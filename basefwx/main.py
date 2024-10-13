@@ -165,7 +165,7 @@ class basefwx:
               return file.read()
 
       def encode(file: str, code: str):
-          ext = basefwx.b512encode(pathlib.Path(file).suffix, code)
+          ext = basefwx.b512encode(self.pathlib.Path(file).suffix, code)
           en = str(basefwx.b512encode(self.base64.b64encode(read(file)).decode('utf-8'), code))
           return ext + "A8igTOmG" + en
 
@@ -177,9 +177,9 @@ class basefwx:
               f.close()
 
       def make_encoded(name, cd):
-          write_fl(pathlib.Path(name).stem, encode(name, cd))
-          self.os.chmod(pathlib.Path(pathlib.Path(name).stem + ".fwx"), 0)
-          self.os.remove(pathlib.Path(pathlib.Path(name)))
+          write_fl(self.pathlib.Path(name).stem, encode(name, cd))
+          self.os.chmod(self.pathlib.Path(self.pathlib.Path(name).stem + ".fwx"), 0)
+          self.os.remove(self.pathlib.Path(self.pathlib.Path(name)))
       try:
         make_encoded(file,code)
         return "SUCCESS!"
@@ -205,7 +205,7 @@ class basefwx:
           f.close()
 
       def encode(file: str, code: str):
-          ext = basefwx.b512encode(pathlib.Path(file).suffix, code)
+          ext = basefwx.b512encode(self.pathlib.Path(file).suffix, code)
           en = str(basefwx.b512encode(self.base64.b64encode(read(file)).decode('utf-8'), code))
           return ext + "A8igTOmG" + en
 
@@ -221,26 +221,26 @@ class basefwx:
               f.close()
 
       def make_decoded(name, cd):
-          self.os.chmod(pathlib.Path(name), 0o777)
+          self.os.chmod(self.pathlib.Path(name), 0o777)
           try:
-              ct = read_normal(pathlib.Path(name).stem + ".fwx")
-              write(pathlib.Path(name).stem + decode(ct, cd)[1], decode(ct, cd)[0])
-              self.os.remove(pathlib.Path(name))
+              ct = read_normal(self.pathlib.Path(name).stem + ".fwx")
+              write(self.pathlib.Path(name).stem + decode(ct, cd)[1], decode(ct, cd)[0])
+              self.os.remove(self.pathlib.Path(name))
           except:
-              self.os.chmod(pathlib.Path(name), 0)
+              self.os.chmod(self.pathlib.Path(name), 0)
               print("Failed To Decode File, The Password Is Wrong Or The File Is Corrupted!")
               return "FAIL!"
 
       def make_encoded(name, cd):
-          write_fl(pathlib.Path(name).stem, encode(name, cd))
-          self.os.chmod(pathlib.Path(pathlib.Path(name).stem + ".fwx"), 0)
-          self.os.remove(pathlib.Path(pathlib.Path(name)))
+          write_fl(self.pathlib.Path(name).stem, encode(name, cd))
+          self.os.chmod(self.pathlib.Path(self.pathlib.Path(name).stem + ".fwx"), 0)
+          self.os.remove(self.pathlib.Path(self.pathlib.Path(name)))
           return "SUCCESS!"
 
       if not self.os.path.isfile(file):
         print("\nFile Does Not Seem To Exist!")
         exit("-1")
-      if pathlib.Path(file).suffix == ".fwx":
+      if self.pathlib.Path(file).suffix == ".fwx":
         v=make_decoded(file, password)
       else:
         v=make_encoded(file, password)
@@ -268,10 +268,10 @@ class basefwx:
           return [self.base64.b64decode(basefwx.b512decode(content.split("A8igTOmG")[1], code)), extd]
 
       def make_decoded(name, cd):
-          self.os.chmod(pathlib.Path(name), 0o777)
-          ct = read_normal(pathlib.Path(name).stem+".fwx")
-          write(pathlib.Path(name).stem + decode(ct, cd)[1], decode(ct, cd)[0])
-          self.os.remove(pathlib.Path(name))
+          self.os.chmod(self.pathlib.Path(name), 0o777)
+          ct = read_normal(self.pathlib.Path(name).stem+".fwx")
+          write(self.pathlib.Path(name).stem + decode(ct, cd)[1], decode(ct, cd)[0])
+          self.os.remove(self.pathlib.Path(name))
       try:
         make_decoded(file,code)
         return "SUCCESS!"

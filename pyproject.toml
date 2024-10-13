@@ -1,6 +1,6 @@
 [project]
 name = "basefwx"
-version = "2.0.1"
+version = "2.2"
 authors = [
   { name="F1xGOD", email="f1xgodim@gmail.com" },
 ]

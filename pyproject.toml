@@ -1,0 +1,18 @@
+[project]
+name = "basefwx"
+version = "2.1"
+authors = [
+  { name="F1xGOD", email="f1xgodim@gmail.com" },
+]
+description = "With BaseFWX you can encode securely!"
+readme = "README.md"
+requires-python = ">=3.8"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: GNU General Public License v3 or later (GPLv3+)",
+    "Operating System :: OS Independent",
+]
+
+[project.urls]
+Homepage = "https://github.com/F1xGOD/basefwx"
+Issues = "https://github.com/F1xGOD/basefwx/issues"

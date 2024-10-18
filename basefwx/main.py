@@ -276,6 +276,7 @@ class basefwx:
         make_decoded(file,code)
         return "SUCCESS!"
       except:
+          self.os.chmod(self.pathlib.Path(self.pathlib.Path(file).stem + ".fwx"), 0)
           return "FAIL!"
 
 

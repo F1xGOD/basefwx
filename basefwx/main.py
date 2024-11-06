@@ -285,8 +285,8 @@ class basefwx:
       def write_fl(nm, cont):
           with open(nm + ".fwx", 'wb'):
               pass
-          with open(nm + ".fwx", 'wb') as f:
-              f.write(cont)
+          with open(nm + ".fwx", 'r+b') as f:
+              f.write(cont.encode('utf-8'))
               f.close()
 
       def make_decoded(name, cd):

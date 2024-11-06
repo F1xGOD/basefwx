@@ -9,7 +9,7 @@
                                               
                                                            
 FixCraft® Inc. FWX Encryption Copyright ©   
-Version - v2.4 😎 OCT 13 2024
+Version - v2.5 😎 NOV 6 2024 (1 AM) PST8
 By F1xGOD 💀
 Donate Crypto (Monero)
 48BKksKRWEgixzz1Yec3BH54ybDNCkmmWHLGtXRY42NPJqBowaeD5RTELqgABD1GzBT97pqrjW5PJHsNWzVyQ8zuL6tRBcY

@@ -1,14 +1,83 @@
 # BASEFWX ENCRYPTION ENGINE ->
+
 class basefwx:
  import base64
  import sys
+ import secrets
+ from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+ from cryptography.hazmat.primitives import padding
  import pathlib
  import os
  import hashlib
+ import string
  def __init__(self):
    self.sys.set_int_max_str_digits(2000000000)
    pass
-# REVERSIBLE  - SECURITY: ❙
+ @staticmethod
+ def generate_random_string(length):
+     """Generates a random string of the specified length."""
+     self=basefwx()
+     alphabet = self.string.ascii_letters + self.string.digits
+     return ''.join(self.secrets.choice(alphabet) for i in range(length))
+
+ @staticmethod
+ def derive_key_from_text(text, salt, key_length_bytes=32):
+     self=basefwx()
+     """Derives an AES key from text using PBKDF2."""
+
+     # Use PBKDF2 to derive a key from the text and salt
+     key = self.hashlib.pbkdf2_hmac(
+         "sha256",
+         text.encode(),
+         salt.encode(),
+         100000,  # Number of iterations (higher is more secure)
+         dklen=key_length_bytes
+     )
+     return key
+ @staticmethod
+ def encryptAES(text, key):
+     self = basefwx()
+     plaintext = text.encode('utf-8')
+     key = basefwx.derive_key_from_text(key,str(basefwx.b512encode(key[:5],key)))
+
+     # Generate a random initialization vector (IV)
+     iv = self.os.urandom(16)
+
+     # Create a cipher object
+     cipher = self.Cipher(self.algorithms.AES(key), self.modes.CBC(iv))
+
+     # Pad the plaintext to be a multiple of the block size
+     padder = self.padding.PKCS7(128).padder()
+     padded_plaintext = padder.update(plaintext) + padder.finalize()
+
+     # Encrypt the plaintext
+     encryptor = cipher.encryptor()
+     ciphertext = encryptor.update(padded_plaintext) + encryptor.finalize()
+
+     return iv + ciphertext
+ @staticmethod
+ def decryptAES(text, key):
+     ciphertext = text
+     key = basefwx.derive_key_from_text(key,str(basefwx.b512encode(key[:5],key)))
+     self = basefwx()
+     # Extract the IV from the ciphertext
+     iv = ciphertext[:16]
+     ciphertext = ciphertext[16:]
+
+     # Create a cipher object
+     cipher = self.Cipher(self.algorithms.AES(key), self.modes.CBC(iv))
+
+     # Decrypt the ciphertext
+     decryptor = cipher.decryptor()
+     padded_plaintext = decryptor.update(ciphertext) + decryptor.finalize()
+
+     # Unpad the plaintext
+     unpadder = self.padding.PKCS7(128).unpadder()
+     plaintext = unpadder.update(padded_plaintext) + unpadder.finalize()
+
+     return plaintext.decode('utf-8')
+
+ # REVERSIBLE  - SECURITY: ❙
  @staticmethod
  def b64encode(string: str):
    self=basefwx()
@@ -216,8 +285,8 @@ class basefwx:
       def write_fl(nm, cont):
           with open(nm + ".fwx", 'wb'):
               pass
-          with open(nm + ".fwx", 'r+b') as f:
-              f.write(cont.encode('utf-8'))
+          with open(nm + ".fwx", 'wb') as f:
+              f.write(cont)
               f.close()
 
       def make_decoded(name, cd):
@@ -246,7 +315,125 @@ class basefwx:
         v=make_encoded(file, password)
       return v
 
+ @staticmethod
+ def AESfile(file: str, password: str, light: bool = True):
+      self = basefwx()
+      if light:
+          def read(file: str):
+              with open(file, 'rb') as file:
+                  return file.read()
 
+          def read_normal(file: str):
+              with open(file, 'r+b') as fil:
+                  return fil.read()
+
+          def write(file: str, content: bytes):
+              with open(file, 'wb'):
+                  pass
+              f = open(file, 'r+b')
+              f.write(content)
+              f.close()
+
+          def encode(file: str, code: str):
+              ext = self.pathlib.Path(file).suffix
+              en = str(self.base64.b64encode(read(file)).decode('utf-8'))
+              return basefwx.encryptAES(ext+"A8igTOmG"+en,code)
+
+          def decode(content: str, code: str):
+              content = basefwx.decryptAES(content, code)
+              extd = content.split("A8igTOmG")[0]
+              return [self.base64.b64decode(content.split("A8igTOmG")[1]), extd]
+
+          def write_fl(nm, cont):
+              with open(nm + ".fwx", 'wb'):
+                  pass
+              with open(nm + ".fwx", 'r+b') as f:
+                  f.write(cont)
+                  f.close()
+
+          def make_decoded(name, cd):
+              self.os.chmod(self.pathlib.Path(name), 0o777)
+              try:
+                  ct = read_normal(self.pathlib.Path(name).stem + ".fwx")
+                  write(self.pathlib.Path(name).stem + decode(ct, cd)[1], decode(ct, cd)[0])
+                  self.os.remove(self.pathlib.Path(name))
+              except:
+                  self.os.chmod(self.pathlib.Path(name), 0)
+                  print("Failed To Decode File, The Password Is Wrong Or The File Is Corrupted!")
+                  return "FAIL!"
+
+          def make_encoded(name, cd):
+              write_fl(self.pathlib.Path(name).stem, encode(name, cd))
+              self.os.chmod(self.pathlib.Path(self.pathlib.Path(name).stem + ".fwx"), 0)
+              self.os.remove(self.pathlib.Path(self.pathlib.Path(name)))
+              return "SUCCESS!"
+
+          if not self.os.path.isfile(file):
+            print("\nFile Does Not Seem To Exist!")
+            exit("-1")
+          if self.pathlib.Path(file).suffix == ".fwx":
+            v=make_decoded(file, password)
+          else:
+            v=make_encoded(file, password)
+          return v
+      else:
+          def read(file: str):
+              with open(file, 'rb') as file:
+                  return file.read()
+
+          def read_normal(file: str):
+              with open(file, 'r+b') as fil:
+                  return fil.read()
+
+          def write(file: str, content: bytes):
+              with open(file, 'wb'):
+                  pass
+              f = open(file, 'r+b')
+              f.write(content)
+              f.close()
+
+          def encode(file: str, code: str):
+              ext = basefwx.pb512encode(self.pathlib.Path(file).suffix,code)
+              en = str(basefwx.pb512encode(self.base64.b64encode(read(file)).decode('utf-8'),code))
+              return basefwx.encryptAES(ext + "673827837628292873" + en, code)
+
+          def decode(content: str, code: str):
+              content = basefwx.decryptAES(content, code)
+              extd = content.split("673827837628292873")[0]
+              return [self.base64.b64decode(basefwx.pb512decode(content.split("673827837628292873")[1],code)), basefwx.pb512decode(extd,code)]
+
+          def write_fl(nm, cont):
+              with open(nm + ".fwx", 'wb'):
+                  pass
+              with open(nm + ".fwx", 'r+b') as f:
+                  f.write(cont)
+                  f.close()
+
+          def make_decoded(name, cd):
+              self.os.chmod(self.pathlib.Path(name), 0o777)
+              try:
+                  ct = read_normal(self.pathlib.Path(name).stem + ".fwx")
+                  write(self.pathlib.Path(name).stem + decode(ct, cd)[1], decode(ct, cd)[0])
+                  self.os.remove(self.pathlib.Path(name))
+              except:
+                  self.os.chmod(self.pathlib.Path(name), 0)
+                  print("Failed To Decode File, The Password Is Wrong Or The File Is Corrupted!")
+                  return "FAIL!"
+
+          def make_encoded(name, cd):
+              write_fl(self.pathlib.Path(name).stem, encode(name, cd))
+              self.os.chmod(self.pathlib.Path(self.pathlib.Path(name).stem + ".fwx"), 0)
+              self.os.remove(self.pathlib.Path(self.pathlib.Path(name)))
+              return "SUCCESS!"
+
+          if not self.os.path.isfile(file):
+              print("\nFile Does Not Seem To Exist!")
+              exit("-1")
+          if self.pathlib.Path(file).suffix == ".fwx":
+              v = make_decoded(file, password)
+          else:
+              v = make_encoded(file, password)
+          return v
 
  @staticmethod
  def b512file_decode(file: str, code: str):

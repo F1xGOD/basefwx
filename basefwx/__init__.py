@@ -33,3 +33,5 @@ def b512decodefile(file: str, code: str):
     return basefwx.b512file_decode(file, code)
 def b512handlefile(file: str, code: str):
     return basefwx.b512file(file, code)
+def fwxAES(file: str, code: str, light: bool = True):
+    return basefwx.AESfile(file, code, light)

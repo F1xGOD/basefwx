@@ -1,11 +1,11 @@
 from .main import *
 
 def b64encode(string: str): return basefwx.b64encode(string)
-def b512encode(string: str, code: str): return basefwx.b512encode(string, code)
+def b512encode(string: str, code: str=""): return basefwx.b512encode(string, code)
 def b256encode(string: str): return basefwx.b256encode(string)
 def b1024encode(string: str): return basefwx.b1024encode(string)
 def bi512encode(string: str): return basefwx.bi512encode(string)
-def pb512encode(string: str, code: str): return basefwx.pb512encode(string, code)
+def pb512encode(string: str, code: str=""): return basefwx.pb512encode(string, code)
 def a512encode(string: str): return basefwx.a512encode(string)
 def hash512(string: str): return basefwx.hash512(string)
 def uhash513(string: str): return basefwx.uhash513(string)

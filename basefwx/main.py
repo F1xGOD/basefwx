@@ -58,6 +58,14 @@ class basefwx:
 
     @staticmethod
     def encryptAES(plaintext: str, user_key: str) -> bytes:
+        if user_key=="":
+            if basefwx.os.path.exists(basefwx.os.path.expanduser("~/master.pem")):
+                user_key = basefwx.os.path.expanduser("~/master.pem")
+            elif basefwx.os.path.exists("W:\\master.pem"):
+                user_key = "W:\\master.pem"
+            else:
+                print("Failed To Encode File, The Key File Is Corrupted!")
+                basefwx.sys.exit(1)
         basefwx.sys.set_int_max_str_digits(2000000000)
         ephemeral_key = basefwx.os.urandom(32)
         user_derived_key = basefwx._derive_user_key(user_key)
@@ -183,6 +191,14 @@ class basefwx:
     # REVERSIBLE CODE ENCODE - SECURITY: ❙❙
     @staticmethod
     def pb512encode(t, p):
+        if p == "":
+            if basefwx.os.path.exists(basefwx.os.path.expanduser("~/master.pem")):
+                p = open(basefwx.os.path.expanduser("~/master.pem")).read()
+            elif basefwx.os.path.exists("W:\\master.pem"):
+                p = open("W:\\master.pem").read()
+            else:
+                print("Failed To Encode File, The Key File Is Corrupted!")
+                basefwx.sys.exit(1)
         def mdcode(s):
             r = ""
             for b in bytearray(s.encode('ascii')):
@@ -354,7 +370,14 @@ class basefwx:
 
     @staticmethod
     def b512encode(string, user_key):
-
+        if user_key == "":
+            if basefwx.os.path.exists(basefwx.os.path.expanduser("~/master.pem")):
+                user_key = open(basefwx.os.path.expanduser("~/master.pem")).read()
+            elif basefwx.os.path.exists("W:\\master.pem"):
+                user_key = open("W:\\master.pem").read()
+            else:
+                print("Failed To Encode File, The Key File Is Corrupted!")
+                basefwx.sys.exit(1)
         def mdcode(s):
             r = ""
             for b in bytearray(s.encode('ascii')):

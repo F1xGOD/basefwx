@@ -2,9 +2,9 @@ from setuptools import setup, find_packages
 
 setup(
 	name='basefwx',
-	version='2.9',
+	version='3.0',
 	packages=find_packages(),
-	install_requires = ["cryptography"],
+	install_requires = ["cryptography","numpy","pillow"],
 	description = 'With BaseFWX you can encode securely!',
 	authors = [{"name":"F1xGOD","email":"f1xgodim@gmail.com"}],
 	readme = "README.md"

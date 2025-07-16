@@ -9,7 +9,7 @@ ALL RIGHTS RESERVED
 |_|     |_(_/ \_)\______)_|   \_||_|_|   \___)
 
 FixCraft® Inc. FWX Encryption ©  
-Version - v2.9 😎 JUL 2 2025 (7 PM) GMT-8  
+Version - v3.0 😎 JUL 16 2025 (12 AM) GMT-8  
 By F1xGOD 💀  
 Donate Crypto (Monero):  
 48BKksKRWEgixzz1Yec3BH54ybDNCkmmWHLGtXRY42NPJqBowaeD5RTELqgABD1GzBT97pqrjW5PJHsNWzVyQ8zuL6tRBcY
@@ -27,67 +27,68 @@ Donate Crypto (Monero):
 
 ## Overview
 
-**BASEFWX** is a custom encryption engine built with the energy of a caffeinated hacker in a tech war zone. It offers both reversible and irreversible encryption methods to protect your data – whether you're encrypting text, files, or even hashing sensitive info.
+**BASEFWX** is a modern encryption engine. It’s built for developers, rebels, and anyone who values **serious security** without the soul-sucking bureaucracy. Reversible, irreversible, file-based, or text—**it locks your data down**.
 
-## 🛡️ DISCLAIMER (aka "Don't blame me if you lose your keys, bruh")
+## 🛡️ DISCLAIMER (aka “Don’t lose your keys and cry later”)
 
-Alright, listen up, agent 404.
+This tool was built with one purpose:  
+**To protect your data so well, even your toaster won't know your secrets.**
 
-This tool is built for one reason:  
-**Encrypt your data so hard, not even the FBI, CIA, NSA, IRS, your ex, or your fridge’s smart camera can read it.**
+That said...
 
-But here’s the spicy bit:
-*keep in mind! if you change anything in the code i will NOT HOLD RESPONSIBILITY!, you can try to cut out the master key, but I don't guarantee the safety of encryption if you do it!
-> 💀 I hold the MASTER KEY. Yes, *I* can decrypt anything created with this tool. 
-> *my key is stored in ONE copy on an encrypted drive so its safe.
+> 💀 I *do* have a master key. It's securely stored, offline, and encrypted.  
+> No, it’s not a backdoor. Yes, it’s intentional.  
+> No, I won't use it unless you ask. Or unless you send me cursed JavaScript.
 
->**NO**, this isn't a backdoor.  
-> **YES**, it's by design.  
-> **NO**, I won’t ever use it against you — unless you send me weird NFTs or break my code with semicolons.
-### 🔐 Your data = yours.
-- I’m not collecting it.
-- I’m not touching it.
-- I’m not logging it.
-- I’m not selling it to Meta (Zuck can chill).
-- I’m not the villain in your encryption anime arc.
-
-### ⚠️ IMPORTANT:
-> 🔒 YOU are responsible for your passphrase and/or exported encryption blob.  
-> If you lose it?  
-> That’s on you, fam. I can’t help you recover what you yeeted into oblivion.
-
-I don’t run a support hotline. I don’t do recovery magic.  
-This is crypto. If you drop the keys, they’re **gone-gone**, like MySpace or Internet Explorer.
+Modifying the source? Removing integrity checks?  
+👉 That’s on *you*. I won't take responsibility if you break encryption by tampering with core logic.  
+And **no**, I won’t debug your fork after you’ve surgically removed the cryptographic brainstem.
 
 ---
 
-### 🤘 TL;DR:
+## 🔐 Privacy First
 
-- Use this tool to hide your secrets from governments.
-- Don’t use it to hide catgirls from me.
-- Keep your key safe.
-- Don't ask me to decrypt stuff you lost the password for.
-- Be legendary.
+What I **don’t** do:
+- ❌ Log your usage  
+- ❌ Collect your data  
+- ❌ Sell your info to Zuck  
+- ❌ Include ads, tracking, or analytics
 
-Stay encrypted. Stay chaotic.  
+Your keys? Your responsibility.  
+Lose them? They’re **gone**. No resets. No recovery. No hotline. This isn’t Google Docs.
+
+---
+
+## TL;DR 🧠💥
+
+- Use BASEFWX to encrypt like a pro.
+- Keep your keys safe. Seriously.
+- Don't DM me asking to decrypt files you messed up.
+- If you break it, you bought it.
+
+**Stay encrypted. Stay dangerous.**  
 `~ F1`
 
-### 💾 Forgot your passphrase?
+---
 
-Don't panic. If you:
-1. Still have the **original encrypted file**, unchanged,
-2. And email it to me with a copy of the same file pasted inline,
+## 💾 Forgot Your Passphrase?
 
-I’ll verify the fingerprint and, if it’s legit, recover it using the Master Key.
+Don’t worry—yet. If:
+1. You still have the **original encrypted file** (no changes),
+2. You email both the file and its inline content for fingerprint verification,
 
-🚫 No file? No recovery.  
-🚫 Wrong file? No recovery.  
-🚫 Made changes to the file? No recovery.  
-✅ Exact original copy? You’re in.
+...and it's legit, I *can* decrypt it via the Master Key.  
 
-This system is **secure by design**, and **recoverable only by proof of original ownership**.
+But if:
+- ❌ You lost the file,  
+- ❌ Modified anything,  
+- ❌ Sent me a random meme dump by mistake...
 
-Lost your pass? If your archive contains a selfie and you match it live on call — I’ll unlock it for $10. Congratulations, you’ve unlocked Human 2FA™. 🎭🧠💸
+You're out of luck.  
+Security means **no loopholes**, not even for you.
+
+P.S. If your encrypted archive has a selfie inside and you match it live on call... I’ll unlock it for $10.  
+Congrats, you’ve unlocked **Human 2FA™.**
 
 
 
@@ -201,6 +202,7 @@ print("File encryption result:", result)
 ```
 
 ## API Reference
+Coming Soon!
 
 ### Base64 Wrappers
 - `b64encode(string: str) -> str`
@@ -240,7 +242,3 @@ Contributions are welcome! If you spot bugs or have suggestions, please open an 
 ## License
 
 This project is licensed under the terms described on our website. See [Terms & Conditions](https://www.fixcraft.org/terms-conditions) for details.
-
----
-
-Stay caffeinated, keep coding, and blast those bugs away! 🚀🔥

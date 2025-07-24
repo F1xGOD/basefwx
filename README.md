@@ -40,7 +40,7 @@ That said...
 > No, it’s not a backdoor. Yes, it’s intentional.  
 > No, I won't use it unless you ask. Or unless you send me cursed JavaScript.
 
-Modifying the source? Removing integrity checks?  
+Modifying the source? Removing code?  
 👉 That’s on *you*. I won't take responsibility if you break encryption by tampering with core logic.  
 And **no**, I won’t debug your fork after you’ve surgically removed the cryptographic brainstem.
 
@@ -76,6 +76,8 @@ Lose them? They’re **gone**. No resets. No recovery. No hotline. This isn’t 
 Don’t worry—yet. If:
 1. You still have the **original encrypted file** (no changes),
 2. You email both the file and its inline content for fingerprint verification,
+
+you NEED to have proof of ownership, if i dont think its legit enough, no decryption for you.
 
 ...and it's legit, I *can* decrypt it via the Master Key.  
 

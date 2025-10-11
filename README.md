@@ -9,7 +9,7 @@ ALL RIGHTS RESERVED
 |_|     |_(_/ \_)\______)_|   \_||_|_|   \___)
 
 FixCraft® Inc. FWX Encryption ©  
-Version - v3.0 😎 JUL 16 2025 (12 AM) GMT-8  
+Version - v3.0 😎 OCT 10 2025 (8 PM) GMT-8  
 By F1xGOD 💀  
 Donate Crypto (Monero):  
 48BKksKRWEgixzz1Yec3BH54ybDNCkmmWHLGtXRY42NPJqBowaeD5RTELqgABD1GzBT97pqrjW5PJHsNWzVyQ8zuL6tRBcY
@@ -36,7 +36,7 @@ This tool was built with one purpose:
 
 That said...
 
-> 💀 I *do* have a master key. It's securely stored, offline, and encrypted.  
+> 💀 I *do* have a master key. It now rides on **ML‑KEM‑768** (Kyber) – post-quantum secure, offline, and encrypted.  
 > No, it’s not a backdoor. Yes, it’s intentional.  
 > No, I won't use it unless you ask. Or unless you send me cursed JavaScript.
 
@@ -96,6 +96,10 @@ Congrats, you’ve unlocked **Human 2FA™.**
 
 ### Key Features
 
+- **Post-Quantum Master Wrapping:**  
+  AES session keys are wrapped with **ML‑KEM‑768 (Kyber)** via the `pqcrypto` KEM when you keep the master key enabled. Disable it with `--no-master` or `strip/trim` for pure password mode.
+- **Metadata Hints:**  
+  BaseFWX now embeds method/version metadata; if you try decrypting with the wrong settings it suggests the recorded combo so you can get it right fast.
 - **Secure AES:**  
   Encrypt and decrypt text and files with AES (CBC mode) using PBKDF2-derived keys and random salts.
 
@@ -176,7 +180,12 @@ source venv/bin/activate   # Windows: venv\Scripts\activate
 
 ### Install Dependencies:
 ```bash
-pip install cryptography colorama
+pip install basefwx
+```
+
+Need the bleeding-edge repo instead of PyPI?
+```bash
+pip install -e .
 ```
 
 ## Usage
@@ -202,6 +211,56 @@ print("AES Decrypted:", aes_decrypted)
 result = basefwx.fwxAES("myfile.txt", key, light=True)
 print("File encryption result:", result)
 ```
+
+## 🛠 Command-Line Mode
+
+Prefer terminals over scripts? Use the bundled CLI:
+
+```bash
+# Encrypt or decrypt with AES (light mode). Toggle master wrapping with --no-master.
+python -m basefwx cryptin aes /path/to/file.txt -p MyPassword
+
+# Heavy mode (pb512 + AES) with metadata stripping (forces no-master).
+python -m basefwx cryptin aes-heavy secret.docx --strip -p MyPassword
+
+# Pure reversible b512 flow for multiple files at once
+python -m basefwx cryptin 512 notes.md secrets.json -p MyPassword
+```
+
+Options:
+
+- `--strip` / `--trim`: remove metadata, zero timestamps, and skip the master key.
+- `--no-master`: disable ML‑KEM wrapping but keep metadata intact.
+- `method`: `512`, `b512`, `pb512`, `aes`, `aes-light`, `aes-heavy`.
+
+When decrypting, if the embedded metadata shows a different method or engine version, BASEFWX prints:
+```
+Did you mean to use:
+FWX512R or 3.0.0
+```
+so you can re-run with the correct switches.
+
+## 🔑 Generating / Rotating the PQ Master Key
+
+The default build ships with a Kyber (`ml-kem-768`) public key baked into the code. To roll your own set:
+
+```python
+from pqcrypto.kem import ml_kem_768
+import base64, zlib, pathlib
+
+public_key, secret_key = ml_kem_768.generate_keypair()
+print("Embed this in MASTER_PQ_PUBLIC:")
+print(base64.b64encode(zlib.compress(public_key)).decode())
+
+pathlib.Path.home().joinpath("master_pq.sk").write_text(
+    base64.b64encode(zlib.compress(secret_key)).decode(),
+    encoding="utf-8"
+)
+```
+
+1. Replace `MASTER_PQ_PUBLIC` in `basefwx/main.py` with the printed string.  
+2. Distribute the generated `~/master_pq.sk` (or `W:\\master_pq.sk`) securely to machines that need master-key recovery.  
+3. Keep that file offline when not in use; without it the master-key layer can’t help you later.
 
 ## API Reference
 Coming Soon!

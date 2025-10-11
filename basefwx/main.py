@@ -18,9 +18,8 @@ class basefwx:
     from cryptography.hazmat.primitives import hashes, padding
     from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
     from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
-    from cryptography.hazmat.primitives import serialization
-    from cryptography.hazmat.primitives.asymmetric import padding as asym_padding
-    from cryptography.hazmat.backends import default_backend
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    from pqcrypto.kem import ml_kem_768
     from datetime import datetime, timezone
 
     MAX_INPUT_BYTES = 15 * 1024 * 1024  # 15 MiB ceiling for source files
@@ -29,6 +28,8 @@ class basefwx:
     FWX_HEAVY_DELIM = "673827837628292873"
     META_DELIM = "::FWX-META::"
     ENGINE_VERSION = "3.0.0"
+    MASTER_PQ_ALG = "ml-kem-768"
+    MASTER_PQ_PUBLIC = b"eJwBoARf+5/JFGxSZWcnXIcBpDtUBKI3JuGbyvmqRrc6fH+GHBOBn9LYpxIwGjozH33zAtAcH3oMZEi7PBYnafaqymdXzC3qQhWBJlaSyq7BaYrZfc1zZXoFp8nUrQrSmG5Jy3bsk/8YUSZmrrI2PfCbOt4Jef5iG+wiG82kN5qFh/Ulp06zFClAMj8HCenjEfojT08FHTUG0KtVYsNDYiumjWA1cYlXvWf5dXgJQLJncvHCUzZMRJXoNNVbcK/iAxxTflCysGsmhVS2nmhSZVQDxhL2MlyUV60HaMkxhFeRK8xwp2v2o/EJWBooEuHThUTlKCeSQxl6d1WhxvaBvXgZEyfWOnBjYvHHoKD6cb3KtXW3ZLh0VpWno8h1vLvSIrNVUzy2u9zjgDZnwzsQKQhqr49IrxxLrerlvobbaTjbYqdpinSEG4smJxfIOqcApqrsmSGkUuZ7q0EXYwESSFrzmFo2jOQKaZyEux3RBaLzBbElc2w7m/XjPSjpwZtlQkX2trohKoWWgG6glBqZMw72C4TkF5NJsha6o1cYOJobsGtYSEahHi7JllzgKL4oaUkzqCu3KCYHeoAVa48qYFmVz+fKZJeRBAGRAwFGYYVEcB3Kx6NxehiaSFKQGCFxk7x2X+lcE4J7xgHsO8mVuqiyXs/LwQ81i895wjvTc0qsoy30IcmabsPIHFUrXiaxfQX1smW8t0ymn02xSm/hfX84WcLXBih6C3bbGv2YvkBRs9+Ax3FLA5iBMcaIxGwLQ7dhP9zyv8gkEkQkPQqpBxehr81qvZucrzJCV0XqGTiJdXQVnD9MWfozPWlnP2tCtTWhxjU2qm44g6LXB1SabG86kF33EzDigE/TfNy3IYz6KTJbyUcES0ljlEFDunyZSkABrMiZzJRWxx+Dz8IYOVPoUye7k5ACEaXEOOZCAe77iCk4adOsrLQZSFHYgHMbliyqLN9UJpFzNOTqAtJQL8a7ZBowy6wjtNrwpJF3HDrDh/IEfgHLpWIEAjRUwIrcM3UGiWHROnzbnB4mSwvVUjL8xdlwzyk6wKqlB/SRLO83WUizou5yg/cnperDOv3ImJUDPo0LH+eMR7B2Byk2bAoUpA45xiEKtYKjBe7zcp2Wq4MpKfMkgb7Ay4ZWvEL1HMe3TOJiTZ5Irh6MsfArTqR2gZjiDNg2EDnCBQERX6Y1Ktq5RyaTyHgCznNiB4rUTd/yg67wwm6QJJMzJVwoKq8qjARjsbtkZobbNNAJuFrIOUGldcoIa3cAQfSYiGaTejOjZotLUnOhJPTktjTBK5z7XUx8pj+3RZzTp9LJRCGVbH6DV0J0EoRbe/O6sethRU3wm5WJQXO5zN7Mk2fAqT2atFhjpIS4GGE3t3TIP66VsGXBd5yaFQpcGqLqc+hcAjBYLXhby3RpDHforXFSpP9bxl9WBQ84kjXqLFlKgmp7n/RIsFwCgd4mK26DyhdMiLQCb76Kl1EKcDvbg94QpxuBrPJMv5bQmc1ZGQsDDIEau/DxGuVLlTHxGNQMz7JKZaQCpgQAm00D156rwc4mgz6FHafXZCXDBOzoBItxzRgWYhQ45nNG0FEpBg=="
 
     class _ProgressReporter:
         """Lightweight textual progress reporter with two WinRAR-style bars."""
@@ -91,7 +92,8 @@ class basefwx:
             "ENC-TIME": timestamp,
             "ENC-VERSION": version,
             "ENC-METHOD": method,
-            "ENC-MASTER": "yes" if use_master else "no"
+            "ENC-MASTER": "yes" if use_master else "no",
+            "ENC-KEM": basefwx.MASTER_PQ_ALG if use_master else "none"
         }
         data = basefwx.json.dumps(info, separators=(',', ':')).encode('utf-8')
         return basefwx.base64.b64encode(data).decode('utf-8')
@@ -118,6 +120,79 @@ class basefwx:
             basefwx.os.utime(path, (0, 0))
         except Exception:
             pass
+
+    @staticmethod
+    def _warn_on_metadata(meta: "basefwx.typing.Dict[str, basefwx.typing.Any]", expected_method: str) -> None:
+        if not meta:
+            return
+        recorded_method = meta.get("ENC-METHOD")
+        recorded_version = meta.get("ENC-VERSION")
+        hints = []
+        if recorded_method and recorded_method != expected_method:
+            hints.append(recorded_method)
+        if recorded_version and recorded_version != basefwx.ENGINE_VERSION:
+            hints.append(recorded_version)
+        if hints:
+            print("Did you mean to use:\n" + " or ".join(hints))
+
+    @staticmethod
+    def _load_master_pq_public() -> bytes:
+        return basefwx.zlib.decompress(basefwx.base64.b64decode(basefwx.MASTER_PQ_PUBLIC))
+
+    @staticmethod
+    def _load_master_pq_private() -> bytes:
+        candidates = (
+            basefwx.pathlib.Path('~/master_pq.sk').expanduser(),
+            basefwx.pathlib.Path(r'W:\master_pq.sk')
+        )
+        for path in candidates:
+            if path.exists():
+                data = path.read_bytes()
+                try:
+                    text = data.decode('utf-8').strip()
+                    return basefwx.zlib.decompress(basefwx.base64.b64decode(text))
+                except Exception:
+                    try:
+                        return basefwx.zlib.decompress(data)
+                    except Exception:
+                        return data
+        raise FileNotFoundError('No master_pq.sk private key found')
+
+    @staticmethod
+    def _kem_derive_key(shared: bytes, length: int = 32) -> bytes:
+        return basefwx.hashlib.sha3_512(shared).digest()[:length]
+
+    @staticmethod
+    def _kem_shared_to_digits(shared: bytes, digits: int = 16) -> str:
+        output = []
+        seed = shared
+        while len(output) < digits:
+            digest = basefwx.hashlib.sha3_512(seed).digest()
+            for byte in digest:
+                output.append(str(byte % 10))
+                if len(output) == digits:
+                    break
+            seed = digest
+        return ''.join(output)
+
+    @staticmethod
+    def _pq_wrap_secret(secret: bytes) -> "basefwx.typing.Tuple[bytes, bytes]":
+        public_key = basefwx._load_master_pq_public()
+        kem_ct, kem_shared = basefwx.ml_kem_768.encrypt(public_key)
+        aes_key = basefwx._kem_derive_key(kem_shared)
+        aesgcm = basefwx.AESGCM(aes_key)
+        nonce = basefwx.os.urandom(12)
+        wrapped = nonce + aesgcm.encrypt(nonce, secret, None)
+        return kem_ct, wrapped
+
+    @staticmethod
+    def _pq_unwrap_secret(ciphertext: bytes, wrapped: bytes) -> bytes:
+        private_key = basefwx._load_master_pq_private()
+        kem_shared = basefwx.ml_kem_768.decrypt(private_key, ciphertext)
+        aes_key = basefwx._kem_derive_key(kem_shared)
+        aesgcm = basefwx.AESGCM(aes_key)
+        nonce, ct = wrapped[:12], wrapped[12:]
+        return aesgcm.decrypt(nonce, ct, None)
 
     @staticmethod
     def _normalize_path(path_like: "basefwx.typing.Union[str, basefwx.pathlib.Path]") -> "basefwx.pathlib.Path":
@@ -212,51 +287,36 @@ class basefwx:
             algorithm=basefwx.hashes.SHA256(),
             length=32,
             salt=salt,
-            iterations=100000,
-            backend=basefwx.default_backend()
+            iterations=100000
         )
         return kdf.derive(password.encode("utf-8"))
 
     @staticmethod
     def encryptAES(plaintext: str, user_key: str, use_master: bool = True) -> bytes:
-        if user_key == "":
-            if use_master:
-                if basefwx.os.path.exists(basefwx.os.path.expanduser("~/master.pem")):
-                    user_key = basefwx.os.path.expanduser("~/master.pem")
-                elif basefwx.os.path.exists("W:\\master.pem"):
-                    user_key = "W:\\master.pem"
-                else:
-                    print("Failed To Encode File, The Key File Is Corrupted!")
-                    basefwx.sys.exit(1)
-            else:
-                raise ValueError("Password required when master key usage is disabled")
+        if not user_key and not use_master:
+            raise ValueError("Cannot encrypt without user password or master key")
         basefwx.sys.set_int_max_str_digits(2000000000)
-        ephemeral_key = basefwx.os.urandom(32)
-        user_derived_key = basefwx._derive_user_key(user_key)
-        ephemeral_key_b64 = basefwx.base64.b64encode(ephemeral_key).decode('utf-8')
-        iv_user = basefwx.os.urandom(16)
-        cipher_user = basefwx.Cipher(basefwx.algorithms.AES(user_derived_key), basefwx.modes.CBC(iv_user))
-        encryptor_user = cipher_user.encryptor()
-        padder = basefwx.padding.PKCS7(128).padder()
-        padded_ephemeral_key = padder.update(ephemeral_key_b64.encode('utf-8')) + padder.finalize()
-        ephemeral_enc_user = encryptor_user.update(padded_ephemeral_key) + encryptor_user.finalize()
-        ephemeral_enc_user = iv_user + ephemeral_enc_user
         if use_master:
-            keypem = basefwx.zlib.decompress(basefwx.base64.b64decode(basefwx.MASTERk))
-            master_public_key = basefwx.serialization.load_pem_public_key(
-                keypem,
-                backend=basefwx.default_backend()
-            )
-            ephemeral_enc_master = master_public_key.encrypt(
-                ephemeral_key,
-                basefwx.asym_padding.OAEP(
-                    mgf=basefwx.asym_padding.MGF1(algorithm=basefwx.hashes.SHA256()),
-                    algorithm=basefwx.hashes.SHA256(),
-                    label=None
-                )
-            )
+            pq_public = basefwx._load_master_pq_public()
+            kem_ciphertext, kem_shared = basefwx.ml_kem_768.encrypt(pq_public)
+            master_payload = kem_ciphertext
+            ephemeral_key = basefwx._kem_derive_key(kem_shared)
         else:
-            ephemeral_enc_master = b""
+            master_payload = b""
+            ephemeral_key = basefwx.os.urandom(32)
+
+        if user_key:
+            user_derived_key = basefwx._derive_user_key(user_key)
+            ephemeral_key_b64 = basefwx.base64.b64encode(ephemeral_key).decode('utf-8')
+            iv_user = basefwx.os.urandom(16)
+            cipher_user = basefwx.Cipher(basefwx.algorithms.AES(user_derived_key), basefwx.modes.CBC(iv_user))
+            encryptor_user = cipher_user.encryptor()
+            padder = basefwx.padding.PKCS7(128).padder()
+            padded_ephemeral_key = padder.update(ephemeral_key_b64.encode('utf-8')) + padder.finalize()
+            ephemeral_enc_user = encryptor_user.update(padded_ephemeral_key) + encryptor_user.finalize()
+            ephemeral_enc_user = iv_user + ephemeral_enc_user
+        else:
+            ephemeral_enc_user = b""
         iv_data = basefwx.os.urandom(16)
         cipher_data = basefwx.Cipher(basefwx.algorithms.AES(ephemeral_key), basefwx.modes.CBC(iv_data))
         encryptor_data = cipher_data.encryptor()
@@ -270,24 +330,13 @@ class basefwx:
 
         blob = b''
         blob += int_to_4(len(ephemeral_enc_user)) + ephemeral_enc_user
-        blob += int_to_4(len(ephemeral_enc_master)) + ephemeral_enc_master
+        blob += int_to_4(len(master_payload)) + master_payload
         blob += int_to_4(len(ciphertext)) + ciphertext
         return blob
 
     @staticmethod
     def decryptAES(encrypted_blob: bytes, key: str = "", use_master: bool = True) -> str:
         basefwx.sys.set_int_max_str_digits(2000000000)
-        if key == "":
-            if use_master:
-                if basefwx.os.path.exists(basefwx.os.path.expanduser("~/master.pem")):
-                    key = basefwx.os.path.expanduser("~/master.pem")
-                elif basefwx.os.path.exists("W:\\master.pem"):
-                    key = "W:\\master.pem"
-                else:
-                    print("Failed To Decode File, The Password Is Wrong Or The File Is Corrupted!")
-                    basefwx.sys.exit(1)
-            else:
-                raise ValueError("Password required when master key usage is disabled")
 
         def read_chunk(in_bytes, offset):
             length = int.from_bytes(in_bytes[offset:offset + 4], 'big')
@@ -301,35 +350,17 @@ class basefwx:
         ephemeral_enc_master, offset = read_chunk(encrypted_blob, offset)
         ciphertext, offset = read_chunk(encrypted_blob, offset)
         master_blob_present = len(ephemeral_enc_master) > 0
-        if not use_master and master_blob_present:
-            raise ValueError("Master key required to decrypt this payload")
+        user_blob_present = len(ephemeral_enc_user) > 0
 
-        if use_master and master_blob_present:
-            if basefwx.os.path.isfile(key):
-                with open(key, "rb") as f:
-                    private_key_data = f.read()
-                private_key = basefwx.serialization.load_pem_private_key(
-                    private_key_data,
-                    password=None,
-                    backend=basefwx.default_backend()
-                )
-            elif "BEGIN PRIVATE KEY" in key or "BEGIN RSA PRIVATE KEY" in key:
-                private_key = basefwx.serialization.load_pem_private_key(
-                    key.encode('utf-8'),
-                    password=None,
-                    backend=basefwx.default_backend()
-                )
-            else:
-                raise ValueError("Master private key required for this payload")
-            ephemeral_key = private_key.decrypt(
-                ephemeral_enc_master,
-                basefwx.asym_padding.OAEP(
-                    mgf=basefwx.asym_padding.MGF1(algorithm=basefwx.hashes.SHA256()),
-                    algorithm=basefwx.hashes.SHA256(),
-                    label=None
-                )
-            )
-        else:
+        if master_blob_present:
+            if not use_master:
+                raise ValueError("Master key required to decrypt this payload")
+            private_key = basefwx._load_master_pq_private()
+            kem_shared = basefwx.ml_kem_768.decrypt(private_key, ephemeral_enc_master)
+            ephemeral_key = basefwx._kem_derive_key(kem_shared)
+        elif user_blob_present:
+            if not key:
+                raise ValueError("User password required to decrypt this payload")
             user_derived_key = basefwx._derive_user_key(key)
             iv_user = ephemeral_enc_user[:16]
             enc_user_key = ephemeral_enc_user[16:]
@@ -339,6 +370,8 @@ class basefwx:
             unpadder = basefwx.padding.PKCS7(128).unpadder()
             ephemeral_key_b64 = unpadder.update(padded_b64) + unpadder.finalize()
             ephemeral_key = basefwx.base64.b64decode(ephemeral_key_b64)
+        else:
+            raise ValueError("Ciphertext missing key transport data")
         iv_data = ciphertext[:16]
         real_ciphertext = ciphertext[16:]
         cipher_data = basefwx.Cipher(basefwx.algorithms.AES(ephemeral_key), basefwx.modes.CBC(iv_data))
@@ -347,10 +380,6 @@ class basefwx:
         unpadder2 = basefwx.padding.PKCS7(128).unpadder()
         plaintext = unpadder2.update(padded_plaintext) + unpadder2.finalize()
         return plaintext.decode('utf-8')
-
-    # noinspection SpellCheckingInspection
-    MASTERk = b'eJxdkkuPqkAUhPf3V7gnhqcCy25otEGbh4DIThpEXgMKCvLrZ+auLrdWJ1XJl5NUrdc/gmiHycoJ4AFrKwtdfr31n9U/OmIMcQkIzKvHvSp26shB4CIDAFsDrgJ+cy23fm4EtmMsqcqs7pFEKIu3XpMMC1g/2s2Zc3tyqfVDnAs3NhKTV/uR6qir77GgtW+nHXiYevAmPv1TwvLzMPM1tXRnfBnuAlZqVuTMjlyAsH0q1Hf84GNlVK25Zy5XGTNyU0GM7phwmnI1OTO2aRoKuCDpFCAwXhcw2aM5XwWkSx5Jt0NeCfYiAXfTG3JKQ2meh8yIxIzJ8pY5l/E2SGuHZG4hMh9L9oXlZw/cSxWkCPThJzoBeJRiGrKWhns/cp6tMqiCpLtmIyuI9yZjK79T6r8AKg/8JJyBuYClQokiZrOZNtFQGMY12diwsTw3uZ2b4fbep0Z8CDTVE62w+9qzEivOJ/PLO0n40l1kx17AdiPWgQvgwvxbOiL6/zv4BsbIl0s='
-
     # REVERSIBLE  - SECURITY: ❙
     @staticmethod
     def b64encode(string: str):
@@ -380,17 +409,8 @@ class basefwx:
     # REVERSIBLE CODE ENCODE - SECURITY: ❙❙
     @staticmethod
     def pb512encode(t, p, use_master: bool = True):
-        if p == "":
-            if use_master:
-                if basefwx.os.path.exists(basefwx.os.path.expanduser("~/master.pem")):
-                    p = open(basefwx.os.path.expanduser("~/master.pem")).read()
-                elif basefwx.os.path.exists("W:\\master.pem"):
-                    p = open("W:\\master.pem").read()
-                else:
-                    print("Failed To Encode File, The Key File Is Corrupted!")
-                    basefwx.sys.exit(1)
-            else:
-                raise ValueError("Password required when master key usage is disabled")
+        if not p:
+            raise ValueError("Password required when PQ master key wrapping is disabled")
 
         def mdcode(s):
             r = ""
@@ -437,11 +457,16 @@ class basefwx:
 
         def _derive_user_key(u):
             s = (u[:5] + "*&fdhauiGGVGUDoiai").encode("utf-8")
-            k = basefwx.PBKDF2HMAC(algorithm=basefwx.hashes.SHA256(), length=32, salt=s, iterations=100000,
-                                   backend=basefwx.default_backend())
+            k = basefwx.PBKDF2HMAC(algorithm=basefwx.hashes.SHA256(), length=32, salt=s, iterations=100000)
             return k.derive(u.encode("utf-8"))
 
-        c = ''.join(basefwx.random.choices(basefwx.string.digits, k=16))
+        if use_master:
+            pq_public = basefwx._load_master_pq_public()
+            kem_ciphertext, kem_shared = basefwx.ml_kem_768.encrypt(pq_public)
+            c = basefwx._kem_shared_to_digits(kem_shared, 16)
+        else:
+            kem_ciphertext = b""
+            c = ''.join(basefwx.random.choices(basefwx.string.digits, k=16))
         enc = pb512encode_chunk(t, c)
         cb = enc.encode('utf-8')
         ck = basefwx.base64.b64encode(c.encode('utf-8')).decode('utf-8')
@@ -452,14 +477,7 @@ class basefwx:
         p1 = pad.update(ck.encode('utf-8')) + pad.finalize()
         ecu = cu.update(p1) + cu.finalize()
         ecu = iv1 + ecu
-        if use_master:
-            keypem = basefwx.zlib.decompress(basefwx.base64.b64decode(basefwx.MASTERk))
-            pk = basefwx.serialization.load_pem_public_key(keypem, backend=basefwx.default_backend())
-            ecm = pk.encrypt(c.encode('utf-8'),
-                             basefwx.asym_padding.OAEP(mgf=basefwx.asym_padding.MGF1(basefwx.hashes.SHA256()),
-                                                       algorithm=basefwx.hashes.SHA256(), label=None))
-        else:
-            ecm = b""
+        ecm = kem_ciphertext
 
         def i4(x):
             return x.to_bytes(4, "big")
@@ -471,17 +489,8 @@ class basefwx:
 
     @staticmethod
     def pb512decode(digs, key, use_master: bool = True):
-        if key == "":
-            if use_master:
-                if basefwx.os.path.exists(basefwx.os.path.expanduser("~/master.pem")):
-                    key = open(basefwx.os.path.expanduser("~/master.pem")).read()
-                elif basefwx.os.path.exists("W:\\master.pem"):
-                    key = open("W:\\master.pem").read()
-                else:
-                    print("Failed To Decode File, The Password Is Wrong Or The File Is Corrupted!")
-                    basefwx.sys.exit(1)
-            else:
-                raise ValueError("Password required when master key usage is disabled")
+        if not key and not use_master:
+            raise ValueError("Password required when PQ master key wrapping is disabled")
         k = key
 
         def mdcode(s):
@@ -531,8 +540,7 @@ class basefwx:
 
         def _derive_user_key(u):
             s = (u[:5] + "*&fdhauiGGVGUDoiai").encode("utf-8")
-            k = basefwx.PBKDF2HMAC(algorithm=basefwx.hashes.SHA256(), length=32, salt=s, iterations=100000,
-                                   backend=basefwx.default_backend())
+            k = basefwx.PBKDF2HMAC(algorithm=basefwx.hashes.SHA256(), length=32, salt=s, iterations=100000)
             return k.derive(u.encode("utf-8"))
 
         ln = int(digs[:6])
@@ -553,20 +561,13 @@ class basefwx:
         ecm, o = rc(raw, o)
         cb, o = rc(raw, o)
         master_blob_present = len(ecm) > 0
-        if not use_master and master_blob_present:
+        if master_blob_present and not use_master:
             raise ValueError("Master key required to decode this payload")
 
         if use_master and master_blob_present:
-            if "BEGIN PRIVATE KEY" in k or "BEGIN RSA PRIVATE KEY" in k:
-                pk = basefwx.serialization.load_pem_private_key(k.encode('utf-8'), None, backend=basefwx.default_backend())
-            elif basefwx.os.path.isfile(k):
-                with open(k, 'rb') as fh:
-                    pem = fh.read()
-                pk = basefwx.serialization.load_pem_private_key(pem, None, backend=basefwx.default_backend())
-            else:
-                raise ValueError("Master private key required for this payload")
-            cc = pk.decrypt(ecm, basefwx.asym_padding.OAEP(mgf=basefwx.asym_padding.MGF1(basefwx.hashes.SHA256()),
-                                                           algorithm=basefwx.hashes.SHA256(), label=None))
+            private_key = basefwx._load_master_pq_private()
+            kem_shared = basefwx.ml_kem_768.decrypt(private_key, ecm)
+            cc = basefwx._kem_shared_to_digits(kem_shared, 16)
         else:
             uk = _derive_user_key(k)
             iv = ecu[:16]
@@ -574,24 +575,17 @@ class basefwx:
             d = basefwx.Cipher(basefwx.algorithms.AES(uk), basefwx.modes.CBC(iv)).decryptor()
             p = d.update(cf) + d.finalize()
             up = basefwx.padding.PKCS7(128).unpadder()
-            cc = basefwx.base64.b64decode(up.update(p) + up.finalize())
-        return pb512decode_chunk(cb.decode('utf-8'), cc.decode('utf-8'))
+            cc = basefwx.base64.b64decode(up.update(p) + up.finalize()).decode('utf-8')
+        if isinstance(cc, bytes):
+            cc = cc.decode('utf-8')
+        return pb512decode_chunk(cb.decode('utf-8'), cc)
 
     # REVERSIBLE CODE ENCODE - SECURITY: ❙❙
 
     @staticmethod
     def b512encode(string, user_key, use_master: bool = True):
-        if user_key == "":
-            if use_master:
-                if basefwx.os.path.exists(basefwx.os.path.expanduser("~/master.pem")):
-                    user_key = open(basefwx.os.path.expanduser("~/master.pem")).read()
-                elif basefwx.os.path.exists("W:\\master.pem"):
-                    user_key = open("W:\\master.pem").read()
-                else:
-                    print("Failed To Encode File, The Key File Is Corrupted!")
-                    basefwx.sys.exit(1)
-            else:
-                raise ValueError("Password required when master key usage is disabled")
+        if not user_key and not use_master:
+            raise ValueError("Password required when PQ master key wrapping is disabled")
 
         def mdcode(s):
             r = ""
@@ -625,12 +619,17 @@ class basefwx:
                 algorithm=basefwx.hashes.SHA256(),
                 length=32,
                 salt=st,
-                iterations=100000,
-                backend=basefwx.default_backend()
+                iterations=100000
             )
             return kd.derive(usr.encode("utf-8"))
 
-        ep = ''.join(basefwx.random.choices(basefwx.string.digits, k=16))
+        if use_master:
+            pq_public = basefwx._load_master_pq_public()
+            kem_ciphertext, kem_shared = basefwx.ml_kem_768.encrypt(pq_public)
+            ep = basefwx._kem_shared_to_digits(kem_shared, 16)
+        else:
+            kem_ciphertext = b""
+            ep = ''.join(basefwx.random.choices(basefwx.string.digits, k=16))
         ec = mainenc(string, ep)
         ec_bin = ec.encode('utf-8')
         ep_b64 = basefwx.base64.b64encode(ep.encode('utf-8'))
@@ -643,20 +642,7 @@ class basefwx:
         epu = ciph.update(padded) + ciph.finalize()
         epu = iv + epu
 
-        if use_master:
-            keypem = basefwx.zlib.decompress(basefwx.base64.b64decode(basefwx.MASTERk))
-
-            pk = basefwx.serialization.load_pem_public_key(keypem, backend=basefwx.default_backend())
-            epm = pk.encrypt(
-                ep.encode('utf-8'),
-                basefwx.asym_padding.OAEP(
-                    mgf=basefwx.asym_padding.MGF1(basefwx.hashes.SHA256()),
-                    algorithm=basefwx.hashes.SHA256(),
-                    label=None
-                )
-            )
-        else:
-            epm = b""
+        epm = kem_ciphertext
 
         def i4(x):
             return x.to_bytes(4, 'big')
@@ -668,17 +654,8 @@ class basefwx:
 
     @staticmethod
     def b512decode(enc, key="", use_master: bool = True):
-        if key == "":
-            if use_master:
-                if basefwx.os.path.exists(basefwx.os.path.expanduser("~/master.pem")):
-                    key = open(basefwx.os.path.expanduser("~/master.pem")).read()
-                elif basefwx.os.path.exists("W:\\master.pem"):
-                    key = open("W:\\master.pem").read()
-                else:
-                    print("Failed To Decode File, The Password Is Wrong Or The File Is Corrupted!")
-                    basefwx.sys.exit(1)
-            else:
-                raise ValueError("Password required when master key usage is disabled")
+        if not key and not use_master:
+            raise ValueError("Password required when PQ master key wrapping is disabled")
 
         def mdcode(s):
             r = ""
@@ -731,8 +708,7 @@ class basefwx:
                 algorithm=basefwx.hashes.SHA256(),
                 length=32,
                 salt=s,
-                iterations=100000,
-                backend=basefwx.default_backend()
+                iterations=100000
             )
             return kd.derive(u.encode("utf-8"))
 
@@ -755,30 +731,10 @@ class basefwx:
             raise ValueError("Master key required to decode this payload")
 
         if use_master and master_blob_present:
-            if "BEGIN PRIVATE KEY" in key or "BEGIN RSA PRIVATE KEY" in key:
-                pk = basefwx.serialization.load_pem_private_key(
-                    key.encode('utf-8'),
-                    None,
-                    backend=basefwx.default_backend()
-                )
-            elif basefwx.os.path.isfile(key):
-                with open(key, 'rb') as fh:
-                    pem = fh.read()
-                pk = basefwx.serialization.load_pem_private_key(
-                    pem,
-                    None,
-                    backend=basefwx.default_backend()
-                )
-            else:
-                raise ValueError("Master private key required for this payload")
-            ep = pk.decrypt(
-                epm,
-                basefwx.asym_padding.OAEP(
-                    mgf=basefwx.asym_padding.MGF1(basefwx.hashes.SHA256()),
-                    algorithm=basefwx.hashes.SHA256(),
-                    label=None
-                )
-            )
+            private_key = basefwx._load_master_pq_private()
+            kem_shared = basefwx.ml_kem_768.decrypt(private_key, epm)
+            ep_str = basefwx._kem_shared_to_digits(kem_shared, 16)
+            ep = ep_str.encode('utf-8')
         else:
             uk = _derive_user_key(key)
             iv = epu[:16]
@@ -866,6 +822,7 @@ class basefwx:
         use_master_effective = use_master and not strip_metadata
         if master_hint == "no":
             use_master_effective = False
+        basefwx._warn_on_metadata(meta, "FWX512R")
 
         try:
             header, payload = content_core.split(basefwx.FWX_DELIM, 1)
@@ -953,21 +910,11 @@ class basefwx:
 
         @staticmethod
         def _load_master_pubkey():
-            pem = basefwx.zlib.decompress(
-                basefwx.base64.b64decode(basefwx.MASTERk)
-            )
-            return basefwx.serialization.load_pem_public_key(pem)
+            return basefwx._load_master_pq_public()
 
         @staticmethod
         def _load_master_privkey():
-            for p in (
-                    basefwx.os.path.expanduser('~/master.pem'),
-                    r'W:\master.pem'
-            ):
-                if basefwx.os.path.exists(p):
-                    data = open(p, 'rb').read()
-                    return basefwx.serialization.load_pem_private_key(data, password=None)
-            raise FileNotFoundError('No master.pem found')
+            return basefwx._load_master_pq_private()
 
         @staticmethod
         def scramble_indices(size: int, key: bytes):
@@ -1020,22 +967,15 @@ class basefwx:
             img_enc = basefwx.Image.fromarray(scrambled.reshape(h, w, 3))
             img_enc.save(output)
 
-            # RSA-encrypt password and append to file
-            pub = basefwx.ImageCipher._load_master_pubkey()
-            enc_pwd = pub.encrypt(
-                key_bytes,
-                basefwx.asym_padding.OAEP(
-                    mgf=basefwx.asym_padding.MGF1(basefwx.hashes.SHA256()),
-                    algorithm=basefwx.hashes.SHA256(),
-                    label=None
-                )
-            )
+            kem_ct, wrapped_pwd = basefwx._pq_wrap_secret(key_bytes)
             data = open(output, 'rb').read()
             with open(output, 'wb') as f:
                 f.write(data)
                 f.write(basefwx.ImageCipher._MARKER)
-                f.write(len(enc_pwd).to_bytes(4, 'big'))
-                f.write(enc_pwd)
+                f.write(len(kem_ct).to_bytes(4, 'big'))
+                f.write(kem_ct)
+                f.write(len(wrapped_pwd).to_bytes(4, 'big'))
+                f.write(wrapped_pwd)
             print(f'🔥 Encrypted image+pwd → {output}')
 
         @staticmethod
@@ -1046,22 +986,20 @@ class basefwx:
                 raise ValueError('No embedded password marker')
             png_data = data[:idx]
             rest = data[idx + len(basefwx.ImageCipher._MARKER):]
-            size = int.from_bytes(rest[:4], 'big')
-            enc_pwd = rest[4:4 + size]
+            offset = 0
+            kem_len = int.from_bytes(rest[offset:offset + 4], 'big')
+            offset += 4
+            kem_ct = rest[offset:offset + kem_len]
+            offset += kem_len
+            wrap_len = int.from_bytes(rest[offset:offset + 4], 'big')
+            offset += 4
+            wrapped_pwd = rest[offset:offset + wrap_len]
 
             # recover password bytes
             if password:
                 key_bytes = password.encode()
             else:
-                priv = basefwx.ImageCipher._load_master_privkey()
-                key_bytes = priv.decrypt(
-                    enc_pwd,
-                    basefwx.asym_padding.OAEP(
-                        mgf=basefwx.asym_padding.MGF1(basefwx.hashes.SHA256()),
-                        algorithm=basefwx.hashes.SHA256(),
-                        label=None
-                    )
-                )
+                key_bytes = basefwx._pq_unwrap_secret(kem_ct, wrapped_pwd)
                 print('🔓 Password recovered via master key')
 
             # decrypt image
@@ -1116,21 +1054,11 @@ class basefwx:
 
         @staticmethod
         def _load_master_pubkey():
-            pem = basefwx.zlib.decompress(
-                basefwx.base64.b64decode(basefwx.MASTERk)
-            )
-            return basefwx.serialization.load_pem_public_key(pem)
+            return basefwx._load_master_pq_public()
 
         @staticmethod
         def _load_master_privkey():
-            for p in (
-                    basefwx.os.path.expanduser('~/master.pem'),
-                    r'W:\master.pem'
-            ):
-                if basefwx.os.path.exists(p):
-                    data = open(p, 'rb').read()
-                    return basefwx.serialization.load_pem_private_key(data, password=None)
-            raise FileNotFoundError('No master.pem found')
+            return basefwx._load_master_pq_private()
 
         @staticmethod
         def scramble_indices(size: int, key: bytes):
@@ -1184,21 +1112,15 @@ class basefwx:
             img_enc.save(output)
 
             # RSA-encrypt password and append to file
-            pub = basefwx.ImageCipher._load_master_pubkey()
-            enc_pwd = pub.encrypt(
-                key_bytes,
-                basefwx.asym_padding.OAEP(
-                    mgf=basefwx.asym_padding.MGF1(basefwx.hashes.SHA256()),
-                    algorithm=basefwx.hashes.SHA256(),
-                    label=None
-                )
-            )
+            kem_ct, wrapped_pwd = basefwx._pq_wrap_secret(key_bytes)
             data = open(output, 'rb').read()
             with open(output, 'wb') as f:
                 f.write(data)
                 f.write(basefwx.ImageCipher._MARKER)
-                f.write(len(enc_pwd).to_bytes(4, 'big'))
-                f.write(enc_pwd)
+                f.write(len(kem_ct).to_bytes(4, 'big'))
+                f.write(kem_ct)
+                f.write(len(wrapped_pwd).to_bytes(4, 'big'))
+                f.write(wrapped_pwd)
             print(f'🔥 Encrypted image+pwd → {output}')
 
         @staticmethod
@@ -1209,22 +1131,20 @@ class basefwx:
                 raise ValueError('No embedded password marker')
             png_data = data[:idx]
             rest = data[idx + len(basefwx.ImageCipher._MARKER):]
-            size = int.from_bytes(rest[:4], 'big')
-            enc_pwd = rest[4:4 + size]
+            offset = 0
+            kem_len = int.from_bytes(rest[offset:offset + 4], 'big')
+            offset += 4
+            kem_ct = rest[offset:offset + kem_len]
+            offset += kem_len
+            wrap_len = int.from_bytes(rest[offset:offset + 4], 'big')
+            offset += 4
+            wrapped_pwd = rest[offset:offset + wrap_len]
 
             # recover password bytes
             if password:
                 key_bytes = password.encode()
             else:
-                priv = basefwx.ImageCipher._load_master_privkey()
-                key_bytes = priv.decrypt(
-                    enc_pwd,
-                    basefwx.asym_padding.OAEP(
-                        mgf=basefwx.asym_padding.MGF1(basefwx.hashes.SHA256()),
-                        algorithm=basefwx.hashes.SHA256(),
-                        label=None
-                    )
-                )
+                key_bytes = basefwx._pq_unwrap_secret(kem_ct, wrapped_pwd)
                 print('🔓 Password recovered via master key')
 
             # decrypt image
@@ -1349,7 +1269,11 @@ class basefwx:
         use_master_effective = use_master and not strip_metadata
         plaintext = basefwx.decryptAES(ciphertext, password, use_master=use_master_effective)
         metadata_blob, payload = basefwx._split_metadata(plaintext)
-        _ = basefwx._decode_metadata(metadata_blob)
+        meta = basefwx._decode_metadata(metadata_blob)
+        if meta.get("ENC-MASTER") == "no":
+            use_master_effective = False
+        basefwx._warn_on_metadata(meta, "AES-LIGHT")
+        basefwx._warn_on_metadata(meta, "AES-LIGHT")
 
         try:
             ext, b64_payload = payload.split(basefwx.FWX_DELIM, 1)
@@ -1451,7 +1375,10 @@ class basefwx:
         use_master_effective = use_master and not strip_metadata
         plaintext = basefwx.decryptAES(ciphertext, password, use_master=use_master_effective)
         metadata_blob, payload = basefwx._split_metadata(plaintext)
-        _ = basefwx._decode_metadata(metadata_blob)
+        meta = basefwx._decode_metadata(metadata_blob)
+        if meta.get("ENC-MASTER") == "no":
+            use_master_effective = False
+        basefwx._warn_on_metadata(meta, "AES-HEAVY")
 
         try:
             ext_token, data_token = payload.split(basefwx.FWX_HEAVY_DELIM, 1)

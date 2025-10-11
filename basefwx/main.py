@@ -27,9 +27,9 @@ class basefwx:
     FWX_DELIM = "A8igTOmG"
     FWX_HEAVY_DELIM = "673827837628292873"
     META_DELIM = "::FWX-META::"
-    ENGINE_VERSION = "3.0.0"
+    ENGINE_VERSION = "3.1.0"
     MASTER_PQ_ALG = "ml-kem-768"
-    MASTER_PQ_PUBLIC = b"eJwBoARf+5/JFGxSZWcnXIcBpDtUBKI3JuGbyvmqRrc6fH+GHBOBn9LYpxIwGjozH33zAtAcH3oMZEi7PBYnafaqymdXzC3qQhWBJlaSyq7BaYrZfc1zZXoFp8nUrQrSmG5Jy3bsk/8YUSZmrrI2PfCbOt4Jef5iG+wiG82kN5qFh/Ulp06zFClAMj8HCenjEfojT08FHTUG0KtVYsNDYiumjWA1cYlXvWf5dXgJQLJncvHCUzZMRJXoNNVbcK/iAxxTflCysGsmhVS2nmhSZVQDxhL2MlyUV60HaMkxhFeRK8xwp2v2o/EJWBooEuHThUTlKCeSQxl6d1WhxvaBvXgZEyfWOnBjYvHHoKD6cb3KtXW3ZLh0VpWno8h1vLvSIrNVUzy2u9zjgDZnwzsQKQhqr49IrxxLrerlvobbaTjbYqdpinSEG4smJxfIOqcApqrsmSGkUuZ7q0EXYwESSFrzmFo2jOQKaZyEux3RBaLzBbElc2w7m/XjPSjpwZtlQkX2trohKoWWgG6glBqZMw72C4TkF5NJsha6o1cYOJobsGtYSEahHi7JllzgKL4oaUkzqCu3KCYHeoAVa48qYFmVz+fKZJeRBAGRAwFGYYVEcB3Kx6NxehiaSFKQGCFxk7x2X+lcE4J7xgHsO8mVuqiyXs/LwQ81i895wjvTc0qsoy30IcmabsPIHFUrXiaxfQX1smW8t0ymn02xSm/hfX84WcLXBih6C3bbGv2YvkBRs9+Ax3FLA5iBMcaIxGwLQ7dhP9zyv8gkEkQkPQqpBxehr81qvZucrzJCV0XqGTiJdXQVnD9MWfozPWlnP2tCtTWhxjU2qm44g6LXB1SabG86kF33EzDigE/TfNy3IYz6KTJbyUcES0ljlEFDunyZSkABrMiZzJRWxx+Dz8IYOVPoUye7k5ACEaXEOOZCAe77iCk4adOsrLQZSFHYgHMbliyqLN9UJpFzNOTqAtJQL8a7ZBowy6wjtNrwpJF3HDrDh/IEfgHLpWIEAjRUwIrcM3UGiWHROnzbnB4mSwvVUjL8xdlwzyk6wKqlB/SRLO83WUizou5yg/cnperDOv3ImJUDPo0LH+eMR7B2Byk2bAoUpA45xiEKtYKjBe7zcp2Wq4MpKfMkgb7Ay4ZWvEL1HMe3TOJiTZ5Irh6MsfArTqR2gZjiDNg2EDnCBQERX6Y1Ktq5RyaTyHgCznNiB4rUTd/yg67wwm6QJJMzJVwoKq8qjARjsbtkZobbNNAJuFrIOUGldcoIa3cAQfSYiGaTejOjZotLUnOhJPTktjTBK5z7XUx8pj+3RZzTp9LJRCGVbH6DV0J0EoRbe/O6sethRU3wm5WJQXO5zN7Mk2fAqT2atFhjpIS4GGE3t3TIP66VsGXBd5yaFQpcGqLqc+hcAjBYLXhby3RpDHforXFSpP9bxl9WBQ84kjXqLFlKgmp7n/RIsFwCgd4mK26DyhdMiLQCb76Kl1EKcDvbg94QpxuBrPJMv5bQmc1ZGQsDDIEau/DxGuVLlTHxGNQMz7JKZaQCpgQAm00D156rwc4mgz6FHafXZCXDBOzoBItxzRgWYhQ45nNG0FEpBg=="
+    MASTER_PQ_PUBLIC = b"eJwBoARf+9Kzz6BzXHi8fntsVzKBAxCzV6VTNfbCvfAqh+jMdEfccE7UR4Nnbl+roH3ML55Adeabfs6kZ3CgSZijRTWJDbaUXj+LX391QXOnTa7rNEg1qTaxSa1DKmFZwY+kCRlyjP8BWUY0P9c2NLHDiHlBObDRjUyWrbb1YdiJXfITJz3bvBlnRLTQIRSpH042LZy1CwpQT+C0ISO5tc9qkDocWZ3Jx8+Avd0KcY2TP8rcCY4kY/7JR4xWiRV6e1wnz3BnQxdivx4jPusMo8VnlInHhYlSJvEIHDgqo5WjScSIKkT0UNXknxWgb5mpoB/poD4gtyCWA57iGarFM6k3oZZnRjMilMAwvQ8bGCRxnDLsnJPCEpTkDP2Ek7LDSGv6KaG3ManmIaAoZH4mpxAmePaRkTSKYuE7vMeVqeyxl394QUZrfi/YirIhfom6SYIChFzlAgHAZCPMx+9FVzmVxicnvlKRPCWITkFRnkVraxZ8x9S4OR9HzT4G0BEsj/sKOY5VeAi6c82ricH6HnaJB+eEvhjiTssSoxnBX9vUbftnLjFqTMPctY1DgmTabWz1U23rffPSqo0zeDxIlR0FD1foxs9gc9JSR/MChL2ZzFLAUqq7QBPWxHsrjN8VO86FyG64VncSQvtwEPR5kRQgEgoBkqsHHnOVBov3le/mB9oBbPDzCTw7rPchTzNWVvwDOS/bfkmQIlOKKENZLvMInF6ktaLGiAzhy0eob5g7dMFwLCnDU/iQjQqZbyIMVCqMuBlgTFHhPWgKErNwcnIMPEoYg+mstgJIq272I7VCX9usoSjWXZX6SViIpg8FrS2RFCzmXPEpbCQHcg9arbxCD+cZIWfxVmxFx1y4Od2Eb/FkZTt6Maq4zMNalRfBjX/0C0C1aetQWiJ8HCvkZufLlYwAwovRJE+7wkXDgQLMe6dwzzo6ydEJM32kJBuzhjxjMGd4BY8JGKzKVBeJhsMLaViBGw5SEiXWgZhUbECktcJDrfc6r8PBgcQwV1TpU3pTcNNHFt1YoAMCpO9XdO7cDfnbaqRbBUY0hr3sI3P0x962F7rkR45xEGzFZp9XfmsRmG5qHfSTk4EGyS0cdFoDZ51Rvw/4e738wo4QRJGkDBGagROXzbwnmpSpV+cxXvK0Su5FIaGhJQHJqTQTv94Gy710eE43GffqEuT6D4X6mRclSBNGTepgGq6laanzJSp3UcVwFZwCNjdbCB+ycdkqR77muhUgnxHAcZvRf4oXx0pnkGx2Px/gvvAaZGLmqv16jFFZj3pocKlIrVBiSduoYy/CBkehUQDoeykgZs73zhGklAi1NBTBkXjgasYySO2UuS8bSINJfKLqUHOsfbB6sEOLilCaPfCcRtqafMqYJwdXW+KwgpmXqbV0I+nyqAVMIpRmwMYjpBxEkV5CMRgHyEnMr2cBXuv8RcjZfLmMbCATfNcJdEuQUXDjfE4nr94DHERSk8y3IkE7paIUbGV4jgGnFtEYUiZ6ADewLTFDDTmFpRA7jCjytuukSqmmdchYYLIgQnRmTRk3AZbnMbwxkgwy86skVNZZYldaxFdWvulRMd1FgnQn5Q=="
 
     class _ProgressReporter:
         """Lightweight textual progress reporter with two WinRAR-style bars."""
@@ -37,40 +37,42 @@ class basefwx:
         def __init__(self, total_files: int, stream=None):
             self.total_files = max(total_files, 1)
             self.stream = stream or basefwx.sys.stdout
+            self._printed = False
 
         @staticmethod
-        def _render_bar(fraction: float, width: int = PROGRESS_BAR_WIDTH) -> str:
+        def _render_bar(fraction: float, width: int | None = None) -> str:
+            width = width or basefwx.PROGRESS_BAR_WIDTH
             fraction = max(0.0, min(1.0, fraction))
             filled = int(round(fraction * width))
             filled = min(filled, width)
             bar = '#' * filled + '.' * (width - filled)
             return f"[{bar}] {fraction * 100:6.2f}%"
 
+        def _write(self, line1: str, line2: str) -> None:
+            if self._printed:
+                self.stream.write('\033[2F')  # move up two lines
+            self.stream.write('\033[2K' + line1 + '\n')
+            self.stream.write('\033[2K' + line2 + '\n')
+            self.stream.flush()
+            self._printed = True
+
         def update(self, file_index: int, fraction: float, phase: str, path: "basefwx.pathlib.Path") -> None:
             overall_fraction = (file_index + max(0.0, min(1.0, fraction))) / self.total_files
             overall = self._render_bar(overall_fraction)
             current = self._render_bar(fraction)
             label = path.name if path else ""
-            self.stream.write(
-                f"Overall {overall} ({file_index}/{self.total_files} files complete)\n"
-            )
-            self.stream.write(
-                f"File    {current} phase: {phase}{' [' + label + ']' if label else ''}\n"
-            )
-            self.stream.flush()
+            line1 = f"Overall {overall} ({file_index}/{self.total_files} files complete)"
+            line2 = f"File    {current} phase: {phase}{' [' + label + ']' if label else ''}"
+            self._write(line1, line2)
 
         def finalize_file(self, file_index: int, path: "basefwx.pathlib.Path") -> None:
             overall_fraction = (file_index + 1) / self.total_files
             overall = self._render_bar(overall_fraction)
-            self.stream.write(
-                f"Overall {overall} ({file_index + 1}/{self.total_files} files complete)\n"
-            )
             label = path.name if path else ""
             current = self._render_bar(1.0)
-            self.stream.write(
-                f"File    {current} phase: done{' [' + label + ']' if label else ''}\n"
-            )
-            self.stream.flush()
+            line1 = f"Overall {overall} ({file_index + 1}/{self.total_files} files complete)"
+            line2 = f"File    {current} phase: done{' [' + label + ']' if label else ''}"
+            self._write(line1, line2)
 
     @staticmethod
     def _human_readable_size(num_bytes: int) -> str:
@@ -227,13 +229,7 @@ class basefwx:
         if password == "":
             if not use_master:
                 raise ValueError("Password required when master key usage is disabled")
-            master_home = basefwx.os.path.expanduser("~/master.pem")
-            if basefwx.os.path.exists(master_home):
-                password = master_home
-            elif basefwx.os.path.exists("W:\\master.pem"):
-                password = "W:\\master.pem"
-            else:
-                raise ValueError("Failed to locate master.pem for default password")
+            return ""
 
         if basefwx.os.path.isfile(password):
             with open(password, "r", encoding="utf-8") as handle:
@@ -1723,7 +1719,7 @@ def cli(argv=None) -> int:
     cryptin.add_argument(
         "-p", "--password",
         default="",
-        help="Password text or PEM path (defaults to master.pem if omitted)"
+        help="Password text or path (leave blank to rely on the master key)"
     )
     cryptin.add_argument(
         "--strip", "--trim",

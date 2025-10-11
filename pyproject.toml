@@ -12,6 +12,12 @@ classifiers = [
     "License :: OSI Approved :: GNU General Public License v3 or later (GPLv3+)",
     "Operating System :: OS Independent",
 ]
+dependencies = [
+    "cryptography>=41.0.0",
+    "numpy>=1.24.0",
+    "pillow>=10.0.0",
+    "pqcrypto>=0.3.4"
+]
 
 [project.urls]
 Homepage = "https://github.com/F1xGOD/basefwx"

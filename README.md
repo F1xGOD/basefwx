@@ -9,7 +9,7 @@ ALL RIGHTS RESERVED
 |_|     |_(_/ \_)\______)_|   \_||_|_|   \___)
 
 FixCraft® Inc. FWX Encryption ©  
-Version - v3.1 😎 OCT 10 2025 (8 PM) GMT-8  
+Version - v3.2 😎 OCT 11 2025 (12 AM) GMT-8  
 By F1xGOD 💀  
 Donate Crypto (Monero):  
 48BKksKRWEgixzz1Yec3BH54ybDNCkmmWHLGtXRY42NPJqBowaeD5RTELqgABD1GzBT97pqrjW5PJHsNWzVyQ8zuL6tRBcY
@@ -303,3 +303,6 @@ Contributions are welcome! If you spot bugs or have suggestions, please open an 
 ## License
 
 This project is licensed under the terms described on our website. See [Terms & Conditions](https://www.fixcraft.org/terms-conditions) for details.
+
+## There's more, but im lazy to put anything.
+Yubikey support as well...

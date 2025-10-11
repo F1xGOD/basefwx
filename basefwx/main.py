@@ -30,6 +30,8 @@ class basefwx:
     ENGINE_VERSION = "3.1.0"
     MASTER_PQ_ALG = "ml-kem-768"
     MASTER_PQ_PUBLIC = b"eJwBoARf+9Kzz6BzXHi8fntsVzKBAxCzV6VTNfbCvfAqh+jMdEfccE7UR4Nnbl+roH3ML55Adeabfs6kZ3CgSZijRTWJDbaUXj+LX391QXOnTa7rNEg1qTaxSa1DKmFZwY+kCRlyjP8BWUY0P9c2NLHDiHlBObDRjUyWrbb1YdiJXfITJz3bvBlnRLTQIRSpH042LZy1CwpQT+C0ISO5tc9qkDocWZ3Jx8+Avd0KcY2TP8rcCY4kY/7JR4xWiRV6e1wnz3BnQxdivx4jPusMo8VnlInHhYlSJvEIHDgqo5WjScSIKkT0UNXknxWgb5mpoB/poD4gtyCWA57iGarFM6k3oZZnRjMilMAwvQ8bGCRxnDLsnJPCEpTkDP2Ek7LDSGv6KaG3ManmIaAoZH4mpxAmePaRkTSKYuE7vMeVqeyxl394QUZrfi/YirIhfom6SYIChFzlAgHAZCPMx+9FVzmVxicnvlKRPCWITkFRnkVraxZ8x9S4OR9HzT4G0BEsj/sKOY5VeAi6c82ricH6HnaJB+eEvhjiTssSoxnBX9vUbftnLjFqTMPctY1DgmTabWz1U23rffPSqo0zeDxIlR0FD1foxs9gc9JSR/MChL2ZzFLAUqq7QBPWxHsrjN8VO86FyG64VncSQvtwEPR5kRQgEgoBkqsHHnOVBov3le/mB9oBbPDzCTw7rPchTzNWVvwDOS/bfkmQIlOKKENZLvMInF6ktaLGiAzhy0eob5g7dMFwLCnDU/iQjQqZbyIMVCqMuBlgTFHhPWgKErNwcnIMPEoYg+mstgJIq272I7VCX9usoSjWXZX6SViIpg8FrS2RFCzmXPEpbCQHcg9arbxCD+cZIWfxVmxFx1y4Od2Eb/FkZTt6Maq4zMNalRfBjX/0C0C1aetQWiJ8HCvkZufLlYwAwovRJE+7wkXDgQLMe6dwzzo6ydEJM32kJBuzhjxjMGd4BY8JGKzKVBeJhsMLaViBGw5SEiXWgZhUbECktcJDrfc6r8PBgcQwV1TpU3pTcNNHFt1YoAMCpO9XdO7cDfnbaqRbBUY0hr3sI3P0x962F7rkR45xEGzFZp9XfmsRmG5qHfSTk4EGyS0cdFoDZ51Rvw/4e738wo4QRJGkDBGagROXzbwnmpSpV+cxXvK0Su5FIaGhJQHJqTQTv94Gy710eE43GffqEuT6D4X6mRclSBNGTepgGq6laanzJSp3UcVwFZwCNjdbCB+ycdkqR77muhUgnxHAcZvRf4oXx0pnkGx2Px/gvvAaZGLmqv16jFFZj3pocKlIrVBiSduoYy/CBkehUQDoeykgZs73zhGklAi1NBTBkXjgasYySO2UuS8bSINJfKLqUHOsfbB6sEOLilCaPfCcRtqafMqYJwdXW+KwgpmXqbV0I+nyqAVMIpRmwMYjpBxEkV5CMRgHyEnMr2cBXuv8RcjZfLmMbCATfNcJdEuQUXDjfE4nr94DHERSk8y3IkE7paIUbGV4jgGnFtEYUiZ6ADewLTFDDTmFpRA7jCjytuukSqmmdchYYLIgQnRmTRk3AZbnMbwxkgwy86skVNZZYldaxFdWvulRMd1FgnQn5Q=="
+    IMAGECIPHER_SCRAMBLE_CONTEXT = b'basefwx.imagecipher.scramble.v1'
+    IMAGECIPHER_OFFSET_CONTEXT = b'basefwx.imagecipher.offset.v1'
 
     class _ProgressReporter:
         """Lightweight textual progress reporter with two WinRAR-style bars."""
@@ -176,6 +178,34 @@ class basefwx:
                     break
             seed = digest
         return ''.join(output)
+
+    @staticmethod
+    def _derive_key_material(
+        secret: "basefwx.typing.Union[str, bytes, bytearray]",
+        context: "basefwx.typing.Union[str, bytes, bytearray]",
+        *,
+        length: int = 32,
+        iterations: int = 200_000
+    ) -> bytes:
+        """
+        Derive deterministic key material from a password-like secret using PBKDF2.
+        The context parameter namespaces derivations for separate use-cases.
+        """
+        if isinstance(secret, str):
+            secret_bytes = secret.encode('utf-8')
+        else:
+            secret_bytes = bytes(secret)
+        if isinstance(context, str):
+            context_bytes = context.encode('utf-8')
+        else:
+            context_bytes = bytes(context)
+        return basefwx.hashlib.pbkdf2_hmac(
+            'sha256',
+            secret_bytes,
+            context_bytes,
+            iterations,
+            dklen=length
+        )
 
     @staticmethod
     def _pq_wrap_secret(secret: bytes) -> "basefwx.typing.Tuple[bytes, bytes]":
@@ -914,7 +944,11 @@ class basefwx:
 
         @staticmethod
         def scramble_indices(size: int, key: bytes):
-            seed = int(basefwx.hashlib.sha256(key).hexdigest(), 16) % 2 ** 32
+            seed_material = basefwx._derive_key_material(
+                key,
+                basefwx.IMAGECIPHER_SCRAMBLE_CONTEXT
+            )
+            seed = int.from_bytes(seed_material[:4], 'big')
             basefwx.np.random.seed(seed)
             idx = basefwx.np.arange(size)
             basefwx.np.random.shuffle(idx)
@@ -936,7 +970,10 @@ class basefwx:
             scrambled = flat[
                 basefwx.ImageCipher.scramble_indices(flat.shape[0], key_bytes)
             ].copy()
-            digest = basefwx.hashlib.sha256(key_bytes).digest()
+            digest = basefwx._derive_key_material(
+                key_bytes,
+                basefwx.IMAGECIPHER_OFFSET_CONTEXT
+            )
             offsets = basefwx.np.frombuffer(
                 digest * ((flat.shape[0] // len(digest)) + 1),
                 dtype=basefwx.np.uint8
@@ -1003,7 +1040,10 @@ class basefwx:
             arr = basefwx.np.array(img)
             h, w, _ = arr.shape
             flat = arr.reshape(-1, 3)
-            digest = basefwx.hashlib.sha256(key_bytes).digest()
+            digest = basefwx._derive_key_material(
+                key_bytes,
+                basefwx.IMAGECIPHER_OFFSET_CONTEXT
+            )
             offsets = basefwx.np.frombuffer(
                 digest * ((flat.shape[0] // len(digest)) + 1),
                 dtype=basefwx.np.uint8
@@ -1058,7 +1098,11 @@ class basefwx:
 
         @staticmethod
         def scramble_indices(size: int, key: bytes):
-            seed = int(basefwx.hashlib.sha256(key).hexdigest(), 16) % 2 ** 32
+            seed_material = basefwx._derive_key_material(
+                key,
+                basefwx.IMAGECIPHER_SCRAMBLE_CONTEXT
+            )
+            seed = int.from_bytes(seed_material[:4], 'big')
             basefwx.np.random.seed(seed)
             idx = basefwx.np.arange(size)
             basefwx.np.random.shuffle(idx)
@@ -1080,7 +1124,10 @@ class basefwx:
             scrambled = flat[
                 basefwx.ImageCipher.scramble_indices(flat.shape[0], key_bytes)
             ].copy()
-            digest = basefwx.hashlib.sha256(key_bytes).digest()
+            digest = basefwx._derive_key_material(
+                key_bytes,
+                basefwx.IMAGECIPHER_OFFSET_CONTEXT
+            )
             offsets = basefwx.np.frombuffer(
                 digest * ((flat.shape[0] // len(digest)) + 1),
                 dtype=basefwx.np.uint8
@@ -1148,7 +1195,10 @@ class basefwx:
             arr = basefwx.np.array(img)
             h, w, _ = arr.shape
             flat = arr.reshape(-1, 3)
-            digest = basefwx.hashlib.sha256(key_bytes).digest()
+            digest = basefwx._derive_key_material(
+                key_bytes,
+                basefwx.IMAGECIPHER_OFFSET_CONTEXT
+            )
             offsets = basefwx.np.frombuffer(
                 digest * ((flat.shape[0] // len(digest)) + 1),
                 dtype=basefwx.np.uint8

@@ -5,7 +5,6 @@ class basefwx:
     import sys
     import secrets
     import pathlib
-    import random
     import typing
     import json
     from PIL import Image
@@ -32,6 +31,8 @@ class basefwx:
     MASTER_PQ_PUBLIC = b"eJwBoARf+9Kzz6BzXHi8fntsVzKBAxCzV6VTNfbCvfAqh+jMdEfccE7UR4Nnbl+roH3ML55Adeabfs6kZ3CgSZijRTWJDbaUXj+LX391QXOnTa7rNEg1qTaxSa1DKmFZwY+kCRlyjP8BWUY0P9c2NLHDiHlBObDRjUyWrbb1YdiJXfITJz3bvBlnRLTQIRSpH042LZy1CwpQT+C0ISO5tc9qkDocWZ3Jx8+Avd0KcY2TP8rcCY4kY/7JR4xWiRV6e1wnz3BnQxdivx4jPusMo8VnlInHhYlSJvEIHDgqo5WjScSIKkT0UNXknxWgb5mpoB/poD4gtyCWA57iGarFM6k3oZZnRjMilMAwvQ8bGCRxnDLsnJPCEpTkDP2Ek7LDSGv6KaG3ManmIaAoZH4mpxAmePaRkTSKYuE7vMeVqeyxl394QUZrfi/YirIhfom6SYIChFzlAgHAZCPMx+9FVzmVxicnvlKRPCWITkFRnkVraxZ8x9S4OR9HzT4G0BEsj/sKOY5VeAi6c82ricH6HnaJB+eEvhjiTssSoxnBX9vUbftnLjFqTMPctY1DgmTabWz1U23rffPSqo0zeDxIlR0FD1foxs9gc9JSR/MChL2ZzFLAUqq7QBPWxHsrjN8VO86FyG64VncSQvtwEPR5kRQgEgoBkqsHHnOVBov3le/mB9oBbPDzCTw7rPchTzNWVvwDOS/bfkmQIlOKKENZLvMInF6ktaLGiAzhy0eob5g7dMFwLCnDU/iQjQqZbyIMVCqMuBlgTFHhPWgKErNwcnIMPEoYg+mstgJIq272I7VCX9usoSjWXZX6SViIpg8FrS2RFCzmXPEpbCQHcg9arbxCD+cZIWfxVmxFx1y4Od2Eb/FkZTt6Maq4zMNalRfBjX/0C0C1aetQWiJ8HCvkZufLlYwAwovRJE+7wkXDgQLMe6dwzzo6ydEJM32kJBuzhjxjMGd4BY8JGKzKVBeJhsMLaViBGw5SEiXWgZhUbECktcJDrfc6r8PBgcQwV1TpU3pTcNNHFt1YoAMCpO9XdO7cDfnbaqRbBUY0hr3sI3P0x962F7rkR45xEGzFZp9XfmsRmG5qHfSTk4EGyS0cdFoDZ51Rvw/4e738wo4QRJGkDBGagROXzbwnmpSpV+cxXvK0Su5FIaGhJQHJqTQTv94Gy710eE43GffqEuT6D4X6mRclSBNGTepgGq6laanzJSp3UcVwFZwCNjdbCB+ycdkqR77muhUgnxHAcZvRf4oXx0pnkGx2Px/gvvAaZGLmqv16jFFZj3pocKlIrVBiSduoYy/CBkehUQDoeykgZs73zhGklAi1NBTBkXjgasYySO2UuS8bSINJfKLqUHOsfbB6sEOLilCaPfCcRtqafMqYJwdXW+KwgpmXqbV0I+nyqAVMIpRmwMYjpBxEkV5CMRgHyEnMr2cBXuv8RcjZfLmMbCATfNcJdEuQUXDjfE4nr94DHERSk8y3IkE7paIUbGV4jgGnFtEYUiZ6ADewLTFDDTmFpRA7jCjytuukSqmmdchYYLIgQnRmTRk3AZbnMbwxkgwy86skVNZZYldaxFdWvulRMd1FgnQn5Q=="
     IMAGECIPHER_SCRAMBLE_CONTEXT = b'basefwx.imagecipher.scramble.v1'
     IMAGECIPHER_OFFSET_CONTEXT = b'basefwx.imagecipher.offset.v1'
+    USER_KDF_SALT_SIZE = 16
+    USER_KDF_ITERATIONS = 200_000
 
     class _ProgressReporter:
         """Lightweight textual progress reporter with two WinRAR-style bars."""
@@ -261,6 +262,21 @@ class basefwx:
                 raise ValueError("Password required when master key usage is disabled")
             return ""
 
+        if isinstance(password, str) and password.startswith("yubikey:"):
+            label = password.split(":", 1)[1] or "default"
+            try:
+                from .yubikey_pq import YubiKeyPQKeyStore, YubiKeyUnavailableError
+            except ImportError as exc:
+                raise ValueError(
+                    "YubiKey support is optional. Install python-fido2 inside your "
+                    "environment to use 'yubikey:<label>' password specifications."
+                ) from exc
+            try:
+                vault = YubiKeyPQKeyStore()
+                return vault.derive_passphrase(label.strip() or "default")
+            except YubiKeyUnavailableError as exc:
+                raise ValueError(str(exc)) from exc
+
         if basefwx.os.path.isfile(password):
             with open(password, "r", encoding="utf-8") as handle:
                 password = handle.read()
@@ -306,16 +322,23 @@ class basefwx:
         return key
 
     @staticmethod
-    def _derive_user_key(password: str) -> bytes:
-
-        salt = (password[:5] + "*&fdhauiGGVGUDoiai").encode("utf-8")
+    def _derive_user_key(
+        password: str,
+        salt: bytes | None = None,
+        *,
+        iterations: int = USER_KDF_ITERATIONS
+    ) -> "basefwx.typing.Tuple[bytes, bytes]":
+        if salt is None:
+            salt = basefwx.os.urandom(basefwx.USER_KDF_SALT_SIZE)
+        if len(salt) < basefwx.USER_KDF_SALT_SIZE:
+            raise ValueError("User key salt must be at least 16 bytes")
         kdf = basefwx.PBKDF2HMAC(
             algorithm=basefwx.hashes.SHA256(),
             length=32,
             salt=salt,
-            iterations=100000
+            iterations=iterations
         )
-        return kdf.derive(password.encode("utf-8"))
+        return kdf.derive(password.encode("utf-8")), salt
 
     @staticmethod
     def encryptAES(plaintext: str, user_key: str, use_master: bool = True) -> bytes:
@@ -332,7 +355,7 @@ class basefwx:
             ephemeral_key = basefwx.os.urandom(32)
 
         if user_key:
-            user_derived_key = basefwx._derive_user_key(user_key)
+            user_derived_key, user_salt = basefwx._derive_user_key(user_key)
             ephemeral_key_b64 = basefwx.base64.b64encode(ephemeral_key).decode('utf-8')
             iv_user = basefwx.os.urandom(16)
             cipher_user = basefwx.Cipher(basefwx.algorithms.AES(user_derived_key), basefwx.modes.CBC(iv_user))
@@ -340,7 +363,7 @@ class basefwx:
             padder = basefwx.padding.PKCS7(128).padder()
             padded_ephemeral_key = padder.update(ephemeral_key_b64.encode('utf-8')) + padder.finalize()
             ephemeral_enc_user = encryptor_user.update(padded_ephemeral_key) + encryptor_user.finalize()
-            ephemeral_enc_user = iv_user + ephemeral_enc_user
+            ephemeral_enc_user = user_salt + iv_user + ephemeral_enc_user
         else:
             ephemeral_enc_user = b""
         iv_data = basefwx.os.urandom(16)
@@ -387,9 +410,13 @@ class basefwx:
         elif user_blob_present:
             if not key:
                 raise ValueError("User password required to decrypt this payload")
-            user_derived_key = basefwx._derive_user_key(key)
-            iv_user = ephemeral_enc_user[:16]
-            enc_user_key = ephemeral_enc_user[16:]
+            min_len = basefwx.USER_KDF_SALT_SIZE + 16
+            if len(ephemeral_enc_user) < min_len:
+                raise ValueError("Corrupted user key blob: missing salt or IV")
+            user_salt = ephemeral_enc_user[:basefwx.USER_KDF_SALT_SIZE]
+            iv_user = ephemeral_enc_user[basefwx.USER_KDF_SALT_SIZE:basefwx.USER_KDF_SALT_SIZE + 16]
+            enc_user_key = ephemeral_enc_user[basefwx.USER_KDF_SALT_SIZE + 16:]
+            user_derived_key, _ = basefwx._derive_user_key(key, salt=user_salt)
             cipher_user = basefwx.Cipher(basefwx.algorithms.AES(user_derived_key), basefwx.modes.CBC(iv_user))
             decryptor_user = cipher_user.decryptor()
             padded_b64 = decryptor_user.update(enc_user_key) + decryptor_user.finalize()
@@ -481,28 +508,23 @@ class basefwx:
         def pb512encode_chunk(txt, code):
             return encrypt_chunks_to_string(mdcode(txt), mdcode(code)).replace("-", "0").replace("=", "4G5tRA")
 
-        def _derive_user_key(u):
-            s = (u[:5] + "*&fdhauiGGVGUDoiai").encode("utf-8")
-            k = basefwx.PBKDF2HMAC(algorithm=basefwx.hashes.SHA256(), length=32, salt=s, iterations=100000)
-            return k.derive(u.encode("utf-8"))
-
         if use_master:
             pq_public = basefwx._load_master_pq_public()
             kem_ciphertext, kem_shared = basefwx.ml_kem_768.encrypt(pq_public)
             c = basefwx._kem_shared_to_digits(kem_shared, 16)
         else:
             kem_ciphertext = b""
-            c = ''.join(basefwx.random.choices(basefwx.string.digits, k=16))
+            c = ''.join(basefwx.secrets.choice(basefwx.string.digits) for _ in range(16))
         enc = pb512encode_chunk(t, c)
         cb = enc.encode('utf-8')
         ck = basefwx.base64.b64encode(c.encode('utf-8')).decode('utf-8')
-        uk = _derive_user_key(p)
+        uk, salt = basefwx._derive_user_key(p)
         iv1 = basefwx.os.urandom(16)
         cu = basefwx.Cipher(basefwx.algorithms.AES(uk), basefwx.modes.CBC(iv1)).encryptor()
         pad = basefwx.padding.PKCS7(128).padder()
         p1 = pad.update(ck.encode('utf-8')) + pad.finalize()
-        ecu = cu.update(p1) + cu.finalize()
-        ecu = iv1 + ecu
+        ecu_ct = cu.update(p1) + cu.finalize()
+        ecu = salt + iv1 + ecu_ct
         ecm = kem_ciphertext
 
         def i4(x):
@@ -564,11 +586,6 @@ class basefwx:
                 rr = "-" + rr[1:]
             return mcode(decrypt_chunks_from_string(rr, mdcode(code)))
 
-        def _derive_user_key(u):
-            s = (u[:5] + "*&fdhauiGGVGUDoiai").encode("utf-8")
-            k = basefwx.PBKDF2HMAC(algorithm=basefwx.hashes.SHA256(), length=32, salt=s, iterations=100000)
-            return k.derive(u.encode("utf-8"))
-
         ln = int(digs[:6])
         val = int(digs[6:])
         raw = val.to_bytes((val.bit_length() + 7) // 8, 'big')
@@ -595,9 +612,13 @@ class basefwx:
             kem_shared = basefwx.ml_kem_768.decrypt(private_key, ecm)
             cc = basefwx._kem_shared_to_digits(kem_shared, 16)
         else:
-            uk = _derive_user_key(k)
-            iv = ecu[:16]
-            cf = ecu[16:]
+            min_len = basefwx.USER_KDF_SALT_SIZE + 16
+            if len(ecu) < min_len:
+                raise ValueError("Corrupted user key blob: missing salt or IV")
+            salt = ecu[:basefwx.USER_KDF_SALT_SIZE]
+            iv = ecu[basefwx.USER_KDF_SALT_SIZE:basefwx.USER_KDF_SALT_SIZE + 16]
+            cf = ecu[basefwx.USER_KDF_SALT_SIZE + 16:]
+            uk, _ = basefwx._derive_user_key(k, salt=salt)
             d = basefwx.Cipher(basefwx.algorithms.AES(uk), basefwx.modes.CBC(iv)).decryptor()
             p = d.update(cf) + d.finalize()
             up = basefwx.padding.PKCS7(128).unpadder()
@@ -639,34 +660,24 @@ class basefwx:
                 encrypt_chunks_to_string(mdcode(s), mdcode(c)).replace("-", "0")
             ).replace("=", "4G5tRA")
 
-        def _derive_user_key(usr):
-            st = (usr[:5] + "*&fdhauiGGVGUDoiai").encode("utf-8")
-            kd = basefwx.PBKDF2HMAC(
-                algorithm=basefwx.hashes.SHA256(),
-                length=32,
-                salt=st,
-                iterations=100000
-            )
-            return kd.derive(usr.encode("utf-8"))
-
         if use_master:
             pq_public = basefwx._load_master_pq_public()
             kem_ciphertext, kem_shared = basefwx.ml_kem_768.encrypt(pq_public)
             ep = basefwx._kem_shared_to_digits(kem_shared, 16)
         else:
             kem_ciphertext = b""
-            ep = ''.join(basefwx.random.choices(basefwx.string.digits, k=16))
+            ep = ''.join(basefwx.secrets.choice(basefwx.string.digits) for _ in range(16))
         ec = mainenc(string, ep)
         ec_bin = ec.encode('utf-8')
         ep_b64 = basefwx.base64.b64encode(ep.encode('utf-8'))
 
-        derived = _derive_user_key(user_key)
+        derived, salt = basefwx._derive_user_key(user_key)
         iv = basefwx.os.urandom(16)
         ciph = basefwx.Cipher(basefwx.algorithms.AES(derived), basefwx.modes.CBC(iv)).encryptor()
         pad = basefwx.padding.PKCS7(128).padder()
         padded = pad.update(ep_b64) + pad.finalize()
-        epu = ciph.update(padded) + ciph.finalize()
-        epu = iv + epu
+        epu_ct = ciph.update(padded) + ciph.finalize()
+        epu = salt + iv + epu_ct
 
         epm = kem_ciphertext
 
@@ -728,16 +739,6 @@ class basefwx:
             if x and x[0] == "0": x = "-" + x[1:]
             return mcode(decrypt_chunks_from_string(x, mdcode(c)))
 
-        def _derive_user_key(u):
-            s = (u[:5] + "*&fdhauiGGVGUDoiai").encode("utf-8")
-            kd = basefwx.PBKDF2HMAC(
-                algorithm=basefwx.hashes.SHA256(),
-                length=32,
-                salt=s,
-                iterations=100000
-            )
-            return kd.derive(u.encode("utf-8"))
-
         raw = basefwx.base64.b64decode(enc)  # decode from base64 string
 
         def rc(b, o):
@@ -762,9 +763,13 @@ class basefwx:
             ep_str = basefwx._kem_shared_to_digits(kem_shared, 16)
             ep = ep_str.encode('utf-8')
         else:
-            uk = _derive_user_key(key)
-            iv = epu[:16]
-            cf = epu[16:]
+            min_len = basefwx.USER_KDF_SALT_SIZE + 16
+            if len(epu) < min_len:
+                raise ValueError("Corrupted user key blob: missing salt or IV")
+            salt = epu[:basefwx.USER_KDF_SALT_SIZE]
+            iv = epu[basefwx.USER_KDF_SALT_SIZE:basefwx.USER_KDF_SALT_SIZE + 16]
+            cf = epu[basefwx.USER_KDF_SALT_SIZE + 16:]
+            uk, _ = basefwx._derive_user_key(key, salt=salt)
             dec = basefwx.Cipher(basefwx.algorithms.AES(uk), basefwx.modes.CBC(iv)).decryptor()
             out = dec.update(cf) + dec.finalize()
             up = basefwx.padding.PKCS7(128).unpadder()

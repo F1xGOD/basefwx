@@ -9,7 +9,7 @@ ALL RIGHTS RESERVED
 |_|     |_(_/ \_)\______)_|   \_||_|_|   \___)
 
 FixCraft® Inc. FWX Encryption ©  
-Version - v3.0 😎 OCT 10 2025 (8 PM) GMT-8  
+Version - v3.1 😎 OCT 10 2025 (8 PM) GMT-8  
 By F1xGOD 💀  
 Donate Crypto (Monero):  
 48BKksKRWEgixzz1Yec3BH54ybDNCkmmWHLGtXRY42NPJqBowaeD5RTELqgABD1GzBT97pqrjW5PJHsNWzVyQ8zuL6tRBcY
@@ -236,7 +236,7 @@ Options:
 When decrypting, if the embedded metadata shows a different method or engine version, BASEFWX prints:
 ```
 Did you mean to use:
-FWX512R or 3.0.0
+FWX512R or 3.1.0
 ```
 so you can re-run with the correct switches.
 

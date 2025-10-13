@@ -22,3 +22,5 @@ dependencies = [
 [project.urls]
 Homepage = "https://github.com/F1xGOD/basefwx"
 Issues = "https://github.com/F1xGOD/basefwx/issues"
+TermsConditions = "https://www.fixcraft.org/terms-conditions"
+PrivacyPolicy = "https://www.fixcraft.org/privacy-policy"

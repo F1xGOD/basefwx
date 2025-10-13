@@ -2,7 +2,7 @@
 
 ## Supported Versions
 
-**Versioning note:** Current releases use `MAJOR.MINOR` (e.g., `3.2`). When patch versions appear (e.g., `3.2.1`), interpret each row as the whole patch line (e.g., `3.2.x`).
+**Versioning note:** Current releases use `MAJOR.MINOR` (e.g., `3.3`). When patch versions appear (e.g., `3.3.1`), interpret each row as the whole patch line (`3.3.x`).
 
 > [!CAUTION]
 > DO NOT USE ANY VERSION BELOW 2.6, you -> WILL <- get compromised!
@@ -12,7 +12,8 @@
 
 |  Version  | Status / Notes                                                                                                                    | Supported |
 | :-------: | --------------------------------------------------------------------------------------------------------------------------------- | :-------: |
-|  **3.2**  | ✅ **USE IT!** Post‑Quantum Encryption (PQE). Actively maintained. **Not cross‑compatible with earlier lines.**                    |     ✅     |
+| **3.3.x** | ✅ **USE IT!** PQE + AEAD + obfuscation fast‑paths. Actively maintained. **Not cross‑compatible with earlier lines.**              |     ✅     |
+|  **3.2**  | ✅ Security maintenance (bug & vuln fixes only). PQE format introduced here. **Not cross‑compatible with older lines.**             |     ✅     |
 |  **3.1**  | ❌ CodeQL findings; weak key‑derivation (affects this and below). **Not cross‑compatible with 3.2.**                               |     ❌     |
 |  **3.0**  | ❌ Unstable; may crash due to code defects. **Not cross‑compatible with 3.2.**                                                     |     ❌     |
 |  **2.9**  | ✅ Stable baseline (LTS for non‑PQE users). Security fixes only. **Partial/"maybe" compatibility with 2.8** depending on features. |     ✅     |
@@ -29,16 +30,17 @@
 
 ### Maintenance policy
 
-* **Active:** `3.2` (PQE) — features + security.
+* **Active:** `3.3.x` (PQE + AEAD obfuscation fast paths) — features + security.
+* **Security maintenance:** `3.2`.
 * **LTS (security‑only):** `2.9`.
 * **Critical fixes (short window):** `2.8`.
 * **EOL:** `3.1`, `3.0`, `2.7`, and anything **< 2.6**.
 
 ### Migration guidance
 
-* From **≤ 3.1** → **3.2**: upgrade ASAP, **re‑generate keys** and **re‑encrypt** all stored data. Do **not** attempt mixed clusters.
-* From **2.9/2.8** → **3.2**: plan a one‑way migration with fresh keys and a full re‑encrypt. Validate exports before cutover. Roll back only with full 2.x snapshots (no forward replay).
-* From **< 2.6**: treat as potentially breached; rotate credentials, invalidate legacy ciphertext at rest, and perform a clean re‑ingest under **3.2**.
+* From **≤ 3.2** → **3.3.x**: upgrade ASAP, **re‑generate keys** and **re‑encrypt** all stored data. Do **not** attempt mixed clusters.
+* From **2.9/2.8** → **3.3.x**: plan a one‑way migration with fresh keys and a full re‑encrypt. Validate exports before cutover. Roll back only with full 2.x snapshots (no forward replay).
+* From **< 2.6**: treat as potentially breached; rotate credentials, invalidate legacy ciphertext at rest, and perform a clean re‑ingest under **3.3.x**.
 
 ---
 

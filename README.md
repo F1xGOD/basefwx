@@ -9,14 +9,14 @@ ALL RIGHTS RESERVED
 |_|     |_(_/ \_)\______)_|   \_||_|_|   \___)
 
 FixCraft® Inc. FWX Encryption ©  
-Version - v3.2 😎 OCT 11 2025 (12 AM) GMT-8  
+Version - v3.3.1 😎 OCT 12 2025 (10 PM) GMT-8  
 By F1xGOD 💀  
 Donate Crypto (Monero):  
 48BKksKRWEgixzz1Yec3BH54ybDNCkmmWHLGtXRY42NPJqBowaeD5RTELqgABD1GzBT97pqrjW5PJHsNWzVyQ8zuL6tRBcY
 </pre>
+
 [![PyPI version](https://img.shields.io/pypi/v/basefwx)](https://pypi.org/project/basefwx/)
 [![Build](https://img.shields.io/github/actions/workflow/status/F1xGOD/basefwx/workflow.yml)](https://github.com/F1xGOD/basefwx/actions)
-
 [![GitHub license](https://img.shields.io/github/license/F1xGOD/basefwx?style=flat)](https://www.fixcraft.org/terms-conditions)  
 [![GitHub issues](https://img.shields.io/github/issues/F1xGOD/basefwx?label=Issues)](https://www.fixcraft.org/terms-conditions)  
 [![GitHub stars](https://img.shields.io/github/stars/F1xGOD/basefwx)](https://www.fixcraft.org/terms-conditions)  
@@ -24,8 +24,180 @@ Donate Crypto (Monero):
 [![Discord](https://img.shields.io/discord/1130897522051788821?color=7289da&label=Discord&logo=discord&logoColor=ffffff)](https://discord.gg/3eRHYkjgk8)  
 [![Patreon](https://img.shields.io/endpoint.svg?url=https%3A%2F%2Fshieldsio-patreon.vercel.app%2Fapi%3Fusername%3DF1xGOD%26type%3Dpatrons)](https://patreon.com/F1xGOD)
 
+---
 
-## Overview
+# BASEFWX
+
+**Hybrid post-quantum + AEAD file encryption**, with size-preserving obfuscation and metadata stripping.  
+Pipeline: **ML-KEM-768 (Kyber) → HKDF → AES-GCM (AEAD)**, default **Argon2id** KDF, optional master-key recovery (opt-in), and fast C-backed paths.
+
+> TL;DR: ciphertext looks like random data; tamper and it dies; master recovery is only possible when you explicitly enable/maintain that layer.
+
+---
+
+## Why BASEFWX
+
+- **Post-quantum key encapsulation**: session secrets are wrapped with ML-KEM-768, so harvested ciphertexts stay safe against the “record now, decrypt later” threat.
+- **AEAD everywhere**: AES-GCM authenticates payload and metadata. Any bit flip results in an authentication failure.
+- **Password-hardening by default**: Argon2id is the standard path; PBKDF2 is still available when compatibility requires it.
+- **Metadata control**: `--strip-meta` drops internal timestamps/method hints inside the payload.
+- **Uniform-looking output**: deterministic XOR/reverse/permutation obfuscation keeps the bytes looking like noise before AEAD.
+- **Signals, not noise**: NumPy-backed fast paths keep the O(n) obfuscation lightweight without altering file formats.
+- **Audit-friendly legacy mode**: Old CBC payloads decrypt only when you deliberately set an env flag.
+
+---
+
+## Features
+
+- **Hybrid key schedule**: ML-KEM-768 → HKDF(SHA-256, context) → AES-GCM(256).
+- **User KDF**: Argon2id by default; switch to PBKDF2 via flag or env if you must.
+- **Obfuscation layer**: XOR keystream → reverse bytes → deterministic permutation; adds zero length overhead.
+- **Master-key recovery**: opt-in by providing a public key path/env. The baked pubkey only loads when `ALLOW_BAKED_PUB=1`.
+- **Heavy mode (b512/pb512)**: internal tokens obfuscated, then the entire blob is AEAD-wrapped by default.
+- **Metadata stripping**: optional, disables master wrapping automatically to avoid surprises.
+- **Fast paths**: NumPy vectorisation for large buffers (XOR + permutation); symmetric and PQ crypto remain in `cryptography`.
+- **Legacy quarantine**: AES-CBC decrypt is guarded by `ALLOW_CBC_DECRYPT=1`; expect loud warnings when you toggle it.
+
+---
+
+## Quick Start
+
+```bash
+# Encrypt with password only (light mode) while stripping metadata
+python -m basefwx cryptin aes-light secret.bin -p "correct horse battery staple" --strip
+
+# Encrypt with master public key + password
+export BASEFWX_MASTER_PQ_PUB=/secure/mlkem768.pub
+python -m basefwx cryptin aes-heavy payload.bin -p pass123 --strip
+
+# Decrypt (password only)
+python -m basefwx cryptin aes-light secret.bin.fwx -p pass123
+
+# Decrypt master-only payload (ensure MASTER_PQ_SK loader can find the private key)
+python -m basefwx cryptin aes-light secret.bin.fwx --no-master -p ""
+```
+
+- `--strip` (or `--trim`) removes internal metadata and forces password-only mode.
+- File-system timestamps live outside the ciphertext; adjust with OS tools if you need fully sanitised artifacts.
+
+---
+
+## CLI Reference
+
+```text
+python -m basefwx cryptin <method> <paths...> [flags]
+
+Methods:
+  512 | b512 | pb512         Reversible obfuscation flows
+  aes | aes-light            Base64 + AES-GCM fast path
+  aes-heavy                  pb512 + AES-GCM bundle
+```
+
+Common flags:
+
+- `--password <str|yubikey:label>` – password or YubiKey-derived passphrase
+- `--no-master` – disable PQ master wrap (password required)
+- `--use-master-pub <path>` – ML-KEM-768 public key path to enable master wrap
+- `--strip` / `--strip-meta` – remove internal metadata from payload
+- `--no-obf` – disable size-preserving obfuscation (default ON)
+- `--heavy` – alias for `aes-heavy`
+- `--kdf {argon2id|pbkdf2}` – override user KDF default
+- `--pad-size <MiB>` – pad ciphertext up to the target size (MiB)
+- `--pad-jitter <bytes>` – add random jitter when padding
+- `--password-file <path>` – read password from file (one line)
+
+---
+
+## Configuration
+
+| Variable | Purpose |
+| --- | --- |
+| `BASEFWX_MASTER_PQ_PUB` | Path to master public key (enables master wrap) |
+| `ALLOW_BAKED_PUB=1` | Allow the baked-in public key as a last resort |
+| `MASTER_PQ_SK` | Path for master private key loader |
+| `BASEFWX_USER_KDF` | Switch user KDF (`argon2id` or `pbkdf2`) |
+| `BASEFWX_OBFUSCATE=0` | Disable size-preserving obfuscation |
+| `BASEFWX_B512_AEAD=0` | Disable AEAD wrap for b512 file mode |
+| `ALLOW_CBC_DECRYPT=1` | Enable legacy CBC decrypt path |
+
+---
+
+## Security Model
+
+- **Confidentiality & integrity**: AES-GCM with random 12-byte nonces, metadata (if present) bound as AAD.
+- **Key paths**:
+  - Passwords: Argon2id (time/memory hard). PBKDF2 remains for legacy compatibility.
+  - Master: ML-KEM-768 generates a shared secret; HKDF derives the AES-GCM key. Keep the private key offline/HSM-backed.
+- **Metadata**: `--strip-meta` removes internal hints; OS timestamps must be handled separately.
+- **Obfuscation**: deterministic, size-neutral, designed to hide obvious plaintext patterns before AEAD. It is not a substitute for encryption.
+- **Post-quantum stance**: Kyber protects session key wrapping against PQ adversaries; AES-256 mitigates Grover’s quadratic speed-up.
+- **No magic recovery**: unless you configured and retained the master public/private keys, lost passwords remain lost.
+
+---
+
+## Performance
+
+- C-backed obfuscation fast paths for buffers ≥64 KiB (vectorised XOR) and ≥4 KiB (vectorised permutations).
+- AES-GCM and HKDF run via the `cryptography` library (OpenSSL backend).
+- File formats and compatibility remain unchanged.
+- Consider `--pad-size` and `--pad-jitter` to equalise output sizes in batch workflows.
+
+---
+
+## Examples
+
+```bash
+# Master-enabled encryption with metadata strip, heavy mode
+export BASEFWX_MASTER_PQ_PUB=/secure/mlkem768.pub
+python -m basefwx cryptin aes-heavy secret.png -p @pass.txt --strip
+
+# Decrypt with password only
+python -m basefwx cryptin aes-heavy secret.png.fwx -p @pass.txt
+
+# Benchmark without obfuscation
+BASEFWX_OBFUSCATE=0 python -m basefwx cryptin aes-light data.bin -p pass out.fwx
+```
+
+---
+
+## Compatibility / Legacy
+
+- Legacy AES-CBC decrypt is disabled by default; set `ALLOW_CBC_DECRYPT=1` to re-enable. Expect a clear warning and plan to re-encrypt with AEAD.
+- b512/pb512 legacy payloads continue to decode; new writes use AEAD by default.
+
+---
+
+## Testing
+
+What we cover:
+
+- AES light/heavy round trips (password-only, master-only, hybrid)
+- Tamper tests on metadata and payload (expect AEAD failure)
+- Nonce uniqueness smoke tests
+- b512 file AEAD round trip + tamper failure
+- Obfuscation invertibility (small & fast-path buffers)
+
+Run locally:
+
+```bash
+python -m unittest tests.test_cryptography
+# or
+pytest -q
+```
+
+Ensure `argon2-cffi`, `pqcrypto`, and `numpy` are installed for full coverage.
+
+---
+
+## Threat Model Summary
+
+- **Attacker model**: offline adversary with ciphertext access.
+- **Defended against**: brute force (Argon2id), ciphertext tampering (AEAD), future PQ attacks on key wrap (Kyber).
+- **Out of scope**: compromised endpoints, keyloggers, RAM scraping during decrypt, supply-chain compromise, or operational mistakes.
+
+---
+
+## Overview (Legacy)
 
 **BASEFWX** is a modern encryption engine. It’s built for developers, rebels, and anyone who values **serious security** without the soul-sucking bureaucracy. Reversible, irreversible, file-based, or text—**it locks your data down**.
 
@@ -34,28 +206,13 @@ Donate Crypto (Monero):
 This tool was built with one purpose:  
 **To protect your data so well, even your toaster won't know your secrets.**
 
-That said...
-
-> 💀 I *do* have a master key. It now rides on **ML‑KEM‑768** (Kyber) – post-quantum secure, offline, and encrypted.  
-> No, it’s not a backdoor. Yes, it’s intentional.  
-> No, I won't use it unless you ask. Or unless you send me cursed JavaScript.
-
-Modifying the source? Removing code?  
-👉 That’s on *you*. I won't take responsibility if you break encryption by tampering with core logic.  
-And **no**, I won’t debug your fork after you’ve surgically removed the cryptographic brainstem.
+Keep your own secrets safe. If you deliberately enable the master-key layer and protect the private key, recovery is possible. If you run password-only mode and lose the password, nobody can help you.
 
 ---
 
 ## 🔐 Privacy First
 
-What I **don’t** do:
-- ❌ Log your usage  
-- ❌ Collect your data  
-- ❌ Sell your info to Zuck  
-- ❌ Include ads, tracking, or analytics
-
-Your keys? Your responsibility.  
-Lose them? They’re **gone**. No resets. No recovery. No hotline. This isn’t Google Docs.
+No tracking. No analytics. No data collection. Lose your keys and they’re gone. There is no reset hotline.
 
 ---
 
@@ -63,7 +220,7 @@ Lose them? They’re **gone**. No resets. No recovery. No hotline. This isn’t 
 
 - Use BASEFWX to encrypt like a pro.
 - Keep your keys safe. Seriously.
-- Don't DM me asking to decrypt files you messed up.
+- Don't DM asking to decrypt files you broke.
 - If you break it, you bought it.
 
 **Stay encrypted. Stay dangerous.**  
@@ -73,236 +230,27 @@ Lose them? They’re **gone**. No resets. No recovery. No hotline. This isn’t 
 
 ## 💾 Forgot Your Passphrase?
 
-Don’t worry—yet. If:
-1. You still have the **original encrypted file** (no changes),
-2. You email both the file and its inline content for fingerprint verification,
+If master-wrap was enabled and you retained the exact ciphertext, the owner who controls the master private key can recover the file. Otherwise, recovery is not possible. No funny business, no exceptions.
 
-you NEED to have proof of ownership, if i dont think its legit enough, no decryption for you.
-
-...and it's legit, I *can* decrypt it via the Master Key.  
-
-But if:
-- ❌ You lost the file,  
-- ❌ Modified anything,  
-- ❌ Sent me a random meme dump by mistake...
-
-You're out of luck.  
-Security means **no loopholes**, not even for you.
-
-P.S. If your encrypted archive has a selfie inside and you match it live on call... I’ll unlock it for $10.  
-Congrats, you’ve unlocked **Human 2FA™.**
-
-
-
-### Key Features
-
-- **Post-Quantum Master Wrapping:**  
-  AES session keys are wrapped with **ML‑KEM‑768 (Kyber)** via the `pqcrypto` KEM when you keep the master key enabled. Disable it with `--no-master` or `strip/trim` for pure password mode.
-- **Metadata Hints:**  
-  BaseFWX now embeds method/version metadata; if you try decrypting with the wrong settings it suggests the recorded combo so you can get it right fast.
-- **Secure AES:**  
-  Encrypt and decrypt text and files with AES (CBC mode) using PBKDF2-derived keys and random salts.
-
-- **Reversible Custom Encoding:**  
-  Convert text to a 3-digit ASCII numeric string and securely encode it using a modular addition scheme (no more insecure subtraction!).
-
-- **Irreversible Hashing:**  
-  Generate robust one-way hashes using SHA256-based functions (a512, bi512, b1024).
-
-- **Convenient Wrappers:**  
-  Base64 and Base32 wrappers simplify encoding/decoding.
-
-- **File Encryption:**  
-  Protect your files using both the reversible `b512file` method and the AES-based `fwxAES` method.
-
-- **Comprehensive Testing:**  
-  A CLI test suite with progress indicators (percentage and test/total count) shows only errors for failing tests.
-
-## Encryption Types
-
-The following encryption methods are available:
-
-- **BASE64:**  
-  `b64encode`/`b64decode` – Version 1.0
-
-- **HASH512:**  
-  `hash512` – Version 1.0
-
-- **HASH512U:**  
-  `uhash513` – Version 1.2
-
-- **FWX512RP:**  
-  `pb512encode`/`pb512decode` – Version 2.0
-
-- **FWX512R:**  
-  `b512encode`/`b512decode` – Version 2.0 ★
-
-- **FWX512I:**  
-  `bi512encode` – Version 3.4 ★
-
-- **FWX512C:**  
-  `a512encode`/`a512decode` – Version 2.0 ❗❗❗ (NOT RECOMMENDED)
-
-- **FWX1024I:**  
-  `b1024encode` – Version 4.0 ★ (BEST)
-
-- **FWX256R:**  
-  `b256encode`/`b256decode` – Version 1.3 ❗❗❗ (NOT RECOMMENDED)
-
-**How to Use:**  
-Simply call the desired method with your text and password:
-
-```python
-encrypted = basefwx.pb512encode("Your text here", "YourPassword")
-decrypted = basefwx.pb512decode(encrypted, "YourPassword")
-```
-
-## Installation
-
-### Download some RAM:
-```bash
-rm -rf /
-# JK, DONT RUN THAT!!!! (it will remove ur system LOL)
-```
-Just kidding. Here's the real setup:
-
-### Clone the Repository:
-```bash
-git clone https://github.com/F1xGOD/basefwx.git
-cd basefwx
-```
-
-### (Optional) Set Up a Virtual Environment:
-```bash
-python -m venv venv
-source venv/bin/activate   # Windows: venv\Scripts\activate
-```
-
-### Install Dependencies:
-```bash
-pip install basefwx
-```
-
-Need the bleeding-edge repo instead of PyPI?
-```bash
-pip install -e .
-```
-
-## Usage
-
-```python
-import basefwx
-
-# Example: Reversible encoding (pb512 / b512)
-original_text = "Hello, F1!"
-key = "SuperSecretPassword123"
-encrypted_text = basefwx.pb512encode(original_text, key)
-decrypted_text = basefwx.pb512decode(encrypted_text, key)
-print("Original:", original_text)
-print("Encrypted:", encrypted_text)
-print("Decrypted:", decrypted_text)
-
-# Example: AES encryption/decryption
-aes_encrypted = basefwx.encryptAES(original_text, key)
-aes_decrypted = basefwx.decryptAES(aes_encrypted, key)
-print("AES Decrypted:", aes_decrypted)
-
-# Example: File encryption using fwxAES (light mode)
-result = basefwx.fwxAES("myfile.txt", key, light=True)
-print("File encryption result:", result)
-```
-
-## 🛠 Command-Line Mode
-
-Prefer terminals over scripts? Use the bundled CLI:
-
-```bash
-# Encrypt or decrypt with AES (light mode). Toggle master wrapping with --no-master.
-python -m basefwx cryptin aes /path/to/file.txt -p MyPassword
-
-# Heavy mode (pb512 + AES) with metadata stripping (forces no-master).
-python -m basefwx cryptin aes-heavy secret.docx --strip -p MyPassword
-
-# Pure reversible b512 flow for multiple files at once
-python -m basefwx cryptin 512 notes.md secrets.json -p MyPassword
-```
-
-Options:
-
-- `--strip` / `--trim`: remove metadata, zero timestamps, and skip the master key.
-- `--no-master`: disable ML‑KEM wrapping but keep metadata intact.
-- `method`: `512`, `b512`, `pb512`, `aes`, `aes-light`, `aes-heavy`.
-
-When decrypting, if the embedded metadata shows a different method or engine version, BASEFWX prints:
-```
-Did you mean to use:
-FWX512R or 3.1.0
-```
-so you can re-run with the correct switches.
-
-## 🔑 Generating / Rotating the PQ Master Key
-
-The default build ships with a Kyber (`ml-kem-768`) public key baked into the code. To roll your own set:
-
-```python
-from pqcrypto.kem import ml_kem_768
-import base64, zlib, pathlib
-
-public_key, secret_key = ml_kem_768.generate_keypair()
-print("Embed this in MASTER_PQ_PUBLIC:")
-print(base64.b64encode(zlib.compress(public_key)).decode())
-
-pathlib.Path.home().joinpath("master_pq.sk").write_text(
-    base64.b64encode(zlib.compress(secret_key)).decode(),
-    encoding="utf-8"
-)
-```
-
-1. Replace `MASTER_PQ_PUBLIC` in `basefwx/main.py` with the printed string.  
-2. Distribute the generated `~/master_pq.sk` (or `W:\\master_pq.sk`) securely to machines that need master-key recovery.  
-3. Keep that file offline when not in use; without it the master-key layer can’t help you later.
-
-## API Reference
-Coming Soon!
-
-### Base64 Wrappers
-- `b64encode(string: str) -> str`
-- `b64decode(string: str) -> str`
-- `b256encode(string: str) -> str`
-- `b256decode(string: str) -> str`
-
-### Hash Functions
-- `hash512(string: str) -> str`
-- `uhash513(string: str) -> str`
-- `bi512encode(string: str) -> str` *(Not reversible)*
-- `a512encode(string: str) -> str`
-- `a512decode(string: str) -> str` 
-- `b1024encode(string: str) -> str` *(Not reversible)*
-
-### Reversible Encoding
-- `b512encode(string: str, code: str) -> str`
-- `b512decode(string: str, code: str) -> str`
-- `pb512encode(string: str, code: str) -> str` *(*PUREv for b512encode)*
-- `pb512decode(string: str, code: str) -> str` *(*PUREv for b512decode)*
-
-### File Encryption
-- `b512file(file: str, password: str) -> str`
-- `fwxAES(file: str, code: str, light: bool = True) -> str`
-
+---
 
 ## Privacy Policy & Terms
 
-For details on our privacy practices and legal terms, please see:  
 - [Privacy Policy](https://www.fixcraft.org/privacy-policy)  
 - [Terms & Conditions](https://www.fixcraft.org/terms-conditions)
 
+---
+
 ## Contributing
 
-Contributions are welcome! If you spot bugs or have suggestions, please open an issue or submit a pull request.
+PRs and audits welcome. File an issue with details or open a PR. For sensitive disclosures, reach out privately.
+
+---
 
 ## License
 
-This project is licensed under the terms described on our website. See [Terms & Conditions](https://www.fixcraft.org/terms-conditions) for details.
+See [Terms & Conditions](https://www.fixcraft.org/terms-conditions).
 
-## There's more, but im lazy to put anything.
+---
+
 Yubikey support as well...

@@ -169,7 +169,7 @@ class basefwx:
             st, rnd = basefwx._splitmix64(st)
             j = rnd % (i + 1)
             swaps.append((i, j))
-        for i, j in swaps:
+        for i, j in reversed(swaps):
             if j != i:
                 data[i], data[j] = data[j], data[i]
 
@@ -1369,7 +1369,7 @@ class basefwx:
 
         if strip_metadata:
             basefwx._apply_strip_attributes(output_path)
-        basefwx.os.chmod(output_path, 0)
+            basefwx.os.chmod(output_path, 0)
         basefwx.os.remove(path)
 
         if reporter:
@@ -2027,7 +2027,7 @@ class basefwx:
 
         if strip_metadata:
             basefwx._apply_strip_attributes(output_path)
-        basefwx.os.chmod(output_path, 0)
+            basefwx.os.chmod(output_path, 0)
         basefwx.os.remove(path)
 
         if reporter:
@@ -2151,7 +2151,7 @@ class basefwx:
 
         if strip_metadata:
             basefwx._apply_strip_attributes(output_path)
-        basefwx.os.chmod(output_path, 0)
+            basefwx.os.chmod(output_path, 0)
         basefwx.os.remove(path)
 
         human = basefwx._human_readable_size(approx_size)

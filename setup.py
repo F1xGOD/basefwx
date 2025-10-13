@@ -17,6 +17,7 @@ setup(
         "pillow>=10.0.0",
         "pqcrypto>=0.3.4",
     ],
+    python_requires=">=3.10",
     author="F1xGOD",
     author_email="f1xgodim@gmail.com",
     description="With BaseFWX you can encode securely!",

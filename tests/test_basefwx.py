@@ -40,12 +40,16 @@ class BaseFWXUnitTests(unittest.TestCase):
         os.environ["HOME"] = str(self.tmp_path)
         (self.tmp_path / "master_pq.sk").write_text(MASTER_PQ_SECRET_B64, encoding="utf-8")
         self.repo_root = Path(__file__).resolve().parent.parent
+        self._orig_master_override = basefwx._MASTER_PUBKEY_OVERRIDE
+        self._orig_priv_loader = basefwx.__dict__['_load_master_pq_private']
 
     def tearDown(self) -> None:
         if self.old_home is not None:
             os.environ["HOME"] = self.old_home
         else:
             os.environ.pop("HOME", None)
+        basefwx._set_master_pubkey_override(self._orig_master_override)
+        basefwx._load_master_pq_private = self._orig_priv_loader
         self.tmpdir.cleanup()
 
     def _run_cli(self, *args: str) -> subprocess.CompletedProcess:
@@ -99,7 +103,10 @@ class BaseFWXUnitTests(unittest.TestCase):
 
     def test_aes_roundtrip_with_master(self):
         original = "QuantumGuardian"
-        blob = basefwx.encryptAES(original, "", use_master=True)
+        public_key, private_key = ml_kem_768.generate_keypair()
+        basefwx._set_master_pubkey_override(public_key)
+        basefwx._load_master_pq_private = staticmethod(lambda: private_key)
+        blob = basefwx.encryptAES(original, "", use_master=True, master_public_key=public_key)
         recovered = basefwx.decryptAES(blob, "", use_master=True)
         self.assertEqual(recovered, original)
 
@@ -108,11 +115,11 @@ class BaseFWXUnitTests(unittest.TestCase):
         src.write_text("classified", encoding="utf-8")
         result = basefwx.b512file(str(src), "pw", strip_metadata=True, use_master=False)
         self.assertEqual(result, "SUCCESS!")
-        encoded = self.tmp_path / "note.fwx"
+        encoded = src.with_suffix('.fwx')
         self.assertTrue(encoded.exists())
         result = basefwx.b512file(str(encoded), "pw", strip_metadata=True, use_master=False)
         self.assertEqual(result, "SUCCESS!")
-        restored = self.tmp_path / "note.txt"
+        restored = src
         self.assertTrue(restored.exists())
         self.assertEqual(restored.read_text(encoding="utf-8"), "classified")
 
@@ -121,11 +128,11 @@ class BaseFWXUnitTests(unittest.TestCase):
         src.write_bytes(b"FWX\x00PQ")
         result = basefwx.AESfile(str(src), "pw", light=True, strip_metadata=True, use_master=False)
         self.assertEqual(result, "SUCCESS!")
-        encoded = self.tmp_path / "data.fwx"
+        encoded = src.with_suffix('.fwx')
         self.assertTrue(encoded.exists())
         result = basefwx.AESfile(str(encoded), "pw", light=True, strip_metadata=True, use_master=False)
         self.assertEqual(result, "SUCCESS!")
-        restored = self.tmp_path / "data.bin"
+        restored = src
         self.assertEqual(restored.read_bytes(), b"FWX\x00PQ")
 
     def test_metadata_hint_message(self):
@@ -141,11 +148,11 @@ class BaseFWXUnitTests(unittest.TestCase):
     def test_cli_aes_master(self):
         src = self.tmp_path / "cli.txt"
         src.write_text("cli-power", encoding="utf-8")
-        result = self._run_cli("cryptin", "aes", str(src))
+        result = self._run_cli("cryptin", "aes", str(src), "-p", "pw", "--no-master")
         self.assertEqual(result.returncode, 0, msg=result.stderr + result.stdout)
-        encoded = self.tmp_path / "cli.fwx"
+        encoded = src.with_suffix('.fwx')
         self.assertTrue(encoded.exists())
-        result = self._run_cli("cryptin", "aes", str(encoded))
+        result = self._run_cli("cryptin", "aes", str(encoded), "-p", "pw", "--no-master")
         self.assertEqual(result.returncode, 0, msg=result.stderr + result.stdout)
         self.assertEqual(src.read_text(encoding="utf-8"), "cli-power")
 
@@ -154,7 +161,7 @@ class BaseFWXUnitTests(unittest.TestCase):
         src.write_text("### reversible", encoding="utf-8")
         result = self._run_cli("cryptin", "512", str(src), "-p", "pw", "--strip")
         self.assertEqual(result.returncode, 0, msg=result.stderr + result.stdout)
-        encoded = self.tmp_path / "reversible.fwx"
+        encoded = src.with_suffix('.fwx')
         self.assertTrue(encoded.exists())
         result = self._run_cli("cryptin", "512", str(encoded), "-p", "pw", "--strip")
         self.assertEqual(result.returncode, 0, msg=result.stderr + result.stdout)
@@ -190,7 +197,7 @@ class CryptographyIntegrationTests(unittest.TestCase):
             src.write_text(plain_text, encoding="utf-8")
             result = basefwx.AESfile(src, "p@ssw0rd", light=True, strip_metadata=False, use_master=False)
             self.assertEqual(result, "SUCCESS!")
-            enc_path = Path(tmpdir, "example.txt.fwx")
+            enc_path = src.with_suffix('.fwx')
             self.assertTrue(enc_path.exists())
             result = basefwx.AESfile(enc_path, "p@ssw0rd", light=True, strip_metadata=False, use_master=False)
             self.assertEqual(result, "SUCCESS!")
@@ -205,7 +212,7 @@ class CryptographyIntegrationTests(unittest.TestCase):
             src.write_bytes(payload)
             result = basefwx.AESfile(src, "p@ssw0rd", light=False, strip_metadata=False, use_master=False)
             self.assertEqual(result, "SUCCESS!")
-            enc_path = Path(tmpdir, "blob.bin.fwx")
+            enc_path = src.with_suffix('.fwx')
             self.assertTrue(enc_path.exists())
             result = basefwx.AESfile(enc_path, "p@ssw0rd", light=False, strip_metadata=False, use_master=False)
             self.assertEqual(result, "SUCCESS!")
@@ -261,7 +268,7 @@ class CryptographyIntegrationTests(unittest.TestCase):
             src.write_bytes(original)
             result = basefwx.b512file(src, "s3cret!", strip_metadata=False, use_master=False)
             self.assertEqual(result, "SUCCESS!")
-            enc_path = Path(tmpdir, "note.bin.fwx")
+            enc_path = src.with_suffix('.fwx')
             self.assertTrue(enc_path.exists())
             result = basefwx.b512file(enc_path, "s3cret!", strip_metadata=False, use_master=False)
             self.assertEqual(result, "SUCCESS!")
@@ -270,7 +277,7 @@ class CryptographyIntegrationTests(unittest.TestCase):
             self.assertEqual(restored.read_bytes(), original)
             result = basefwx.b512file(restored, "s3cret!", strip_metadata=False, use_master=False)
             self.assertEqual(result, "SUCCESS!")
-            enc_path = Path(tmpdir, "note.bin.fwx")
+            enc_path = restored.with_suffix('.fwx')
             blob = enc_path.read_bytes()
             user_blob, master_blob, ct_blob = basefwx._unpack_length_prefixed(blob, 3)
             tampered_ct = bytearray(ct_blob)

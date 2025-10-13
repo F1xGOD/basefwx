@@ -7,6 +7,7 @@ class basefwx:
     import pathlib
     import typing
     import json
+    import struct
     from PIL import Image
     from io import BytesIO
     import numpy as np
@@ -177,27 +178,37 @@ class basefwx:
         if not buf:
             return
         n = len(buf)
-        if n >= basefwx.OFB_FAST_MIN:
-            stream = basefwx._hkdf_sha256(key, length=n, info=info)
-            mv = memoryview(buf)
-            a = basefwx.np.frombuffer(mv, dtype=basefwx.np.uint8)
-            b = basefwx.np.frombuffer(stream, dtype=basefwx.np.uint8)
-            basefwx.np.bitwise_xor(a, b, out=a)
-            return
         block_key = basefwx._hkdf(info, key, 32)
         ctr = 0
+        total_len_bytes = n.to_bytes(8, 'big')
+        if n >= basefwx.OFB_FAST_MIN:
+            mv = memoryview(buf)
+            arr = basefwx.np.frombuffer(mv, dtype=basefwx.np.uint8)
+            offset = 0
+            while offset < n:
+                h = basefwx.hmac.HMAC(block_key, basefwx.hashes.SHA256())
+                meta = info + total_len_bytes + ctr.to_bytes(8, 'big')
+                h.update(meta)
+                block = h.finalize()
+                take = min(len(block), n - offset)
+                block_arr = basefwx.np.frombuffer(block, dtype=basefwx.np.uint8)
+                basefwx.np.bitwise_xor(
+                    arr[offset:offset + take],
+                    block_arr[:take],
+                    out=arr[offset:offset + take]
+                )
+                offset += take
+                ctr += 1
+            return
         off = 0
-        total_len = n.to_bytes(8, 'big')
-        mv = memoryview(buf)
         while off < n:
             h = basefwx.hmac.HMAC(block_key, basefwx.hashes.SHA256())
-            meta = info + total_len + ctr.to_bytes(8, 'big')
+            meta = info + total_len_bytes + ctr.to_bytes(8, 'big')
             h.update(meta)
             block = h.finalize()
             take = min(len(block), n - off)
-            segment = mv[off:off + take]
             for i in range(take):
-                segment[i] ^= block[i]
+                buf[off + i] ^= block[i]
             off += take
             ctr += 1
 
@@ -422,7 +433,7 @@ class basefwx:
         for _ in range(count):
             if offset + 4 > total_len:
                 raise ValueError("Malformed length-prefixed blob (missing length)")
-            length = mv[offset:offset + 4].cast('>I')[0]
+            length = basefwx.struct.unpack_from('>I', mv, offset)[0]
             offset += 4
             if offset + length > total_len:
                 raise ValueError("Malformed length-prefixed blob (truncated part)")

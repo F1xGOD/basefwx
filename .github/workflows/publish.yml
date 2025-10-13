@@ -1,0 +1,42 @@
+name: Upload Python Package
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+          pip install build cryptography pqcrypto numpy pillow argon2-cffi
+
+      - name: Run test suite
+        env:
+          BASEFWX_OBFUSCATE: "1"
+          ALLOW_BAKED_PUB: "0"
+        run: python -m unittest tests.test_basefwx -q
+
+      - name: Build package
+        run: python -m build
+
+      - name: Publish package
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          user: __token__
+          password: ${{ secrets.PYPI_API_TOKEN }}

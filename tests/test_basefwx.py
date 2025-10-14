@@ -300,6 +300,47 @@ class BaseFWXUnitTests(unittest.TestCase):
         for temp_path in created_dirs:
             self.assertFalse(os.path.exists(temp_path))
 
+    def test_aes_light_large_no_obfuscation(self):
+        src = self.tmp_path / "large.bin"
+        data = os.urandom(400 * 1024)
+        src.write_bytes(data)
+        encoded_path, approx = basefwx._aes_light_encode_path(
+            src,
+            "pw",
+            None,
+            0,
+            strip_metadata=False,
+            use_master=False,
+            master_pubkey=None
+        )
+        self.assertGreater(approx, 0)
+        compressed_bytes = encoded_path.read_bytes()
+        blob = basefwx.zlib.decompress(compressed_bytes)
+        offset = 0
+        len_user = int.from_bytes(blob[offset:offset + 4], 'big')
+        offset += 4 + len_user
+        len_master = int.from_bytes(blob[offset:offset + 4], 'big')
+        offset += 4 + len_master
+        len_payload = int.from_bytes(blob[offset:offset + 4], 'big')
+        offset += 4
+        metadata_len = int.from_bytes(blob[offset:offset + 4], 'big')
+        offset += 4
+        metadata_bytes = blob[offset:offset + metadata_len]
+        meta_blob = metadata_bytes.decode('utf-8') if metadata_bytes else ""
+        meta = basefwx._decode_metadata(meta_blob)
+        self.assertEqual(meta.get("ENC-OBF"), "no")
+
+        decoded_path, restored_len = basefwx._aes_light_decode_path(
+            encoded_path,
+            "pw",
+            None,
+            0,
+            strip_metadata=False,
+            use_master=False
+        )
+        self.assertEqual(restored_len, len(data))
+        self.assertEqual(decoded_path.read_bytes(), data)
+
     def test_b512_streaming_roundtrip(self):
         src = self.tmp_path / "stream512.bin"
         data = os.urandom(512 * 1024)

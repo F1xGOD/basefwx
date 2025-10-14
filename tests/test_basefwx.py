@@ -7,6 +7,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 from contextlib import redirect_stdout
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -46,6 +47,7 @@ class BaseFWXUnitTests(unittest.TestCase):
         self.repo_root = Path(__file__).resolve().parent.parent
         self._orig_master_override = basefwx._MASTER_PUBKEY_OVERRIDE
         self._orig_priv_loader = basefwx.__dict__['_load_master_pq_private']
+        self._recording_reporter = None
 
     def tearDown(self) -> None:
         if self.old_home is not None:
@@ -55,6 +57,47 @@ class BaseFWXUnitTests(unittest.TestCase):
         basefwx._set_master_pubkey_override(self._orig_master_override)
         basefwx._load_master_pq_private = self._orig_priv_loader
         self.tmpdir.cleanup()
+
+    class _RecordingReporter:
+        def __init__(self) -> None:
+            self.phases: list[str] = []
+
+        def update(self, file_index: int, fraction: float, phase: str, path: Path, *, size_hint=None) -> None:  # type: ignore[override]
+            self.phases.append(phase)
+
+        def finalize_file(self, file_index: int, path: Path, *, size_hint=None) -> None:  # type: ignore[override]
+            pass
+
+    def _read_metadata_from_file(self, path: Path) -> dict[str, object]:
+        with open(path, 'rb') as handle:
+            len_user_bytes = handle.read(4)
+            if len(len_user_bytes) < 4:
+                return {}
+            len_user = int.from_bytes(len_user_bytes, 'big')
+            handle.seek(len_user, os.SEEK_CUR)
+            len_master_bytes = handle.read(4)
+            if len(len_master_bytes) < 4:
+                return {}
+            len_master = int.from_bytes(len_master_bytes, 'big')
+            handle.seek(len_master, os.SEEK_CUR)
+            len_payload_bytes = handle.read(4)
+            if len(len_payload_bytes) < 4:
+                return {}
+            len_payload = int.from_bytes(len_payload_bytes, 'big')
+            if len_payload < 4:
+                return {}
+            meta_len_bytes = handle.read(4)
+            if len(meta_len_bytes) < 4:
+                return {}
+            meta_len = int.from_bytes(meta_len_bytes, 'big')
+            meta_bytes = handle.read(meta_len)
+            if not meta_bytes:
+                return {}
+            try:
+                blob = meta_bytes.decode('utf-8')
+            except UnicodeDecodeError:
+                return {}
+        return basefwx._decode_metadata(blob)
 
     def _run_cli(self, *args: str) -> subprocess.CompletedProcess:
         env = os.environ.copy()
@@ -170,6 +213,125 @@ class BaseFWXUnitTests(unittest.TestCase):
         result = self._run_cli("cryptin", "512", str(encoded), "-p", "pw", "--strip")
         self.assertEqual(result.returncode, 0, msg=result.stderr + result.stdout)
         self.assertEqual(src.read_text(encoding="utf-8"), "### reversible")
+
+    def test_aes_heavy_small_legacy_mode(self):
+        src = self.tmp_path / "legacy.bin"
+        payload = b"legacy-data" * 64  # well below streaming threshold
+        src.write_bytes(payload)
+        reporter = self._RecordingReporter()
+        encoded_path, approx = basefwx._aes_heavy_encode_path(
+            src,
+            "pw",
+            reporter,
+            file_index=0,
+            strip_metadata=False,
+            use_master=False,
+            master_pubkey=None
+        )
+        self.assertTrue(encoded_path.exists())
+        self.assertFalse(src.exists())  # original removed after encode
+        meta = self._read_metadata_from_file(encoded_path)
+        self.assertNotEqual(approx, 0)
+        self.assertNotIn("ENC-MODE", meta)
+        self.assertIn("pb512", reporter.phases)
+        self.assertNotIn("pb512-stream", reporter.phases)
+
+        decode_reporter = self._RecordingReporter()
+        decoded_path, restored_len = basefwx._aes_heavy_decode_path(
+            encoded_path,
+            "pw",
+            decode_reporter,
+            file_index=0,
+            strip_metadata=False,
+            use_master=False
+        )
+        self.assertEqual(restored_len, len(payload))
+        self.assertEqual(decoded_path.read_bytes(), payload)
+        self.assertEqual(decoded_path, self.tmp_path / "legacy.bin")
+
+    def test_aes_heavy_streaming_roundtrip(self):
+        src = self.tmp_path / "stream.bin"
+        data = os.urandom(512 * 1024)
+        src.write_bytes(data)
+        created_dirs: list[str] = []
+        real_tempdir = tempfile.TemporaryDirectory
+
+        class RecordingTemporaryDirectory:
+            def __init__(self, *args, **kwargs):
+                self._real = real_tempdir(*args, **kwargs)
+                created_dirs.append(self._real.name)
+
+            def cleanup(self) -> None:
+                self._real.cleanup()
+
+            @property
+            def name(self) -> str:
+                return self._real.name
+
+        with patch.object(basefwx.tempfile, "TemporaryDirectory", RecordingTemporaryDirectory):
+            reporter = self._RecordingReporter()
+            encoded_path, approx = basefwx._aes_heavy_encode_path(
+                src,
+                "pw",
+                reporter,
+                file_index=0,
+                strip_metadata=False,
+                use_master=False,
+                master_pubkey=None
+            )
+            self.assertGreater(approx, 0)
+            meta = self._read_metadata_from_file(encoded_path)
+            self.assertEqual(meta.get("ENC-MODE"), "STREAM")
+            self.assertIn("pb512-stream", reporter.phases)
+
+            decode_reporter = self._RecordingReporter()
+            decoded_path, restored_len = basefwx._aes_heavy_decode_path(
+                encoded_path,
+                "pw",
+                decode_reporter,
+                file_index=0,
+                strip_metadata=False,
+                use_master=False
+            )
+            self.assertEqual(restored_len, len(data))
+            self.assertEqual(decoded_path.read_bytes(), data)
+            self.assertIn("deobfuscate", decode_reporter.phases)
+
+        for temp_path in created_dirs:
+            self.assertFalse(os.path.exists(temp_path))
+
+    def test_b512_streaming_roundtrip(self):
+        src = self.tmp_path / "stream512.bin"
+        data = os.urandom(512 * 1024)
+        src.write_bytes(data)
+        reporter = self._RecordingReporter()
+        encoded_path, approx = basefwx._b512_encode_path(
+            src,
+            "pw",
+            reporter,
+            file_index=0,
+            total_files=1,
+            strip_metadata=False,
+            use_master=False,
+            master_pubkey=None
+        )
+        self.assertGreater(approx, 0)
+        meta = self._read_metadata_from_file(encoded_path)
+        self.assertEqual(meta.get("ENC-MODE"), "STREAM")
+        self.assertIn("pb512-stream", reporter.phases)
+
+        decode_reporter = self._RecordingReporter()
+        decoded_path, restored_len = basefwx._b512_decode_path(
+            encoded_path,
+            "pw",
+            decode_reporter,
+            file_index=0,
+            strip_metadata=False,
+            use_master=False
+        )
+        self.assertEqual(restored_len, len(data))
+        self.assertEqual(decoded_path.read_bytes(), data)
+        self.assertIn("deobfuscate", decode_reporter.phases)
 
 
 @unittest.skipIf(basefwx is None, f"dependency unavailable: {_IMPORT_ERROR}")

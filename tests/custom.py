@@ -7,4 +7,4 @@ if str(REPO_ROOT) not in sys.path:
 
 from basefwx.__init__ import fwxAES
 
-fwxAES("inst.exe", "password")
+fwxAES("ranB.bin", "password", light=True)

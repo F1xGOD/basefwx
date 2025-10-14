@@ -16,7 +16,8 @@ Donate Crypto (Monero):
 </pre>
 
 [![PyPI version](https://img.shields.io/pypi/v/basefwx)](https://pypi.org/project/basefwx/)
-[![Build](https://img.shields.io/github/actions/workflow/status/F1xGOD/basefwx/workflow.yml)](https://github.com/F1xGOD/basefwx/actions)
+[![Publish](https://img.shields.io/github/actions/workflow/status/F1xGOD/basefwx/publish.yml)](https://github.com/F1xGOD/basefwx/actions)
+[![Tests](https://img.shields.io/github/actions/workflow/status/F1xGOD/basefwx/ci.yml)](https://github.com/F1xGOD/basefwx/actions)
 [![GitHub license](https://img.shields.io/github/license/F1xGOD/basefwx?style=flat)](https://www.fixcraft.org/terms-conditions)  
 [![GitHub issues](https://img.shields.io/github/issues/F1xGOD/basefwx?label=Issues)](https://www.fixcraft.org/terms-conditions)  
 [![GitHub stars](https://img.shields.io/github/stars/F1xGOD/basefwx)](https://www.fixcraft.org/terms-conditions)  

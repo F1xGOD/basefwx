@@ -64,6 +64,10 @@ class basefwx:
     STREAM_INFO_KEY = b'basefwx.stream.obf.key.v1'
     STREAM_INFO_IV = b'basefwx.stream.obf.iv.v1'
     STREAM_INFO_PERM = b'basefwx.stream.obf.perm.v1'
+    HEAVY_PBKDF2_ITERATIONS = 1_000_000
+    HEAVY_ARGON2_TIME_COST = 5
+    HEAVY_ARGON2_MEMORY_COST = 2 ** 17
+    HEAVY_ARGON2_PARALLELISM = 4
     OFB_FAST_MIN = 64 * 1024
     PERM_FAST_MIN = 4 * 1024
     USER_KDF_SALT_SIZE = 16
@@ -120,8 +124,10 @@ class basefwx:
             self.stream = stream or basefwx.sys.stdout
             self._printed = False
             self._min_interval = max(0.0, float(min_interval))
+            self._is_tty = bool(getattr(self.stream, "isatty", lambda: False)())
             self._last_render = 0.0
             self._cached_lines: "basefwx.typing.Optional[tuple[str, str]]" = None
+            self._last_fraction: dict[int, float] = {}
 
         @staticmethod
         def _render_bar(fraction: float, width: int | None = None) -> str:
@@ -143,6 +149,16 @@ class basefwx:
         def _write(self, line1: str, line2: str, force: bool = False) -> None:
             now = basefwx.time.monotonic()
             self._cached_lines = (line1, line2)
+            if not self._is_tty:
+                if not force and self._printed:
+                    return
+                self.stream.write(line1 + '\n')
+                self.stream.write(line2 + '\n')
+                self.stream.flush()
+                self._printed = True
+                self._last_render = now
+                self._cached_lines = None
+                return
             if not force and self._printed and (now - self._last_render) < self._min_interval:
                 return
             cached = self._cached_lines
@@ -167,15 +183,40 @@ class basefwx:
             *,
             size_hint: "basefwx.typing.Optional[basefwx.typing.Tuple[int, int]]" = None
         ) -> None:
-            overall_fraction = (file_index + max(0.0, min(1.0, fraction))) / self.total_files
+            # threshold: consider "almost done" as done for display logic
+            THRESH = 0.98
+
+            # clamp fraction and ensure float
+            fraction = max(0.0, min(1.0, float(fraction)))
+
+            # compute overall fraction and bars
+            overall_fraction = (file_index + fraction) / self.total_files
             overall = self._render_bar(overall_fraction)
             current = self._render_bar(fraction)
+
+            # compute a human-friendly "files complete" value:
+            # treat fraction >= THRESH as fully completed for the counter
+            completed_files = file_index + (1 if fraction >= THRESH else 0)
+            # clamp just in case
+            completed_files = min(self.total_files, max(0, int(completed_files)))
+
             label = path.name if path else ""
-            line1 = f"Overall {overall} ({file_index}/{self.total_files} files complete)"
+            line1 = f"\rOverall {overall} ({completed_files}/{self.total_files} files complete)"
             hint_text = f" ({self._format_size_hint(size_hint)})" if size_hint else ""
             label_text = f" [{label}]" if label else ""
-            line2 = f"File    {current} phase: {phase}{hint_text}{label_text}"
+            line2 = f"\rFile    {current} phase: {phase}{hint_text}{label_text}"
+
+            # If non-tty, avoid spamming a near-final 100% line: let finalize_file() print final authoritative line.
+            if not self._is_tty and fraction >= THRESH:
+                # cache lines so finalize_file can still force output if needed,
+                # but don't actually write them now to avoid duplicate final prints.
+                self._cached_lines = (line1, line2)
+                self._last_fraction[file_index] = fraction
+                return
+
+            # normal write path
             self._write(line1, line2)
+            self._last_fraction[file_index] = fraction
 
         def finalize_file(
             self,
@@ -184,15 +225,26 @@ class basefwx:
             *,
             size_hint: "basefwx.typing.Optional[basefwx.typing.Tuple[int, int]]" = None
         ) -> None:
+            THRESH = 0.999
+            last_fraction = self._last_fraction.pop(file_index, None)
+
+            # if TTY and we already printed almost-complete, skip duplicate final
+            if self._is_tty and last_fraction is not None and last_fraction >= THRESH:
+                return
+
             overall_fraction = (file_index + 1) / self.total_files
             overall = self._render_bar(overall_fraction)
             label = path.name if path else ""
             current = self._render_bar(1.0)
-            line1 = f"Overall {overall} ({file_index + 1}/{self.total_files} files complete)"
+            line1 = f"\rOverall {overall} ({file_index + 1}/{self.total_files} files complete)"
             hint_text = f" ({self._format_size_hint(size_hint)})" if size_hint else ""
             label_text = f" [{label}]" if label else ""
-            line2 = f"File    {current} phase: done{hint_text}{label_text}"
+            line2 = f"\rFile    {current} phase: done{hint_text}{label_text}"
+
+            # force final output (overwriting in TTY or printing in non-TTY)
             self._write(line1, line2, force=True)
+
+            
 
     @staticmethod
     def _human_readable_size(num_bytes: int) -> str:
@@ -507,7 +559,12 @@ class basefwx:
         *,
         aead: str = "AESGCM",
         kdf: "basefwx.typing.Optional[str]" = None,
-        mode: "basefwx.typing.Optional[str]" = None
+        mode: "basefwx.typing.Optional[str]" = None,
+        obfuscation: "basefwx.typing.Optional[bool]" = None,
+        kdf_iters: "basefwx.typing.Optional[int]" = None,
+        argon2_time_cost: "basefwx.typing.Optional[int]" = None,
+        argon2_memory_cost: "basefwx.typing.Optional[int]" = None,
+        argon2_parallelism: "basefwx.typing.Optional[int]" = None
     ) -> str:
         if strip:
             return ""
@@ -525,6 +582,16 @@ class basefwx:
         }
         if mode:
             info["ENC-MODE"] = mode
+        if obfuscation is not None:
+            info["ENC-OBF"] = "yes" if obfuscation else "no"
+        if kdf_iters is not None:
+            info["ENC-KDF-ITER"] = str(kdf_iters)
+        if argon2_time_cost is not None:
+            info["ENC-ARGON2-TC"] = str(argon2_time_cost)
+        if argon2_memory_cost is not None:
+            info["ENC-ARGON2-MEM"] = str(argon2_memory_cost)
+        if argon2_parallelism is not None:
+            info["ENC-ARGON2-PAR"] = str(argon2_parallelism)
         data = basefwx.json.dumps(info, separators=(',', ':')).encode('utf-8')
         return basefwx.base64.b64encode(data).decode('utf-8')
 
@@ -993,7 +1060,10 @@ class basefwx:
         password: str,
         salt: "basefwx.typing.Optional[bytes]" = None,
         *,
-        length: int = 32
+        length: int = 32,
+        time_cost: int = 3,
+        memory_cost: int = 2 ** 15,
+        parallelism: int = 4
     ) -> "basefwx.typing.Tuple[bytes, bytes]":
         if salt is None:
             salt = basefwx.os.urandom(basefwx.USER_KDF_SALT_SIZE)
@@ -1004,9 +1074,9 @@ class basefwx:
         key = basefwx.hash_secret_raw(
             password.encode("utf-8"),
             salt,
-            time_cost=3,
-            memory_cost=2 ** 15,
-            parallelism=4,
+            time_cost=time_cost,
+            memory_cost=memory_cost,
+            parallelism=parallelism,
             hash_len=length,
             type=basefwx.Argon2Type.ID
         )
@@ -1037,7 +1107,10 @@ class basefwx:
         salt: bytes | None = None,
         *,
         iterations: int | None = None,
-        kdf: "basefwx.typing.Optional[str]" = None
+        kdf: "basefwx.typing.Optional[str]" = None,
+        argon2_time_cost: "basefwx.typing.Optional[int]" = None,
+        argon2_memory_cost: "basefwx.typing.Optional[int]" = None,
+        argon2_parallelism: "basefwx.typing.Optional[int]" = None
     ) -> "basefwx.typing.Tuple[bytes, bytes]":
         if salt is None:
             salt = basefwx.os.urandom(basefwx.USER_KDF_SALT_SIZE)
@@ -1052,7 +1125,13 @@ class basefwx:
                     basefwx._WARNED_ARGON2_MISSING = True
                 requested_kdf = "pbkdf2"
             else:
-                return basefwx._derive_user_key_argon2id(password, salt)
+                return basefwx._derive_user_key_argon2id(
+                    password,
+                    salt,
+                    time_cost=argon2_time_cost or 3,
+                    memory_cost=argon2_memory_cost or (2 ** 15),
+                    parallelism=argon2_parallelism or 4
+                )
         return basefwx._derive_user_key_pbkdf2(password, salt, iterations=iterations)
 
     @staticmethod
@@ -1064,7 +1143,12 @@ class basefwx:
         metadata_blob: "basefwx.typing.Optional[str]" = None,
         master_public_key: "basefwx.typing.Optional[bytes]" = None,
         kdf: "basefwx.typing.Optional[str]" = None,
-        progress_callback: "basefwx.typing.Optional[basefwx.typing.Callable[[int, int], None]]" = None
+        progress_callback: "basefwx.typing.Optional[basefwx.typing.Callable[[int, int], None]]" = None,
+        obfuscate: bool = True,
+        kdf_iterations: "basefwx.typing.Optional[int]" = None,
+        argon2_time_cost: "basefwx.typing.Optional[int]" = None,
+        argon2_memory_cost: "basefwx.typing.Optional[int]" = None,
+        argon2_parallelism: "basefwx.typing.Optional[int]" = None
     ) -> bytes:
         if not user_key and not use_master:
             raise ValueError("Cannot encrypt without user password or master key")
@@ -1086,15 +1170,18 @@ class basefwx:
             user_derived_key, user_salt = basefwx._derive_user_key(
                 user_key,
                 salt=None,
-                iterations=basefwx.USER_KDF_ITERATIONS,
-                kdf=kdf_used
+                iterations=kdf_iterations or basefwx.USER_KDF_ITERATIONS,
+                kdf=kdf_used,
+                argon2_time_cost=argon2_time_cost,
+                argon2_memory_cost=argon2_memory_cost,
+                argon2_parallelism=argon2_parallelism
             )
             wrapped_ephemeral = basefwx._aead_encrypt(user_derived_key, ephemeral_key, aad)
             ephemeral_enc_user = user_salt + wrapped_ephemeral
         else:
             ephemeral_enc_user = b""
         payload_bytes = plaintext.encode('utf-8')
-        if basefwx.ENABLE_OBFUSCATION:
+        if obfuscate and basefwx.ENABLE_OBFUSCATION:
             payload_bytes = basefwx._obfuscate_bytes(payload_bytes, ephemeral_key)
 
         nonce = basefwx.os.urandom(basefwx.AEAD_NONCE_LEN)
@@ -1231,7 +1318,21 @@ class basefwx:
             metadata_blob = ""
         aad = metadata_bytes if metadata_bytes else b''
         meta_info = basefwx._decode_metadata(metadata_blob) if metadata_blob else {}
+        should_deobfuscate = basefwx.ENABLE_OBFUSCATION and meta_info.get("ENC-OBF", "yes") != "no"
+
+        def _parse_int(value: "basefwx.typing.Any", default: "basefwx.typing.Optional[int]") -> "basefwx.typing.Optional[int]":
+            if value is None:
+                return default
+            try:
+                return int(value)
+            except (TypeError, ValueError):
+                return default
+
         kdf_hint = (meta_info.get("ENC-KDF") or basefwx.USER_KDF or "argon2id").lower()
+        kdf_iter_hint = _parse_int(meta_info.get("ENC-KDF-ITER"), basefwx.USER_KDF_ITERATIONS)
+        argon2_time_hint = _parse_int(meta_info.get("ENC-ARGON2-TC"), None)
+        argon2_mem_hint = _parse_int(meta_info.get("ENC-ARGON2-MEM"), None)
+        argon2_par_hint = _parse_int(meta_info.get("ENC-ARGON2-PAR"), None)
         ciphertext = payload_blob[metadata_end:]
 
         if master_blob_present:
@@ -1251,8 +1352,11 @@ class basefwx:
             user_derived_key, _ = basefwx._derive_user_key(
                 key,
                 salt=user_salt,
-                iterations=basefwx.USER_KDF_ITERATIONS,
-                kdf=kdf_hint
+                iterations=kdf_iter_hint or basefwx.USER_KDF_ITERATIONS,
+                kdf=kdf_hint,
+                argon2_time_cost=argon2_time_hint,
+                argon2_memory_cost=argon2_mem_hint,
+                argon2_parallelism=argon2_par_hint
             )
             try:
                 ephemeral_key = basefwx._aead_decrypt(user_derived_key, wrapped_ephemeral, aad)
@@ -1295,7 +1399,7 @@ class basefwx:
                 print("⚠️  AEAD authentication failed; attempting legacy CBC decrypt.")
                 return legacy_decrypt(ephemeral_enc_user, ephemeral_enc_master, payload_blob)
             raise ValueError("AEAD authentication failed; ciphertext or metadata tampered") from exc
-        if basefwx.ENABLE_OBFUSCATION:
+        if should_deobfuscate:
             payload_bytes = basefwx._deobfuscate_bytes(payload_bytes, ephemeral_key)
         plaintext = payload_bytes.decode('utf-8')
         header_blob, _ = basefwx._split_metadata(plaintext)
@@ -1673,6 +1777,19 @@ class basefwx:
 
         pubkey_bytes = master_pubkey if master_pubkey is not None else (basefwx._load_master_pq_public() if use_master else None)
         use_master_effective = use_master and not strip_metadata and pubkey_bytes is not None
+        heavy_iters = basefwx.HEAVY_PBKDF2_ITERATIONS
+        heavy_argon_time = basefwx.HEAVY_ARGON2_TIME_COST if basefwx.hash_secret_raw is not None else None
+        heavy_argon_mem = basefwx.HEAVY_ARGON2_MEMORY_COST if basefwx.hash_secret_raw is not None else None
+        heavy_argon_par = basefwx.HEAVY_ARGON2_PARALLELISM if basefwx.hash_secret_raw is not None else None
+        heavy_iters = basefwx.HEAVY_PBKDF2_ITERATIONS
+        heavy_argon_time = basefwx.HEAVY_ARGON2_TIME_COST if basefwx.hash_secret_raw is not None else None
+        heavy_argon_mem = basefwx.HEAVY_ARGON2_MEMORY_COST if basefwx.hash_secret_raw is not None else None
+        heavy_argon_par = basefwx.HEAVY_ARGON2_PARALLELISM if basefwx.hash_secret_raw is not None else None
+        heavy_iters = basefwx.HEAVY_PBKDF2_ITERATIONS
+        heavy_argon_time = basefwx.HEAVY_ARGON2_TIME_COST if basefwx.hash_secret_raw is not None else None
+        heavy_argon_mem = basefwx.HEAVY_ARGON2_MEMORY_COST if basefwx.hash_secret_raw is not None else None
+        heavy_argon_par = basefwx.HEAVY_ARGON2_PARALLELISM if basefwx.hash_secret_raw is not None else None
+        obfuscate_payload = input_size <= basefwx.STREAM_THRESHOLD
         if input_size >= basefwx.STREAM_THRESHOLD and basefwx.ENABLE_B512_AEAD:
             return basefwx._b512_encode_path_stream(
                 path,
@@ -1740,13 +1857,7 @@ class basefwx:
         basefwx.os.remove(path)
 
         if reporter:
-            reporter.update(
-                file_index,
-                0.9,
-                f"write (~{basefwx._human_readable_size(approx_size)})",
-                output_path,
-                size_hint=size_hint
-            )
+            reporter.update(file_index, 1.0, "done", output_path, size_hint=size_hint)
             reporter.finalize_file(file_index, output_path, size_hint=size_hint)
 
         basefwx._del('mask_key')
@@ -1828,13 +1939,13 @@ class basefwx:
         def _seal_progress(done_plain: int) -> None:
             if not reporter:
                 return
-            fraction = 0.55 + 0.3 * (done_plain / plaintext_len if plaintext_len else 0.0)
+            fraction = 0.55 + 0.44 * (done_plain / plaintext_len if plaintext_len else 0.0)
             reporter.update(file_index, fraction, "seal", path, size_hint=estimated_hint)
 
         def _obf_progress(done_bytes: int, total_bytes: int) -> None:
             if not reporter:
                 return
-            fraction = 0.2 + 0.35 * (done_bytes / total_bytes if total_bytes else 0.0)
+            fraction = 0.2 + 0.70 * (done_bytes / total_bytes if total_bytes else 0.0)
             reporter.update(file_index, fraction, "pb512-stream", path, size_hint=estimated_hint)
 
         result: "basefwx.typing.Optional[basefwx.typing.Tuple[basefwx.pathlib.Path, int]]" = None
@@ -1905,8 +2016,6 @@ class basefwx:
             cleanup_paths.remove(final_tmp_path)
             basefwx.os.remove(obf_tmp.name)
             cleanup_paths.remove(obf_tmp.name)
-            if reporter:
-                reporter.update(file_index, 0.9, "write", output_path, size_hint=actual_hint)
             if strip_metadata:
                 basefwx._apply_strip_attributes(output_path)
                 basefwx.os.chmod(output_path, 0)
@@ -1914,7 +2023,7 @@ class basefwx:
             human = basefwx._human_readable_size(actual_size)
             print(f"{output_path.name}: approx output size {human}")
             if reporter:
-                reporter.update(file_index, 0.97, f"write (~{human})", output_path, size_hint=actual_hint)
+                reporter.update(file_index, 1.0, "done", output_path, size_hint=actual_hint)
                 reporter.finalize_file(file_index, output_path, size_hint=actual_hint)
             result = (output_path, actual_size)
         finally:
@@ -1954,13 +2063,22 @@ class basefwx:
         pubkey_bytes = master_pubkey if master_pubkey is not None else (basefwx._load_master_pq_public() if use_master else None)
         use_master_effective = use_master and not strip_metadata and pubkey_bytes is not None
         kdf_used = (basefwx.USER_KDF or "argon2id").lower()
+        heavy_iters = basefwx.HEAVY_PBKDF2_ITERATIONS
+        heavy_argon_time = basefwx.HEAVY_ARGON2_TIME_COST if basefwx.hash_secret_raw is not None else None
+        heavy_argon_mem = basefwx.HEAVY_ARGON2_MEMORY_COST if basefwx.hash_secret_raw is not None else None
+        heavy_argon_par = basefwx.HEAVY_ARGON2_PARALLELISM if basefwx.hash_secret_raw is not None else None
         stream_salt = basefwx._StreamObfuscator.generate_salt()
         metadata_blob = basefwx._build_metadata(
             "AES-HEAVY",
             strip_metadata,
             use_master_effective,
             kdf=kdf_used,
-            mode="STREAM"
+            mode="STREAM",
+            obfuscation=True,
+            kdf_iters=heavy_iters,
+            argon2_time_cost=heavy_argon_time,
+            argon2_memory_cost=heavy_argon_mem,
+            argon2_parallelism=heavy_argon_par
         )
         metadata_bytes = metadata_blob.encode('utf-8') if metadata_blob else b""
         aad = metadata_bytes if metadata_bytes else b""
@@ -2000,8 +2118,11 @@ class basefwx:
             user_derived_key, user_salt = basefwx._derive_user_key(
                 password,
                 salt=None,
-                iterations=basefwx.USER_KDF_ITERATIONS,
-                kdf=kdf_used
+                iterations=heavy_iters,
+                kdf=kdf_used,
+                argon2_time_cost=heavy_argon_time,
+                argon2_memory_cost=heavy_argon_mem,
+                argon2_parallelism=heavy_argon_par
             )
             wrapped_ephemeral = basefwx._aead_encrypt(user_derived_key, ephemeral_key, aad)
             ephemeral_enc_user = user_salt + wrapped_ephemeral
@@ -2022,13 +2143,13 @@ class basefwx:
         def _aes_progress(done_plain: int, total_plain_bytes: int) -> None:
             if not reporter:
                 return
-            fraction = 0.55 + 0.30 * (done_plain / total_plain_bytes if total_plain_bytes else 0.0)
+            fraction = 0.55 + 0.44 * (done_plain / total_plain_bytes if total_plain_bytes else 0.0)
             reporter.update(file_index, fraction, "AES512", path, size_hint=estimated_hint)
 
         def _obf_progress(done_bytes: int, total_bytes: int) -> None:
             if not reporter:
                 return
-            fraction = 0.2 + 0.30 * (done_bytes / total_bytes if total_bytes else 0.0)
+            fraction = 0.2 + 0.70 * (done_bytes / total_bytes if total_bytes else 0.0)
             reporter.update(file_index, fraction, "pb512-stream", path, size_hint=estimated_hint)
 
         try:
@@ -2088,8 +2209,6 @@ class basefwx:
             actual_hint = (input_size, actual_size)
             basefwx.os.replace(cipher_tmp_path, output_path)
             cleanup_paths.remove(cipher_tmp_path)
-            if reporter:
-                reporter.update(file_index, 0.88, "write", output_path, size_hint=actual_hint)
             if strip_metadata:
                 basefwx._apply_strip_attributes(output_path)
                 basefwx.os.chmod(output_path, 0)
@@ -2099,7 +2218,7 @@ class basefwx:
             human = basefwx._human_readable_size(actual_size)
             print(f"{output_path.name}: approx output size {human}")
             if reporter:
-                reporter.update(file_index, 0.95, f"write (~{human})", output_path, size_hint=actual_hint)
+                reporter.update(file_index, 1.0, "done", output_path, size_hint=actual_hint)
                 reporter.finalize_file(file_index, output_path, size_hint=actual_hint)
             return output_path, actual_size
         finally:
@@ -2247,7 +2366,7 @@ class basefwx:
         output_len = len(decoded_bytes)
         size_hint = (input_size, output_len)
         if reporter:
-            reporter.update(file_index, 0.9, "write", target, size_hint=size_hint)
+            reporter.update(file_index, 1.0, "done", target, size_hint=size_hint)
             reporter.finalize_file(file_index, target, size_hint=size_hint)
 
         basefwx._del('content')
@@ -2459,7 +2578,7 @@ class basefwx:
             output_len = original_size
             size_hint = (input_size, output_len)
             if reporter:
-                reporter.update(file_index, 0.95, "write", target, size_hint=size_hint)
+                reporter.update(file_index, 1.0, "done", target, size_hint=size_hint)
                 reporter.finalize_file(file_index, target, size_hint=size_hint)
             return target, output_len
         finally:
@@ -2786,6 +2905,7 @@ class basefwx:
 
         pubkey_bytes = master_pubkey if master_pubkey is not None else (basefwx._load_master_pq_public() if use_master else None)
         use_master_effective = use_master and not strip_metadata and pubkey_bytes is not None
+        obfuscate_payload = input_size <= basefwx.STREAM_THRESHOLD
         chunk_size = max(3, basefwx.STREAM_CHUNK_SIZE)
         buffer = bytearray()
         processed = 0
@@ -2818,7 +2938,8 @@ class basefwx:
             "AES-LIGHT",
             strip_metadata,
             use_master_effective,
-            kdf=kdf_used
+            kdf=kdf_used,
+            obfuscation=obfuscate_payload
         )
         body = (path.suffix or "") + basefwx.FWX_DELIM + b64_payload
         plaintext = f"{metadata_blob}{basefwx.META_DELIM}{body}" if metadata_blob else body
@@ -2830,7 +2951,7 @@ class basefwx:
             enc_hint = (input_size, est_cipher_len)
 
             def _enc_progress(done: int, total: int) -> None:
-                fraction = 0.55 + 0.25 * (done / total if total else 0.0)
+                fraction = 0.55 + 0.41 * (done / total if total else 0.0)
                 reporter.update(file_index, fraction, "AES512", path, size_hint=enc_hint)
 
             progress_cb = _enc_progress
@@ -2842,7 +2963,8 @@ class basefwx:
             metadata_blob=metadata_blob,
             master_public_key=pubkey_bytes if use_master_effective else None,
             kdf=kdf_used,
-            progress_callback=progress_cb
+            progress_callback=progress_cb,
+            obfuscate=obfuscate_payload
         )
         compressor = basefwx.zlib.compressobj()
         compressed_parts: "basefwx.typing.List[bytes]" = []
@@ -2856,8 +2978,8 @@ class basefwx:
                 compressed_parts.append(comp)
             processed_cipher += len(chunk)
             if reporter and total_cipher:
-                fraction = 0.8 + 0.1 * (processed_cipher / total_cipher)
-                reporter.update(file_index, min(fraction, 0.89), "compress", path)
+                fraction = 0.8 + 0.12 * (processed_cipher / total_cipher)
+                reporter.update(file_index, min(fraction, 0.92), "compress", path)
         tail = compressor.flush()
         if tail:
             compressed_parts.append(tail)
@@ -2867,7 +2989,7 @@ class basefwx:
         size_hint = (input_size, output_len)
 
         if reporter:
-            reporter.update(file_index, 0.9, "compress", path, size_hint=size_hint)
+            reporter.update(file_index, 0.92, "compress", path, size_hint=size_hint)
 
         output_path = path.with_suffix('.fwx')
         with open(output_path, 'wb') as handle:
@@ -2881,6 +3003,7 @@ class basefwx:
         basefwx.os.remove(path)
 
         if reporter:
+            reporter.update(file_index, 1.0, "done", output_path, size_hint=size_hint)
             reporter.finalize_file(file_index, output_path, size_hint=size_hint)
 
         return output_path, output_len
@@ -2955,7 +3078,7 @@ class basefwx:
         output_len = len(raw)
         size_hint = (input_size, output_len)
         if reporter:
-            reporter.update(file_index, 0.9, "write", target, size_hint=size_hint)
+            reporter.update(file_index, 1.0, "done", target, size_hint=size_hint)
             reporter.finalize_file(file_index, target, size_hint=size_hint)
 
         return target, output_len
@@ -2990,6 +3113,18 @@ class basefwx:
         decoded_path: "basefwx.typing.Optional[str]" = None
         metadata_bytes: bytes = metadata_blob.encode('utf-8') if metadata_blob else b""
         aad = metadata_bytes if metadata_bytes else b""
+        def _parse_int(value: "basefwx.typing.Any", default: "basefwx.typing.Optional[int]") -> "basefwx.typing.Optional[int]":
+            if value is None:
+                return default
+            try:
+                return int(value)
+            except (TypeError, ValueError):
+                return default
+        kdf_hint = (meta.get("ENC-KDF") or basefwx.USER_KDF or "argon2id").lower()
+        kdf_iter_hint = _parse_int(meta.get("ENC-KDF-ITER"), basefwx.USER_KDF_ITERATIONS)
+        argon2_time_hint = _parse_int(meta.get("ENC-ARGON2-TC"), None)
+        argon2_mem_hint = _parse_int(meta.get("ENC-ARGON2-MEM"), None)
+        argon2_par_hint = _parse_int(meta.get("ENC-ARGON2-PAR"), None)
         try:
             with open(path, 'rb') as handle:
                 len_user_bytes = handle.read(4)
@@ -3052,12 +3187,14 @@ class basefwx:
                         raise ValueError("Corrupted user key blob: missing salt or AEAD data")
                     user_salt = user_blob[:basefwx.USER_KDF_SALT_SIZE]
                     wrapped_ephemeral = user_blob[basefwx.USER_KDF_SALT_SIZE:]
-                    kdf_hint = (meta.get("ENC-KDF") or basefwx.USER_KDF or "argon2id").lower()
                     user_derived_key, _ = basefwx._derive_user_key(
                         password,
                         salt=user_salt,
-                        iterations=basefwx.USER_KDF_ITERATIONS,
-                        kdf=kdf_hint
+                        iterations=kdf_iter_hint or basefwx.USER_KDF_ITERATIONS,
+                        kdf=kdf_hint,
+                        argon2_time_cost=argon2_time_hint,
+                        argon2_memory_cost=argon2_mem_hint,
+                        argon2_parallelism=argon2_par_hint
                     )
                     ephemeral_key = basefwx._aead_decrypt(user_derived_key, wrapped_ephemeral, aad)
                 else:
@@ -3178,7 +3315,7 @@ class basefwx:
             output_len = original_size
             size_hint = (input_size, output_len)
             if reporter:
-                reporter.update(file_index, 0.95, "write", target, size_hint=size_hint)
+                reporter.update(file_index, 1.0, "done", target, size_hint=size_hint)
                 reporter.finalize_file(file_index, target, size_hint=size_hint)
             return target, output_len
         finally:
@@ -3219,6 +3356,10 @@ class basefwx:
 
         pubkey_bytes = master_pubkey if master_pubkey is not None else (basefwx._load_master_pq_public() if use_master else None)
         use_master_effective = use_master and not strip_metadata and pubkey_bytes is not None
+        heavy_iters = basefwx.HEAVY_PBKDF2_ITERATIONS
+        heavy_argon_time = basefwx.HEAVY_ARGON2_TIME_COST if basefwx.hash_secret_raw is not None else None
+        heavy_argon_mem = basefwx.HEAVY_ARGON2_MEMORY_COST if basefwx.hash_secret_raw is not None else None
+        heavy_argon_par = basefwx.HEAVY_ARGON2_PARALLELISM if basefwx.hash_secret_raw is not None else None
         raw = path.read_bytes()
         if reporter:
             reporter.update(file_index, 0.25, "base64", path)
@@ -3235,7 +3376,12 @@ class basefwx:
             "AES-HEAVY",
             strip_metadata,
             use_master_effective,
-            kdf=kdf_used
+            kdf=kdf_used,
+            obfuscation=True,
+            kdf_iters=heavy_iters,
+            argon2_time_cost=heavy_argon_time,
+            argon2_memory_cost=heavy_argon_mem,
+            argon2_parallelism=heavy_argon_par
         )
         body = f"{ext_token}{basefwx.FWX_HEAVY_DELIM}{data_token}"
         plaintext = f"{metadata_blob}{basefwx.META_DELIM}{body}" if metadata_blob else body
@@ -3252,7 +3398,7 @@ class basefwx:
         if reporter:
 
             def _enc_progress(done: int, total: int) -> None:
-                fraction = 0.55 + 0.25 * (done / total if total else 0.0)
+                fraction = 0.55 + 0.40 * (done / total if total else 0.0)
                 reporter.update(file_index, fraction, "AES512", path, size_hint=estimated_hint)
 
             progress_cb = _enc_progress
@@ -3263,19 +3409,14 @@ class basefwx:
             metadata_blob=metadata_blob,
             master_public_key=pubkey_bytes if use_master_effective else None,
             kdf=kdf_used,
-            progress_callback=progress_cb
+            progress_callback=progress_cb,
+            kdf_iterations=heavy_iters,
+            argon2_time_cost=heavy_argon_time,
+            argon2_memory_cost=heavy_argon_mem,
+            argon2_parallelism=heavy_argon_par
         )
         approx_size = len(ciphertext)
         actual_hint = (input_size, approx_size)
-
-        if reporter:
-            reporter.update(
-                file_index,
-                0.8,
-                "AES512",
-                path,
-                size_hint=actual_hint
-            )
 
         output_path = path.with_suffix('.fwx')
         with open(output_path, 'wb') as handle:
@@ -3290,7 +3431,7 @@ class basefwx:
         print(f"{output_path.name}: approx output size {human}")
 
         if reporter:
-            reporter.update(file_index, 0.95, f"write (~{human})", output_path, size_hint=actual_hint)
+            reporter.update(file_index, 1.0, "done", output_path, size_hint=actual_hint)
             reporter.finalize_file(file_index, output_path, size_hint=actual_hint)
 
         return output_path, approx_size
@@ -3405,7 +3546,7 @@ class basefwx:
         output_len = len(raw)
         size_hint = (input_size, output_len)
         if reporter:
-            reporter.update(file_index, 0.9, "write", target, size_hint=size_hint)
+            reporter.update(file_index, 1.0, "done", target, size_hint=size_hint)
             reporter.finalize_file(file_index, target, size_hint=size_hint)
 
         return target, output_len
@@ -3455,6 +3596,11 @@ class basefwx:
                     else:
                         basefwx._aes_heavy_encode_path(path, resolved_password, reporter, idx, strip_metadata, encode_use_master, master_pubkey)
                 return str(path), "SUCCESS!"
+            except KeyboardInterrupt:
+                if reporter:
+                    reporter.update(idx, 0.0, "cancelled", path)
+                    reporter.finalize_file(idx, path)
+                raise
             except Exception as exc:
                 if reporter:
                     reporter.update(idx, 0.0, f"error: {exc}", path)
@@ -3477,18 +3623,38 @@ class basefwx:
                 return str(path), "SUCCESS!"
             except FileNotFoundError:
                 return str(path), "FAIL!"
+            except KeyboardInterrupt:
+                raise
             except Exception:
                 return str(path), "FAIL!"
 
-        if reporter is None and len(paths) > 1 and basefwx._CPU_COUNT > 1:
-            max_workers = min(len(paths), basefwx._CPU_COUNT)
-            with basefwx.concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-                for file_id, status in executor.map(_process_without_reporter, paths):
-                    results[file_id] = status
-        else:
-            for idx, path in enumerate(paths):
-                file_id, status = _process_with_reporter(idx, path)
-                results[file_id] = status
+        cancel_idx: "basefwx.typing.Optional[int]" = None
+        try:
+            if reporter is None and len(paths) > 1 and basefwx._CPU_COUNT > 1:
+                max_workers = min(len(paths), basefwx._CPU_COUNT)
+                with basefwx.concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+                    for file_id, status in executor.map(_process_without_reporter, paths):
+                        results[file_id] = status
+            else:
+                for idx, path in enumerate(paths):
+                    try:
+                        file_id, status = _process_with_reporter(idx, path)
+                        results[file_id] = status
+                    except KeyboardInterrupt:
+                        cancel_idx = idx
+                        results[str(path)] = "CANCELLED"
+                        raise
+        except KeyboardInterrupt:
+            for idx, rest_path in enumerate(paths):
+                key = str(rest_path)
+                if key not in results:
+                    if reporter:
+                        reporter.update(idx, 0.0, "cancelled", rest_path)
+                        reporter.finalize_file(idx, rest_path)
+                    results[key] = "CANCELLED"
+            if len(paths) == 1:
+                return "CANCELLED"
+            return results
 
         if len(paths) == 1:
             return next(iter(results.values()))

@@ -1,7 +1,12 @@
 # BASEFWX ENCRYPTION ENGINE ->
 
+import re as _re_module
+
+
 class basefwx:
     import base64
+    import concurrent.futures
+    import enum
     import sys
     import secrets
     import pathlib
@@ -14,7 +19,9 @@ class basefwx:
     import os
     import zlib
     import hashlib
+    import time
     import string
+    re = _re_module
     from cryptography.hazmat.primitives import hashes, padding
     from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
     from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
@@ -22,11 +29,15 @@ class basefwx:
     from cryptography.hazmat.primitives.ciphers.aead import AESGCM
     from pqcrypto.kem import ml_kem_768
     from datetime import datetime, timezone
-    from argon2.low_level import hash_secret_raw, Type as Argon2Type
+    try:
+        from argon2.low_level import hash_secret_raw as _argon2_hash_secret_raw, Type as _Argon2Type
+    except Exception:  # pragma: no cover - optional dependency
+        _argon2_hash_secret_raw = None
+        _Argon2Type = None
     from cryptography.exceptions import InvalidTag
     from cryptography.hazmat.primitives import hmac
 
-    MAX_INPUT_BYTES = 15 * 1024 * 1024  # 15 MiB ceiling for source files
+    MAX_INPUT_BYTES = 20 * 1024 * 1024 * 1024  # allow up to ~20 GiB per file
     PROGRESS_BAR_WIDTH = 30
     FWX_DELIM = "A8igTOmG"
     FWX_HEAVY_DELIM = "673827837628292873"
@@ -37,6 +48,9 @@ class basefwx:
     IMAGECIPHER_SCRAMBLE_CONTEXT = b'basefwx.imagecipher.scramble.v1'
     IMAGECIPHER_OFFSET_CONTEXT = b'basefwx.imagecipher.offset.v1'
     IMAGECIPHER_AEAD_INFO = b'basefwx.image.v1'
+    IMAGECIPHER_STREAM_INFO = b'basefwx.imagecipher.stream.v1'
+    IMAGECIPHER_ARCHIVE_INFO = b'basefwx.imagecipher.archive.v1'
+    IMAGECIPHER_TRAILER_MAGIC = b'JMG0'
     ENABLE_B512_AEAD = os.getenv("BASEFWX_B512_AEAD", "1") == "1"
     B512_AEAD_INFO = b'basefwx.b512file.v1'
     B512_FILE_MASK_INFO = b'basefwx.b512file.mask.v1'
@@ -47,51 +61,131 @@ class basefwx:
     PERM_FAST_MIN = 4 * 1024
     USER_KDF_SALT_SIZE = 16
     USER_KDF_ITERATIONS = 200_000
-    USER_KDF = os.getenv("BASEFWX_USER_KDF", "argon2id").lower()
+    if _Argon2Type is None:
+        class _FallbackArgon2Type(enum.Enum):
+            ID = 2
+        Argon2Type = _FallbackArgon2Type
+    else:
+        Argon2Type = _Argon2Type
+    hash_secret_raw = _argon2_hash_secret_raw
+    _ARGON2_AVAILABLE = hash_secret_raw is not None
+    USER_KDF_DEFAULT = "argon2id" if _ARGON2_AVAILABLE else "pbkdf2"
+    USER_KDF = os.getenv("BASEFWX_USER_KDF", USER_KDF_DEFAULT).lower()
+    if not _ARGON2_AVAILABLE:
+        USER_KDF_ITERATIONS = 32_768
+    _WARNED_ARGON2_MISSING = False
     _MASTER_PUBKEY_OVERRIDE: typing.ClassVar[typing.Optional[bytes]] = None
+    _CPU_COUNT = max(1, os.cpu_count() or 1)
+    _PARALLEL_CHUNK_SIZE = 1 << 20  # 1 MiB chunks when fan-out encoding
+    PQ_CIPHERTEXT_SIZE = getattr(ml_kem_768, "CIPHERTEXT_SIZE", 0)
+    AEAD_NONCE_LEN = 12
+    AEAD_TAG_LEN = 16
+    EPHEMERAL_KEY_LEN = 32
+    USER_WRAP_FIXED_LEN = USER_KDF_SALT_SIZE + AEAD_NONCE_LEN + AEAD_TAG_LEN + EPHEMERAL_KEY_LEN  # salt + nonce + tag + key
+    _CODE_MAP: typing.ClassVar[dict[str, str]] = {
+        'a': 'e*1', 'b': '&hl', 'c': '*&Gs', 'd': '*YHA', 'e': 'K5a{', 'f': '(*HGA(', 'g': '*&GD2',
+        'h': '+*jsGA', 'i': '(aj*a', 'j': 'g%', 'k': '&G{A', 'l': '/IHa', 'm': '*(oa', 'n': '*KA^7',
+        'o': ')i*8A', 'p': '*H)PA-G', 'q': '*YFSA', 'r': 'O.-P[A', 's': '{9sl', 't': '*(HARR',
+        'u': 'O&iA6u', 'v': 'n):u', 'w': '&^F*GV', 'x': '(*HskW', 'y': '{JM', 'z': 'J.!dA', 'A': '(&Tav',
+        'B': 't5', 'C': '*TGA3', 'D': '*GABD', 'E': '{A', 'F': 'pW', 'G': '*UAK(', 'H': '&GH+',
+        'I': '&AN)', 'J': 'L&VA', 'K': '(HAF5', 'L': '&F*Va', 'M': '^&FVB', 'N': '(*HSA$i',
+        'O': '*IHda&gT', 'P': '&*FAl', 'Q': ')P{A]', 'R': '*Ha$g', 'S': 'G)OA&', 'T': '|QG6',
+        'U': 'Qd&^', 'V': 'hA', 'W': '8h^va', 'X': '_9xlA', 'Y': '*J', 'Z': '*;pY&', ' ': 'R7a{',
+        '-': '}F', '=': 'OJ)_A', '+': '}J', '&': '%A', '%': 'y{A3s', '#': '.aGa!', '@': 'l@', '!': '/A',
+        '^': 'OIp*a', '*': '(U', '(': 'I*Ua]', ')': '{0aD', '{': 'Av[', '}': '9j', '[': '[a)',
+        ']': '*&GBA', '|': ']Vc!A', '/': ')*HND_', '~': '(&*GHA', ';': 'K}N=O', ':': 'YGOI&Ah',
+        '?': 'Oa', '.': '8y)a', '>': '0{a9', '<': 'v6Yha', ',': 'I8ys#', '0': '(HPA7', '1': '}v',
+        '2': '*HAl%', '3': '_)JHS', '4': 'IG(A', '5': '(*GFD', '6': 'IU(&V', '7': '(JH*G', '8': '*GHBA',
+        '9': 'U&G*C', '"': 'I(a-s'
+    }
+    _DECODE_MAP: typing.ClassVar[dict[str, str]] = {v: k for k, v in _CODE_MAP.items()}
+    _DECODE_PATTERN = _re_module.compile(
+        "|".join(
+            _re_module.escape(token) for token in sorted(_DECODE_MAP, key=len, reverse=True)
+        )
+    )
 
     class _ProgressReporter:
         """Lightweight textual progress reporter with two WinRAR-style bars."""
 
-        def __init__(self, total_files: int, stream=None):
+        def __init__(self, total_files: int, stream=None, min_interval: float = 0.1):
             self.total_files = max(total_files, 1)
             self.stream = stream or basefwx.sys.stdout
             self._printed = False
+            self._min_interval = max(0.0, float(min_interval))
+            self._last_render = 0.0
+            self._cached_lines: "basefwx.typing.Optional[tuple[str, str]]" = None
 
         @staticmethod
         def _render_bar(fraction: float, width: int | None = None) -> str:
             width = width or basefwx.PROGRESS_BAR_WIDTH
             fraction = max(0.0, min(1.0, fraction))
-            filled = int(round(fraction * width))
-            filled = min(filled, width)
-            bar = '#' * filled + '.' * (width - filled)
-            return f"[{bar}] {fraction * 100:6.2f}%"
+            filled = int(fraction * width)
+            bar = '=' * filled
+            if filled < width:
+                bar += '>'
+                bar += '.' * (width - filled - 1)
+            bar = bar.ljust(width, '.')
+            return f"|{bar}| {fraction * 100:6.2f}%"
 
-        def _write(self, line1: str, line2: str) -> None:
+        @staticmethod
+        def _format_size_hint(size_hint: "basefwx.typing.Tuple[int, int]") -> str:
+            src, dst = size_hint
+            return f"{basefwx._human_readable_size(src)} -> {basefwx._human_readable_size(dst)}"
+
+        def _write(self, line1: str, line2: str, force: bool = False) -> None:
+            now = basefwx.time.monotonic()
+            self._cached_lines = (line1, line2)
+            if not force and self._printed and (now - self._last_render) < self._min_interval:
+                return
+            cached = self._cached_lines
+            if cached is None:
+                return
+            line1, line2 = cached
             if self._printed:
-                self.stream.write('\033[2F')  # move up two lines
-            self.stream.write('\033[2K' + line1 + '\n')
-            self.stream.write('\033[2K' + line2 + '\n')
+                self.stream.write('\r\033[2F')  # move up two lines and reset column
+            self.stream.write('\r\033[2K' + line1 + '\n')
+            self.stream.write('\r\033[2K' + line2 + '\n')
             self.stream.flush()
             self._printed = True
+            self._last_render = now
+            self._cached_lines = None
 
-        def update(self, file_index: int, fraction: float, phase: str, path: "basefwx.pathlib.Path") -> None:
+        def update(
+            self,
+            file_index: int,
+            fraction: float,
+            phase: str,
+            path: "basefwx.pathlib.Path",
+            *,
+            size_hint: "basefwx.typing.Optional[basefwx.typing.Tuple[int, int]]" = None
+        ) -> None:
             overall_fraction = (file_index + max(0.0, min(1.0, fraction))) / self.total_files
             overall = self._render_bar(overall_fraction)
             current = self._render_bar(fraction)
             label = path.name if path else ""
             line1 = f"Overall {overall} ({file_index}/{self.total_files} files complete)"
-            line2 = f"File    {current} phase: {phase}{' [' + label + ']' if label else ''}"
+            hint_text = f" ({self._format_size_hint(size_hint)})" if size_hint else ""
+            label_text = f" [{label}]" if label else ""
+            line2 = f"File    {current} phase: {phase}{hint_text}{label_text}"
             self._write(line1, line2)
 
-        def finalize_file(self, file_index: int, path: "basefwx.pathlib.Path") -> None:
+        def finalize_file(
+            self,
+            file_index: int,
+            path: "basefwx.pathlib.Path",
+            *,
+            size_hint: "basefwx.typing.Optional[basefwx.typing.Tuple[int, int]]" = None
+        ) -> None:
             overall_fraction = (file_index + 1) / self.total_files
             overall = self._render_bar(overall_fraction)
             label = path.name if path else ""
             current = self._render_bar(1.0)
             line1 = f"Overall {overall} ({file_index + 1}/{self.total_files} files complete)"
-            line2 = f"File    {current} phase: done{' [' + label + ']' if label else ''}"
-            self._write(line1, line2)
+            hint_text = f" ({self._format_size_hint(size_hint)})" if size_hint else ""
+            label_text = f" [{label}]" if label else ""
+            line2 = f"File    {current} phase: done{hint_text}{label_text}"
+            self._write(line1, line2, force=True)
 
     @staticmethod
     def _human_readable_size(num_bytes: int) -> str:
@@ -448,7 +542,51 @@ class basefwx:
         if not payload:
             return b""
         stream = basefwx._hkdf_sha256(mask_key, length=len(payload), info=info)
-        return bytes(a ^ b for a, b in zip(payload, stream))
+        data_arr = basefwx.np.frombuffer(payload, dtype=basefwx.np.uint8)
+        mask_arr = basefwx.np.frombuffer(stream, dtype=basefwx.np.uint8)
+        total_len = data_arr.size
+        if total_len <= basefwx._PARALLEL_CHUNK_SIZE or basefwx._CPU_COUNT == 1:
+            out_arr = basefwx.np.bitwise_xor(data_arr, mask_arr)
+            return out_arr.tobytes()
+
+        out_arr = basefwx.np.empty_like(data_arr)
+        chunk = basefwx._PARALLEL_CHUNK_SIZE
+        ranges = [
+            (start, min(start + chunk, total_len))
+            for start in range(0, total_len, chunk)
+        ]
+
+        def _xor_slice(bounds: "tuple[int, int]") -> None:
+            start, end = bounds
+            basefwx.np.bitwise_xor(
+                data_arr[start:end],
+                mask_arr[start:end],
+                out=out_arr[start:end]
+            )
+
+        max_workers = min(len(ranges), basefwx._CPU_COUNT)
+        with basefwx.concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+            list(executor.map(_xor_slice, ranges))
+        return out_arr.tobytes()
+
+    @staticmethod
+    def _estimate_aead_blob_size(
+        plaintext_bytes: int,
+        metadata_bytes: int,
+        *,
+        include_user: bool,
+        include_master: bool
+    ) -> int:
+        cipher_section = basefwx.AEAD_NONCE_LEN + plaintext_bytes + basefwx.AEAD_TAG_LEN
+        payload_section = 4 + metadata_bytes + cipher_section
+        user_section = basefwx.USER_WRAP_FIXED_LEN if include_user else 0
+        master_section = basefwx.PQ_CIPHERTEXT_SIZE if include_master else 0
+        total = (
+            4 + user_section +
+            4 + master_section +
+            4 + payload_section
+        )
+        return total
 
     @staticmethod
     def _prepare_mask_key(
@@ -699,6 +837,8 @@ class basefwx:
             salt = basefwx.os.urandom(basefwx.USER_KDF_SALT_SIZE)
         if len(salt) < basefwx.USER_KDF_SALT_SIZE:
             raise ValueError("User key salt must be at least 16 bytes")
+        if basefwx.hash_secret_raw is None:
+            raise RuntimeError("Argon2 backend unavailable")
         key = basefwx.hash_secret_raw(
             password.encode("utf-8"),
             salt,
@@ -715,11 +855,12 @@ class basefwx:
         password: str,
         salt: bytes,
         *,
-        iterations: int = USER_KDF_ITERATIONS,
+        iterations: int | None = None,
         length: int = 32
     ) -> "basefwx.typing.Tuple[bytes, bytes]":
         if len(salt) < basefwx.USER_KDF_SALT_SIZE:
             raise ValueError("User key salt must be at least 16 bytes")
+        iterations = iterations or basefwx.USER_KDF_ITERATIONS
         kdf = basefwx.PBKDF2HMAC(
             algorithm=basefwx.hashes.SHA256(),
             length=length,
@@ -733,15 +874,24 @@ class basefwx:
         password: str,
         salt: bytes | None = None,
         *,
-        iterations: int = USER_KDF_ITERATIONS,
+        iterations: int | None = None,
         kdf: "basefwx.typing.Optional[str]" = None
     ) -> "basefwx.typing.Tuple[bytes, bytes]":
         if salt is None:
             salt = basefwx.os.urandom(basefwx.USER_KDF_SALT_SIZE)
-        kdf_name = (kdf or basefwx.USER_KDF or "argon2id").lower()
-        if kdf_name == "pbkdf2":
-            return basefwx._derive_user_key_pbkdf2(password, salt, iterations=iterations)
-        return basefwx._derive_user_key_argon2id(password, salt)
+        iterations = iterations or basefwx.USER_KDF_ITERATIONS
+        requested_kdf = (kdf or basefwx.USER_KDF or basefwx.USER_KDF_DEFAULT).lower()
+        if requested_kdf in {"argon2", "argon2id"}:
+            if basefwx.hash_secret_raw is None:
+                if kdf is not None:
+                    raise RuntimeError("Argon2 KDF requested but argon2 backend is unavailable")
+                if not basefwx._WARNED_ARGON2_MISSING:
+                    print("Warning: argon2 backend unavailable, falling back to PBKDF2.")
+                    basefwx._WARNED_ARGON2_MISSING = True
+                requested_kdf = "pbkdf2"
+            else:
+                return basefwx._derive_user_key_argon2id(password, salt)
+        return basefwx._derive_user_key_pbkdf2(password, salt, iterations=iterations)
 
     @staticmethod
     def encryptAES(
@@ -751,7 +901,8 @@ class basefwx:
         *,
         metadata_blob: "basefwx.typing.Optional[str]" = None,
         master_public_key: "basefwx.typing.Optional[bytes]" = None,
-        kdf: "basefwx.typing.Optional[str]" = None
+        kdf: "basefwx.typing.Optional[str]" = None,
+        progress_callback: "basefwx.typing.Optional[basefwx.typing.Callable[[int, int], None]]" = None
     ) -> bytes:
         if not user_key and not use_master:
             raise ValueError("Cannot encrypt without user password or master key")
@@ -783,11 +934,27 @@ class basefwx:
         payload_bytes = plaintext.encode('utf-8')
         if basefwx.ENABLE_OBFUSCATION:
             payload_bytes = basefwx._obfuscate_bytes(payload_bytes, ephemeral_key)
-        ciphertext = basefwx._aead_encrypt(
-            ephemeral_key,
-            payload_bytes,
-            aad
-        )
+
+        nonce = basefwx.os.urandom(basefwx.AEAD_NONCE_LEN)
+        encryptor = basefwx.Cipher(
+            basefwx.algorithms.AES(ephemeral_key),
+            basefwx.modes.GCM(nonce)
+        ).encryptor()
+        if aad:
+            encryptor.authenticate_additional_data(aad)
+        chunk_size = 1 << 20
+        total = len(payload_bytes)
+        processed = 0
+        cipher_chunks: "basefwx.typing.List[bytes]" = []
+        for offset in range(0, total, chunk_size):
+            chunk = payload_bytes[offset:offset + chunk_size]
+            cipher_chunks.append(encryptor.update(chunk))
+            processed += len(chunk)
+            if progress_callback:
+                progress_callback(processed, total)
+        cipher_chunks.append(encryptor.finalize())
+        tag = encryptor.tag
+        ciphertext = nonce + b"".join(cipher_chunks) + tag
         payload = len(metadata_bytes).to_bytes(4, 'big') + metadata_bytes + ciphertext
 
         def int_to_4(i):
@@ -810,7 +977,8 @@ class basefwx:
         use_master: bool = True,
         *,
         master_public_key: "basefwx.typing.Optional[bytes]" = None,
-        allow_legacy: "basefwx.typing.Optional[bool]" = None
+        allow_legacy: "basefwx.typing.Optional[bool]" = None,
+        progress_callback: "basefwx.typing.Optional[basefwx.typing.Callable[[int, int], None]]" = None
     ) -> str:
         basefwx.sys.set_int_max_str_digits(2000000000)
 
@@ -937,7 +1105,29 @@ class basefwx:
             raise ValueError("Ciphertext missing key transport data")
 
         try:
-            payload_bytes = basefwx._aead_decrypt(ephemeral_key, ciphertext, aad)
+            if len(ciphertext) < basefwx.AEAD_NONCE_LEN + basefwx.AEAD_TAG_LEN:
+                raise ValueError("Ciphertext truncated")
+            nonce = ciphertext[:basefwx.AEAD_NONCE_LEN]
+            tag = ciphertext[-basefwx.AEAD_TAG_LEN:]
+            cipher_body = ciphertext[basefwx.AEAD_NONCE_LEN:-basefwx.AEAD_TAG_LEN]
+            decryptor_ctx = basefwx.Cipher(
+                basefwx.algorithms.AES(ephemeral_key),
+                basefwx.modes.GCM(nonce, tag)
+            ).decryptor()
+            if aad:
+                decryptor_ctx.authenticate_additional_data(aad)
+            chunk_size = 1 << 20
+            total_ct = len(cipher_body)
+            processed = 0
+            plaintext_parts: "basefwx.typing.List[bytes]" = []
+            for offset_chunk in range(0, total_ct, chunk_size):
+                chunk = cipher_body[offset_chunk:offset_chunk + chunk_size]
+                plaintext_parts.append(decryptor_ctx.update(chunk))
+                processed += len(chunk)
+                if progress_callback:
+                    progress_callback(processed, total_ct)
+            plaintext_parts.append(decryptor_ctx.finalize())
+            payload_bytes = b"".join(plaintext_parts)
         except basefwx.InvalidTag as exc:
             if legacy_allowed:
                 print("⚠️  AEAD authentication failed; attempting legacy CBC decrypt.")
@@ -1314,6 +1504,8 @@ class basefwx:
     ) -> "basefwx.typing.Tuple[basefwx.pathlib.Path, int]":
         basefwx._ensure_existing_file(path)
         basefwx._ensure_size_limit(path)
+        input_size = path.stat().st_size
+        size_hint: "basefwx.typing.Optional[basefwx.typing.Tuple[int, int]]" = None
         if reporter:
             reporter.update(file_index, 0.05, "prepare", path)
 
@@ -1358,14 +1550,15 @@ class basefwx:
             aead_key = basefwx._hkdf_sha256(mask_key, info=basefwx.B512_AEAD_INFO)
             ct_blob = basefwx._aead_encrypt(aead_key, payload_bytes, basefwx.B512_AEAD_INFO)
             output_bytes = basefwx._pack_length_prefixed(user_blob, master_blob, ct_blob)
-            approx_size = len(output_bytes)
         else:
             output_bytes = payload_bytes
-            approx_size = len(output_bytes)
 
         output_path = path.with_suffix('.fwx')
         with open(output_path, 'wb') as handle:
             handle.write(output_bytes)
+
+        approx_size = len(output_bytes)
+        size_hint = (input_size, approx_size)
 
         if strip_metadata:
             basefwx._apply_strip_attributes(output_path)
@@ -1377,9 +1570,10 @@ class basefwx:
                 file_index,
                 0.9,
                 f"write (~{basefwx._human_readable_size(approx_size)})",
-                output_path
+                output_path,
+                size_hint=size_hint
             )
-            reporter.finalize_file(file_index, output_path)
+            reporter.finalize_file(file_index, output_path, size_hint=size_hint)
 
         basefwx._del('mask_key')
         basefwx._del('aead_key')
@@ -1403,6 +1597,8 @@ class basefwx:
     ) -> "basefwx.typing.Tuple[basefwx.pathlib.Path, int]":
         basefwx._ensure_existing_file(path)
         basefwx.os.chmod(path, 0o777)
+        input_size = path.stat().st_size
+        size_hint: "basefwx.typing.Optional[basefwx.typing.Tuple[int, int]]" = None
         if reporter:
             reporter.update(file_index, 0.1, "read", path)
 
@@ -1479,11 +1675,12 @@ class basefwx:
 
         if strip_metadata:
             basefwx._apply_strip_attributes(target)
-        if reporter:
-            reporter.update(file_index, 0.9, "write", target)
-            reporter.finalize_file(file_index, target)
-
         output_len = len(decoded_bytes)
+        size_hint = (input_size, output_len)
+        if reporter:
+            reporter.update(file_index, 0.9, "write", target, size_hint=size_hint)
+            reporter.finalize_file(file_index, target, size_hint=size_hint)
+
         basefwx._del('content')
         basefwx._del('decoded_bytes')
 
@@ -1514,7 +1711,8 @@ class basefwx:
             password: str,
             strip_metadata: bool = False,
             use_master: bool = True,
-            master_pubkey: "basefwx.typing.Optional[bytes]" = None
+            master_pubkey: "basefwx.typing.Optional[bytes]" = None,
+            silent: bool = False
     ):
         paths = basefwx._coerce_file_list(files)
         encode_use_master = use_master and not strip_metadata and master_pubkey is not None
@@ -1522,458 +1720,270 @@ class basefwx:
         try:
             resolved_password = basefwx._resolve_password(password, use_master=encode_use_master)
         except Exception as exc:
-            print(f"Password resolution failed: {exc}")
+            if not silent:
+                print(f"Password resolution failed: {exc}")
             return "FAIL!" if len(paths) == 1 else {str(p): "FAIL!" for p in paths}
 
-        reporter = basefwx._ProgressReporter(len(paths))
-        results = {}
+        reporter = basefwx._ProgressReporter(len(paths)) if not silent else None
+        results: dict[str, str] = {}
 
-        for idx, path in enumerate(paths):
+        def _process_with_reporter(idx: int, path: "basefwx.pathlib.Path") -> tuple[str, str]:
             try:
                 basefwx._ensure_existing_file(path)
             except FileNotFoundError:
-                reporter.update(idx, 0.0, "missing", path)
-                reporter.finalize_file(idx, path)
-                results[str(path)] = "FAIL!"
-                continue
-
+                if reporter:
+                    reporter.update(idx, 0.0, "missing", path)
+                    reporter.finalize_file(idx, path)
+                return str(path), "FAIL!"
             try:
                 if path.suffix.lower() == ".fwx":
-                    basefwx._b512_decode_path(path, resolved_password, reporter, idx, len(paths), strip_metadata, decode_use_master)
+                    basefwx._b512_decode_path(
+                        path,
+                        resolved_password,
+                        reporter,
+                        idx,
+                        len(paths),
+                        strip_metadata,
+                        decode_use_master
+                    )
                 else:
-                    basefwx._b512_encode_path(path, resolved_password, reporter, idx, len(paths), strip_metadata, encode_use_master, master_pubkey)
-                results[str(path)] = "SUCCESS!"
+                    basefwx._b512_encode_path(
+                        path,
+                        resolved_password,
+                        reporter,
+                        idx,
+                        len(paths),
+                        strip_metadata,
+                        encode_use_master,
+                        master_pubkey
+                    )
+                return str(path), "SUCCESS!"
             except Exception as exc:
-                reporter.update(idx, 0.0, f"error: {exc}", path)
-                reporter.finalize_file(idx, path)
-                results[str(path)] = "FAIL!"
+                if reporter:
+                    reporter.update(idx, 0.0, f"error: {exc}", path)
+                    reporter.finalize_file(idx, path)
+                return str(path), "FAIL!"
+
+        def _process_without_reporter(path: "basefwx.pathlib.Path") -> tuple[str, str]:
+            try:
+                basefwx._ensure_existing_file(path)
+                if path.suffix.lower() == ".fwx":
+                    basefwx._b512_decode_path(
+                        path,
+                        resolved_password,
+                        None,
+                        0,
+                        len(paths),
+                        strip_metadata,
+                        decode_use_master
+                    )
+                else:
+                    basefwx._b512_encode_path(
+                        path,
+                        resolved_password,
+                        None,
+                        0,
+                        len(paths),
+                        strip_metadata,
+                        encode_use_master,
+                        master_pubkey
+                    )
+                return str(path), "SUCCESS!"
+            except FileNotFoundError:
+                return str(path), "FAIL!"
+            except Exception:
+                return str(path), "FAIL!"
+
+        if reporter is None and len(paths) > 1 and basefwx._CPU_COUNT > 1:
+            max_workers = min(len(paths), basefwx._CPU_COUNT)
+            with basefwx.concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+                for file_id, status in executor.map(_process_without_reporter, paths):
+                    results[file_id] = status
+        else:
+            for idx, path in enumerate(paths):
+                file_id, status = _process_with_reporter(idx, path)
+                results[file_id] = status
 
         if len(paths) == 1:
             return next(iter(results.values()))
         return results
 
-    class sepImageCipher:
-        _MARKER = b'--ENCRYPTED_PWD--'
-
-        @staticmethod
-        def _load_master_pubkey():
-            return basefwx._load_master_pq_public()
-
-        @staticmethod
-        def _load_master_privkey():
-            return basefwx._load_master_pq_private()
-
-        @staticmethod
-        def scramble_indices(size: int, key: bytes):
-            seed_material = basefwx._derive_key_material(
-                key,
-                basefwx.IMAGECIPHER_SCRAMBLE_CONTEXT
-            )
-            seed = int.from_bytes(seed_material[:4], 'big')
-            basefwx.np.random.seed(seed)
-            idx = basefwx.np.arange(size)
-            basefwx.np.random.shuffle(idx)
-            return idx
-
-        @staticmethod
-        def rotate8(x: int, k: int) -> int:
-            return ((x << k) & 0xFF) | (x >> (8 - k))
-
-        @staticmethod
-        def encrypt_image_inv(path: str, password: str, output: str = 'chaos_inv.png'):
-            key_bytes = password.encode()
-            img = basefwx.Image.open(path).convert('RGB')
-            arr = basefwx.np.array(img)
-            h, w, _ = arr.shape
-            flat = arr.reshape(-1, 3)
-
-            # pixel shuffle & transform
-            scrambled = flat[
-                basefwx.ImageCipher.scramble_indices(flat.shape[0], key_bytes)
-            ].copy()
-            digest = basefwx._derive_key_material(
-                key_bytes,
-                basefwx.IMAGECIPHER_OFFSET_CONTEXT
-            )
-            offsets = basefwx.np.frombuffer(
-                digest * ((flat.shape[0] // len(digest)) + 1),
-                dtype=basefwx.np.uint8
-            )[:flat.shape[0]]
-            perms = [(0, 1, 2), (0, 2, 1), (1, 0, 2), (1, 2, 0), (2, 0, 1), (2, 1, 0)]
-            for i in range(flat.shape[0]):
-                off = int(offsets[i])
-                r, g, b = map(int, scrambled[i])
-                # shift
-                r = (r + off) & 0xFF
-                g = (g + off // 2) & 0xFF
-                b = (b + off // 3) & 0xFF
-                # swap
-                p = perms[off % 6]
-                r, g, b = ([r, g, b][j] for j in p)
-                # rotate
-                k = (off % 7) + 1
-                scrambled[i] = [
-                    basefwx.ImageCipher.rotate8(r, k),
-                    basefwx.ImageCipher.rotate8(g, k),
-                    basefwx.ImageCipher.rotate8(b, k)
-                ]
-
-            img_enc = basefwx.Image.fromarray(scrambled.reshape(h, w, 3))
-            img_enc.save(output)
-
-            png_data = basefwx.pathlib.Path(output).read_bytes()
-            derived_user_key = None
-            kem_shared = None
-            aead_key = None
-            salt = b""
-            if password:
-                derived_user_key, salt = basefwx._derive_user_key(password, kdf=basefwx.USER_KDF)
-            kem_ct, wrapped_pwd, kem_shared = basefwx._pq_wrap_secret(key_bytes)
-            aead_source = derived_user_key if derived_user_key is not None else kem_shared
-            aead_key = basefwx._hkdf_sha256(aead_source, info=basefwx.IMAGECIPHER_AEAD_INFO)
-            cipher_blob = basefwx._aead_encrypt(aead_key, png_data, basefwx.IMAGECIPHER_AEAD_INFO)
-            nonce, ct = cipher_blob[:12], cipher_blob[12:]
-            with open(output, 'wb') as f:
-                f.write(ct)
-                f.write(basefwx.ImageCipher._MARKER)
-                f.write(len(kem_ct).to_bytes(4, 'big'))
-                f.write(kem_ct)
-                f.write(len(wrapped_pwd).to_bytes(4, 'big'))
-                f.write(wrapped_pwd)
-                f.write(len(salt).to_bytes(4, 'big'))
-                f.write(salt)
-                f.write(nonce)
-            basefwx._del('derived_user_key')
-            basefwx._del('kem_shared')
-            basefwx._del('aead_key')
-            basefwx._del('png_data')
-            basefwx._del('key_bytes')
-            print(f'🔥 Encrypted image+pwd → {output}')
-
-        @staticmethod
-        def decrypt_image_inv(path: str, password: str = '', output: str = 'decrypted_inv.png'):
-            data = basefwx.pathlib.Path(path).read_bytes()
-            idx = data.rfind(basefwx.ImageCipher._MARKER)
-            if idx < 0:
-                raise ValueError('No embedded password marker')
-            ciphertext = data[:idx]
-            rest = data[idx + len(basefwx.ImageCipher._MARKER):]
-            offset = 0
-            kem_len = int.from_bytes(rest[offset:offset + 4], 'big')
-            offset += 4
-            kem_ct = rest[offset:offset + kem_len]
-            offset += kem_len
-            wrap_len = int.from_bytes(rest[offset:offset + 4], 'big')
-            offset += 4
-            wrapped_pwd = rest[offset:offset + wrap_len]
-            offset += wrap_len
-            legacy_footer = offset == len(rest)
-            if legacy_footer:
-                salt_len = 0
-                salt = b""
-                nonce = b""
-            else:
-                if offset + 4 > len(rest):
-                    raise ValueError('Malformed image cipher footer: missing salt length')
-                salt_len = int.from_bytes(rest[offset:offset + 4], 'big')
-                offset += 4
-                if offset + salt_len + 12 > len(rest):
-                    raise ValueError('Malformed image cipher footer: truncated salt/nonce')
-                salt = rest[offset:offset + salt_len]
-                offset += salt_len
-                nonce = rest[offset:offset + 12]
-                if len(nonce) != 12:
-                    raise ValueError('Malformed image cipher footer: missing nonce')
-
-            derived_key = None
-            kem_shared = None
-            aead_key = None
-            recovered_secret = None
-            if password:
-                password_text = password
-                key_bytes = password.encode()
-                if salt_len:
-                    derived_key, _ = basefwx._derive_user_key(password_text, salt=salt, kdf=basefwx.USER_KDF)
-                    aead_source = derived_key
-                else:
-                    aead_source = basefwx._derive_key_material(key_bytes, basefwx.IMAGECIPHER_AEAD_INFO)
-            else:
-                recovered_secret, kem_shared = basefwx._pq_unwrap_secret_with_shared(kem_ct, wrapped_pwd)
-                try:
-                    password_text = recovered_secret.decode('utf-8')
-                except UnicodeDecodeError:
-                    password_text = recovered_secret.decode('latin-1')
-                key_bytes = password_text.encode('utf-8')
-                print('🔓 Password recovered via master key')
-                if salt_len:
-                    derived_key, _ = basefwx._derive_user_key(password_text, salt=salt, kdf=basefwx.USER_KDF)
-                    aead_source = derived_key
-                else:
-                    aead_source = kem_shared
-            if legacy_footer:
-                png_data = ciphertext
-            else:
-                aead_key = basefwx._hkdf_sha256(aead_source, info=basefwx.IMAGECIPHER_AEAD_INFO)
-                png_data = basefwx._aead_decrypt(aead_key, nonce + ciphertext, basefwx.IMAGECIPHER_AEAD_INFO)
-
-            img = basefwx.Image.open(basefwx.BytesIO(png_data)).convert('RGB')
-            arr = basefwx.np.array(img)
-            h, w, _ = arr.shape
-            flat = arr.reshape(-1, 3)
-            digest = basefwx._derive_key_material(
-                key_bytes,
-                basefwx.IMAGECIPHER_OFFSET_CONTEXT
-            )
-            offsets = basefwx.np.frombuffer(
-                digest * ((flat.shape[0] // len(digest)) + 1),
-                dtype=basefwx.np.uint8
-            )[:flat.shape[0]]
-            perms = [(0, 1, 2), (0, 2, 1), (1, 0, 2), (1, 2, 0), (2, 0, 1), (2, 1, 0)]
-            temp = flat.copy()
-            # invert rotate
-            for i in range(flat.shape[0]):
-                k = (int(offsets[i]) % 7) + 1
-                r, g, b = temp[i]
-                flat[i] = [
-                    ((r >> k) | (r << (8 - k))) & 0xFF,
-                    ((g >> k) | (g << (8 - k))) & 0xFF,
-                    ((b >> k) | (b << (8 - k))) & 0xFF
-                ]
-            # invert swap
-            temp = flat.copy()
-            for i in range(flat.shape[0]):
-                off = int(offsets[i]);
-                p = perms[off % 6]
-                inv = [p.index(j) for j in range(3)];
-                vals = temp[i]
-                flat[i] = [vals[inv[j]] for j in range(3)]
-            # invert shift & unshuffle
-            recovered = basefwx.np.zeros_like(flat)
-            idx_map = basefwx.ImageCipher.scramble_indices(flat.shape[0], key_bytes)
-            out_arr = basefwx.np.zeros_like(flat)
-            for i in range(flat.shape[0]):
-                off = int(offsets[i]);
-                r, g, b = flat[i]
-                recovered[i] = [
-                    (r - off) & 0xFF,
-                    (g - off // 2) & 0xFF,
-                    (b - off // 3) & 0xFF
-                ]
-            for i, orig in enumerate(idx_map):
-                out_arr[orig] = recovered[i]
-
-            basefwx.Image.fromarray(out_arr.reshape(h, w, 3)).save(output)
-            basefwx._del('derived_key')
-            basefwx._del('recovered_secret')
-            basefwx._del('kem_shared')
-            basefwx._del('aead_key')
-            basefwx._del('ciphertext')
-            basefwx._del('png_data')
-            basefwx._del('key_bytes')
-            print(f'✅ Decrypted → {output}')
-
     class ImageCipher:
-        _MARKER = b'--ENCRYPTED_PWD--'
+        """Deterministic image cipher that keeps data inside regular image formats."""
 
         @staticmethod
-        def _load_master_pubkey():
-            return basefwx._load_master_pq_public()
+        def _default_encrypted_path(path: "basefwx.pathlib.Path") -> "basefwx.pathlib.Path":
+            return path
 
         @staticmethod
-        def _load_master_privkey():
-            return basefwx._load_master_pq_private()
+        def _default_decrypted_path(path: "basefwx.pathlib.Path") -> "basefwx.pathlib.Path":
+            return path
 
         @staticmethod
-        def scramble_indices(size: int, key: bytes):
-            seed_material = basefwx._derive_key_material(
-                key,
-                basefwx.IMAGECIPHER_SCRAMBLE_CONTEXT
-            )
-            seed = int.from_bytes(seed_material[:4], 'big')
-            basefwx.np.random.seed(seed)
-            idx = basefwx.np.arange(size)
-            basefwx.np.random.shuffle(idx)
-            return idx
-
-        @staticmethod
-        def rotate8(x: int, k: int) -> int:
-            return ((x << k) & 0xFF) | (x >> (8 - k))
-
-        @staticmethod
-        def encrypt_image_inv(path: str, password: str, output: str = 'chaos_inv.png'):
-            key_bytes = password.encode()
-            img = basefwx.Image.open(path).convert('RGB')
-            arr = basefwx.np.array(img)
-            h, w, _ = arr.shape
-            flat = arr.reshape(-1, 3)
-
-            # pixel shuffle & transform
-            scrambled = flat[
-                basefwx.ImageCipher.scramble_indices(flat.shape[0], key_bytes)
-            ].copy()
-            digest = basefwx._derive_key_material(
-                key_bytes,
-                basefwx.IMAGECIPHER_OFFSET_CONTEXT
-            )
-            offsets = basefwx.np.frombuffer(
-                digest * ((flat.shape[0] // len(digest)) + 1),
-                dtype=basefwx.np.uint8
-            )[:flat.shape[0]]
-            perms = [(0, 1, 2), (0, 2, 1), (1, 0, 2), (1, 2, 0), (2, 0, 1), (2, 1, 0)]
-            for i in range(flat.shape[0]):
-                off = int(offsets[i])
-                r, g, b = map(int, scrambled[i])
-                # shift
-                r = (r + off) & 0xFF
-                g = (g + off // 2) & 0xFF
-                b = (b + off // 3) & 0xFF
-                # swap
-                p = perms[off % 6]
-                r, g, b = ([r, g, b][j] for j in p)
-                # rotate
-                k = (off % 7) + 1
-                scrambled[i] = [
-                    basefwx.ImageCipher.rotate8(r, k),
-                    basefwx.ImageCipher.rotate8(g, k),
-                    basefwx.ImageCipher.rotate8(b, k)
-                ]
-
-            img_enc = basefwx.Image.fromarray(scrambled.reshape(h, w, 3))
-            img_enc.save(output)
-
-            png_data = basefwx.pathlib.Path(output).read_bytes()
-            derived_user_key = None
-            salt = b""
-            if password:
-                derived_user_key, salt = basefwx._derive_user_key(password, kdf=basefwx.USER_KDF)
-            kem_ct, wrapped_pwd, kem_shared = basefwx._pq_wrap_secret(key_bytes)
-            aead_source = derived_user_key if derived_user_key is not None else kem_shared
-            aead_key = basefwx._hkdf_sha256(aead_source, info=basefwx.IMAGECIPHER_AEAD_INFO)
-            cipher_blob = basefwx._aead_encrypt(aead_key, png_data, basefwx.IMAGECIPHER_AEAD_INFO)
-            nonce, ct = cipher_blob[:12], cipher_blob[12:]
-            with open(output, 'wb') as f:
-                f.write(ct)
-                f.write(basefwx.ImageCipher._MARKER)
-                f.write(len(kem_ct).to_bytes(4, 'big'))
-                f.write(kem_ct)
-                f.write(len(wrapped_pwd).to_bytes(4, 'big'))
-                f.write(wrapped_pwd)
-                f.write(len(salt).to_bytes(4, 'big'))
-                f.write(salt)
-                f.write(nonce)
-            print(f'🔥 Encrypted image+pwd → {output}')
-
-        @staticmethod
-        def decrypt_image_inv(path: str, password: str = '', output: str = 'decrypted_inv.png'):
-            data = basefwx.pathlib.Path(path).read_bytes()
-            idx = data.rfind(basefwx.ImageCipher._MARKER)
-            if idx < 0:
-                raise ValueError('No embedded password marker')
-            ciphertext = data[:idx]
-            rest = data[idx + len(basefwx.ImageCipher._MARKER):]
-            offset = 0
-            kem_len = int.from_bytes(rest[offset:offset + 4], 'big')
-            offset += 4
-            kem_ct = rest[offset:offset + kem_len]
-            offset += kem_len
-            wrap_len = int.from_bytes(rest[offset:offset + 4], 'big')
-            offset += 4
-            wrapped_pwd = rest[offset:offset + wrap_len]
-            offset += wrap_len
-            legacy_footer = offset == len(rest)
-            if legacy_footer:
-                salt_len = 0
-                salt = b""
-                nonce = b""
-            else:
-                if offset + 4 > len(rest):
-                    raise ValueError('Malformed image cipher footer: missing salt length')
-                salt_len = int.from_bytes(rest[offset:offset + 4], 'big')
-                offset += 4
-                if offset + salt_len + 12 > len(rest):
-                    raise ValueError('Malformed image cipher footer: truncated salt/nonce')
-                salt = rest[offset:offset + salt_len]
-                offset += salt_len
-                nonce = rest[offset:offset + 12]
-                if len(nonce) != 12:
-                    raise ValueError('Malformed image cipher footer: missing nonce')
-
-            if password:
-                password_text = password
-                key_bytes = password.encode()
-                if salt_len:
-                    derived_key, _ = basefwx._derive_user_key(password_text, salt=salt, kdf=basefwx.USER_KDF)
-                    aead_source = derived_key
+        def _load_image(path: "basefwx.pathlib.Path", data: bytes | None = None) -> "basefwx.typing.Tuple[basefwx.np.ndarray, str, str]":
+            stream = basefwx.BytesIO(data) if data is not None else None
+            with basefwx.Image.open(stream or path) as img:
+                format_name = img.format or path.suffix.lstrip('.').upper()
+                bands = len(img.getbands())
+                if bands == 1:
+                    work_mode = 'L'
+                elif bands >= 4:
+                    work_mode = 'RGBA'
                 else:
-                    aead_source = basefwx._derive_key_material(key_bytes, basefwx.IMAGECIPHER_AEAD_INFO)
+                    work_mode = 'RGB'
+                work_img = img.convert(work_mode)
+                arr = basefwx.np.array(work_img, dtype=basefwx.np.uint8, copy=True)
+            return arr, work_mode, format_name
+
+        @staticmethod
+        def _image_primitives(password: str, num_pixels: int, channels: int) -> "basefwx.typing.Tuple[basefwx.np.ndarray, basefwx.typing.Optional[basefwx.np.ndarray], basefwx.np.ndarray, bytes]":
+            if not password:
+                raise ValueError('Password is required for image encryption')
+            material = basefwx._derive_key_material(
+                password,
+                basefwx.IMAGECIPHER_STREAM_INFO,
+                length=64,
+                iterations=max(200_000, basefwx.USER_KDF_ITERATIONS)
+            )
+            aes_key = material[:32]
+            nonce = material[32:48]
+            seed_bytes = material[48:]
+            seed = int.from_bytes(seed_bytes, 'big') or 1
+            cipher = basefwx.Cipher(basefwx.algorithms.AES(aes_key), basefwx.modes.CTR(nonce))
+            encryptor = cipher.encryptor()
+            total = num_pixels * channels
+            mask_bytes = encryptor.update(bytes(total)) + encryptor.finalize()
+            mask = basefwx.np.frombuffer(mask_bytes, dtype=basefwx.np.uint8).reshape(num_pixels, channels).copy()
+            rng = basefwx.np.random.Generator(basefwx.np.random.PCG64(seed))
+            rotations = None
+            if channels > 1:
+                rotations = rng.integers(0, channels, size=num_pixels, dtype=basefwx.np.uint8)
+            perm = rng.permutation(num_pixels)
+            return mask, rotations, perm, material
+
+        @staticmethod
+        def encrypt_image_inv(path: str, password: str, output: str | None = None) -> str:
+            path_obj = basefwx.pathlib.Path(path)
+            basefwx._ensure_existing_file(path_obj)
+            output_path = basefwx.pathlib.Path(output) if output else basefwx.ImageCipher._default_encrypted_path(path_obj)
+            original_bytes = path_obj.read_bytes()
+            arr, mode, fmt = basefwx.ImageCipher._load_image(path_obj, original_bytes)
+            shape = arr.shape
+            if arr.ndim == 2:
+                channels = 1
+                flat = arr.reshape(-1, 1).astype(basefwx.np.uint8, copy=True)
             else:
-                recovered_secret, kem_shared = basefwx._pq_unwrap_secret_with_shared(kem_ct, wrapped_pwd)
+                channels = shape[2]
+                flat = arr.reshape(-1, channels).astype(basefwx.np.uint8, copy=True)
+            num_pixels = flat.shape[0]
+            mask, rotations, perm, material = basefwx.ImageCipher._image_primitives(password, num_pixels, channels)
+            basefwx.np.bitwise_xor(flat, mask, out=flat)
+            if rotations is not None:
+                rows = basefwx.np.arange(num_pixels, dtype=basefwx.np.intp)[:, None]
+                base_idx = basefwx.np.arange(channels, dtype=basefwx.np.intp)
+                idx = (base_idx + rotations[:, None]) % channels
+                flat = flat[rows, idx]
+            flat = flat.take(perm, axis=0)
+            scrambled = flat.reshape(shape)
+            image = basefwx.Image.fromarray(scrambled.astype(basefwx.np.uint8), mode)
+            save_kwargs: dict[str, basefwx.typing.Any] = {}
+            if fmt:
+                save_kwargs['format'] = fmt
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            temp_path = output_path.with_name(f"{output_path.stem}._tmp{output_path.suffix}")
+            image.save(temp_path, **save_kwargs)
+            image.close()
+            basefwx.os.replace(temp_path, output_path)
+            archive_key = basefwx._hkdf_sha256(material, info=basefwx.IMAGECIPHER_ARCHIVE_INFO)
+            archive_blob = basefwx._aead_encrypt(archive_key, original_bytes, basefwx.IMAGECIPHER_ARCHIVE_INFO)
+            with open(output_path, 'ab') as handle:
+                handle.write(basefwx.IMAGECIPHER_TRAILER_MAGIC)
+                handle.write(len(archive_blob).to_bytes(4, 'big'))
+                handle.write(archive_blob)
+
+            basefwx._del('mask')
+            basefwx._del('rotations')
+            basefwx._del('perm')
+            basefwx._del('flat')
+            basefwx._del('arr')
+            basefwx._del('material')
+            basefwx._del('archive_key')
+            basefwx._del('archive_blob')
+            basefwx._del('original_bytes')
+            print(f"🔥 Encrypted image → {output_path}")
+            return str(output_path)
+
+        @staticmethod
+        def decrypt_image_inv(path: str, password: str, output: str | None = None) -> str:
+            path_obj = basefwx.pathlib.Path(path)
+            basefwx._ensure_existing_file(path_obj)
+            output_path = basefwx.pathlib.Path(output) if output else basefwx.ImageCipher._default_decrypted_path(path_obj)
+            file_bytes = path_obj.read_bytes()
+            magic = basefwx.IMAGECIPHER_TRAILER_MAGIC
+            marker_idx = file_bytes.rfind(magic)
+            orig_blob = None
+            payload_bytes = file_bytes
+            if marker_idx >= 0 and marker_idx + len(magic) + 4 <= len(file_bytes):
+                length = int.from_bytes(file_bytes[marker_idx + len(magic):marker_idx + len(magic) + 4], 'big')
+                blob_start = marker_idx + len(magic) + 4
+                blob_end = blob_start + length
+                if blob_end <= len(file_bytes):
+                    orig_blob = file_bytes[blob_start:blob_end]
+                    payload_bytes = file_bytes[:marker_idx]
+            arr, mode, fmt = basefwx.ImageCipher._load_image(path_obj, payload_bytes)
+            shape = arr.shape
+            if arr.ndim == 2:
+                channels = 1
+                flat = arr.reshape(-1, 1).astype(basefwx.np.uint8, copy=True)
+            else:
+                channels = shape[2]
+                flat = arr.reshape(-1, channels).astype(basefwx.np.uint8, copy=True)
+            num_pixels = flat.shape[0]
+            mask, rotations, perm, material = basefwx.ImageCipher._image_primitives(password, num_pixels, channels)
+            archive_key = basefwx._hkdf_sha256(material, info=basefwx.IMAGECIPHER_ARCHIVE_INFO)
+            if orig_blob is not None:
                 try:
-                    password_text = recovered_secret.decode('utf-8')
-                except UnicodeDecodeError:
-                    password_text = recovered_secret.decode('latin-1')
-                key_bytes = password_text.encode('utf-8')
-                print('🔓 Password recovered via master key')
-                if salt_len:
-                    derived_key, _ = basefwx._derive_user_key(password_text, salt=salt, kdf=basefwx.USER_KDF)
-                    aead_source = derived_key
-                else:
-                    aead_source = kem_shared
-            if legacy_footer:
-                png_data = ciphertext
-            else:
-                aead_key = basefwx._hkdf_sha256(aead_source, info=basefwx.IMAGECIPHER_AEAD_INFO)
-                png_data = basefwx._aead_decrypt(aead_key, nonce + ciphertext, basefwx.IMAGECIPHER_AEAD_INFO)
-
-            img = basefwx.Image.open(basefwx.BytesIO(png_data)).convert('RGB')
-            arr = basefwx.np.array(img)
-            h, w, _ = arr.shape
-            flat = arr.reshape(-1, 3)
-            digest = basefwx._derive_key_material(
-                key_bytes,
-                basefwx.IMAGECIPHER_OFFSET_CONTEXT
-            )
-            offsets = basefwx.np.frombuffer(
-                digest * ((flat.shape[0] // len(digest)) + 1),
-                dtype=basefwx.np.uint8
-            )[:flat.shape[0]]
-            perms = [(0, 1, 2), (0, 2, 1), (1, 0, 2), (1, 2, 0), (2, 0, 1), (2, 1, 0)]
-            temp = flat.copy()
-            # invert rotate
-            for i in range(flat.shape[0]):
-                k = (int(offsets[i]) % 7) + 1
-                r, g, b = temp[i]
-                flat[i] = [
-                    ((r >> k) | (r << (8 - k))) & 0xFF,
-                    ((g >> k) | (g << (8 - k))) & 0xFF,
-                    ((b >> k) | (b << (8 - k))) & 0xFF
-                ]
-            # invert swap
-            temp = flat.copy()
-            for i in range(flat.shape[0]):
-                off = int(offsets[i]);
-                p = perms[off % 6]
-                inv = [p.index(j) for j in range(3)];
-                vals = temp[i]
-                flat[i] = [vals[inv[j]] for j in range(3)]
-            # invert shift & unshuffle
-            recovered = basefwx.np.zeros_like(flat)
-            idx_map = basefwx.ImageCipher.scramble_indices(flat.shape[0], key_bytes)
-            out_arr = basefwx.np.zeros_like(flat)
-            for i in range(flat.shape[0]):
-                off = int(offsets[i]);
-                r, g, b = flat[i]
-                recovered[i] = [
-                    (r - off) & 0xFF,
-                    (g - off // 2) & 0xFF,
-                    (b - off // 3) & 0xFF
-                ]
-            for i, orig in enumerate(idx_map):
-                out_arr[orig] = recovered[i]
-
-            basefwx.Image.fromarray(out_arr.reshape(h, w, 3)).save(output)
-            print(f'✅ Decrypted → {output}')
-
+                    original_bytes = basefwx._aead_decrypt(archive_key, orig_blob, basefwx.IMAGECIPHER_ARCHIVE_INFO)
+                    output_path.write_bytes(original_bytes)
+                    basefwx._del('mask')
+                    basefwx._del('rotations')
+                    basefwx._del('perm')
+                    basefwx._del('flat')
+                    basefwx._del('arr')
+                    basefwx._del('material')
+                    basefwx._del('archive_key')
+                    print(f"✅ Decrypted image → {output_path}")
+                    return str(output_path)
+                except Exception:
+                    pass
+            inv_perm = basefwx.np.empty_like(perm)
+            inv_perm[perm] = basefwx.np.arange(num_pixels, dtype=perm.dtype)
+            flat = flat.take(inv_perm, axis=0)
+            if rotations is not None:
+                rows = basefwx.np.arange(num_pixels, dtype=basefwx.np.intp)[:, None]
+                base_idx = basefwx.np.arange(channels, dtype=basefwx.np.intp)
+                idx = (base_idx - rotations[:, None]) % channels
+                flat = flat[rows, idx]
+            basefwx.np.bitwise_xor(flat, mask, out=flat)
+            recovered = flat.reshape(shape)
+            image = basefwx.Image.fromarray(recovered.astype(basefwx.np.uint8), mode)
+            save_kwargs: dict[str, basefwx.typing.Any] = {}
+            if fmt:
+                save_kwargs['format'] = fmt
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            temp_path = output_path.with_name(f"{output_path.stem}._tmp{output_path.suffix}")
+            image.save(temp_path, **save_kwargs)
+            image.close()
+            basefwx.os.replace(temp_path, output_path)
+            basefwx._del('mask')
+            basefwx._del('rotations')
+            basefwx._del('perm')
+            basefwx._del('flat')
+            basefwx._del('arr')
+            basefwx._del('material')
+            basefwx._del('archive_key')
+            print(f"✅ Decrypted image → {output_path}")
+            return str(output_path)
     def _aes_light_encode_path(
             path: "basefwx.pathlib.Path",
             password: str,
@@ -1985,6 +1995,8 @@ class basefwx:
     ) -> "basefwx.typing.Tuple[basefwx.pathlib.Path, int]":
         basefwx._ensure_existing_file(path)
         basefwx._ensure_size_limit(path)
+        input_size = path.stat().st_size
+        size_hint: "basefwx.typing.Optional[basefwx.typing.Tuple[int, int]]" = None
         if reporter:
             reporter.update(file_index, 0.05, "prepare", path)
 
@@ -2005,8 +2017,17 @@ class basefwx:
         body = (path.suffix or "") + basefwx.FWX_DELIM + b64_payload
         plaintext = f"{metadata_blob}{basefwx.META_DELIM}{body}" if metadata_blob else body
 
+        plain_bytes_len = len(plaintext.encode('utf-8'))
+        est_cipher_len = basefwx.AEAD_NONCE_LEN + plain_bytes_len + basefwx.AEAD_TAG_LEN
+        progress_cb = None
         if reporter:
-            reporter.update(file_index, 0.55, "AES256", path)
+            enc_hint = (input_size, est_cipher_len)
+
+            def _enc_progress(done: int, total: int) -> None:
+                fraction = 0.55 + 0.25 * (done / total if total else 0.0)
+                reporter.update(file_index, fraction, "AES512", path, size_hint=enc_hint)
+
+            progress_cb = _enc_progress
 
         ciphertext = basefwx.encryptAES(
             plaintext,
@@ -2014,12 +2035,15 @@ class basefwx:
             use_master=use_master_effective,
             metadata_blob=metadata_blob,
             master_public_key=pubkey_bytes if use_master_effective else None,
-            kdf=kdf_used
+            kdf=kdf_used,
+            progress_callback=progress_cb
         )
         compressed = basefwx.zlib.compress(ciphertext)
+        output_len = len(compressed)
+        size_hint = (input_size, output_len)
 
         if reporter:
-            reporter.update(file_index, 0.8, "compress", path)
+            reporter.update(file_index, 0.8, "compress", path, size_hint=size_hint)
 
         output_path = path.with_suffix('.fwx')
         with open(output_path, 'wb') as handle:
@@ -2031,9 +2055,9 @@ class basefwx:
         basefwx.os.remove(path)
 
         if reporter:
-            reporter.finalize_file(file_index, output_path)
+            reporter.finalize_file(file_index, output_path, size_hint=size_hint)
 
-        return output_path, len(compressed)
+        return output_path, output_len
 
     @staticmethod
     def _aes_light_decode_path(
@@ -2046,6 +2070,8 @@ class basefwx:
     ) -> "basefwx.typing.Tuple[basefwx.pathlib.Path, int]":
         basefwx._ensure_existing_file(path)
         basefwx.os.chmod(path, 0o777)
+        input_size = path.stat().st_size
+        size_hint: "basefwx.typing.Optional[basefwx.typing.Tuple[int, int]]" = None
         if reporter:
             reporter.update(file_index, 0.05, "read", path)
 
@@ -2058,11 +2084,21 @@ class basefwx:
         except basefwx.zlib.error as exc:
             raise ValueError("Compressed FWX payload is corrupted") from exc
 
+        decrypt_progress = None
         if reporter:
-            reporter.update(file_index, 0.55, "AES256", path)
+            def _dec_progress(done: int, total: int) -> None:
+                fraction = 0.55 + 0.20 * (done / total if total else 0.0)
+                reporter.update(file_index, fraction, "AES512", path)
+
+            decrypt_progress = _dec_progress
 
         use_master_effective = use_master and not strip_metadata
-        plaintext = basefwx.decryptAES(ciphertext, password, use_master=use_master_effective)
+        plaintext = basefwx.decryptAES(
+            ciphertext,
+            password,
+            use_master=use_master_effective,
+            progress_callback=decrypt_progress
+        )
         metadata_blob, payload = basefwx._split_metadata(plaintext)
         meta = basefwx._decode_metadata(metadata_blob)
         if meta.get("ENC-MASTER") == "no":
@@ -2090,10 +2126,13 @@ class basefwx:
 
         if strip_metadata:
             basefwx._apply_strip_attributes(target)
+        output_len = len(raw)
+        size_hint = (input_size, output_len)
         if reporter:
-            reporter.finalize_file(file_index, target)
+            reporter.update(file_index, 0.9, "write", target, size_hint=size_hint)
+            reporter.finalize_file(file_index, target, size_hint=size_hint)
 
-        return target, len(raw)
+        return target, output_len
 
     @staticmethod
     def _aes_heavy_encode_path(
@@ -2107,6 +2146,8 @@ class basefwx:
     ) -> "basefwx.typing.Tuple[basefwx.pathlib.Path, int]":
         basefwx._ensure_existing_file(path)
         basefwx._ensure_size_limit(path)
+        input_size = path.stat().st_size
+        estimated_hint: "basefwx.typing.Optional[basefwx.typing.Tuple[int, int]]" = None
         if reporter:
             reporter.update(file_index, 0.05, "prepare", path)
 
@@ -2132,18 +2173,43 @@ class basefwx:
         )
         body = f"{ext_token}{basefwx.FWX_HEAVY_DELIM}{data_token}"
         plaintext = f"{metadata_blob}{basefwx.META_DELIM}{body}" if metadata_blob else body
+        metadata_bytes_len = len(metadata_blob.encode('utf-8')) if metadata_blob else 0
+        plaintext_bytes_len = len(plaintext.encode('utf-8'))
+        estimated_len = basefwx._estimate_aead_blob_size(
+            plaintext_bytes_len,
+            metadata_bytes_len,
+            include_user=bool(password),
+            include_master=use_master_effective
+        )
+        estimated_hint = (input_size, estimated_len)
+        progress_cb = None
+        if reporter:
+
+            def _enc_progress(done: int, total: int) -> None:
+                fraction = 0.55 + 0.25 * (done / total if total else 0.0)
+                reporter.update(file_index, fraction, "AES512", path, size_hint=estimated_hint)
+
+            progress_cb = _enc_progress
         ciphertext = basefwx.encryptAES(
             plaintext,
             password,
             use_master=use_master_effective,
             metadata_blob=metadata_blob,
             master_public_key=pubkey_bytes if use_master_effective else None,
-            kdf=kdf_used
+            kdf=kdf_used,
+            progress_callback=progress_cb
         )
         approx_size = len(ciphertext)
+        actual_hint = (input_size, approx_size)
 
         if reporter:
-            reporter.update(file_index, 0.8, "AES512", path)
+            reporter.update(
+                file_index,
+                0.8,
+                "AES512",
+                path,
+                size_hint=actual_hint
+            )
 
         output_path = path.with_suffix('.fwx')
         with open(output_path, 'wb') as handle:
@@ -2158,8 +2224,8 @@ class basefwx:
         print(f"{output_path.name}: approx output size {human}")
 
         if reporter:
-            reporter.update(file_index, 0.95, f"write (~{human})", output_path)
-            reporter.finalize_file(file_index, output_path)
+            reporter.update(file_index, 0.95, f"write (~{human})", output_path, size_hint=actual_hint)
+            reporter.finalize_file(file_index, output_path, size_hint=actual_hint)
 
         return output_path, approx_size
 
@@ -2174,16 +2240,27 @@ class basefwx:
     ) -> "basefwx.typing.Tuple[basefwx.pathlib.Path, int]":
         basefwx._ensure_existing_file(path)
         basefwx.os.chmod(path, 0o777)
+        input_size = path.stat().st_size
+        size_hint: "basefwx.typing.Optional[basefwx.typing.Tuple[int, int]]" = None
         if reporter:
             reporter.update(file_index, 0.05, "read", path)
 
         ciphertext = path.read_bytes()
 
-        if reporter:
-            reporter.update(file_index, 0.35, "AES512", path)
-
         use_master_effective = use_master and not strip_metadata
-        plaintext = basefwx.decryptAES(ciphertext, password, use_master=use_master_effective)
+        decrypt_progress = None
+        if reporter:
+            def _dec_progress(done: int, total: int) -> None:
+                fraction = 0.35 + 0.25 * (done / total if total else 0.0)
+                reporter.update(file_index, fraction, "AES512", path)
+
+            decrypt_progress = _dec_progress
+        plaintext = basefwx.decryptAES(
+            ciphertext,
+            password,
+            use_master=use_master_effective,
+            progress_callback=decrypt_progress
+        )
         metadata_blob, payload = basefwx._split_metadata(plaintext)
         meta = basefwx._decode_metadata(metadata_blob)
         if meta.get("ENC-MASTER") == "no":
@@ -2216,10 +2293,13 @@ class basefwx:
 
         if strip_metadata:
             basefwx._apply_strip_attributes(target)
+        output_len = len(raw)
+        size_hint = (input_size, output_len)
         if reporter:
-            reporter.finalize_file(file_index, target)
+            reporter.update(file_index, 0.9, "write", target, size_hint=size_hint)
+            reporter.finalize_file(file_index, target, size_hint=size_hint)
 
-        return target, len(raw)
+        return target, output_len
 
     @staticmethod
     def AESfile(
@@ -2228,7 +2308,8 @@ class basefwx:
             light: bool = True,
             strip_metadata: bool = False,
             use_master: bool = True,
-            master_pubkey: "basefwx.typing.Optional[bytes]" = None
+            master_pubkey: "basefwx.typing.Optional[bytes]" = None,
+            silent: bool = False
     ):
         basefwx.sys.set_int_max_str_digits(2000000000)
         paths = basefwx._coerce_file_list(files)
@@ -2238,21 +2319,21 @@ class basefwx:
         try:
             resolved_password = basefwx._resolve_password(password, use_master=encode_use_master)
         except Exception as exc:
-            print(f"Password resolution failed: {exc}")
+            if not silent:
+                print(f"Password resolution failed: {exc}")
             return "FAIL!" if len(paths) == 1 else {str(p): "FAIL!" for p in paths}
 
-        reporter = basefwx._ProgressReporter(len(paths))
-        results = {}
+        reporter = basefwx._ProgressReporter(len(paths)) if not silent else None
+        results: dict[str, str] = {}
 
-        for idx, path in enumerate(paths):
+        def _process_with_reporter(idx: int, path: "basefwx.pathlib.Path") -> tuple[str, str]:
             try:
                 basefwx._ensure_existing_file(path)
             except FileNotFoundError:
-                reporter.update(idx, 0.0, "missing", path)
-                reporter.finalize_file(idx, path)
-                results[str(path)] = "FAIL!"
-                continue
-
+                if reporter:
+                    reporter.update(idx, 0.0, "missing", path)
+                    reporter.finalize_file(idx, path)
+                return str(path), "FAIL!"
             try:
                 if path.suffix.lower() == ".fwx":
                     if light:
@@ -2264,82 +2345,80 @@ class basefwx:
                         basefwx._aes_light_encode_path(path, resolved_password, reporter, idx, strip_metadata, encode_use_master, master_pubkey)
                     else:
                         basefwx._aes_heavy_encode_path(path, resolved_password, reporter, idx, strip_metadata, encode_use_master, master_pubkey)
-                results[str(path)] = "SUCCESS!"
+                return str(path), "SUCCESS!"
             except Exception as exc:
-                reporter.update(idx, 0.0, f"error: {exc}", path)
-                reporter.finalize_file(idx, path)
-                results[str(path)] = "FAIL!"
+                if reporter:
+                    reporter.update(idx, 0.0, f"error: {exc}", path)
+                    reporter.finalize_file(idx, path)
+                return str(path), "FAIL!"
+
+        def _process_without_reporter(path: "basefwx.pathlib.Path") -> tuple[str, str]:
+            try:
+                basefwx._ensure_existing_file(path)
+                if path.suffix.lower() == ".fwx":
+                    if light:
+                        basefwx._aes_light_decode_path(path, resolved_password, None, 0, strip_metadata, decode_use_master)
+                    else:
+                        basefwx._aes_heavy_decode_path(path, resolved_password, None, 0, strip_metadata, decode_use_master)
+                else:
+                    if light:
+                        basefwx._aes_light_encode_path(path, resolved_password, None, 0, strip_metadata, encode_use_master, master_pubkey)
+                    else:
+                        basefwx._aes_heavy_encode_path(path, resolved_password, None, 0, strip_metadata, encode_use_master, master_pubkey)
+                return str(path), "SUCCESS!"
+            except FileNotFoundError:
+                return str(path), "FAIL!"
+            except Exception:
+                return str(path), "FAIL!"
+
+        if reporter is None and len(paths) > 1 and basefwx._CPU_COUNT > 1:
+            max_workers = min(len(paths), basefwx._CPU_COUNT)
+            with basefwx.concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+                for file_id, status in executor.map(_process_without_reporter, paths):
+                    results[file_id] = status
+        else:
+            for idx, path in enumerate(paths):
+                file_id, status = _process_with_reporter(idx, path)
+                results[file_id] = status
 
         if len(paths) == 1:
             return next(iter(results.values()))
         return results
 
-    @staticmethod
-    def code(string):
-        mapping = {
-            'a': 'e*1', 'b': '&hl', 'c': '*&Gs', 'd': '*YHA', 'e': 'K5a{', 'f': '(*HGA(', 'g': '*&GD2',
-            'h': '+*jsGA', 'i': '(aj*a', 'j': 'g%', 'k': '&G{A', 'l': '/IHa', 'm': '*(oa', 'n': '*KA^7',
-            'o': ')i*8A', 'p': '*H)PA-G', 'q': '*YFSA', 'r': 'O.-P[A', 's': '{9sl', 't': '*(HARR',
-            'u': 'O&iA6u', 'v': 'n):u', 'w': '&^F*GV', 'x': '(*HskW', 'y': '{JM', 'z': 'J.!dA', 'A': '(&Tav',
-            'B': 't5', 'C': '*TGA3', 'D': '*GABD', 'E': '{A', 'F': 'pW', 'G': '*UAK(', 'H': '&GH+',
-            'I': '&AN)', 'J': 'L&VA', 'K': '(HAF5', 'L': '&F*Va', 'M': '^&FVB', 'N': '(*HSA$i',
-            'O': '*IHda&gT', 'P': '&*FAl', 'Q': ')P{A]', 'R': '*Ha$g', 'S': 'G)OA&', 'T': '|QG6',
-            'U': 'Qd&^', 'V': 'hA', 'W': '8h^va', 'X': '_9xlA', 'Y': '*J', 'Z': '*;pY&', ' ': 'R7a{',
-            '-': '}F', '=': 'OJ)_A', '+': '}J', '&': '%A', '%': 'y{A3s', '#': '.aGa!', '@': 'l@', '!': '/A',
-            '^': 'OIp*a', '*': '(U', '(': 'I*Ua]', ')': '{0aD', '{': 'Av[', '}': '9j', '[': '[a)',
-            ']': '*&GBA', '|': ']Vc!A', '/': ')*HND_', '~': '(&*GHA', ';': 'K}N=O', ':': 'YGOI&Ah',
-            '?': 'Oa', '.': '8y)a', '>': '0{a9', '<': 'v6Yha', ',': 'I8ys#', '0': '(HPA7', '1': '}v',
-            '2': '*HAl%', '3': '_)JHS', '4': 'IG(A', '5': '(*GFD', '6': 'IU(&V', '7': '(JH*G', '8': '*GHBA',
-            '9': 'U&G*C', '"': 'I(a-s'
-        }
-        return ''.join(mapping.get(c, c) for c in string)
+    @classmethod
+    def _code_chunk(cls, chunk: str) -> str:
+        return ''.join(cls._CODE_MAP.get(ch, ch) for ch in chunk)
 
-    @staticmethod
-    def fwx256bin(string):
-        encoded = basefwx.base64.b32hexencode(basefwx.code(string).encode()).decode()
+    @classmethod
+    def code(cls, string: str) -> str:
+        if not string:
+            return string
+        if len(string) <= cls._PARALLEL_CHUNK_SIZE or cls._CPU_COUNT == 1:
+            return cls._code_chunk(string)
+        chunk_size = cls._PARALLEL_CHUNK_SIZE
+        slices = [string[i:i + chunk_size] for i in range(0, len(string), chunk_size)]
+        with cls.concurrent.futures.ThreadPoolExecutor(max_workers=cls._CPU_COUNT) as executor:
+            parts = executor.map(cls._code_chunk, slices)
+            return ''.join(parts)
+
+    @classmethod
+    def fwx256bin(cls, string: str) -> str:
+        encoded = cls.base64.b32hexencode(cls.code(string).encode('utf-8')).decode('utf-8')
         padding_count = encoded.count("=")
         return encoded.rstrip("=") + str(padding_count)
 
-    @staticmethod
-    def decode(sttr):
-        mapping = {
-            "I(a-s": "\"", "U&G*C": "9", "*GHBA": "8", "(JH*G": "7", "IU(&V": "6", "(*GFD": "5", "IG(A": "4",
-            "_)JHS": "3", "*HAl%": "2", "}v": "1", "(HPA7": "0", "I8ys#": ",", "v6Yha": "<", "0{a9": ">",
-            "8y)a": ".", "Oa": "?", "YGOI&Ah": ":", "K}N=O": ";", "(&*GHA": "~", ")*HND_": "/", "]Vc!A": "|",
-            "*&GBA": "]", "[a)": "[", "9j": "}", "Av[": "{", "{0aD": ")", "I*Ua]": "(", "(U": "*",
-            "OIp*a": "^", "/A": "!", "l@": "@", ".aGa!": "#", "y{A3s": "%", "%A": "&", "}J": "+",
-            "OJ)_A": "=", "}F": "-", "R7a{": " ", "*;pY&": "Z", "*J": "Y", "_9xlA": "X", "8h^va": "W",
-            "hA": "V", "Qd&^": "U", "|QG6": "T", "G)OA&": "S", "*Ha$g": "R", ")P{A]": "Q", "&*FAl": "P",
-            "*IHda&gT": "O", "(*HSA$i": "N", "^&FVB": "M", "&F*Va": "L", "(HAF5": "K", "L&VA": "J",
-            "&AN)": "I", "&GH+": "H", "*UAK(": "G", "pW": "F", "{A": "E", "*GABD": "D", "*TGA3": "C",
-            "t5": "B", "(&Tav": "A", "J.!dA": "z", "{JM": "y", "(*HskW": "x", "&^F*GV": "w", "n):u": "v",
-            "O&iA6u": "u", "*(HARR": "t", "{9sl": "s", "O.-P[A": "r", "*YFSA": "q", "*H)PA-G": "p",
-            ")i*8A": "o", "*KA^7": "n", "*(oa": "m", "/IHa": "l", "&G{A": "k", "g%": "j", "(aj*a": "i",
-            "+*jsGA": "h", "*&GD2": "g", "(*HGA(": "f", "K5a{": "e", "*YHA": "d", "*&Gs": "c", "&hl": "b",
-            "e*1": "a"
-        }
+    @classmethod
+    def decode(cls, sttr: str) -> str:
+        if not sttr:
+            return sttr
+        return cls._DECODE_PATTERN.sub(lambda match: cls._DECODE_MAP[match.group(0)], sttr)
 
-        # Get all values sorted by length DESC to avoid collisions (like `*` vs `*UAK(`)
-        tokens = sorted(mapping.keys(), key=lambda x: -len(x))
-
-        result = ''
-        i = 0
-        while i < len(sttr):
-            for token in tokens:
-                if sttr.startswith(token, i):
-                    result += mapping[token]
-                    i += len(token)
-                    break
-            else:
-                result += sttr[i]
-                i += 1
-        return result
-
-    @staticmethod
-    def fwx256unbin(string):
+    @classmethod
+    def fwx256unbin(cls, string: str) -> str:
         padding_count = int(string[-1])
         base32text = string[:-1] + ("=" * padding_count)
-        return basefwx.decode(basefwx.base64.b32hexdecode(base32text.encode('utf-8')).decode('utf-8'))
+        decoded = cls.base64.b32hexdecode(base32text.encode('utf-8')).decode('utf-8')
+        return cls.decode(decoded)
 
     @staticmethod
     def b512file_decode(file: str, code: str, strip_metadata: bool = False, use_master: bool = True):
@@ -2487,17 +2566,27 @@ class basefwx:
 
     # CODELESS ENCODE - SECURITY: ❙
     @staticmethod
-    def b256decode(string):
+    def _coerce_text(data: "basefwx.typing.Union[str, bytes, bytearray, memoryview]") -> str:
+        if isinstance(data, str):
+            return data
+        if isinstance(data, (bytes, bytearray, memoryview)):
+            return bytes(data).decode('latin-1')
+        raise TypeError(f"Unsupported type for textual conversion: {type(data)!r}")
+
+    @classmethod
+    def b256decode(cls, string: str) -> str:
         padding_count = int(string[-1])
         base32text = string[:-1] + ("=" * padding_count)
-        decoded = basefwx.base64.b32hexdecode(base32text.encode('utf-8')).decode('utf-8')
-        return basefwx.decode(decoded)
+        decoded = cls.base64.b32hexdecode(base32text.encode('utf-8')).decode('utf-8')
+        return cls.decode(decoded)
 
-    @staticmethod
-    def b256encode(string):
-        raw = basefwx.code(string).encode()
-        encoded = basefwx.base64.b32hexencode(raw).decode()
-        return encoded.rstrip("=") + str(encoded.count("="))
+    @classmethod
+    def b256encode(cls, data: "basefwx.typing.Union[str, bytes, bytearray, memoryview]") -> str:
+        text = cls._coerce_text(data)
+        raw = cls.code(text).encode('utf-8')
+        encoded = cls.base64.b32hexencode(raw).decode('utf-8')
+        padding_count = encoded.count("=")
+        return encoded.rstrip("=") + str(padding_count)
 
 # ENCRYPTION TYPES:
 # BASE64 - b64encode/b64decode  V1.0

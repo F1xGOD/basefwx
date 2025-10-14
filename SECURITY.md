@@ -12,8 +12,9 @@
 
 |  Version  | Status / Notes                                                                                                                    | Supported |
 | :-------: | --------------------------------------------------------------------------------------------------------------------------------- | :-------: |
-| **3.3.x** | ✅ **USE IT!** PQE + AEAD + obfuscation fast‑paths. Actively maintained. **Not cross‑compatible with earlier lines.**              |     ✅     |
-|  **3.2**  | ✅ Security maintenance (bug & vuln fixes only). PQE format introduced here. **Not cross‑compatible with older lines.**             |     ✅     |
+| **3.3.2** | 👑 **USE IT!** Faster, Optimized, Multi-Thread. Actively maintained. **Cross‑compatible with 3.3.1**              |     ✅     |
+| **3.3.1** | ➖ PQE + AEAD + obfuscation fast‑paths. Actively maintained. **Not cross‑compatible with earlier lines.**              |     ✅     |
+|  **3.2**  | ➖ Security maintenance (bug & vuln fixes only). PQE format introduced here. **Not cross‑compatible with older lines.**             |     🧪     |
 |  **3.1**  | ❌ CodeQL findings; weak key‑derivation (affects this and below). **Not cross‑compatible with 3.2.**                               |     ❌     |
 |  **3.0**  | ❌ Unstable; may crash due to code defects. **Not cross‑compatible with 3.2.**                                                     |     ❌     |
 |  **2.9**  | ✅ Stable baseline (LTS for non‑PQE users). Security fixes only. **Partial/"maybe" compatibility with 2.8** depending on features. |     ✅     |
@@ -23,7 +24,7 @@
 
 ### Compatibility policy
 
-* **3.2 vs earlier:** **Not cross‑compatible.** PQE changes keys, formats, and wire expectations. Do not mix nodes or data stores across the boundary.
+* **3.3 vs earlier:** **Not cross‑compatible.** PQE changes keys, formats, and wire expectations. Do not mix nodes or data stores across the boundary.
 * **2.9 ↔ 2.8:** **"Maybe compatible"** for basic operations. Advanced features (new cipher modes, headers, or metadata) may break interoperability. Test explicitly.
 * **≤ 2.7:** Treat as incompatible and unsupported.
 * **< 2.6:** Cryptographically weak — treat historical data as compromised. Assume adversary can recover large portions of plaintext.

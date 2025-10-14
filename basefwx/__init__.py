@@ -16,7 +16,10 @@ def a512decode(string: str): return basefwx.a512decode(string)
 def b512decode(string: str, code: str="", use_master: bool = True): return basefwx.b512decode(string, code, use_master=use_master)
 def pb512decode(string: str, code: str="", use_master: bool = True): return basefwx.pb512decode(string, code, use_master=use_master)
 
+def jMGe(path: str, password: str, output: str | None = None): return basefwx.ImageCipher.encrypt_image_inv(path, password, output=output)
+def jMGd(path: str, password: str, output: str | None = None): return basefwx.ImageCipher.decrypt_image_inv(path, password, output=output)
+
 def b512encodefile(file: str, code: str, strip_metadata: bool = False, use_master: bool = True): return basefwx.b512file_encode(file, code, strip_metadata=strip_metadata, use_master=use_master)
 def b512decodefile(file: str, code: str="", strip_metadata: bool = False, use_master: bool = True): return basefwx.b512file_decode(file, code, strip_metadata=strip_metadata, use_master=use_master)
-def b512handlefile(file: str, code: str="", strip_metadata: bool = False, use_master: bool = True): return basefwx.b512file(file, code, strip_metadata=strip_metadata, use_master=use_master)
-def fwxAES(file: str, code: str="", light: bool = True, strip_metadata: bool = False, use_master: bool = True): return basefwx.AESfile(file, code, light, strip_metadata=strip_metadata, use_master=use_master)
+def b512handlefile(file: str, code: str="", strip_metadata: bool = False, use_master: bool = True, silent: bool = False): return basefwx.b512file(file, code, strip_metadata=strip_metadata, use_master=use_master, silent=silent)
+def fwxAES(file: str, code: str="", light: bool = True, strip_metadata: bool = False, use_master: bool = True, silent: bool = False): return basefwx.AESfile(file, code, light, strip_metadata=strip_metadata, use_master=use_master, silent=silent)

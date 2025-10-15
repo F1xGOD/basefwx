@@ -88,6 +88,7 @@ class basefwx:
     _MASTER_PUBKEY_OVERRIDE: typing.ClassVar[typing.Optional[bytes]] = None
     _CPU_COUNT = max(1, os.cpu_count() or 1)
     _PARALLEL_CHUNK_SIZE = 1 << 20  # 1 MiB chunks when fan-out encoding
+    _SILENT_MODE: typing.ClassVar[bool] = False
     PQ_CIPHERTEXT_SIZE = getattr(ml_kem_768, "CIPHERTEXT_SIZE", 0)
     AEAD_NONCE_LEN = 12
     AEAD_TAG_LEN = 16
@@ -2021,7 +2022,8 @@ class basefwx:
                 basefwx.os.chmod(output_path, 0)
             basefwx.os.remove(path)
             human = basefwx._human_readable_size(actual_size)
-            print(f"{output_path.name}: approx output size {human}")
+            if not basefwx._SILENT_MODE:
+                print(f"{output_path.name}: approx output size {human}")
             if reporter:
                 reporter.update(file_index, 1.0, "done", output_path, size_hint=actual_hint)
                 reporter.finalize_file(file_index, output_path, size_hint=actual_hint)
@@ -2216,7 +2218,8 @@ class basefwx:
             basefwx.os.remove(obf_tmp_path)
             cleanup_paths.remove(obf_tmp_path)
             human = basefwx._human_readable_size(actual_size)
-            print(f"{output_path.name}: approx output size {human}")
+            if not basefwx._SILENT_MODE:
+                print(f"{output_path.name}: approx output size {human}")
             if reporter:
                 reporter.update(file_index, 1.0, "done", output_path, size_hint=actual_hint)
                 reporter.finalize_file(file_index, output_path, size_hint=actual_hint)
@@ -2627,89 +2630,97 @@ class basefwx:
                 print(f"Password resolution failed: {exc}")
             return "FAIL!" if len(paths) == 1 else {str(p): "FAIL!" for p in paths}
 
-        reporter = basefwx._ProgressReporter(len(paths)) if not silent else None
-        results: dict[str, str] = {}
+        previous_silent = basefwx._SILENT_MODE
+        basefwx._SILENT_MODE = silent
+        try:
+            reporter = basefwx._ProgressReporter(len(paths)) if not silent else None
+            results: dict[str, str] = {}
 
-        def _process_with_reporter(idx: int, path: "basefwx.pathlib.Path") -> tuple[str, str]:
-            try:
-                basefwx._ensure_existing_file(path)
-            except FileNotFoundError:
-                if reporter:
-                    reporter.update(idx, 0.0, "missing", path)
-                    reporter.finalize_file(idx, path)
-                return str(path), "FAIL!"
-            try:
-                if path.suffix.lower() == ".fwx":
-                    basefwx._b512_decode_path(
-                        path,
-                        resolved_password,
-                        reporter,
-                        idx,
-                        len(paths),
-                        strip_metadata,
-                        decode_use_master
-                    )
-                else:
-                    basefwx._b512_encode_path(
-                        path,
-                        resolved_password,
-                        reporter,
-                        idx,
-                        len(paths),
-                        strip_metadata,
-                        encode_use_master,
-                        master_pubkey
-                    )
-                return str(path), "SUCCESS!"
-            except Exception as exc:
-                if reporter:
-                    reporter.update(idx, 0.0, f"error: {exc}", path)
-                    reporter.finalize_file(idx, path)
-                return str(path), "FAIL!"
+            def _process_with_reporter(idx: int, path: "basefwx.pathlib.Path") -> tuple[str, str]:
+                try:
+                    basefwx._ensure_existing_file(path)
+                except FileNotFoundError:
+                    if reporter:
+                        reporter.update(idx, 0.0, "missing", path)
+                        reporter.finalize_file(idx, path)
+                    return str(path), "FAIL!"
+                try:
+                    if path.suffix.lower() == ".fwx":
+                        basefwx._b512_decode_path(
+                            path,
+                            resolved_password,
+                            reporter,
+                            idx,
+                            len(paths),
+                            strip_metadata,
+                            decode_use_master
+                        )
+                    else:
+                        basefwx._b512_encode_path(
+                            path,
+                            resolved_password,
+                            reporter,
+                            idx,
+                            len(paths),
+                            strip_metadata,
+                            encode_use_master,
+                            master_pubkey
+                        )
+                    return str(path), "SUCCESS!"
+                except Exception as exc:
+                    if reporter:
+                        reporter.update(idx, 0.0, f"error: {exc}", path)
+                        reporter.finalize_file(idx, path)
+                    return str(path), "FAIL!"
 
-        def _process_without_reporter(path: "basefwx.pathlib.Path") -> tuple[str, str]:
-            try:
-                basefwx._ensure_existing_file(path)
-                if path.suffix.lower() == ".fwx":
-                    basefwx._b512_decode_path(
-                        path,
-                        resolved_password,
-                        None,
-                        0,
-                        len(paths),
-                        strip_metadata,
-                        decode_use_master
-                    )
-                else:
-                    basefwx._b512_encode_path(
-                        path,
-                        resolved_password,
-                        None,
-                        0,
-                        len(paths),
-                        strip_metadata,
-                        encode_use_master,
-                        master_pubkey
-                    )
-                return str(path), "SUCCESS!"
-            except FileNotFoundError:
-                return str(path), "FAIL!"
-            except Exception:
-                return str(path), "FAIL!"
+            def _process_without_reporter(path: "basefwx.pathlib.Path") -> tuple[str, str]:
+                try:
+                    basefwx._ensure_existing_file(path)
+                    if path.suffix.lower() == ".fwx":
+                        basefwx._b512_decode_path(
+                            path,
+                            resolved_password,
+                            None,
+                            0,
+                            len(paths),
+                            strip_metadata,
+                            decode_use_master
+                        )
+                    else:
+                        basefwx._b512_encode_path(
+                            path,
+                            resolved_password,
+                            None,
+                            0,
+                            len(paths),
+                            strip_metadata,
+                            encode_use_master,
+                            master_pubkey
+                        )
+                    return str(path), "SUCCESS!"
+                except FileNotFoundError:
+                    return str(path), "FAIL!"
+                except Exception:
+                    return str(path), "FAIL!"
 
-        if reporter is None and len(paths) > 1 and basefwx._CPU_COUNT > 1:
-            max_workers = min(len(paths), basefwx._CPU_COUNT)
-            with basefwx.concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-                for file_id, status in executor.map(_process_without_reporter, paths):
+            if reporter is None and len(paths) > 1 and basefwx._CPU_COUNT > 1:
+                max_workers = min(len(paths), basefwx._CPU_COUNT)
+                with basefwx.concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+                    for file_id, status in executor.map(_process_without_reporter, paths):
+                        results[file_id] = status
+            else:
+                for idx, path in enumerate(paths):
+                    file_id, status = _process_with_reporter(idx, path)
                     results[file_id] = status
-        else:
-            for idx, path in enumerate(paths):
-                file_id, status = _process_with_reporter(idx, path)
-                results[file_id] = status
 
-        if len(paths) == 1:
-            return next(iter(results.values()))
-        return results
+            if len(paths) == 1:
+                final_result = next(iter(results.values()))
+            else:
+                final_result = results
+        finally:
+            basefwx._SILENT_MODE = previous_silent
+
+        return final_result
 
     class ImageCipher:
         """Deterministic image cipher that keeps data inside regular image formats."""
@@ -3428,7 +3439,8 @@ class basefwx:
         basefwx.os.remove(path)
 
         human = basefwx._human_readable_size(approx_size)
-        print(f"{output_path.name}: approx output size {human}")
+        if not basefwx._SILENT_MODE:
+            print(f"{output_path.name}: approx output size {human}")
 
         if reporter:
             reporter.update(file_index, 1.0, "done", output_path, size_hint=actual_hint)
@@ -3573,92 +3585,97 @@ class basefwx:
                 print(f"Password resolution failed: {exc}")
             return "FAIL!" if len(paths) == 1 else {str(p): "FAIL!" for p in paths}
 
-        reporter = basefwx._ProgressReporter(len(paths)) if not silent else None
-        results: dict[str, str] = {}
-
-        def _process_with_reporter(idx: int, path: "basefwx.pathlib.Path") -> tuple[str, str]:
-            try:
-                basefwx._ensure_existing_file(path)
-            except FileNotFoundError:
-                if reporter:
-                    reporter.update(idx, 0.0, "missing", path)
-                    reporter.finalize_file(idx, path)
-                return str(path), "FAIL!"
-            try:
-                if path.suffix.lower() == ".fwx":
-                    if light:
-                        basefwx._aes_light_decode_path(path, resolved_password, reporter, idx, strip_metadata, decode_use_master)
-                    else:
-                        basefwx._aes_heavy_decode_path(path, resolved_password, reporter, idx, strip_metadata, decode_use_master)
-                else:
-                    if light:
-                        basefwx._aes_light_encode_path(path, resolved_password, reporter, idx, strip_metadata, encode_use_master, master_pubkey)
-                    else:
-                        basefwx._aes_heavy_encode_path(path, resolved_password, reporter, idx, strip_metadata, encode_use_master, master_pubkey)
-                return str(path), "SUCCESS!"
-            except KeyboardInterrupt:
-                if reporter:
-                    reporter.update(idx, 0.0, "cancelled", path)
-                    reporter.finalize_file(idx, path)
-                raise
-            except Exception as exc:
-                if reporter:
-                    reporter.update(idx, 0.0, f"error: {exc}", path)
-                    reporter.finalize_file(idx, path)
-                return str(path), "FAIL!"
-
-        def _process_without_reporter(path: "basefwx.pathlib.Path") -> tuple[str, str]:
-            try:
-                basefwx._ensure_existing_file(path)
-                if path.suffix.lower() == ".fwx":
-                    if light:
-                        basefwx._aes_light_decode_path(path, resolved_password, None, 0, strip_metadata, decode_use_master)
-                    else:
-                        basefwx._aes_heavy_decode_path(path, resolved_password, None, 0, strip_metadata, decode_use_master)
-                else:
-                    if light:
-                        basefwx._aes_light_encode_path(path, resolved_password, None, 0, strip_metadata, encode_use_master, master_pubkey)
-                    else:
-                        basefwx._aes_heavy_encode_path(path, resolved_password, None, 0, strip_metadata, encode_use_master, master_pubkey)
-                return str(path), "SUCCESS!"
-            except FileNotFoundError:
-                return str(path), "FAIL!"
-            except KeyboardInterrupt:
-                raise
-            except Exception:
-                return str(path), "FAIL!"
-
-        cancel_idx: "basefwx.typing.Optional[int]" = None
+        previous_silent = basefwx._SILENT_MODE
+        basefwx._SILENT_MODE = silent
         try:
-            if reporter is None and len(paths) > 1 and basefwx._CPU_COUNT > 1:
-                max_workers = min(len(paths), basefwx._CPU_COUNT)
-                with basefwx.concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-                    for file_id, status in executor.map(_process_without_reporter, paths):
-                        results[file_id] = status
-            else:
-                for idx, path in enumerate(paths):
-                    try:
-                        file_id, status = _process_with_reporter(idx, path)
-                        results[file_id] = status
-                    except KeyboardInterrupt:
-                        cancel_idx = idx
-                        results[str(path)] = "CANCELLED"
-                        raise
-        except KeyboardInterrupt:
-            for idx, rest_path in enumerate(paths):
-                key = str(rest_path)
-                if key not in results:
-                    if reporter:
-                        reporter.update(idx, 0.0, "cancelled", rest_path)
-                        reporter.finalize_file(idx, rest_path)
-                    results[key] = "CANCELLED"
-            if len(paths) == 1:
-                return "CANCELLED"
-            return results
+            reporter = basefwx._ProgressReporter(len(paths)) if not silent else None
+            results: dict[str, str] = {}
 
-        if len(paths) == 1:
-            return next(iter(results.values()))
-        return results
+            def _process_with_reporter(idx: int, path: "basefwx.pathlib.Path") -> tuple[str, str]:
+                try:
+                    basefwx._ensure_existing_file(path)
+                except FileNotFoundError:
+                    if reporter:
+                        reporter.update(idx, 0.0, "missing", path)
+                        reporter.finalize_file(idx, path)
+                    return str(path), "FAIL!"
+                try:
+                    if path.suffix.lower() == ".fwx":
+                        if light:
+                            basefwx._aes_light_decode_path(path, resolved_password, reporter, idx, strip_metadata, decode_use_master)
+                        else:
+                            basefwx._aes_heavy_decode_path(path, resolved_password, reporter, idx, strip_metadata, decode_use_master)
+                    else:
+                        if light:
+                            basefwx._aes_light_encode_path(path, resolved_password, reporter, idx, strip_metadata, encode_use_master, master_pubkey)
+                        else:
+                            basefwx._aes_heavy_encode_path(path, resolved_password, reporter, idx, strip_metadata, encode_use_master, master_pubkey)
+                    return str(path), "SUCCESS!"
+                except KeyboardInterrupt:
+                    if reporter:
+                        reporter.update(idx, 0.0, "cancelled", path)
+                        reporter.finalize_file(idx, path)
+                    raise
+                except Exception as exc:
+                    if reporter:
+                        reporter.update(idx, 0.0, f"error: {exc}", path)
+                        reporter.finalize_file(idx, path)
+                    return str(path), "FAIL!"
+
+            def _process_without_reporter(path: "basefwx.pathlib.Path") -> tuple[str, str]:
+                try:
+                    basefwx._ensure_existing_file(path)
+                    if path.suffix.lower() == ".fwx":
+                        if light:
+                            basefwx._aes_light_decode_path(path, resolved_password, None, 0, strip_metadata, decode_use_master)
+                        else:
+                            basefwx._aes_heavy_decode_path(path, resolved_password, None, 0, strip_metadata, decode_use_master)
+                    else:
+                        if light:
+                            basefwx._aes_light_encode_path(path, resolved_password, None, 0, strip_metadata, encode_use_master, master_pubkey)
+                        else:
+                            basefwx._aes_heavy_encode_path(path, resolved_password, None, 0, strip_metadata, encode_use_master, master_pubkey)
+                    return str(path), "SUCCESS!"
+                except FileNotFoundError:
+                    return str(path), "FAIL!"
+                except KeyboardInterrupt:
+                    raise
+                except Exception:
+                    return str(path), "FAIL!"
+
+            cancel_idx: "basefwx.typing.Optional[int]" = None
+            try:
+                if reporter is None and len(paths) > 1 and basefwx._CPU_COUNT > 1:
+                    max_workers = min(len(paths), basefwx._CPU_COUNT)
+                    with basefwx.concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+                        for file_id, status in executor.map(_process_without_reporter, paths):
+                            results[file_id] = status
+                else:
+                    for idx, path in enumerate(paths):
+                        try:
+                            file_id, status = _process_with_reporter(idx, path)
+                            results[file_id] = status
+                        except KeyboardInterrupt:
+                            cancel_idx = idx
+                            results[str(path)] = "CANCELLED"
+                            raise
+            except KeyboardInterrupt:
+                for idx, rest_path in enumerate(paths):
+                    key = str(rest_path)
+                    if key not in results:
+                        if reporter:
+                            reporter.update(idx, 0.0, "cancelled", rest_path)
+                            reporter.finalize_file(idx, rest_path)
+                        results[key] = "CANCELLED"
+                if len(paths) == 1:
+                    return "CANCELLED"
+                return results
+
+            if len(paths) == 1:
+                return next(iter(results.values()))
+            return results
+        finally:
+            basefwx._SILENT_MODE = previous_silent
 
     @classmethod
     def _code_chunk(cls, chunk: str) -> str:

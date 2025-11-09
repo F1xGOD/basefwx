@@ -1,0 +1,14 @@
+LICENCE
+README.md
+pyproject.toml
+setup.py
+basefwx/__init__.py
+basefwx/__main__.py
+basefwx/main.py
+basefwx/yubikey_pq.py
+basefwx.egg-info/PKG-INFO
+basefwx.egg-info/SOURCES.txt
+basefwx.egg-info/dependency_links.txt
+basefwx.egg-info/requires.txt
+basefwx.egg-info/top_level.txt
+tests/test_basefwx.py

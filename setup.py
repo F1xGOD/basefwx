@@ -12,6 +12,7 @@ setup(
     version="3.4.0",
     packages=find_packages(),
     install_requires=[
+        'argon2-cffi==25.1.0',
         "cryptography>=41.0.0",
         "numpy>=1.24.0",
         "pillow>=10.0.0",

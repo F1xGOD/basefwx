@@ -19,6 +19,7 @@ from typing import Any, Dict, Mapping, Optional, Tuple
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives import hashes
+from argon2 import PasswordHasher
 
 try:
     from fido2.client import (
@@ -210,10 +211,10 @@ class YubiKeyPQKeyStore:
         client, device = self._connect()
         try:
             rp = PublicKeyCredentialRpEntity(id=self.RP_ID, name=self.RP_NAME)
-            user_id = hashes.Hash(hashes.SHA3_256())
-            user_id.update(label.encode("utf-8"))
+            ph = PasswordHasher()
+            hashed_label = ph.hash(label)
             user = PublicKeyCredentialUserEntity(
-                id=user_id.finalize(),
+                id=hashed_label.encode("utf-8"),
                 name=label,
                 display_name=label,
             )

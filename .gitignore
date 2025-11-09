@@ -3,3 +3,6 @@ MASS.py
 .venv
 __pycache__
 inst.exe
+*.egg-info/
+build/
+dist/

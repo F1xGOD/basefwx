@@ -3,6 +3,7 @@
 #include "basefwx/codec.hpp"
 #include "basefwx/format.hpp"
 #include "basefwx/pb512.hpp"
+#include "basefwx/imagecipher.hpp"
 
 #include <fstream>
 #include <stdexcept>
@@ -97,6 +98,18 @@ std::string Pb512Decode(const std::string& input, const std::string& password, b
     opts.argon2_parallelism = kdf.argon2_parallelism;
     opts.allow_pbkdf2_fallback = kdf.allow_pbkdf2_fallback;
     return basefwx::pb512::Pb512Decode(input, password, use_master, opts);
+}
+
+std::string Jmge(const std::string& path,
+                 const std::string& password,
+                 const std::string& output,
+                 bool keep_meta,
+                 bool keep_input) {
+    return basefwx::imagecipher::EncryptMedia(path, password, output, keep_meta, keep_input);
+}
+
+std::string Jmgd(const std::string& path, const std::string& password, const std::string& output) {
+    return basefwx::imagecipher::DecryptMedia(path, password, output);
 }
 
 }  // namespace basefwx

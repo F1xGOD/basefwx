@@ -20,7 +20,8 @@ std::string Build(const std::string& method,
                   std::optional<std::uint32_t> kdf_iters = std::nullopt,
                   std::optional<std::uint32_t> argon2_time = std::nullopt,
                   std::optional<std::uint32_t> argon2_mem = std::nullopt,
-                  std::optional<std::uint32_t> argon2_par = std::nullopt);
+                  std::optional<std::uint32_t> argon2_par = std::nullopt,
+                  std::string_view pack = {});
 
 MetadataMap Decode(const std::string& blob);
 std::string GetValue(const MetadataMap& meta, std::string_view key);

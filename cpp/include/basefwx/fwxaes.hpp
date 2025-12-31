@@ -21,6 +21,10 @@ struct NormalizeOptions {
     std::string cover_phrase = "low taper fade";
 };
 
+struct PackOptions {
+    bool compress = false;
+};
+
 Bytes EncryptRaw(const Bytes& plaintext, const std::string& password, const Options& options = {});
 Bytes DecryptRaw(const Bytes& blob, const std::string& password);
 
@@ -31,7 +35,9 @@ void EncryptFile(const std::string& path_in,
                  const std::string& path_out,
                  const std::string& password,
                  const Options& options = {},
-                 const NormalizeOptions& normalize = {});
+                 const NormalizeOptions& normalize = {},
+                 const PackOptions& pack = {},
+                 bool keep_input = false);
 
 void DecryptFile(const std::string& path_in,
                  const std::string& path_out,

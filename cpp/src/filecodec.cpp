@@ -1,5 +1,6 @@
 #include "basefwx/filecodec.hpp"
 
+#include "basefwx/archive.hpp"
 #include "basefwx/base64.hpp"
 #include "basefwx/constants.hpp"
 #include "basefwx/crypto.hpp"
@@ -131,6 +132,16 @@ std::pair<std::string, std::string> SplitWithHeavyDelims(const std::string& payl
         return {payload.substr(0, pos), payload.substr(pos + legacy.size())};
     }
     throw std::runtime_error(std::string("Malformed ") + std::string(label) + " payload");
+}
+
+basefwx::archive::PackMode ResolvePackMode(const basefwx::metadata::MetadataMap& meta,
+                                           const std::string& ext) {
+    std::string flag = basefwx::metadata::GetValue(meta, constants::kPackMetaKey);
+    auto mode = basefwx::archive::PackModeFromFlag(flag);
+    if (mode == basefwx::archive::PackMode::None && !ext.empty()) {
+        mode = basefwx::archive::PackModeFromExtension(std::filesystem::path(ext));
+    }
+    return mode;
 }
 
 Bytes Uint32Be(std::uint32_t value) {
@@ -468,7 +479,8 @@ bool EnableObfuscation(const FileOptions& options) {
 std::string B512EncodeFileSimple(const std::filesystem::path& input,
                                  const std::string& password,
                                  const FileOptions& options,
-                                 const basefwx::pb512::KdfOptions& kdf) {
+                                 const basefwx::pb512::KdfOptions& kdf,
+                                 std::string_view pack_flag) {
     Bytes data = ReadFileBytes(input);
     std::string b64_payload = basefwx::base64::Encode(data);
     std::string ext = input.extension().string();
@@ -490,7 +502,14 @@ std::string B512EncodeFileSimple(const std::filesystem::path& input,
         options.strip_metadata,
         use_master_effective,
         use_aead ? "AESGCM" : "NONE",
-        kdf_label
+        kdf_label,
+        {},
+        std::nullopt,
+        std::nullopt,
+        std::nullopt,
+        std::nullopt,
+        std::nullopt,
+        std::string(pack_flag)
     );
 
     std::string body = ext_token + std::string(constants::kFwxDelim) + data_token;
@@ -521,14 +540,17 @@ std::string B512EncodeFileSimple(const std::filesystem::path& input,
     std::filesystem::path out_path = input;
     out_path.replace_extension(".fwx");
     WriteFileBytes(out_path, output_bytes);
-    std::filesystem::remove(input);
+    if (!options.keep_input) {
+        std::filesystem::remove(input);
+    }
     return out_path.string();
 }
 
 std::string B512EncodeFileStream(const std::filesystem::path& input,
                                  const std::string& password,
                                  const FileOptions& options,
-                                 const basefwx::pb512::KdfOptions& kdf) {
+                                 const basefwx::pb512::KdfOptions& kdf,
+                                 std::string_view pack_flag) {
     if (password.empty()) {
         throw std::runtime_error("Password required for streaming b512 encode");
     }
@@ -556,7 +578,13 @@ std::string B512EncodeFileStream(const std::filesystem::path& input,
         use_master_effective,
         "AESGCM",
         kdf_label,
-        "STREAM"
+        "STREAM",
+        std::nullopt,
+        std::nullopt,
+        std::nullopt,
+        std::nullopt,
+        std::nullopt,
+        std::string(pack_flag)
     );
     Bytes metadata_bytes = ToBytes(metadata_blob);
     Bytes prefix_bytes;
@@ -656,7 +684,9 @@ std::string B512EncodeFileStream(const std::filesystem::path& input,
     if (!output) {
         throw std::runtime_error("Failed to write output file: " + out_path.string());
     }
-    std::filesystem::remove(input);
+    if (!options.keep_input) {
+        std::filesystem::remove(input);
+    }
     return out_path.string();
 }
 
@@ -715,6 +745,7 @@ std::string B512DecodeFileStream(const std::filesystem::path& input,
             throw std::runtime_error("Ciphertext payload truncated");
         }
     }
+    auto meta = basefwx::metadata::Decode(ToString(metadata_bytes));
     Bytes nonce(constants::kAeadNonceLen);
     handle.read(reinterpret_cast<char*>(nonce.data()), nonce.size());
     if (handle.gcount() != static_cast<std::streamsize>(nonce.size())) {
@@ -848,9 +879,12 @@ std::string B512DecodeFileStream(const std::filesystem::path& input,
     basefwx::obf::StreamObfuscator decoder = basefwx::obf::StreamObfuscator::ForPassword(password, salt);
     std::filesystem::path target = input;
     target.replace_extension("");
+    std::string ext;
     if (!ext_bytes.empty()) {
-        target.replace_extension(ToString(ext_bytes));
+        ext = ToString(ext_bytes);
+        target.replace_extension(ext);
     }
+    auto pack_mode = ResolvePackMode(meta, ext);
     std::ofstream out(target, std::ios::binary);
     if (!out) {
         throw std::runtime_error("Failed to open output file");
@@ -873,7 +907,12 @@ std::string B512DecodeFileStream(const std::filesystem::path& input,
     out.flush();
     plain_in.close();
     std::filesystem::remove(temp_plain);
-    std::filesystem::remove(input);
+    if (!options.keep_input) {
+        std::filesystem::remove(input);
+    }
+    if (pack_mode != basefwx::archive::PackMode::None) {
+        return basefwx::archive::UnpackArchive(target, pack_mode).string();
+    }
     return target.string();
 }
 
@@ -918,6 +957,7 @@ std::string B512DecodeFileSimple(const std::filesystem::path& input,
     auto [header, payload] = SplitWithDelims(body, "FWX container");
     std::string ext = basefwx::pb512::B512Decode(header, password, use_master_effective, kdf);
     std::string data_b64 = basefwx::pb512::B512Decode(payload, password, use_master_effective, kdf);
+    auto pack_mode = ResolvePackMode(meta, ext);
 
     bool ok = false;
     Bytes decoded = basefwx::base64::Decode(data_b64, &ok);
@@ -930,7 +970,12 @@ std::string B512DecodeFileSimple(const std::filesystem::path& input,
         target.replace_extension(ext);
     }
     WriteFileBytes(target, decoded);
-    std::filesystem::remove(input);
+    if (!options.keep_input) {
+        std::filesystem::remove(input);
+    }
+    if (pack_mode != basefwx::archive::PackMode::None) {
+        return basefwx::archive::UnpackArchive(target, pack_mode).string();
+    }
     return target.string();
 }
 
@@ -986,7 +1031,8 @@ std::optional<std::string> PeekMetadataBlob(const std::filesystem::path& input) 
 std::string Pb512EncodeFileSimple(const std::filesystem::path& input,
                                   const std::string& password,
                                   const FileOptions& options,
-                                  const basefwx::pb512::KdfOptions& kdf) {
+                                  const basefwx::pb512::KdfOptions& kdf,
+                                  std::string_view pack_flag) {
     Bytes data = ReadFileBytes(input);
     std::string b64_payload = basefwx::base64::Encode(data);
     std::string ext = input.extension().string();
@@ -1020,10 +1066,11 @@ std::string Pb512EncodeFileSimple(const std::filesystem::path& input,
         kdf_label,
         "",
         obf_enabled,
-        basefwx::constants::kHeavyPbkdf2Iterations,
+        basefwx::constants::HeavyPbkdf2Iterations(),
         argon_time,
         argon_mem,
-        argon_par
+        argon_par,
+        std::string(pack_flag)
     );
 
     std::string body = ext_token + std::string(constants::kFwxHeavyDelim) + data_token;
@@ -1037,7 +1084,7 @@ std::string Pb512EncodeFileSimple(const std::filesystem::path& input,
         use_master_effective,
         metadata_blob,
         kdf_opts,
-        basefwx::constants::kHeavyPbkdf2Iterations,
+        basefwx::constants::HeavyPbkdf2Iterations(),
         argon_time,
         argon_mem,
         argon_par,
@@ -1047,14 +1094,17 @@ std::string Pb512EncodeFileSimple(const std::filesystem::path& input,
     std::filesystem::path out_path = input;
     out_path.replace_extension(".fwx");
     WriteFileBytes(out_path, blob);
-    std::filesystem::remove(input);
+    if (!options.keep_input) {
+        std::filesystem::remove(input);
+    }
     return out_path.string();
 }
 
 std::string Pb512EncodeFileStream(const std::filesystem::path& input,
                                   const std::string& password,
                                   const FileOptions& options,
-                                  const basefwx::pb512::KdfOptions& kdf) {
+                                  const basefwx::pb512::KdfOptions& kdf,
+                                  std::string_view pack_flag) {
     if (password.empty()) {
         throw std::runtime_error("Password required for AES-heavy streaming mode");
     }
@@ -1091,10 +1141,11 @@ std::string Pb512EncodeFileStream(const std::filesystem::path& input,
         kdf_label,
         "STREAM",
         obf_enabled,
-        basefwx::constants::kHeavyPbkdf2Iterations,
+        basefwx::constants::HeavyPbkdf2Iterations(),
         argon_time,
         argon_mem,
-        argon_par
+        argon_par,
+        std::string(pack_flag)
     );
     Bytes metadata_bytes = ToBytes(metadata_blob);
     Bytes prefix_bytes;
@@ -1130,7 +1181,7 @@ std::string Pb512EncodeFileStream(const std::filesystem::path& input,
     Bytes user_blob;
     if (!password.empty()) {
         basefwx::pb512::KdfOptions kdf_wrap = kdf_opts;
-        kdf_wrap.pbkdf2_iterations = basefwx::constants::kHeavyPbkdf2Iterations;
+        kdf_wrap.pbkdf2_iterations = basefwx::constants::HeavyPbkdf2Iterations();
         if (argon_time.has_value()) {
             kdf_wrap.argon2_time_cost = argon_time.value();
         }
@@ -1215,7 +1266,9 @@ std::string Pb512EncodeFileStream(const std::filesystem::path& input,
     if (!output) {
         throw std::runtime_error("Failed to write output file: " + out_path.string());
     }
-    std::filesystem::remove(input);
+    if (!options.keep_input) {
+        std::filesystem::remove(input);
+    }
     return out_path.string();
 }
 
@@ -1437,9 +1490,12 @@ std::string Pb512DecodeFileStream(const std::filesystem::path& input,
     basefwx::obf::StreamObfuscator decoder = basefwx::obf::StreamObfuscator::ForPassword(password, salt);
     std::filesystem::path target = input;
     target.replace_extension("");
+    std::string ext;
     if (!ext_bytes.empty()) {
-        target.replace_extension(ToString(ext_bytes));
+        ext = ToString(ext_bytes);
+        target.replace_extension(ext);
     }
+    auto pack_mode = ResolvePackMode(meta, ext);
     std::ofstream out(target, std::ios::binary);
     if (!out) {
         throw std::runtime_error("Failed to open output file");
@@ -1462,7 +1518,12 @@ std::string Pb512DecodeFileStream(const std::filesystem::path& input,
     out.flush();
     plain_in.close();
     std::filesystem::remove(temp_plain);
-    std::filesystem::remove(input);
+    if (!options.keep_input) {
+        std::filesystem::remove(input);
+    }
+    if (pack_mode != basefwx::archive::PackMode::None) {
+        return basefwx::archive::UnpackArchive(target, pack_mode).string();
+    }
     return target.string();
 }
 
@@ -1476,11 +1537,41 @@ std::string B512EncodeFile(const std::string& path,
     if (!std::filesystem::exists(input)) {
         throw std::runtime_error("Input file not found: " + input.string());
     }
-    std::uint64_t size = FileSize(input);
-    if (EnableAead(options) && size >= options.stream_threshold) {
-        return B512EncodeFileStream(input, password, options, kdf);
+    auto pack = basefwx::archive::PackInput(input, options.compress);
+    std::filesystem::path source = pack.used ? pack.source : input;
+    std::string pack_flag = basefwx::archive::PackFlag(pack.mode);
+    std::string output;
+    try {
+        std::uint64_t size = FileSize(source);
+        if (EnableAead(options) && size >= options.stream_threshold) {
+            output = B512EncodeFileStream(source, password, options, kdf, pack_flag);
+        } else {
+            output = B512EncodeFileSimple(source, password, options, kdf, pack_flag);
+        }
+        if (pack.used) {
+            std::filesystem::path final_out = input;
+            final_out.replace_extension(".fwx");
+            std::error_code ec;
+            std::filesystem::remove(final_out, ec);
+            std::filesystem::rename(output, final_out, ec);
+            if (ec) {
+                throw std::runtime_error("Failed to move output file: " + ec.message());
+            }
+            output = final_out.string();
+            if (!options.keep_input) {
+                if (std::filesystem::is_directory(input)) {
+                    std::filesystem::remove_all(input, ec);
+                } else {
+                    std::filesystem::remove(input, ec);
+                }
+            }
+        }
+    } catch (...) {
+        basefwx::archive::CleanupPack(pack);
+        throw;
     }
-    return B512EncodeFileSimple(input, password, options, kdf);
+    basefwx::archive::CleanupPack(pack);
+    return output;
 }
 
 std::string B512DecodeFile(const std::string& path,
@@ -1510,11 +1601,41 @@ std::string Pb512EncodeFile(const std::string& path,
     if (!std::filesystem::exists(input)) {
         throw std::runtime_error("Input file not found: " + input.string());
     }
-    std::uint64_t size = FileSize(input);
-    if (size >= options.stream_threshold) {
-        return Pb512EncodeFileStream(input, password, options, kdf);
+    auto pack = basefwx::archive::PackInput(input, options.compress);
+    std::filesystem::path source = pack.used ? pack.source : input;
+    std::string pack_flag = basefwx::archive::PackFlag(pack.mode);
+    std::string output;
+    try {
+        std::uint64_t size = FileSize(source);
+        if (size >= options.stream_threshold) {
+            output = Pb512EncodeFileStream(source, password, options, kdf, pack_flag);
+        } else {
+            output = Pb512EncodeFileSimple(source, password, options, kdf, pack_flag);
+        }
+        if (pack.used) {
+            std::filesystem::path final_out = input;
+            final_out.replace_extension(".fwx");
+            std::error_code ec;
+            std::filesystem::remove(final_out, ec);
+            std::filesystem::rename(output, final_out, ec);
+            if (ec) {
+                throw std::runtime_error("Failed to move output file: " + ec.message());
+            }
+            output = final_out.string();
+            if (!options.keep_input) {
+                if (std::filesystem::is_directory(input)) {
+                    std::filesystem::remove_all(input, ec);
+                } else {
+                    std::filesystem::remove(input, ec);
+                }
+            }
+        }
+    } catch (...) {
+        basefwx::archive::CleanupPack(pack);
+        throw;
     }
-    return Pb512EncodeFileSimple(input, password, options, kdf);
+    basefwx::archive::CleanupPack(pack);
+    return output;
 }
 
 std::string Pb512DecodeFile(const std::string& path,
@@ -1548,6 +1669,7 @@ std::string Pb512DecodeFile(const std::string& path,
     auto split = SplitWithHeavyDelims(payload, "FWX heavy");
     std::string ext = basefwx::pb512::Pb512Decode(split.first, password, use_master_effective, kdf);
     std::string data_b64 = basefwx::pb512::Pb512Decode(split.second, password, use_master_effective, kdf);
+    auto pack_mode = ResolvePackMode(meta, ext);
 
     bool ok = false;
     Bytes decoded = basefwx::base64::Decode(data_b64, &ok);
@@ -1560,7 +1682,12 @@ std::string Pb512DecodeFile(const std::string& path,
         target.replace_extension(ext);
     }
     WriteFileBytes(target, decoded);
-    std::filesystem::remove(input);
+    if (!options.keep_input) {
+        std::filesystem::remove(input);
+    }
+    if (pack_mode != basefwx::archive::PackMode::None) {
+        return basefwx::archive::UnpackArchive(target, pack_mode).string();
+    }
     return target.string();
 }
 

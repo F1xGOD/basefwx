@@ -6,7 +6,8 @@ namespace basefwx::imagecipher {
 
 std::string EncryptImageInv(const std::string& path,
                             const std::string& password,
-                            const std::string& output = {});
+                            const std::string& output = {},
+                            bool include_trailer = true);
 
 std::string DecryptImageInv(const std::string& path,
                             const std::string& password,

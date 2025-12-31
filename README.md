@@ -9,7 +9,7 @@ ALL RIGHTS RESERVED
 |_|     |_(_/ \_)\______)_|   \_||_|_|   \___)
 
 FixCraft® Inc. FWX Encryption ©  
-Version - v3.4.1 😎 DEC 30 2025 (11 PM) GMT-8  
+Version - v3.5.2 😎 DEC 31 2025 (4 AM) GMT-8  
 By F1xGOD 💀  
 Donate Crypto (Monero):  
 48BKksKRWEgixzz1Yec3BH54ybDNCkmmWHLGtXRY42NPJqBowaeD5RTELqgABD1GzBT97pqrjW5PJHsNWzVyQ8zuL6tRBcY
@@ -53,6 +53,7 @@ Pipeline: **ML-KEM-768 (Kyber) → HKDF → AES-GCM (AEAD)**, default **Argon2id
 - **Hybrid key schedule**: ML-KEM-768 → HKDF(SHA-256, context) → AES-GCM(256).
 - **User KDF**: Argon2id by default; switch to PBKDF2 via flag or env if you must.
 - **Obfuscation layer**: XOR keystream → reverse bytes → deterministic permutation; adds zero length overhead.
+- **C++ core + CLI**: native build in `cpp/` with cross‑compatible formats (Python ↔ C++).
 - **Master-key recovery**: opt-in by providing a public key path/env. The baked pubkey only loads when `ALLOW_BAKED_PUB=1`.
 - **Heavy mode (b512/pb512)**: internal tokens obfuscated, then the entire blob is AEAD-wrapped by default.
 - **Metadata stripping**: optional, disables master wrapping automatically to avoid surprises.

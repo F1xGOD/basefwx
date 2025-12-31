@@ -5,7 +5,11 @@ set -o pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-PYTHON_BIN="${PYTHON_BIN:-python3}"
+USE_VENV="${USE_VENV:-1}"
+VENV_DIR="${VENV_DIR:-$ROOT/.venv}"
+VENV_PY="$VENV_DIR/bin/python"
+PIP_BIN="$VENV_DIR/bin/pip"
+PYTHON_BIN="${PYTHON_BIN:-}"
 CPP_BIN="$ROOT/cpp/build/basefwx_cpp"
 
 LOG="$ROOT/diagnose.log"
@@ -16,19 +20,40 @@ OUT_DIR="$TMP_DIR/out"
 VERIFY_LIST="$TMP_DIR/verify_list.txt"
 TEXT_ORIG="$TMP_DIR/text_orig.txt"
 PY_HELPER="$TMP_DIR/py_helper.py"
+GEN_HELPER="$TMP_DIR/gen_files.py"
 
 PW="pw12345"
 BAD_PW="wrongpw"
+
+ENABLE_HUGE="${ENABLE_HUGE:-0}"
+BIG_FILE_BYTES="${BIG_FILE_BYTES:-37748736}"
+HUGE_200M_BYTES="${HUGE_200M_BYTES:-200000000}"
+HUGE_1P2G_BYTES="${HUGE_1P2G_BYTES:-1200000000}"
+
+for arg in "$@"; do
+    case "$arg" in
+        --huge)
+            ENABLE_HUGE=1
+            ;;
+    esac
+done
 
 export PYTHONPATH="$ROOT${PYTHONPATH:+:$PYTHONPATH}"
 export BASEFWX_USER_KDF="pbkdf2"
 export BASEFWX_B512_AEAD="1"
 export BASEFWX_OBFUSCATE="1"
+export ENABLE_HUGE BIG_FILE_BYTES HUGE_200M_BYTES HUGE_1P2G_BYTES
 
 declare -A TIMES
 FAILURES=()
 CPP_AVAILABLE=1
 PBKDF2_ITERS=""
+STEP_INDEX=0
+STEP_TOTAL=0
+PROGRESS_INTERVAL="${PROGRESS_INTERVAL:-15}"
+if [[ ! "$PROGRESS_INTERVAL" =~ ^[0-9]+$ ]]; then
+    PROGRESS_INTERVAL=15
+fi
 
 log() {
     printf "%s\n" "$*" >>"$LOG"
@@ -42,9 +67,10 @@ time_cmd() {
     local key="$1"
     shift
     local start_ns end_ns dur_ns rc
+    announce_step "$key"
     log "CMD[$key]: $*"
     start_ns=$(date +%s%N)
-    "$@" >>"$LOG" 2>&1
+    run_with_heartbeat "$key" "$@"
     rc=$?
     end_ns=$(date +%s%N)
     dur_ns=$((end_ns - start_ns))
@@ -71,8 +97,71 @@ time_cmd_no_fail() {
     return $rc
 }
 
+announce_step() {
+    local label="$1"
+    STEP_INDEX=$((STEP_INDEX + 1))
+    if (( STEP_TOTAL > 0 )); then
+        printf "[%d/%d] %s\n" "$STEP_INDEX" "$STEP_TOTAL" "$label"
+    else
+        printf "[%d] %s\n" "$STEP_INDEX" "$label"
+    fi
+}
+
+run_with_heartbeat() {
+    local label="$1"
+    shift
+    local start_s=$SECONDS
+    if (( PROGRESS_INTERVAL <= 0 )); then
+        "$@" >>"$LOG" 2>&1
+        return $?
+    fi
+    "$@" >>"$LOG" 2>&1 &
+    local pid=$!
+    while kill -0 "$pid" 2>/dev/null; do
+        sleep "$PROGRESS_INTERVAL"
+        if kill -0 "$pid" 2>/dev/null; then
+            printf "  ... %s (%ds elapsed)\n" "$label" "$((SECONDS - start_s))"
+        fi
+    done
+    wait "$pid"
+}
+
+ensure_venv() {
+    if [[ "$USE_VENV" != "1" ]]; then
+        PYTHON_BIN="${PYTHON_BIN:-python3}"
+        return 0
+    fi
+    if [[ ! -x "$VENV_PY" ]]; then
+        time_cmd_no_fail "venv_create" python3 -m venv "$VENV_DIR"
+    fi
+    PYTHON_BIN="$VENV_PY"
+    time_cmd_no_fail "venv_pip" "$PIP_BIN" install -U pip setuptools wheel
+    time_cmd_no_fail "venv_install" "$PIP_BIN" install -e "$ROOT"
+}
+
 add_verify() {
     printf "%s|%s\n" "$1" "$2" >>"$VERIFY_LIST"
+}
+
+case_tag() {
+    local name="$1"
+    name="${name##*/}"
+    name="${name//[^a-zA-Z0-9]/_}"
+    printf "%s\n" "$name"
+}
+
+calc_total_steps() {
+    local b512_count="${#B512FILE_CASES[@]}"
+    local pb512_count="${#PB512FILE_CASES[@]}"
+    STEP_TOTAL=0
+    STEP_TOTAL=$((STEP_TOTAL + 7))
+    STEP_TOTAL=$((STEP_TOTAL + 2 * b512_count + 2 * pb512_count))
+    if (( CPP_AVAILABLE == 1 )); then
+        STEP_TOTAL=$((STEP_TOTAL + 7))
+        STEP_TOTAL=$((STEP_TOTAL + 2 * b512_count + 2 * pb512_count))
+        STEP_TOTAL=$((STEP_TOTAL + 8))
+        STEP_TOTAL=$((STEP_TOTAL + 2 * b512_count + 2 * pb512_count))
+    fi
 }
 
 strip_newline() {
@@ -432,11 +521,13 @@ pb512file_cpp_enc_py_dec() {
     "$PYTHON_BIN" -m basefwx cryptin pb512 "$enc" -p "$PW" --no-master
 }
 
-phase "PHASE1: generate temporary files"
 rm -rf "$TMP_DIR"
+phase "PHASE1: generate temporary files"
 mkdir -p "$ORIG_DIR" "$WORK_DIR" "$OUT_DIR"
 printf "" >"$LOG"
 printf "" >"$VERIFY_LIST"
+
+ensure_venv
 
 log "Python: $("$PYTHON_BIN" --version 2>&1)"
 log "C++ binary: $CPP_BIN"
@@ -456,9 +547,10 @@ The quick brown fox jumps over the lazy dog 0123456789 ABCDEFGHIJKLMNOPQRSTUVWXY
 TXT
 printf "%s" "$(cat "$TEXT_ORIG")" >"$TEXT_ORIG"
 
-$PYTHON_BIN - "$ORIG_DIR" >>"$LOG" 2>&1 <<'PY'
+cat >"$GEN_HELPER" <<'PY'
 import os
 import sys
+import random
 from pathlib import Path
 
 root = Path(sys.argv[1])
@@ -479,7 +571,45 @@ try:
     img.save(png_path)
 except Exception:
     png_path.write_bytes(os.urandom(320 * 320 * 3))
+
+enable_huge = os.getenv("ENABLE_HUGE", "0") == "1"
+big_bytes = int(os.getenv("BIG_FILE_BYTES", "37748736"))
+large_200m = int(os.getenv("HUGE_200M_BYTES", "200000000"))
+large_1p2g = int(os.getenv("HUGE_1P2G_BYTES", "1200000000"))
+
+def write_large(path: Path, size: int, seed: int) -> None:
+    chunk = 4 * 1024 * 1024
+    rng = random.Random(seed)
+    with path.open("wb") as handle:
+        remaining = size
+        while remaining > 0:
+            take = min(chunk, remaining)
+            if hasattr(rng, "randbytes"):
+                data = rng.randbytes(take)
+            else:
+                data = os.urandom(take)
+            handle.write(data)
+            remaining -= take
+
+write_large(root / "large_36m.bin", big_bytes, seed=4242)
+if enable_huge:
+    write_large(root / "large_200m.bin", large_200m, seed=12345)
+    write_large(root / "huge_1p2g.bin", large_1p2g, seed=98765)
 PY
+
+log "CMD[generate_fixtures]: $PYTHON_BIN $GEN_HELPER $ORIG_DIR"
+run_with_heartbeat "generate_fixtures" "$PYTHON_BIN" "$GEN_HELPER" "$ORIG_DIR"
+gen_rc=$?
+log "TIME[generate_fixtures]: rc=${gen_rc}"
+if (( gen_rc != 0 )); then
+    FAILURES+=("generate_fixtures (rc=${gen_rc})")
+    printf "\nFAILURES (%d):\n" "${#FAILURES[@]}"
+    for failure in "${FAILURES[@]}"; do
+        printf " - %s\n" "$failure"
+    done
+    printf "See diagnose.log for details.\n"
+    exit 1
+fi
 
 cat >"$PY_HELPER" <<'PY'
 import sys
@@ -610,8 +740,14 @@ phase "PHASE2: run native Python/C++ tests"
 ensure_cpp || log "C++ binary unavailable; C++ tests will be marked failed"
 
 FWXAES_FILE="tiny.txt"
-B512FILE_FILE="noise.png"
-PB512FILE_FILE="medium.bin"
+B512FILE_CASES=("noise.png" "large_36m.bin")
+PB512FILE_CASES=("medium.bin" "large_36m.bin")
+if [[ "$ENABLE_HUGE" == "1" ]]; then
+    B512FILE_CASES+=("large_200m.bin")
+    PB512FILE_CASES+=("huge_1p2g.bin")
+fi
+STEP_INDEX=0
+calc_total_steps
 
 # fwxAES correct
 fwxaes_py_input="$(copy_input "fwxaes_py_correct" "$FWXAES_FILE")"
@@ -700,53 +836,71 @@ else
     FAILURES+=("pb512_cpp_wrong (cpp unavailable)")
 fi
 
-# b512file correct
-b512file_py_input="$(copy_input "b512file_py_correct" "$B512FILE_FILE")"
-time_cmd "b512file_py_correct" py_b512file_roundtrip "$b512file_py_input"
-add_verify "$ORIG_DIR/$B512FILE_FILE" "$b512file_py_input"
+B512FILE_PY_TOTAL=0
+B512FILE_CPP_TOTAL=0
+for file_name in "${B512FILE_CASES[@]}"; do
+    tag="$(case_tag "$file_name")"
+    # b512file correct
+    b512file_py_input="$(copy_input "b512file_py_correct_${tag}" "$file_name")"
+    key="b512file_py_correct_${tag}"
+    time_cmd "$key" py_b512file_roundtrip "$b512file_py_input"
+    B512FILE_PY_TOTAL=$((B512FILE_PY_TOTAL + ${TIMES[$key]:-0}))
+    add_verify "$ORIG_DIR/$file_name" "$b512file_py_input"
 
-b512file_cpp_input="$(copy_input "b512file_cpp_correct" "$B512FILE_FILE")"
-if (( CPP_AVAILABLE == 1 )); then
-    time_cmd "b512file_cpp_correct" cpp_b512file_roundtrip "$b512file_cpp_input"
-    add_verify "$ORIG_DIR/$B512FILE_FILE" "$b512file_cpp_input"
-else
-    FAILURES+=("b512file_cpp_correct (cpp unavailable)")
-fi
+    b512file_cpp_input="$(copy_input "b512file_cpp_correct_${tag}" "$file_name")"
+    if (( CPP_AVAILABLE == 1 )); then
+        key="b512file_cpp_correct_${tag}"
+        time_cmd "$key" cpp_b512file_roundtrip "$b512file_cpp_input"
+        B512FILE_CPP_TOTAL=$((B512FILE_CPP_TOTAL + ${TIMES[$key]:-0}))
+        add_verify "$ORIG_DIR/$file_name" "$b512file_cpp_input"
+    else
+        FAILURES+=("b512file_cpp_correct_${tag} (cpp unavailable)")
+    fi
 
-# b512file wrong password
-b512file_py_wrong_input="$(copy_input "b512file_py_wrong" "$B512FILE_FILE")"
-time_cmd "b512file_py_wrong" py_b512file_wrong "$b512file_py_wrong_input"
+    # b512file wrong password
+    b512file_py_wrong_input="$(copy_input "b512file_py_wrong_${tag}" "$file_name")"
+    time_cmd "b512file_py_wrong_${tag}" py_b512file_wrong "$b512file_py_wrong_input"
 
-b512file_cpp_wrong_input="$(copy_input "b512file_cpp_wrong" "$B512FILE_FILE")"
-if (( CPP_AVAILABLE == 1 )); then
-    time_cmd "b512file_cpp_wrong" cpp_b512file_wrong "$b512file_cpp_wrong_input"
-else
-    FAILURES+=("b512file_cpp_wrong (cpp unavailable)")
-fi
+    b512file_cpp_wrong_input="$(copy_input "b512file_cpp_wrong_${tag}" "$file_name")"
+    if (( CPP_AVAILABLE == 1 )); then
+        time_cmd "b512file_cpp_wrong_${tag}" cpp_b512file_wrong "$b512file_cpp_wrong_input"
+    else
+        FAILURES+=("b512file_cpp_wrong_${tag} (cpp unavailable)")
+    fi
+done
 
-# pb512file correct
-pb512file_py_input="$(copy_input "pb512file_py_correct" "$PB512FILE_FILE")"
-time_cmd "pb512file_py_correct" py_pb512file_roundtrip "$pb512file_py_input"
-add_verify "$ORIG_DIR/$PB512FILE_FILE" "$pb512file_py_input"
+PB512FILE_PY_TOTAL=0
+PB512FILE_CPP_TOTAL=0
+for file_name in "${PB512FILE_CASES[@]}"; do
+    tag="$(case_tag "$file_name")"
+    # pb512file correct
+    pb512file_py_input="$(copy_input "pb512file_py_correct_${tag}" "$file_name")"
+    key="pb512file_py_correct_${tag}"
+    time_cmd "$key" py_pb512file_roundtrip "$pb512file_py_input"
+    PB512FILE_PY_TOTAL=$((PB512FILE_PY_TOTAL + ${TIMES[$key]:-0}))
+    add_verify "$ORIG_DIR/$file_name" "$pb512file_py_input"
 
-pb512file_cpp_input="$(copy_input "pb512file_cpp_correct" "$PB512FILE_FILE")"
-if (( CPP_AVAILABLE == 1 )); then
-    time_cmd "pb512file_cpp_correct" cpp_pb512file_roundtrip "$pb512file_cpp_input"
-    add_verify "$ORIG_DIR/$PB512FILE_FILE" "$pb512file_cpp_input"
-else
-    FAILURES+=("pb512file_cpp_correct (cpp unavailable)")
-fi
+    pb512file_cpp_input="$(copy_input "pb512file_cpp_correct_${tag}" "$file_name")"
+    if (( CPP_AVAILABLE == 1 )); then
+        key="pb512file_cpp_correct_${tag}"
+        time_cmd "$key" cpp_pb512file_roundtrip "$pb512file_cpp_input"
+        PB512FILE_CPP_TOTAL=$((PB512FILE_CPP_TOTAL + ${TIMES[$key]:-0}))
+        add_verify "$ORIG_DIR/$file_name" "$pb512file_cpp_input"
+    else
+        FAILURES+=("pb512file_cpp_correct_${tag} (cpp unavailable)")
+    fi
 
-# pb512file wrong password
-pb512file_py_wrong_input="$(copy_input "pb512file_py_wrong" "$PB512FILE_FILE")"
-time_cmd "pb512file_py_wrong" py_pb512file_wrong "$pb512file_py_wrong_input"
+    # pb512file wrong password
+    pb512file_py_wrong_input="$(copy_input "pb512file_py_wrong_${tag}" "$file_name")"
+    time_cmd "pb512file_py_wrong_${tag}" py_pb512file_wrong "$pb512file_py_wrong_input"
 
-pb512file_cpp_wrong_input="$(copy_input "pb512file_cpp_wrong" "$PB512FILE_FILE")"
-if (( CPP_AVAILABLE == 1 )); then
-    time_cmd "pb512file_cpp_wrong" cpp_pb512file_wrong "$pb512file_cpp_wrong_input"
-else
-    FAILURES+=("pb512file_cpp_wrong (cpp unavailable)")
-fi
+    pb512file_cpp_wrong_input="$(copy_input "pb512file_cpp_wrong_${tag}" "$file_name")"
+    if (( CPP_AVAILABLE == 1 )); then
+        time_cmd "pb512file_cpp_wrong_${tag}" cpp_pb512file_wrong "$pb512file_cpp_wrong_input"
+    else
+        FAILURES+=("pb512file_cpp_wrong_${tag} (cpp unavailable)")
+    fi
+done
 
 phase "PHASE2.2: cross-compat tests"
 
@@ -829,42 +983,48 @@ else
 fi
 
 # b512file cross-compat
-b512file_pycc_input="$(copy_input "b512file_pycc" "$B512FILE_FILE")"
-b512file_pycc_enc="$(with_suffix "$b512file_pycc_input" ".fwx")"
-if (( CPP_AVAILABLE == 1 )); then
-    time_cmd "b512file_py_enc_cpp_dec" b512file_py_enc_cpp_dec "$b512file_pycc_input" "$b512file_pycc_enc"
-    add_verify "$ORIG_DIR/$B512FILE_FILE" "$b512file_pycc_input"
-else
-    FAILURES+=("b512file_py_enc_cpp_dec (cpp unavailable)")
-fi
+for file_name in "${B512FILE_CASES[@]}"; do
+    tag="$(case_tag "$file_name")"
+    b512file_pycc_input="$(copy_input "b512file_pycc_${tag}" "$file_name")"
+    b512file_pycc_enc="$(with_suffix "$b512file_pycc_input" ".fwx")"
+    if (( CPP_AVAILABLE == 1 )); then
+        time_cmd "b512file_py_enc_cpp_dec_${tag}" b512file_py_enc_cpp_dec "$b512file_pycc_input" "$b512file_pycc_enc"
+        add_verify "$ORIG_DIR/$file_name" "$b512file_pycc_input"
+    else
+        FAILURES+=("b512file_py_enc_cpp_dec_${tag} (cpp unavailable)")
+    fi
 
-b512file_cpyp_input="$(copy_input "b512file_cpyp" "$B512FILE_FILE")"
-b512file_cpyp_enc="$(with_suffix "$b512file_cpyp_input" ".fwx")"
-if (( CPP_AVAILABLE == 1 )); then
-    time_cmd "b512file_cpp_enc_py_dec" b512file_cpp_enc_py_dec "$b512file_cpyp_input" "$b512file_cpyp_enc"
-    add_verify "$ORIG_DIR/$B512FILE_FILE" "$b512file_cpyp_input"
-else
-    FAILURES+=("b512file_cpp_enc_py_dec (cpp unavailable)")
-fi
+    b512file_cpyp_input="$(copy_input "b512file_cpyp_${tag}" "$file_name")"
+    b512file_cpyp_enc="$(with_suffix "$b512file_cpyp_input" ".fwx")"
+    if (( CPP_AVAILABLE == 1 )); then
+        time_cmd "b512file_cpp_enc_py_dec_${tag}" b512file_cpp_enc_py_dec "$b512file_cpyp_input" "$b512file_cpyp_enc"
+        add_verify "$ORIG_DIR/$file_name" "$b512file_cpyp_input"
+    else
+        FAILURES+=("b512file_cpp_enc_py_dec_${tag} (cpp unavailable)")
+    fi
+done
 
 # pb512file cross-compat
-pb512file_pycc_input="$(copy_input "pb512file_pycc" "$PB512FILE_FILE")"
-pb512file_pycc_enc="$(with_suffix "$pb512file_pycc_input" ".fwx")"
-if (( CPP_AVAILABLE == 1 )); then
-    time_cmd "pb512file_py_enc_cpp_dec" pb512file_py_enc_cpp_dec "$pb512file_pycc_input" "$pb512file_pycc_enc"
-    add_verify "$ORIG_DIR/$PB512FILE_FILE" "$pb512file_pycc_input"
-else
-    FAILURES+=("pb512file_py_enc_cpp_dec (cpp unavailable)")
-fi
+for file_name in "${PB512FILE_CASES[@]}"; do
+    tag="$(case_tag "$file_name")"
+    pb512file_pycc_input="$(copy_input "pb512file_pycc_${tag}" "$file_name")"
+    pb512file_pycc_enc="$(with_suffix "$pb512file_pycc_input" ".fwx")"
+    if (( CPP_AVAILABLE == 1 )); then
+        time_cmd "pb512file_py_enc_cpp_dec_${tag}" pb512file_py_enc_cpp_dec "$pb512file_pycc_input" "$pb512file_pycc_enc"
+        add_verify "$ORIG_DIR/$file_name" "$pb512file_pycc_input"
+    else
+        FAILURES+=("pb512file_py_enc_cpp_dec_${tag} (cpp unavailable)")
+    fi
 
-pb512file_cpyp_input="$(copy_input "pb512file_cpyp" "$PB512FILE_FILE")"
-pb512file_cpyp_enc="$(with_suffix "$pb512file_cpyp_input" ".fwx")"
-if (( CPP_AVAILABLE == 1 )); then
-    time_cmd "pb512file_cpp_enc_py_dec" pb512file_cpp_enc_py_dec "$pb512file_cpyp_input" "$pb512file_cpyp_enc"
-    add_verify "$ORIG_DIR/$PB512FILE_FILE" "$pb512file_cpyp_input"
-else
-    FAILURES+=("pb512file_cpp_enc_py_dec (cpp unavailable)")
-fi
+    pb512file_cpyp_input="$(copy_input "pb512file_cpyp_${tag}" "$file_name")"
+    pb512file_cpyp_enc="$(with_suffix "$pb512file_cpyp_input" ".fwx")"
+    if (( CPP_AVAILABLE == 1 )); then
+        time_cmd "pb512file_cpp_enc_py_dec_${tag}" pb512file_cpp_enc_py_dec "$pb512file_cpyp_input" "$pb512file_cpyp_enc"
+        add_verify "$ORIG_DIR/$file_name" "$pb512file_cpyp_input"
+    else
+        FAILURES+=("pb512file_cpp_enc_py_dec_${tag} (cpp unavailable)")
+    fi
+done
 
 phase "PHASE3: verify outputs"
 if [[ -f "$VERIFY_LIST" ]]; then
@@ -917,8 +1077,12 @@ compare_speed "fwxAES" "fwxaes_py_correct" "fwxaes_cpp_correct"
 compare_speed "b256" "b256_py_correct" "b256_cpp_correct"
 compare_speed "b512" "b512_py_correct" "b512_cpp_correct"
 compare_speed "pb512" "pb512_py_correct" "pb512_cpp_correct"
-compare_speed "b512file" "b512file_py_correct" "b512file_cpp_correct"
-compare_speed "pb512file" "pb512file_py_correct" "pb512file_cpp_correct"
+TIMES["b512file_py_total"]=$B512FILE_PY_TOTAL
+TIMES["b512file_cpp_total"]=$B512FILE_CPP_TOTAL
+TIMES["pb512file_py_total"]=$PB512FILE_PY_TOTAL
+TIMES["pb512file_cpp_total"]=$PB512FILE_CPP_TOTAL
+compare_speed "b512file" "b512file_py_total" "b512file_cpp_total"
+compare_speed "pb512file" "pb512file_py_total" "pb512file_cpp_total"
 
 if (( ${#FAILURES[@]} > 0 )); then
     printf "\nFAILURES (%d):\n" "${#FAILURES[@]}"

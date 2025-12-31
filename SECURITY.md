@@ -12,7 +12,7 @@
 
 |  Version  | Status / Notes                                                                                                                    | Supported |
 | :-------: | --------------------------------------------------------------------------------------------------------------------------------- | :-------: |
-| **3.4.0** | 👑 **USE IT!** Faster, Optimized, Multi-Thread. Actively maintained. **Not cross‑compatible with earlier lines.** *maybe 3.3.1             |     ✅     |
+| **3.4.x+** | 👑 **USE IT!** Faster, Optimized, Multi-Thread. Actively maintained. **Not cross‑compatible with earlier lines.** *maybe 3.3.1             |     ✅     |
 | **3.3.1** | ➖ PQE + AEAD + obfuscation fast‑paths. Actively maintained. **Not cross‑compatible with earlier lines.**              |     ✅     |
 |  **3.2**  | ➖ Security maintenance (bug & vuln fixes only). PQE format introduced here. **Not cross‑compatible with older lines.**             |     🧪     |
 |  **3.1**  | ❌ CodeQL findings; weak key‑derivation (affects this and below). **Not cross‑compatible with 3.2.**                               |     ❌     |

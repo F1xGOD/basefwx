@@ -35,7 +35,8 @@ class basefwx:
         colorama.init()  # Initialize colorama for cross-platform color support
     except ImportError:
         pass  # Colorama is optional
-    from cryptography.hazmat.primitives import hashes, padding
+    from cryptography.hazmat.primitives import hashes, padding, serialization
+    from cryptography.hazmat.primitives.asymmetric import ec
     from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
     from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
     from cryptography.hazmat.primitives.kdf.hkdf import HKDF
@@ -78,6 +79,10 @@ class basefwx:
     ENGINE_VERSION = "3.5.2"
     MASTER_PQ_ALG = "ml-kem-768"
     MASTER_PQ_PUBLIC = b"eJwBoARf+9Kzz6BzXHi8fntsVzKBAxCzV6VTNfbCvfAqh+jMdEfccE7UR4Nnbl+roH3ML55Adeabfs6kZ3CgSZijRTWJDbaUXj+LX391QXOnTa7rNEg1qTaxSa1DKmFZwY+kCRlyjP8BWUY0P9c2NLHDiHlBObDRjUyWrbb1YdiJXfITJz3bvBlnRLTQIRSpH042LZy1CwpQT+C0ISO5tc9qkDocWZ3Jx8+Avd0KcY2TP8rcCY4kY/7JR4xWiRV6e1wnz3BnQxdivx4jPusMo8VnlInHhYlSJvEIHDgqo5WjScSIKkT0UNXknxWgb5mpoB/poD4gtyCWA57iGarFM6k3oZZnRjMilMAwvQ8bGCRxnDLsnJPCEpTkDP2Ek7LDSGv6KaG3ManmIaAoZH4mpxAmePaRkTSKYuE7vMeVqeyxl394QUZrfi/YirIhfom6SYIChFzlAgHAZCPMx+9FVzmVxicnvlKRPCWITkFRnkVraxZ8x9S4OR9HzT4G0BEsj/sKOY5VeAi6c82ricH6HnaJB+eEvhjiTssSoxnBX9vUbftnLjFqTMPctY1DgmTabWz1U23rffPSqo0zeDxIlR0FD1foxs9gc9JSR/MChL2ZzFLAUqq7QBPWxHsrjN8VO86FyG64VncSQvtwEPR5kRQgEgoBkqsHHnOVBov3le/mB9oBbPDzCTw7rPchTzNWVvwDOS/bfkmQIlOKKENZLvMInF6ktaLGiAzhy0eob5g7dMFwLCnDU/iQjQqZbyIMVCqMuBlgTFHhPWgKErNwcnIMPEoYg+mstgJIq272I7VCX9usoSjWXZX6SViIpg8FrS2RFCzmXPEpbCQHcg9arbxCD+cZIWfxVmxFx1y4Od2Eb/FkZTt6Maq4zMNalRfBjX/0C0C1aetQWiJ8HCvkZufLlYwAwovRJE+7wkXDgQLMe6dwzzo6ydEJM32kJBuzhjxjMGd4BY8JGKzKVBeJhsMLaViBGw5SEiXWgZhUbECktcJDrfc6r8PBgcQwV1TpU3pTcNNHFt1YoAMCpO9XdO7cDfnbaqRbBUY0hr3sI3P0x962F7rkR45xEGzFZp9XfmsRmG5qHfSTk4EGyS0cdFoDZ51Rvw/4e738wo4QRJGkDBGagROXzbwnmpSpV+cxXvK0Su5FIaGhJQHJqTQTv94Gy710eE43GffqEuT6D4X6mRclSBNGTepgGq6laanzJSp3UcVwFZwCNjdbCB+ycdkqR77muhUgnxHAcZvRf4oXx0pnkGx2Px/gvvAaZGLmqv16jFFZj3pocKlIrVBiSduoYy/CBkehUQDoeykgZs73zhGklAi1NBTBkXjgasYySO2UuS8bSINJfKLqUHOsfbB6sEOLilCaPfCcRtqafMqYJwdXW+KwgpmXqbV0I+nyqAVMIpRmwMYjpBxEkV5CMRgHyEnMr2cBXuv8RcjZfLmMbCATfNcJdEuQUXDjfE4nr94DHERSk8y3IkE7paIUbGV4jgGnFtEYUiZ6ADewLTFDDTmFpRA7jCjytuukSqmmdchYYLIgQnRmTRk3AZbnMbwxkgwy86skVNZZYldaxFdWvulRMd1FgnQn5Q=="
+    MASTER_EC_MAGIC = b"EC1"
+    MASTER_EC_CURVE_NAME = "secp521r1"
+    MASTER_EC_PUBLIC_ENV = "BASEFWX_MASTER_EC_PUB"
+    MASTER_EC_PRIVATE_ENV = "BASEFWX_MASTER_EC_PRIV"
     IMAGECIPHER_SCRAMBLE_CONTEXT = b'basefwx.imagecipher.scramble.v1'
     IMAGECIPHER_OFFSET_CONTEXT = b'basefwx.imagecipher.offset.v1'
     IMAGECIPHER_AEAD_INFO = b'basefwx.image.v1'
@@ -104,6 +109,11 @@ class basefwx:
     PERM_FAST_MIN = 4 * 1024
     USER_KDF_SALT_SIZE = 16
     USER_KDF_ITERATIONS = 200_000
+    SHORT_PASSWORD_MIN = 12
+    SHORT_PBKDF2_ITERATIONS = 400_000
+    SHORT_ARGON2_TIME_COST = 4
+    SHORT_ARGON2_MEMORY_COST = 2 ** 16
+    SHORT_ARGON2_PARALLELISM = max(1, os.cpu_count() or 1)
     if _Argon2Type is None:
         class _FallbackArgon2Type(enum.Enum):
             ID = 2
@@ -616,14 +626,16 @@ class basefwx:
             return basefwx.os.urandom(basefwx._StreamObfuscator._SALT_LEN)
 
         @classmethod
-        def for_password(cls, password: str, salt: bytes) -> "_StreamObfuscator":
-            if not isinstance(password, str):
-                raise TypeError("password must be a string for streaming obfuscation")
+        def for_password(
+            cls,
+            password: "basefwx.typing.Union[str, bytes, bytearray, memoryview]",
+            salt: bytes
+        ) -> "_StreamObfuscator":
             if not password:
                 raise ValueError("Password required for streaming obfuscation")
             if len(salt) < cls._SALT_LEN:
                 raise ValueError("Streaming obfuscation salt must be at least 16 bytes")
-            base_material = password.encode('utf-8') + salt
+            base_material = basefwx._coerce_password_bytes(password) + salt
             mask_key = basefwx._hkdf_sha256(base_material, info=basefwx.STREAM_INFO_KEY, length=32)
             iv = basefwx._hkdf_sha256(base_material, info=basefwx.STREAM_INFO_IV, length=16)
             perm_material = basefwx._hkdf_sha256(base_material, info=basefwx.STREAM_INFO_PERM, length=32)
@@ -1339,7 +1351,12 @@ class basefwx:
             )
 
     @staticmethod
-    def _resolve_password(password: str, use_master: bool = True) -> str:
+    def _resolve_password(
+        password: "basefwx.typing.Union[str, bytes, bytearray, memoryview]",
+        use_master: bool = True
+    ) -> "basefwx.typing.Union[str, bytes]":
+        if isinstance(password, (bytes, bytearray, memoryview)):
+            return bytes(password)
         if password == "":
             if not use_master:
                 raise ValueError("Password required when master key usage is disabled")
@@ -1360,9 +1377,9 @@ class basefwx:
             except YubiKeyUnavailableError as exc:
                 raise ValueError(str(exc)) from exc
 
-        if basefwx.os.path.isfile(password):
-            with open(password, "r", encoding="utf-8") as handle:
-                password = handle.read()
+        candidate = basefwx.pathlib.Path(password).expanduser()
+        if candidate.is_file():
+            return candidate.read_bytes()
         return password
 
     @staticmethod
@@ -1405,7 +1422,7 @@ class basefwx:
 
     @staticmethod
     def _derive_user_key_argon2id(
-        password: str,
+        password: "basefwx.typing.Union[str, bytes, bytearray, memoryview]",
         salt: "basefwx.typing.Optional[bytes]" = None,
         *,
         length: int = 32,
@@ -1419,8 +1436,9 @@ class basefwx:
             raise ValueError("User key salt must be at least 16 bytes")
         if basefwx.hash_secret_raw is None:
             raise RuntimeError("Argon2 backend unavailable")
+        password_bytes = basefwx._coerce_password_bytes(password)
         key = basefwx.hash_secret_raw(
-            password.encode("utf-8"),
+            password_bytes,
             salt,
             time_cost=time_cost,
             memory_cost=memory_cost,
@@ -1432,7 +1450,7 @@ class basefwx:
 
     @staticmethod
     def _derive_user_key_pbkdf2(
-        password: str,
+        password: "basefwx.typing.Union[str, bytes, bytearray, memoryview]",
         salt: bytes,
         *,
         iterations: int | None = None,
@@ -1447,11 +1465,11 @@ class basefwx:
             salt=salt,
             iterations=iterations
         )
-        return kdf.derive(password.encode("utf-8")), salt
+        return kdf.derive(basefwx._coerce_password_bytes(password)), salt
 
     @staticmethod
     def _derive_user_key(
-        password: str,
+        password: "basefwx.typing.Union[str, bytes, bytearray, memoryview]",
         salt: bytes | None = None,
         *,
         iterations: int | None = None,
@@ -1463,6 +1481,16 @@ class basefwx:
         if salt is None:
             salt = basefwx.os.urandom(basefwx.USER_KDF_SALT_SIZE)
         iterations = iterations or basefwx.USER_KDF_ITERATIONS
+        argon2_time_cost = argon2_time_cost or 3
+        argon2_memory_cost = argon2_memory_cost or (2 ** 15)
+        argon2_parallelism = argon2_parallelism or basefwx._CPU_COUNT
+        iterations, argon2_time_cost, argon2_memory_cost, argon2_parallelism = basefwx._harden_kdf_params(
+            password,
+            iterations=iterations,
+            argon2_time_cost=argon2_time_cost,
+            argon2_memory_cost=argon2_memory_cost,
+            argon2_parallelism=argon2_parallelism
+        )
         requested_kdf = (kdf or basefwx.USER_KDF or basefwx.USER_KDF_DEFAULT).lower()
         if requested_kdf in {"argon2", "argon2id"}:
             if basefwx.hash_secret_raw is None:
@@ -1476,9 +1504,9 @@ class basefwx:
                 return basefwx._derive_user_key_argon2id(
                     password,
                     salt,
-                    time_cost=argon2_time_cost or 3,
-                    memory_cost=argon2_memory_cost or (2 ** 15),
-                    parallelism=argon2_parallelism or basefwx._CPU_COUNT
+                    time_cost=argon2_time_cost,
+                    memory_cost=argon2_memory_cost,
+                    parallelism=argon2_parallelism
                 )
         return basefwx._derive_user_key_pbkdf2(password, salt, iterations=iterations)
 
@@ -1770,6 +1798,39 @@ class basefwx:
         raise TypeError(f"Unsupported password type: {type(password)!r}")
 
     @staticmethod
+    def _harden_kdf_params(
+        password: "basefwx.typing.Union[str, bytes, bytearray, memoryview]",
+        *,
+        iterations: int,
+        argon2_time_cost: int,
+        argon2_memory_cost: int,
+        argon2_parallelism: int
+    ) -> "tuple[int, int, int, int]":
+        pw = basefwx._coerce_password_bytes(password)
+        if not pw:
+            return iterations, argon2_time_cost, argon2_memory_cost, argon2_parallelism
+        if basefwx._TEST_KDF_ITERS is not None:
+            return iterations, argon2_time_cost, argon2_memory_cost, argon2_parallelism
+        if len(pw) < basefwx.SHORT_PASSWORD_MIN:
+            iterations = max(iterations, basefwx.SHORT_PBKDF2_ITERATIONS)
+            argon2_time_cost = max(argon2_time_cost, basefwx.SHORT_ARGON2_TIME_COST)
+            argon2_memory_cost = max(argon2_memory_cost, basefwx.SHORT_ARGON2_MEMORY_COST)
+            argon2_parallelism = max(argon2_parallelism, basefwx.SHORT_ARGON2_PARALLELISM)
+        return iterations, argon2_time_cost, argon2_memory_cost, argon2_parallelism
+
+    @staticmethod
+    def _fwxaes_iterations(
+        password: "basefwx.typing.Union[str, bytes, bytearray, memoryview]"
+    ) -> int:
+        iters = basefwx.FWXAES_PBKDF2_ITERS
+        if basefwx._TEST_KDF_ITERS is not None:
+            return iters
+        pw = basefwx._coerce_password_bytes(password)
+        if pw and len(pw) < basefwx.SHORT_PASSWORD_MIN:
+            iters = max(iters, basefwx.SHORT_PBKDF2_ITERATIONS)
+        return iters
+
+    @staticmethod
     def _kdf_pbkdf2_raw(password: bytes, salt: bytes, iters: int) -> bytes:
         kdf = basefwx.PBKDF2HMAC(
             algorithm=basefwx.hashes.SHA256(),
@@ -1789,7 +1850,8 @@ class basefwx:
         pw = basefwx._coerce_password_bytes(password)
         salt = basefwx.os.urandom(basefwx.FWXAES_SALT_LEN)
         iv = basefwx.os.urandom(basefwx.FWXAES_IV_LEN)
-        key = basefwx._kdf_pbkdf2_raw(pw, salt, basefwx.FWXAES_PBKDF2_ITERS)
+        iters = basefwx._fwxaes_iterations(pw)
+        key = basefwx._kdf_pbkdf2_raw(pw, salt, iters)
         aesgcm = basefwx.AESGCM(key)
         ct = aesgcm.encrypt(iv, bytes(plaintext), basefwx.FWXAES_AAD)
         header = bytearray()
@@ -1800,7 +1862,7 @@ class basefwx:
             basefwx.FWXAES_SALT_LEN,
             basefwx.FWXAES_IV_LEN
         ])
-        header += basefwx.struct.pack(">I", basefwx.FWXAES_PBKDF2_ITERS)
+        header += basefwx.struct.pack(">I", iters)
         header += basefwx.struct.pack(">I", len(ct))
         return bytes(header) + salt + iv + ct
 
@@ -3414,7 +3476,13 @@ class basefwx:
             return mask, rotations, perm, material
 
         @staticmethod
-        def encrypt_image_inv(path: str, password: str, output: str | None = None) -> str:
+        def encrypt_image_inv(
+            path: str,
+            password: str,
+            output: str | None = None,
+            *,
+            include_trailer: bool = True
+        ) -> str:
             path_obj = basefwx.pathlib.Path(path)
             basefwx._ensure_existing_file(path_obj)
             output_path = basefwx.pathlib.Path(output) if output else basefwx.ImageCipher._default_encrypted_path(path_obj)
@@ -3446,12 +3514,13 @@ class basefwx:
             image.save(temp_path, **save_kwargs)
             image.close()
             basefwx.os.replace(temp_path, output_path)
-            archive_key = basefwx._hkdf_sha256(material, info=basefwx.IMAGECIPHER_ARCHIVE_INFO)
-            archive_blob = basefwx._aead_encrypt(archive_key, original_bytes, basefwx.IMAGECIPHER_ARCHIVE_INFO)
-            with open(output_path, 'ab') as handle:
-                handle.write(basefwx.IMAGECIPHER_TRAILER_MAGIC)
-                handle.write(len(archive_blob).to_bytes(4, 'big'))
-                handle.write(archive_blob)
+            if include_trailer:
+                archive_key = basefwx._hkdf_sha256(material, info=basefwx.IMAGECIPHER_ARCHIVE_INFO)
+                archive_blob = basefwx._aead_encrypt(archive_key, original_bytes, basefwx.IMAGECIPHER_ARCHIVE_INFO)
+                with open(output_path, 'ab') as handle:
+                    handle.write(basefwx.IMAGECIPHER_TRAILER_MAGIC)
+                    handle.write(len(archive_blob).to_bytes(4, 'big'))
+                    handle.write(archive_blob)
 
             basefwx._del('mask')
             basefwx._del('rotations')
@@ -3542,8 +3611,11 @@ class basefwx:
 
         VIDEO_GROUP_SECONDS = 1.0
         VIDEO_BLOCK_SIZE = 16
-        AUDIO_BLOCK_SECONDS = 0.05
+        VIDEO_MASK_BITS = 4
+        AUDIO_BLOCK_SECONDS = 0.15
         AUDIO_GROUP_SECONDS = 1.0
+        AUDIO_MASK_BITS = 12
+        TRAILER_FALLBACK_MAX = 64 * 1024 * 1024
 
         IMAGE_EXTS = {
             ".png", ".jpg", ".jpeg", ".bmp", ".tga", ".gif", ".webp",
@@ -3677,6 +3749,77 @@ class basefwx:
             return encryptor.update(data) + encryptor.finalize()
 
         @staticmethod
+        def _audio_mask_transform(data: bytes, key: bytes, iv: bytes) -> bytes:
+            if not data:
+                return b""
+            tail = b""
+            if len(data) % 2:
+                tail = data[-1:]
+                data = data[:-1]
+            cipher = basefwx.Cipher(basefwx.algorithms.AES(key), basefwx.modes.CTR(iv))
+            encryptor = cipher.encryptor()
+            keystream = encryptor.update(bytes(len(data))) + encryptor.finalize()
+            mask = (1 << basefwx.MediaCipher.AUDIO_MASK_BITS) - 1
+            out = bytearray(len(data))
+            for i in range(0, len(data), 2):
+                sample = int.from_bytes(data[i:i + 2], "little", signed=True)
+                ks = keystream[i] | (keystream[i + 1] << 8)
+                sample ^= (ks & mask)
+                out[i:i + 2] = sample.to_bytes(2, "little", signed=True)
+            return bytes(out) + tail
+
+        @staticmethod
+        def _video_mask_transform(data: bytes, key: bytes, iv: bytes) -> bytes:
+            if not data:
+                return b""
+            cipher = basefwx.Cipher(basefwx.algorithms.AES(key), basefwx.modes.CTR(iv))
+            encryptor = cipher.encryptor()
+            keystream = encryptor.update(bytes(len(data))) + encryptor.finalize()
+            mask = (1 << basefwx.MediaCipher.VIDEO_MASK_BITS) - 1
+            out = bytearray(data)
+            for i in range(len(out)):
+                out[i] ^= keystream[i] & mask
+            return bytes(out)
+
+        @staticmethod
+        def _ffmpeg_video_codec_args(output_path: "basefwx.pathlib.Path") -> "list[str]":
+            ext = output_path.suffix.lower()
+            if ext == ".webm":
+                return ["-c:v", "libvpx-vp9", "-b:v", "0", "-crf", "32", "-pix_fmt", "yuv420p"]
+            return ["-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-pix_fmt", "yuv420p"]
+
+        @staticmethod
+        def _ffmpeg_audio_codec_args(output_path: "basefwx.pathlib.Path") -> "list[str]":
+            ext = output_path.suffix.lower()
+            if ext == ".mp3":
+                return ["-c:a", "libmp3lame", "-b:a", "192k"]
+            if ext in {".flac"}:
+                return ["-c:a", "flac"]
+            if ext in {".wav", ".aiff", ".aif"}:
+                return ["-c:a", "pcm_s16le"]
+            if ext in {".ogg", ".opus", ".webm"}:
+                return ["-c:a", "libopus", "-b:a", "96k"]
+            if ext in {".m4a", ".aac"}:
+                return ["-c:a", "aac", "-b:a", "160k"]
+            return ["-c:a", "aac", "-b:a", "160k"]
+
+        @staticmethod
+        def _ffmpeg_container_args(output_path: "basefwx.pathlib.Path") -> "list[str]":
+            if output_path.suffix.lower() in {".mp4", ".m4v", ".mov", ".m4a"}:
+                return ["-movflags", "+faststart"]
+            return []
+
+        @staticmethod
+        def _media_workers() -> int:
+            raw = basefwx.os.getenv("BASEFWX_MEDIA_WORKERS")
+            if raw:
+                try:
+                    value = int(raw)
+                    return max(1, value)
+                except Exception:
+                    pass
+            return max(1, basefwx.os.cpu_count() or 1)
+        @staticmethod
         def _shuffle_frame_blocks(
             frame: bytes,
             width: int,
@@ -3706,54 +3849,240 @@ class basefwx:
             return bytes(out)
 
         @staticmethod
+        def _unshuffle_frame_blocks(
+            frame: bytes,
+            width: int,
+            height: int,
+            channels: int,
+            seed: int,
+            block_size: int
+        ) -> bytes:
+            blocks_x = (width + block_size - 1) // block_size
+            blocks_y = (height + block_size - 1) // block_size
+            total_blocks = blocks_x * blocks_y
+            perm = basefwx.MediaCipher._permute_indices(total_blocks, seed)
+            out = bytearray(len(frame))
+            for dest_idx in range(total_blocks):
+                src_idx = perm[dest_idx]
+                dx = (dest_idx % blocks_x) * block_size
+                dy = (dest_idx // blocks_x) * block_size
+                sx = (src_idx % blocks_x) * block_size
+                sy = (src_idx // blocks_x) * block_size
+                copy_w = min(block_size, width - dx, width - sx)
+                copy_h = min(block_size, height - dy, height - sy)
+                for row in range(copy_h):
+                    src_off = ((dy + row) * width + dx) * channels
+                    dst_off = ((sy + row) * width + sx) * channels
+                    end = src_off + copy_w * channels
+                    out[dst_off:dst_off + copy_w * channels] = frame[src_off:end]
+            return bytes(out)
+
+        @staticmethod
+        def _shuffle_audio_samples(block: bytes, seed: int) -> bytes:
+            if not block:
+                return block
+            tail = b""
+            if len(block) % 2:
+                tail = block[-1:]
+                block = block[:-1]
+            samples = len(block) // 2
+            if samples <= 1:
+                return block + tail
+            perm = basefwx.MediaCipher._permute_indices(samples, seed)
+            out = bytearray(len(block))
+            for dest_idx, src_idx in enumerate(perm):
+                src_off = src_idx * 2
+                dst_off = dest_idx * 2
+                out[dst_off:dst_off + 2] = block[src_off:src_off + 2]
+            return bytes(out) + tail
+
+        @staticmethod
+        def _unshuffle_audio_samples(block: bytes, seed: int) -> bytes:
+            if not block:
+                return block
+            tail = b""
+            if len(block) % 2:
+                tail = block[-1:]
+                block = block[:-1]
+            samples = len(block) // 2
+            if samples <= 1:
+                return block + tail
+            perm = basefwx.MediaCipher._permute_indices(samples, seed)
+            out = bytearray(len(block))
+            for dest_idx, src_idx in enumerate(perm):
+                src_off = src_idx * 2
+                dst_off = dest_idx * 2
+                out[src_off:src_off + 2] = block[dst_off:dst_off + 2]
+            return bytes(out) + tail
+
+        @staticmethod
         def _scramble_video_raw(
             raw_in: "basefwx.pathlib.Path",
             raw_out: "basefwx.pathlib.Path",
             width: int,
             height: int,
             fps: float,
-            base_key: bytes
+            base_key: bytes,
+            *,
+            progress_cb: "basefwx.typing.Optional[basefwx.typing.Callable[[float], None]]" = None,
+            workers: "basefwx.typing.Optional[int]" = None
         ) -> None:
             frame_size = width * height * 3
             if frame_size <= 0:
                 raise ValueError("Invalid video dimensions")
             group_frames = max(2, int(round((fps or 30.0) * basefwx.MediaCipher.VIDEO_GROUP_SECONDS)))
-            with open(raw_in, "rb") as src, open(raw_out, "wb") as dst:
-                frame_index = 0
-                group_index = 0
-                while True:
-                    group_start_index = frame_index
-                    frames: "list[bytes]" = []
-                    for _ in range(group_frames):
-                        data = src.read(frame_size)
-                        if not data or len(data) < frame_size:
+            total_frames = 0
+            if progress_cb:
+                try:
+                    total_frames = raw_in.stat().st_size // frame_size
+                except Exception:
+                    total_frames = 0
+            use_workers = workers or basefwx.MediaCipher._media_workers()
+            executor = None
+            if use_workers > 1:
+                executor = basefwx.concurrent.futures.ThreadPoolExecutor(
+                    max_workers=min(use_workers, group_frames)
+                )
+            processed_frames = 0
+            try:
+                with open(raw_in, "rb") as src, open(raw_out, "wb") as dst:
+                    frame_index = 0
+                    group_index = 0
+                    while True:
+                        group_start_index = frame_index
+                        raw_frames: "list[bytes]" = []
+                        for _ in range(group_frames):
+                            data = src.read(frame_size)
+                            if not data or len(data) < frame_size:
+                                break
+                            raw_frames.append(data)
+                        if not raw_frames:
                             break
-                        material = basefwx.MediaCipher._unit_material(base_key, b"jmg-frame", frame_index, 48)
-                        key = material[:32]
-                        iv = material[32:48]
-                        masked = basefwx.MediaCipher._aes_ctr_transform(data, key, iv)
-                        seed_bytes = basefwx.MediaCipher._unit_material(base_key, b"jmg-fblk", frame_index, 16)
+
+                        def _process(item: tuple[int, bytes]) -> bytes:
+                            idx, frame = item
+                            frame_id = group_start_index + idx
+                            material = basefwx.MediaCipher._unit_material(base_key, b"jmg-frame", frame_id, 48)
+                            key = material[:32]
+                            iv = material[32:48]
+                            masked = basefwx.MediaCipher._video_mask_transform(frame, key, iv)
+                            seed_bytes = basefwx.MediaCipher._unit_material(base_key, b"jmg-fblk", frame_id, 16)
+                            seed = int.from_bytes(seed_bytes, "big")
+                            return basefwx.MediaCipher._shuffle_frame_blocks(
+                                masked,
+                                width,
+                                height,
+                                3,
+                                seed,
+                                basefwx.MediaCipher.VIDEO_BLOCK_SIZE
+                            )
+
+                        if executor:
+                            frames = list(executor.map(_process, enumerate(raw_frames)))
+                        else:
+                            frames = [_process(item) for item in enumerate(raw_frames)]
+
+                        seed_index = (group_index * 0x9E3779B97F4A7C15) ^ group_start_index
+                        seed_index &= (1 << 64) - 1
+                        seed_bytes = basefwx.MediaCipher._unit_material(base_key, b"jmg-fgrp", seed_index, 16)
                         seed = int.from_bytes(seed_bytes, "big")
-                        shuffled = basefwx.MediaCipher._shuffle_frame_blocks(
-                            masked,
-                            width,
-                            height,
-                            3,
-                            seed,
-                            basefwx.MediaCipher.VIDEO_BLOCK_SIZE
-                        )
-                        frames.append(shuffled)
-                        frame_index += 1
-                    if not frames:
-                        break
-                    seed_index = (group_index * 0x9E3779B97F4A7C15) ^ group_start_index
-                    seed_index &= (1 << 64) - 1
-                    seed_bytes = basefwx.MediaCipher._unit_material(base_key, b"jmg-fgrp", seed_index, 16)
-                    seed = int.from_bytes(seed_bytes, "big")
-                    perm = basefwx.MediaCipher._permute_indices(len(frames), seed)
-                    for idx in perm:
-                        dst.write(frames[idx])
-                    group_index += 1
+                        perm = basefwx.MediaCipher._permute_indices(len(frames), seed)
+                        for idx in perm:
+                            dst.write(frames[idx])
+                        processed_frames += len(frames)
+                        if progress_cb and total_frames:
+                            progress_cb(min(1.0, processed_frames / total_frames))
+                        frame_index += len(frames)
+                        group_index += 1
+            finally:
+                if executor:
+                    executor.shutdown(wait=True)
+
+        @staticmethod
+        def _unscramble_video_raw(
+            raw_in: "basefwx.pathlib.Path",
+            raw_out: "basefwx.pathlib.Path",
+            width: int,
+            height: int,
+            fps: float,
+            base_key: bytes,
+            *,
+            progress_cb: "basefwx.typing.Optional[basefwx.typing.Callable[[float], None]]" = None,
+            workers: "basefwx.typing.Optional[int]" = None
+        ) -> None:
+            frame_size = width * height * 3
+            if frame_size <= 0:
+                raise ValueError("Invalid video dimensions")
+            group_frames = max(2, int(round((fps or 30.0) * basefwx.MediaCipher.VIDEO_GROUP_SECONDS)))
+            total_frames = 0
+            if progress_cb:
+                try:
+                    total_frames = raw_in.stat().st_size // frame_size
+                except Exception:
+                    total_frames = 0
+            use_workers = workers or basefwx.MediaCipher._media_workers()
+            executor = None
+            if use_workers > 1:
+                executor = basefwx.concurrent.futures.ThreadPoolExecutor(
+                    max_workers=min(use_workers, group_frames)
+                )
+            processed_frames = 0
+            try:
+                with open(raw_in, "rb") as src, open(raw_out, "wb") as dst:
+                    frame_index = 0
+                    group_index = 0
+                    while True:
+                        group_start_index = frame_index
+                        scrambled_frames: "list[bytes]" = []
+                        for _ in range(group_frames):
+                            data = src.read(frame_size)
+                            if not data or len(data) < frame_size:
+                                break
+                            scrambled_frames.append(data)
+                        if not scrambled_frames:
+                            break
+
+                        seed_index = (group_index * 0x9E3779B97F4A7C15) ^ group_start_index
+                        seed_index &= (1 << 64) - 1
+                        seed_bytes = basefwx.MediaCipher._unit_material(base_key, b"jmg-fgrp", seed_index, 16)
+                        seed = int.from_bytes(seed_bytes, "big")
+                        perm = basefwx.MediaCipher._permute_indices(len(scrambled_frames), seed)
+                        ordered: "list[bytes]" = [b""] * len(scrambled_frames)
+                        for dest_idx, src_idx in enumerate(perm):
+                            ordered[src_idx] = scrambled_frames[dest_idx]
+
+                        def _process(item: tuple[int, bytes]) -> bytes:
+                            idx, frame = item
+                            frame_id = group_start_index + idx
+                            seed_bytes = basefwx.MediaCipher._unit_material(base_key, b"jmg-fblk", frame_id, 16)
+                            seed_local = int.from_bytes(seed_bytes, "big")
+                            unshuffled = basefwx.MediaCipher._unshuffle_frame_blocks(
+                                frame,
+                                width,
+                                height,
+                                3,
+                                seed_local,
+                                basefwx.MediaCipher.VIDEO_BLOCK_SIZE
+                            )
+                            material = basefwx.MediaCipher._unit_material(base_key, b"jmg-frame", frame_id, 48)
+                            key = material[:32]
+                            iv = material[32:48]
+                            return basefwx.MediaCipher._video_mask_transform(unshuffled, key, iv)
+
+                        if executor:
+                            restored = list(executor.map(_process, enumerate(ordered)))
+                        else:
+                            restored = [_process(item) for item in enumerate(ordered)]
+                        for frame in restored:
+                            dst.write(frame)
+                        processed_frames += len(restored)
+                        if progress_cb and total_frames:
+                            progress_cb(min(1.0, processed_frames / total_frames))
+                        frame_index += len(restored)
+                        group_index += 1
+            finally:
+                if executor:
+                    executor.shutdown(wait=True)
 
         @staticmethod
         def _scramble_audio_raw(
@@ -3761,39 +4090,154 @@ class basefwx:
             raw_out: "basefwx.pathlib.Path",
             sample_rate: int,
             channels: int,
-            base_key: bytes
+            base_key: bytes,
+            *,
+            progress_cb: "basefwx.typing.Optional[basefwx.typing.Callable[[float], None]]" = None,
+            workers: "basefwx.typing.Optional[int]" = None
         ) -> None:
             if sample_rate <= 0 or channels <= 0:
                 raise ValueError("Invalid audio stream parameters")
             samples_per_block = max(1, int(round(sample_rate * basefwx.MediaCipher.AUDIO_BLOCK_SECONDS)))
             block_size = samples_per_block * channels * 2
             group_blocks = max(2, int(round(basefwx.MediaCipher.AUDIO_GROUP_SECONDS / basefwx.MediaCipher.AUDIO_BLOCK_SECONDS)))
-            with open(raw_in, "rb") as src, open(raw_out, "wb") as dst:
-                block_index = 0
-                group_index = 0
-                while True:
-                    group_start_index = block_index
-                    blocks: "list[bytes]" = []
-                    for _ in range(group_blocks):
-                        data = src.read(block_size)
-                        if not data:
+            total_blocks = 0
+            if progress_cb:
+                try:
+                    total_blocks = (raw_in.stat().st_size + block_size - 1) // block_size
+                except Exception:
+                    total_blocks = 0
+            use_workers = workers or basefwx.MediaCipher._media_workers()
+            executor = None
+            if use_workers > 1:
+                executor = basefwx.concurrent.futures.ThreadPoolExecutor(
+                    max_workers=min(use_workers, group_blocks)
+                )
+            processed_blocks = 0
+            try:
+                with open(raw_in, "rb") as src, open(raw_out, "wb") as dst:
+                    block_index = 0
+                    group_index = 0
+                    while True:
+                        group_start_index = block_index
+                        raw_blocks: "list[bytes]" = []
+                        for _ in range(group_blocks):
+                            data = src.read(block_size)
+                            if not data:
+                                break
+                            raw_blocks.append(data)
+                        if not raw_blocks:
                             break
-                        material = basefwx.MediaCipher._unit_material(base_key, b"jmg-ablock", block_index, 48)
-                        key = material[:32]
-                        iv = material[32:48]
-                        masked = basefwx.MediaCipher._aes_ctr_transform(data, key, iv)
-                        blocks.append(masked)
-                        block_index += 1
-                    if not blocks:
-                        break
-                    seed_index = (group_index * 0x9E3779B97F4A7C15) ^ group_start_index
-                    seed_index &= (1 << 64) - 1
-                    seed_bytes = basefwx.MediaCipher._unit_material(base_key, b"jmg-agrp", seed_index, 16)
-                    seed = int.from_bytes(seed_bytes, "big")
-                    perm = basefwx.MediaCipher._permute_indices(len(blocks), seed)
-                    for idx in perm:
-                        dst.write(blocks[idx])
-                    group_index += 1
+
+                        def _process(item: tuple[int, bytes]) -> bytes:
+                            idx, block = item
+                            block_id = group_start_index + idx
+                            material = basefwx.MediaCipher._unit_material(base_key, b"jmg-ablock", block_id, 48)
+                            key = material[:32]
+                            iv = material[32:48]
+                            masked = basefwx.MediaCipher._audio_mask_transform(block, key, iv)
+                            seed_bytes = basefwx.MediaCipher._unit_material(base_key, b"jmg-asamp", block_id, 16)
+                            seed = int.from_bytes(seed_bytes, "big")
+                            return basefwx.MediaCipher._shuffle_audio_samples(masked, seed)
+
+                        if executor:
+                            blocks = list(executor.map(_process, enumerate(raw_blocks)))
+                        else:
+                            blocks = [_process(item) for item in enumerate(raw_blocks)]
+
+                        seed_index = (group_index * 0x9E3779B97F4A7C15) ^ group_start_index
+                        seed_index &= (1 << 64) - 1
+                        seed_bytes = basefwx.MediaCipher._unit_material(base_key, b"jmg-agrp", seed_index, 16)
+                        seed = int.from_bytes(seed_bytes, "big")
+                        perm = basefwx.MediaCipher._permute_indices(len(blocks), seed)
+                        for idx in perm:
+                            dst.write(blocks[idx])
+                        processed_blocks += len(blocks)
+                        if progress_cb and total_blocks:
+                            progress_cb(min(1.0, processed_blocks / total_blocks))
+                        block_index += len(blocks)
+                        group_index += 1
+            finally:
+                if executor:
+                    executor.shutdown(wait=True)
+
+        @staticmethod
+        def _unscramble_audio_raw(
+            raw_in: "basefwx.pathlib.Path",
+            raw_out: "basefwx.pathlib.Path",
+            sample_rate: int,
+            channels: int,
+            base_key: bytes,
+            *,
+            progress_cb: "basefwx.typing.Optional[basefwx.typing.Callable[[float], None]]" = None,
+            workers: "basefwx.typing.Optional[int]" = None
+        ) -> None:
+            if sample_rate <= 0 or channels <= 0:
+                raise ValueError("Invalid audio stream parameters")
+            samples_per_block = max(1, int(round(sample_rate * basefwx.MediaCipher.AUDIO_BLOCK_SECONDS)))
+            block_size = samples_per_block * channels * 2
+            group_blocks = max(2, int(round(basefwx.MediaCipher.AUDIO_GROUP_SECONDS / basefwx.MediaCipher.AUDIO_BLOCK_SECONDS)))
+            total_blocks = 0
+            if progress_cb:
+                try:
+                    total_blocks = (raw_in.stat().st_size + block_size - 1) // block_size
+                except Exception:
+                    total_blocks = 0
+            use_workers = workers or basefwx.MediaCipher._media_workers()
+            executor = None
+            if use_workers > 1:
+                executor = basefwx.concurrent.futures.ThreadPoolExecutor(
+                    max_workers=min(use_workers, group_blocks)
+                )
+            processed_blocks = 0
+            try:
+                with open(raw_in, "rb") as src, open(raw_out, "wb") as dst:
+                    block_index = 0
+                    group_index = 0
+                    while True:
+                        group_start_index = block_index
+                        scrambled_blocks: "list[bytes]" = []
+                        for _ in range(group_blocks):
+                            data = src.read(block_size)
+                            if not data:
+                                break
+                            scrambled_blocks.append(data)
+                        if not scrambled_blocks:
+                            break
+
+                        seed_index = (group_index * 0x9E3779B97F4A7C15) ^ group_start_index
+                        seed_index &= (1 << 64) - 1
+                        seed_bytes = basefwx.MediaCipher._unit_material(base_key, b"jmg-agrp", seed_index, 16)
+                        seed = int.from_bytes(seed_bytes, "big")
+                        perm = basefwx.MediaCipher._permute_indices(len(scrambled_blocks), seed)
+                        ordered: "list[bytes]" = [b""] * len(scrambled_blocks)
+                        for dest_idx, src_idx in enumerate(perm):
+                            ordered[src_idx] = scrambled_blocks[dest_idx]
+
+                        def _process(item: tuple[int, bytes]) -> bytes:
+                            idx, block = item
+                            block_id = group_start_index + idx
+                            seed_bytes = basefwx.MediaCipher._unit_material(base_key, b"jmg-asamp", block_id, 16)
+                            seed_local = int.from_bytes(seed_bytes, "big")
+                            unshuffled = basefwx.MediaCipher._unshuffle_audio_samples(block, seed_local)
+                            material = basefwx.MediaCipher._unit_material(base_key, b"jmg-ablock", block_id, 48)
+                            key = material[:32]
+                            iv = material[32:48]
+                            return basefwx.MediaCipher._audio_mask_transform(unshuffled, key, iv)
+
+                        if executor:
+                            restored = list(executor.map(_process, enumerate(ordered)))
+                        else:
+                            restored = [_process(item) for item in enumerate(ordered)]
+                        for block in restored:
+                            dst.write(block)
+                        processed_blocks += len(restored)
+                        if progress_cb and total_blocks:
+                            progress_cb(min(1.0, processed_blocks / total_blocks))
+                        block_index += len(restored)
+                        group_index += 1
+            finally:
+                if executor:
+                    executor.shutdown(wait=True)
 
         @staticmethod
         def _encrypt_metadata(
@@ -3810,6 +4254,20 @@ class basefwx:
             return encoded_args
 
         @staticmethod
+        def _decrypt_metadata(
+            tags: "dict[str, str]",
+            password_text: str
+        ) -> "list[str]":
+            decoded_args: "list[str]" = []
+            for key, value in tags.items():
+                try:
+                    dec = basefwx.b512decode(value, password_text, use_master=False)
+                except Exception:
+                    continue
+                decoded_args.append(f"{key}={dec}")
+            return decoded_args
+
+        @staticmethod
         def _append_trailer(
             output_path: "basefwx.pathlib.Path",
             password: "basefwx.typing.Union[str, bytes, bytearray, memoryview]",
@@ -3822,6 +4280,45 @@ class basefwx:
                 handle.write(basefwx.IMAGECIPHER_TRAILER_MAGIC)
                 handle.write(len(archive_blob).to_bytes(4, "big"))
                 handle.write(archive_blob)
+                handle.write(basefwx.IMAGECIPHER_TRAILER_MAGIC)
+                handle.write(len(archive_blob).to_bytes(4, "big"))
+
+        @staticmethod
+        def _append_trailer_stream(
+            output_path: "basefwx.pathlib.Path",
+            password: "basefwx.typing.Union[str, bytes, bytearray, memoryview]",
+            original_path: "basefwx.pathlib.Path",
+            progress_cb: "basefwx.typing.Optional[basefwx.typing.Callable[[float], None]]" = None
+        ) -> None:
+            material = basefwx.MediaCipher._derive_media_material(password)
+            archive_key = basefwx._hkdf_sha256(material, info=basefwx.IMAGECIPHER_ARCHIVE_INFO, length=32)
+            aad = basefwx.IMAGECIPHER_ARCHIVE_INFO
+            size = original_path.stat().st_size
+            blob_len = basefwx.AEAD_NONCE_LEN + size + basefwx.AEAD_TAG_LEN
+            if blob_len > 0xFFFFFFFF:
+                raise ValueError("Trailer too large for 4-byte length field")
+            nonce = basefwx.os.urandom(basefwx.AEAD_NONCE_LEN)
+            cipher = basefwx.Cipher(basefwx.algorithms.AES(archive_key), basefwx.modes.GCM(nonce))
+            encryptor = cipher.encryptor()
+            encryptor.authenticate_additional_data(aad)
+            chunk_size = 1024 * 1024
+            with open(output_path, "ab") as out_handle, open(original_path, "rb") as src_handle:
+                out_handle.write(basefwx.IMAGECIPHER_TRAILER_MAGIC)
+                out_handle.write(blob_len.to_bytes(4, "big"))
+                out_handle.write(nonce)
+                processed = 0
+                while True:
+                    chunk = src_handle.read(chunk_size)
+                    if not chunk:
+                        break
+                    out_handle.write(encryptor.update(chunk))
+                    processed += len(chunk)
+                    if progress_cb and size:
+                        progress_cb(min(1.0, processed / size))
+                encryptor.finalize()
+                out_handle.write(encryptor.tag)
+                out_handle.write(basefwx.IMAGECIPHER_TRAILER_MAGIC)
+                out_handle.write(blob_len.to_bytes(4, "big"))
 
         @staticmethod
         def _decrypt_trailer(
@@ -3846,6 +4343,74 @@ class basefwx:
             return basefwx._aead_decrypt(archive_key, blob, basefwx.IMAGECIPHER_ARCHIVE_INFO)
 
         @staticmethod
+        def _decrypt_trailer_stream(
+            path: "basefwx.pathlib.Path",
+            password: "basefwx.typing.Union[str, bytes, bytearray, memoryview]",
+            output_path: "basefwx.pathlib.Path",
+            progress_cb: "basefwx.typing.Optional[basefwx.typing.Callable[[float], None]]" = None
+        ) -> bool:
+            try:
+                magic = basefwx.IMAGECIPHER_TRAILER_MAGIC
+                footer_len = len(magic) + 4
+                try:
+                    size = path.stat().st_size
+                except Exception:
+                    return False
+                if size < footer_len:
+                    return False
+                with open(path, "rb") as handle:
+                    handle.seek(size - footer_len)
+                    footer = handle.read(footer_len)
+                    if len(footer) != footer_len or footer[:len(magic)] != magic:
+                        return False
+                    blob_len = int.from_bytes(footer[len(magic):], "big")
+                    trailer_start = size - footer_len - blob_len - footer_len
+                    if trailer_start < 0:
+                        return False
+                    handle.seek(trailer_start)
+                    header = handle.read(footer_len)
+                    if len(header) != footer_len or header[:len(magic)] != magic:
+                        return False
+                    header_len = int.from_bytes(header[len(magic):], "big")
+                    if header_len != blob_len:
+                        return False
+                    blob_start = trailer_start + footer_len
+                    handle.seek(blob_start)
+                    nonce = handle.read(basefwx.AEAD_NONCE_LEN)
+                    if len(nonce) != basefwx.AEAD_NONCE_LEN:
+                        return False
+                    cipher_body_len = blob_len - basefwx.AEAD_NONCE_LEN - basefwx.AEAD_TAG_LEN
+                    cipher = basefwx.Cipher(basefwx.algorithms.AES(
+                        basefwx._hkdf_sha256(
+                            basefwx.MediaCipher._derive_media_material(password),
+                            info=basefwx.IMAGECIPHER_ARCHIVE_INFO,
+                            length=32
+                        )
+                    ), basefwx.modes.GCM(nonce))
+                    decryptor = cipher.decryptor()
+                    decryptor.authenticate_additional_data(basefwx.IMAGECIPHER_ARCHIVE_INFO)
+                    chunk_size = 1024 * 1024
+                    with open(output_path, "wb") as out_handle:
+                        remaining = cipher_body_len
+                        processed = 0
+                        while remaining > 0:
+                            chunk = handle.read(min(chunk_size, remaining))
+                            if not chunk:
+                                return False
+                            out_handle.write(decryptor.update(chunk))
+                            remaining -= len(chunk)
+                            processed += len(chunk)
+                            if progress_cb and cipher_body_len:
+                                progress_cb(min(1.0, processed / cipher_body_len))
+                        tag = handle.read(basefwx.AEAD_TAG_LEN)
+                        if len(tag) != basefwx.AEAD_TAG_LEN:
+                            return False
+                        decryptor.finalize_with_tag(tag)
+                return True
+            except Exception:
+                return False
+
+        @staticmethod
         def _run_ffmpeg(cmd: "list[str]") -> None:
             result = basefwx.subprocess.run(cmd, capture_output=True, text=True)
             if result.returncode != 0:
@@ -3856,8 +4421,12 @@ class basefwx:
             path: "basefwx.pathlib.Path",
             output_path: "basefwx.pathlib.Path",
             password: "basefwx.typing.Union[str, bytes, bytearray, memoryview]",
-            keep_meta: bool
+            keep_meta: bool,
+            reporter: "basefwx.typing.Optional[basefwx._ProgressReporter]" = None,
+            file_index: int = 0,
+            display_path: "basefwx.typing.Optional[basefwx.pathlib.Path]" = None
         ) -> None:
+            display_path = display_path or path
             password_text = basefwx._coerce_password_bytes(password).decode("utf-8", "ignore")
             info = basefwx.MediaCipher._probe_streams(path)
             video = info.get("video")
@@ -3868,6 +4437,8 @@ class basefwx:
             fps = float(video.get("fps") or 0.0)
             audio = info.get("audio")
 
+            if reporter:
+                reporter.update(file_index, 0.05, "probe", display_path)
             temp_dir = basefwx.tempfile.TemporaryDirectory(prefix="basefwx-media-")
             try:
                 raw_video = basefwx.pathlib.Path(temp_dir.name) / "video.raw"
@@ -3880,6 +4451,8 @@ class basefwx:
                     str(raw_video)
                 ]
                 basefwx.MediaCipher._run_ffmpeg(cmd_video)
+                if reporter:
+                    reporter.update(file_index, 0.2, "decode-video", display_path)
 
                 raw_audio = None
                 raw_audio_out = None
@@ -3902,11 +4475,38 @@ class basefwx:
                     basefwx.MediaCipher._run_ffmpeg(cmd_audio)
                     sample_rate = sample_rate or 48000
                     channels = channels or 2
+                    if reporter:
+                        reporter.update(file_index, 0.3, "decode-audio", display_path)
 
                 base_key = basefwx.MediaCipher._derive_base_key(password)
-                basefwx.MediaCipher._scramble_video_raw(raw_video, raw_video_out, width, height, fps, base_key)
+                def video_cb(frac: float) -> None:
+                    if reporter:
+                        reporter.update(file_index, 0.3 + 0.4 * frac, "jmg-video", display_path)
+
+                def audio_cb(frac: float) -> None:
+                    if reporter:
+                        reporter.update(file_index, 0.7 + 0.2 * frac, "jmg-audio", display_path)
+
+                basefwx.MediaCipher._scramble_video_raw(
+                    raw_video,
+                    raw_video_out,
+                    width,
+                    height,
+                    fps,
+                    base_key,
+                    progress_cb=video_cb if reporter else None,
+                    workers=basefwx.MediaCipher._media_workers()
+                )
                 if raw_audio and raw_audio_out:
-                    basefwx.MediaCipher._scramble_audio_raw(raw_audio, raw_audio_out, sample_rate, channels, base_key)
+                    basefwx.MediaCipher._scramble_audio_raw(
+                        raw_audio,
+                        raw_audio_out,
+                        sample_rate,
+                        channels,
+                        base_key,
+                        progress_cb=audio_cb if reporter else None,
+                        workers=basefwx.MediaCipher._media_workers()
+                    )
 
                 cmd = [
                     "ffmpeg", "-y",
@@ -3930,8 +4530,14 @@ class basefwx:
                         cmd += ["-metadata", meta]
                 else:
                     cmd += ["-map_metadata", "-1"]
+                cmd += basefwx.MediaCipher._ffmpeg_video_codec_args(output_path)
+                if raw_audio_out:
+                    cmd += basefwx.MediaCipher._ffmpeg_audio_codec_args(output_path)
+                cmd += basefwx.MediaCipher._ffmpeg_container_args(output_path)
                 cmd.append(str(output_path))
                 basefwx.MediaCipher._run_ffmpeg(cmd)
+                if reporter:
+                    reporter.update(file_index, 0.95, "encode", display_path)
             finally:
                 temp_dir.cleanup()
 
@@ -3940,8 +4546,12 @@ class basefwx:
             path: "basefwx.pathlib.Path",
             output_path: "basefwx.pathlib.Path",
             password: "basefwx.typing.Union[str, bytes, bytearray, memoryview]",
-            keep_meta: bool
+            keep_meta: bool,
+            reporter: "basefwx.typing.Optional[basefwx._ProgressReporter]" = None,
+            file_index: int = 0,
+            display_path: "basefwx.typing.Optional[basefwx.pathlib.Path]" = None
         ) -> None:
+            display_path = display_path or path
             password_text = basefwx._coerce_password_bytes(password).decode("utf-8", "ignore")
             info = basefwx.MediaCipher._probe_streams(path)
             audio = info.get("audio")
@@ -3952,6 +4562,8 @@ class basefwx:
             sample_rate = sample_rate or 48000
             channels = channels or 2
 
+            if reporter:
+                reporter.update(file_index, 0.05, "probe", display_path)
             temp_dir = basefwx.tempfile.TemporaryDirectory(prefix="basefwx-media-")
             try:
                 raw_audio = basefwx.pathlib.Path(temp_dir.name) / "audio.raw"
@@ -3967,7 +4579,22 @@ class basefwx:
                 ]
                 basefwx.MediaCipher._run_ffmpeg(cmd_audio)
                 base_key = basefwx.MediaCipher._derive_base_key(password)
-                basefwx.MediaCipher._scramble_audio_raw(raw_audio, raw_audio_out, sample_rate, channels, base_key)
+                if reporter:
+                    reporter.update(file_index, 0.2, "decode-audio", display_path)
+
+                def audio_cb(frac: float) -> None:
+                    if reporter:
+                        reporter.update(file_index, 0.2 + 0.65 * frac, "jmg-audio", display_path)
+
+                basefwx.MediaCipher._scramble_audio_raw(
+                    raw_audio,
+                    raw_audio_out,
+                    sample_rate,
+                    channels,
+                    base_key,
+                    progress_cb=audio_cb if reporter else None,
+                    workers=basefwx.MediaCipher._media_workers()
+                )
 
                 cmd = [
                     "ffmpeg", "-y",
@@ -3982,8 +4609,215 @@ class basefwx:
                         cmd += ["-metadata", meta]
                 else:
                     cmd += ["-map_metadata", "-1"]
+                cmd += basefwx.MediaCipher._ffmpeg_audio_codec_args(output_path)
+                cmd += basefwx.MediaCipher._ffmpeg_container_args(output_path)
                 cmd.append(str(output_path))
                 basefwx.MediaCipher._run_ffmpeg(cmd)
+                if reporter:
+                    reporter.update(file_index, 0.95, "encode", display_path)
+            finally:
+                temp_dir.cleanup()
+
+        @staticmethod
+        def _unscramble_video(
+            path: "basefwx.pathlib.Path",
+            output_path: "basefwx.pathlib.Path",
+            password: "basefwx.typing.Union[str, bytes, bytearray, memoryview]",
+            reporter: "basefwx.typing.Optional[basefwx._ProgressReporter]" = None,
+            file_index: int = 0,
+            display_path: "basefwx.typing.Optional[basefwx.pathlib.Path]" = None
+        ) -> None:
+            display_path = display_path or path
+            password_text = basefwx._coerce_password_bytes(password).decode("utf-8", "ignore")
+            info = basefwx.MediaCipher._probe_streams(path)
+            video = info.get("video")
+            if not video:
+                raise ValueError("No video stream found")
+            width = int(video.get("width") or 0)
+            height = int(video.get("height") or 0)
+            fps = float(video.get("fps") or 0.0)
+            audio = info.get("audio")
+
+            if reporter:
+                reporter.update(file_index, 0.05, "probe", display_path)
+            temp_dir = basefwx.tempfile.TemporaryDirectory(prefix="basefwx-media-")
+            try:
+                raw_video = basefwx.pathlib.Path(temp_dir.name) / "video.raw"
+                raw_video_out = basefwx.pathlib.Path(temp_dir.name) / "video.unscr.raw"
+                cmd_video = [
+                    "ffmpeg", "-y", "-i", str(path),
+                    "-map", "0:v:0",
+                    "-f", "rawvideo",
+                    "-pix_fmt", "rgb24",
+                    str(raw_video)
+                ]
+                basefwx.MediaCipher._run_ffmpeg(cmd_video)
+                if reporter:
+                    reporter.update(file_index, 0.2, "decode-video", display_path)
+
+                raw_audio = None
+                raw_audio_out = None
+                sample_rate = 0
+                channels = 0
+                if audio:
+                    raw_audio = basefwx.pathlib.Path(temp_dir.name) / "audio.raw"
+                    raw_audio_out = basefwx.pathlib.Path(temp_dir.name) / "audio.unscr.raw"
+                    sample_rate = int(audio.get("sample_rate") or 0)
+                    channels = int(audio.get("channels") or 0)
+                    cmd_audio = [
+                        "ffmpeg", "-y", "-i", str(path),
+                        "-map", "0:a:0",
+                        "-f", "s16le",
+                        "-acodec", "pcm_s16le",
+                        "-ar", str(sample_rate or 48000),
+                        "-ac", str(channels or 2),
+                        str(raw_audio)
+                    ]
+                    basefwx.MediaCipher._run_ffmpeg(cmd_audio)
+                    sample_rate = sample_rate or 48000
+                    channels = channels or 2
+                    if reporter:
+                        reporter.update(file_index, 0.3, "decode-audio", display_path)
+
+                base_key = basefwx.MediaCipher._derive_base_key(password)
+
+                def video_cb(frac: float) -> None:
+                    if reporter:
+                        reporter.update(file_index, 0.3 + 0.4 * frac, "unjmg-video", display_path)
+
+                def audio_cb(frac: float) -> None:
+                    if reporter:
+                        reporter.update(file_index, 0.7 + 0.2 * frac, "unjmg-audio", display_path)
+
+                basefwx.MediaCipher._unscramble_video_raw(
+                    raw_video,
+                    raw_video_out,
+                    width,
+                    height,
+                    fps,
+                    base_key,
+                    progress_cb=video_cb if reporter else None,
+                    workers=basefwx.MediaCipher._media_workers()
+                )
+                if raw_audio and raw_audio_out:
+                    basefwx.MediaCipher._unscramble_audio_raw(
+                        raw_audio,
+                        raw_audio_out,
+                        sample_rate,
+                        channels,
+                        base_key,
+                        progress_cb=audio_cb if reporter else None,
+                        workers=basefwx.MediaCipher._media_workers()
+                    )
+
+                cmd = [
+                    "ffmpeg", "-y",
+                    "-f", "rawvideo",
+                    "-pix_fmt", "rgb24",
+                    "-s", f"{width}x{height}",
+                    "-r", str(fps or 30),
+                    "-i", str(raw_video_out)
+                ]
+                if raw_audio_out:
+                    cmd += [
+                        "-f", "s16le",
+                        "-ar", str(sample_rate),
+                        "-ac", str(channels),
+                        "-i", str(raw_audio_out),
+                        "-shortest"
+                    ]
+                tags = basefwx.MediaCipher._probe_metadata(path)
+                decoded = basefwx.MediaCipher._decrypt_metadata(tags, password_text)
+                if decoded:
+                    for meta in decoded:
+                        cmd += ["-metadata", meta]
+                else:
+                    cmd += ["-map_metadata", "-1"]
+                cmd += basefwx.MediaCipher._ffmpeg_video_codec_args(output_path)
+                if raw_audio_out:
+                    cmd += basefwx.MediaCipher._ffmpeg_audio_codec_args(output_path)
+                cmd += basefwx.MediaCipher._ffmpeg_container_args(output_path)
+                cmd.append(str(output_path))
+                basefwx.MediaCipher._run_ffmpeg(cmd)
+                if reporter:
+                    reporter.update(file_index, 0.95, "encode", display_path)
+            finally:
+                temp_dir.cleanup()
+
+        @staticmethod
+        def _unscramble_audio(
+            path: "basefwx.pathlib.Path",
+            output_path: "basefwx.pathlib.Path",
+            password: "basefwx.typing.Union[str, bytes, bytearray, memoryview]",
+            reporter: "basefwx.typing.Optional[basefwx._ProgressReporter]" = None,
+            file_index: int = 0,
+            display_path: "basefwx.typing.Optional[basefwx.pathlib.Path]" = None
+        ) -> None:
+            display_path = display_path or path
+            password_text = basefwx._coerce_password_bytes(password).decode("utf-8", "ignore")
+            info = basefwx.MediaCipher._probe_streams(path)
+            audio = info.get("audio")
+            if not audio:
+                raise ValueError("No audio stream found")
+            sample_rate = int(audio.get("sample_rate") or 0)
+            channels = int(audio.get("channels") or 0)
+            sample_rate = sample_rate or 48000
+            channels = channels or 2
+
+            if reporter:
+                reporter.update(file_index, 0.05, "probe", display_path)
+            temp_dir = basefwx.tempfile.TemporaryDirectory(prefix="basefwx-media-")
+            try:
+                raw_audio = basefwx.pathlib.Path(temp_dir.name) / "audio.raw"
+                raw_audio_out = basefwx.pathlib.Path(temp_dir.name) / "audio.unscr.raw"
+                cmd_audio = [
+                    "ffmpeg", "-y", "-i", str(path),
+                    "-map", "0:a:0",
+                    "-f", "s16le",
+                    "-acodec", "pcm_s16le",
+                    "-ar", str(sample_rate),
+                    "-ac", str(channels),
+                    str(raw_audio)
+                ]
+                basefwx.MediaCipher._run_ffmpeg(cmd_audio)
+                if reporter:
+                    reporter.update(file_index, 0.2, "decode-audio", display_path)
+                base_key = basefwx.MediaCipher._derive_base_key(password)
+
+                def audio_cb(frac: float) -> None:
+                    if reporter:
+                        reporter.update(file_index, 0.2 + 0.65 * frac, "unjmg-audio", display_path)
+
+                basefwx.MediaCipher._unscramble_audio_raw(
+                    raw_audio,
+                    raw_audio_out,
+                    sample_rate,
+                    channels,
+                    base_key,
+                    progress_cb=audio_cb if reporter else None,
+                    workers=basefwx.MediaCipher._media_workers()
+                )
+
+                cmd = [
+                    "ffmpeg", "-y",
+                    "-f", "s16le",
+                    "-ar", str(sample_rate),
+                    "-ac", str(channels),
+                    "-i", str(raw_audio_out)
+                ]
+                tags = basefwx.MediaCipher._probe_metadata(path)
+                decoded = basefwx.MediaCipher._decrypt_metadata(tags, password_text)
+                if decoded:
+                    for meta in decoded:
+                        cmd += ["-metadata", meta]
+                else:
+                    cmd += ["-map_metadata", "-1"]
+                cmd += basefwx.MediaCipher._ffmpeg_audio_codec_args(output_path)
+                cmd += basefwx.MediaCipher._ffmpeg_container_args(output_path)
+                cmd.append(str(output_path))
+                basefwx.MediaCipher._run_ffmpeg(cmd)
+                if reporter:
+                    reporter.update(file_index, 0.95, "encode", display_path)
             finally:
                 temp_dir.cleanup()
 
@@ -3994,63 +4828,182 @@ class basefwx:
             output: str | None = None,
             *,
             keep_meta: bool = False,
-            keep_input: bool = False
+            keep_input: bool = False,
+            reporter: "basefwx.typing.Optional[basefwx._ProgressReporter]" = None,
+            file_index: int = 0,
+            display_path: "basefwx.typing.Optional[basefwx.pathlib.Path]" = None
         ) -> str:
             path_obj = basefwx._normalize_path(path)
             basefwx._ensure_existing_file(path_obj)
             if not password:
                 raise ValueError("Password is required for media encryption")
             password_text = basefwx._coerce_password_bytes(password).decode("utf-8", "ignore")
+            display_path = display_path or path_obj
             output_path = basefwx.pathlib.Path(output) if output else path_obj
             temp_output = output_path
             if basefwx._normalize_path(output_path) == basefwx._normalize_path(path_obj):
                 temp_output = output_path.with_name(f"{output_path.stem}._jmg{output_path.suffix}")
-
-            original_bytes = path_obj.read_bytes()
             suffix = path_obj.suffix.lower()
-            append_trailer = True
-            if suffix in basefwx.MediaCipher.IMAGE_EXTS:
-                result = basefwx.ImageCipher.encrypt_image_inv(str(path_obj), password_text, output=str(temp_output))
+            local_reporter = reporter
+            created_reporter = False
+            if local_reporter is None and not basefwx._SILENT_MODE:
+                local_reporter = basefwx._ProgressReporter(1)
+                created_reporter = True
+            try:
                 append_trailer = False
-            else:
-                info = basefwx.MediaCipher._probe_streams(path_obj)
-                if info.get("video"):
-                    basefwx.MediaCipher._scramble_video(path_obj, temp_output, password, keep_meta)
-                    result = str(temp_output)
-                elif info.get("audio"):
-                    basefwx.MediaCipher._scramble_audio(path_obj, temp_output, password, keep_meta)
-                    result = str(temp_output)
+                if suffix in basefwx.MediaCipher.IMAGE_EXTS:
+                    result = basefwx.ImageCipher.encrypt_image_inv(
+                        str(path_obj),
+                        password_text,
+                        output=str(temp_output),
+                        include_trailer=True
+                    )
                 else:
-                    raise ValueError("Unsupported media format")
+                    info = basefwx.MediaCipher._probe_streams(path_obj)
+                    if info.get("video"):
+                        basefwx.MediaCipher._scramble_video(
+                            path_obj,
+                            temp_output,
+                            password,
+                            keep_meta,
+                            reporter=local_reporter,
+                            file_index=file_index,
+                            display_path=display_path
+                        )
+                        result = str(temp_output)
+                        append_trailer = True
+                    elif info.get("audio"):
+                        basefwx.MediaCipher._scramble_audio(
+                            path_obj,
+                            temp_output,
+                            password,
+                            keep_meta,
+                            reporter=local_reporter,
+                            file_index=file_index,
+                            display_path=display_path
+                        )
+                        result = str(temp_output)
+                        append_trailer = True
+                    else:
+                        raise ValueError("Unsupported media format")
 
-            out_path = basefwx._normalize_path(result)
-            if out_path != temp_output:
-                temp_output = out_path
-            if append_trailer:
-                basefwx.MediaCipher._append_trailer(temp_output, password, original_bytes)
-            if basefwx._normalize_path(output_path) != basefwx._normalize_path(temp_output):
-                basefwx.os.replace(temp_output, output_path)
-                temp_output = output_path
-            basefwx._remove_input(path_obj, keep_input, output_path=temp_output)
-            return str(temp_output)
+                out_path = basefwx._normalize_path(result)
+                if out_path != temp_output:
+                    temp_output = out_path
+                if append_trailer:
+                    def trailer_cb(frac: float) -> None:
+                        if local_reporter:
+                            local_reporter.update(file_index, 0.95 + 0.04 * frac, "archive", display_path)
+
+                    basefwx.MediaCipher._append_trailer_stream(
+                        temp_output,
+                        password,
+                        path_obj,
+                        progress_cb=trailer_cb if local_reporter else None
+                    )
+                if basefwx._normalize_path(output_path) != basefwx._normalize_path(temp_output):
+                    basefwx.os.replace(temp_output, output_path)
+                    temp_output = output_path
+                basefwx._remove_input(path_obj, keep_input, output_path=temp_output)
+                if local_reporter:
+                    local_reporter.update(file_index, 1.0, "done", display_path)
+                return str(temp_output)
+            finally:
+                if created_reporter and local_reporter:
+                    local_reporter.reset_terminal_state()
 
         @staticmethod
         def decrypt_media(
             path: str,
             password: "basefwx.typing.Union[str, bytes, bytearray, memoryview]",
-            output: str | None = None
+            output: str | None = None,
+            *,
+            reporter: "basefwx.typing.Optional[basefwx._ProgressReporter]" = None,
+            file_index: int = 0,
+            display_path: "basefwx.typing.Optional[basefwx.pathlib.Path]" = None
         ) -> str:
             path_obj = basefwx._normalize_path(path)
             basefwx._ensure_existing_file(path_obj)
             if not password:
                 raise ValueError("Password is required for media decryption")
+            display_path = display_path or path_obj
             output_path = basefwx.pathlib.Path(output) if output else path_obj
-            data = path_obj.read_bytes()
-            plain = basefwx.MediaCipher._decrypt_trailer(data, password)
-            if plain is None:
-                raise ValueError("No media trailer found; unable to decrypt")
-            output_path.write_bytes(plain)
-            return str(output_path)
+            temp_output = output_path
+            if basefwx._normalize_path(output_path) == basefwx._normalize_path(path_obj):
+                temp_output = output_path.with_name(f"{output_path.stem}._jmgdec{output_path.suffix}")
+
+            local_reporter = reporter
+            created_reporter = False
+            if local_reporter is None and not basefwx._SILENT_MODE:
+                local_reporter = basefwx._ProgressReporter(1)
+                created_reporter = True
+            try:
+                suffix = path_obj.suffix.lower()
+                if suffix in basefwx.MediaCipher.IMAGE_EXTS:
+                    result = basefwx.ImageCipher.decrypt_image_inv(
+                        str(path_obj),
+                        basefwx._coerce_password_bytes(password).decode("utf-8", "ignore"),
+                        output=str(temp_output)
+                    )
+                else:
+                    result = ""
+                    def trailer_cb(frac: float) -> None:
+                        if local_reporter:
+                            local_reporter.update(file_index, 0.05 + 0.90 * frac, "archive", display_path)
+
+                    if basefwx.MediaCipher._decrypt_trailer_stream(
+                        path_obj,
+                        password,
+                        temp_output,
+                        progress_cb=trailer_cb if local_reporter else None
+                    ):
+                        result = str(temp_output)
+                    else:
+                        fallback_ok = False
+                        try:
+                            fallback_ok = path_obj.stat().st_size <= basefwx.MediaCipher.TRAILER_FALLBACK_MAX
+                        except Exception:
+                            fallback_ok = False
+                        if fallback_ok:
+                            data = path_obj.read_bytes()
+                            plain = basefwx.MediaCipher._decrypt_trailer(data, password)
+                            if plain is not None:
+                                temp_output.write_bytes(plain)
+                                result = str(temp_output)
+                    if not result:
+                        info = basefwx.MediaCipher._probe_streams(path_obj)
+                        if info.get("video"):
+                            basefwx.MediaCipher._unscramble_video(
+                                path_obj,
+                                temp_output,
+                                password,
+                                reporter=local_reporter,
+                                file_index=file_index,
+                                display_path=display_path
+                            )
+                            result = str(temp_output)
+                        elif info.get("audio"):
+                            basefwx.MediaCipher._unscramble_audio(
+                                path_obj,
+                                temp_output,
+                                password,
+                                reporter=local_reporter,
+                                file_index=file_index,
+                                display_path=display_path
+                            )
+                            result = str(temp_output)
+                        else:
+                            raise ValueError("Unsupported media format")
+                if local_reporter:
+                    local_reporter.update(file_index, 1.0, "done", display_path)
+            finally:
+                if created_reporter and local_reporter:
+                    local_reporter.reset_terminal_state()
+
+            if basefwx._normalize_path(output_path) != basefwx._normalize_path(temp_output):
+                basefwx.os.replace(temp_output, output_path)
+                temp_output = output_path
+            return str(temp_output)
     def _aes_light_encode_path(
             path: "basefwx.pathlib.Path",
             password: str,

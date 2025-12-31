@@ -13,6 +13,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cctype>
 #include <cstdio>
 #include <cstring>
@@ -21,15 +22,21 @@
 #include <cmath>
 #include <filesystem>
 #include <fstream>
+#include <functional>
+#include <iostream>
 #include <limits>
 #include <map>
 #include <optional>
 #include <random>
+#include <chrono>
 #include <set>
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <vector>
+
+#include <openssl/evp.h>
 
 namespace basefwx::imagecipher {
 
@@ -138,6 +145,12 @@ std::uint64_t ReadU64Be(const std::uint8_t* data) {
            | (static_cast<std::uint64_t>(data[5]) << 16)
            | (static_cast<std::uint64_t>(data[6]) << 8)
            | (static_cast<std::uint64_t>(data[7]));
+}
+
+void Ensure(bool ok, const char* msg) {
+    if (!ok) {
+        throw std::runtime_error(msg);
+    }
 }
 
 struct Xoroshiro128Plus {
@@ -294,6 +307,245 @@ void AppendTrailer(const std::filesystem::path& path, const Bytes& blob) {
     }
 }
 
+void AppendTrailerStream(const std::filesystem::path& output_path,
+                         const std::filesystem::path& original_path,
+                         const std::string& password,
+                         const std::function<void(double)>& progress_cb = {}) {
+    auto magic = basefwx::constants::kImageCipherTrailerMagic;
+    std::error_code ec;
+    auto size = std::filesystem::file_size(original_path, ec);
+    if (ec) {
+        throw std::runtime_error("Failed to stat input for trailer");
+    }
+    std::uint64_t blob_len = basefwx::constants::kAeadNonceLen + size + basefwx::constants::kAeadTagLen;
+    if (blob_len > std::numeric_limits<std::uint32_t>::max()) {
+        throw std::runtime_error("Trailer too large");
+    }
+    std::uint32_t len = static_cast<std::uint32_t>(blob_len);
+    std::array<std::uint8_t, 4> len_bytes{};
+    len_bytes[0] = static_cast<std::uint8_t>((len >> 24) & 0xFF);
+    len_bytes[1] = static_cast<std::uint8_t>((len >> 16) & 0xFF);
+    len_bytes[2] = static_cast<std::uint8_t>((len >> 8) & 0xFF);
+    len_bytes[3] = static_cast<std::uint8_t>(len & 0xFF);
+
+    Bytes material = DeriveMaterial(password);
+    Bytes archive_key = basefwx::crypto::HkdfSha256(basefwx::constants::kImageCipherArchiveInfo, material, 32);
+    Bytes aad(basefwx::constants::kImageCipherArchiveInfo.begin(),
+              basefwx::constants::kImageCipherArchiveInfo.end());
+    Bytes nonce = basefwx::crypto::RandomBytes(basefwx::constants::kAeadNonceLen);
+
+    std::ifstream input(original_path, std::ios::binary);
+    std::ofstream out(output_path, std::ios::binary | std::ios::app);
+    if (!input || !out) {
+        throw std::runtime_error("Failed to open trailer streams");
+    }
+    out.write(magic.data(), static_cast<std::streamsize>(magic.size()));
+    out.write(reinterpret_cast<const char*>(len_bytes.data()),
+              static_cast<std::streamsize>(len_bytes.size()));
+    out.write(reinterpret_cast<const char*>(nonce.data()), static_cast<std::streamsize>(nonce.size()));
+
+    EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();
+    if (!ctx) {
+        throw std::runtime_error("AES-GCM context allocation failed");
+    }
+    std::vector<std::uint8_t> buffer(1024 * 1024);
+    std::vector<std::uint8_t> outbuf(buffer.size() + 16);
+    int out_len = 0;
+
+    try {
+        Ensure(EVP_EncryptInit_ex(ctx, EVP_aes_256_gcm(), nullptr, nullptr, nullptr) == 1,
+               "AES-GCM init failed");
+        Ensure(EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_IVLEN,
+                                   static_cast<int>(nonce.size()), nullptr) == 1,
+               "AES-GCM ivlen failed");
+        Ensure(EVP_EncryptInit_ex(ctx, nullptr, nullptr, archive_key.data(), nonce.data()) == 1,
+               "AES-GCM key init failed");
+        if (!aad.empty()) {
+            Ensure(EVP_EncryptUpdate(ctx, nullptr, &out_len,
+                                     aad.data(), static_cast<int>(aad.size())) == 1,
+                   "AES-GCM aad failed");
+        }
+    std::uint64_t processed = 0;
+    while (input) {
+        input.read(reinterpret_cast<char*>(buffer.data()), static_cast<std::streamsize>(buffer.size()));
+        std::streamsize got = input.gcount();
+        if (got <= 0) {
+            break;
+        }
+        Ensure(EVP_EncryptUpdate(ctx, outbuf.data(), &out_len,
+                                 buffer.data(), static_cast<int>(got)) == 1,
+               "AES-GCM update failed");
+        if (out_len > 0) {
+            out.write(reinterpret_cast<const char*>(outbuf.data()), out_len);
+        }
+        processed += static_cast<std::uint64_t>(got);
+        if (progress_cb && size > 0) {
+            double frac = static_cast<double>(processed) / static_cast<double>(size);
+            if (frac > 1.0) {
+                frac = 1.0;
+            }
+            progress_cb(frac);
+        }
+    }
+        Ensure(EVP_EncryptFinal_ex(ctx, outbuf.data(), &out_len) == 1,
+               "AES-GCM final failed");
+        if (out_len > 0) {
+            out.write(reinterpret_cast<const char*>(outbuf.data()), out_len);
+        }
+        std::array<std::uint8_t, basefwx::constants::kAeadTagLen> tag{};
+        Ensure(EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_GET_TAG,
+                                   static_cast<int>(tag.size()), tag.data()) == 1,
+               "AES-GCM tag failed");
+        out.write(reinterpret_cast<const char*>(tag.data()), static_cast<std::streamsize>(tag.size()));
+        out.write(magic.data(), static_cast<std::streamsize>(magic.size()));
+        out.write(reinterpret_cast<const char*>(len_bytes.data()),
+                  static_cast<std::streamsize>(len_bytes.size()));
+    } catch (...) {
+        EVP_CIPHER_CTX_free(ctx);
+        throw;
+    }
+
+    EVP_CIPHER_CTX_free(ctx);
+}
+
+bool TryDecryptTrailerStream(const std::filesystem::path& input_path,
+                             const std::string& password,
+                             const std::filesystem::path& output_path,
+                             const std::function<void(double)>& progress_cb = {}) {
+    auto magic = basefwx::constants::kImageCipherTrailerMagic;
+    const std::size_t footer_len = magic.size() + 4;
+    std::error_code ec;
+    auto size = std::filesystem::file_size(input_path, ec);
+    if (ec || size < footer_len) {
+        return false;
+    }
+    std::ifstream input(input_path, std::ios::binary);
+    if (!input) {
+        return false;
+    }
+    input.seekg(static_cast<std::streamoff>(size - footer_len), std::ios::beg);
+    std::vector<std::uint8_t> footer(footer_len);
+    input.read(reinterpret_cast<char*>(footer.data()), static_cast<std::streamsize>(footer.size()));
+    if (input.gcount() != static_cast<std::streamsize>(footer.size())) {
+        return false;
+    }
+    if (std::memcmp(footer.data(), magic.data(), magic.size()) != 0) {
+        return false;
+    }
+    std::uint32_t blob_len = (static_cast<std::uint32_t>(footer[magic.size()]) << 24)
+                             | (static_cast<std::uint32_t>(footer[magic.size() + 1]) << 16)
+                             | (static_cast<std::uint32_t>(footer[magic.size() + 2]) << 8)
+                             | static_cast<std::uint32_t>(footer[magic.size() + 3]);
+    if (blob_len == 0) {
+        return false;
+    }
+    std::uint64_t trailer_start = size - footer_len - blob_len - footer_len;
+    if (static_cast<std::int64_t>(trailer_start) < 0) {
+        return false;
+    }
+    input.seekg(static_cast<std::streamoff>(trailer_start), std::ios::beg);
+    std::vector<std::uint8_t> header(footer_len);
+    input.read(reinterpret_cast<char*>(header.data()), static_cast<std::streamsize>(header.size()));
+    if (input.gcount() != static_cast<std::streamsize>(header.size())) {
+        return false;
+    }
+    if (std::memcmp(header.data(), magic.data(), magic.size()) != 0) {
+        return false;
+    }
+    std::uint32_t header_len = (static_cast<std::uint32_t>(header[magic.size()]) << 24)
+                               | (static_cast<std::uint32_t>(header[magic.size() + 1]) << 16)
+                               | (static_cast<std::uint32_t>(header[magic.size() + 2]) << 8)
+                               | static_cast<std::uint32_t>(header[magic.size() + 3]);
+    if (header_len != blob_len) {
+        return false;
+    }
+    std::uint64_t blob_start = trailer_start + footer_len;
+    input.seekg(static_cast<std::streamoff>(blob_start), std::ios::beg);
+
+    Bytes material = DeriveMaterial(password);
+    Bytes archive_key = basefwx::crypto::HkdfSha256(basefwx::constants::kImageCipherArchiveInfo, material, 32);
+    Bytes aad(basefwx::constants::kImageCipherArchiveInfo.begin(),
+              basefwx::constants::kImageCipherArchiveInfo.end());
+
+    Bytes nonce(basefwx::constants::kAeadNonceLen);
+    input.read(reinterpret_cast<char*>(nonce.data()), static_cast<std::streamsize>(nonce.size()));
+    if (input.gcount() != static_cast<std::streamsize>(nonce.size())) {
+        return false;
+    }
+    std::uint64_t cipher_len = blob_len - basefwx::constants::kAeadNonceLen - basefwx::constants::kAeadTagLen;
+
+    EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();
+    if (!ctx) {
+        return false;
+    }
+    std::vector<std::uint8_t> buffer(1024 * 1024);
+    std::vector<std::uint8_t> outbuf(buffer.size() + 16);
+    int out_len = 0;
+    std::ofstream output(output_path, std::ios::binary);
+    if (!output) {
+        EVP_CIPHER_CTX_free(ctx);
+        return false;
+    }
+
+    try {
+        Ensure(EVP_DecryptInit_ex(ctx, EVP_aes_256_gcm(), nullptr, nullptr, nullptr) == 1,
+               "AES-GCM init failed");
+        Ensure(EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_IVLEN,
+                                   static_cast<int>(nonce.size()), nullptr) == 1,
+               "AES-GCM ivlen failed");
+        Ensure(EVP_DecryptInit_ex(ctx, nullptr, nullptr, archive_key.data(), nonce.data()) == 1,
+               "AES-GCM key init failed");
+        if (!aad.empty()) {
+            Ensure(EVP_DecryptUpdate(ctx, nullptr, &out_len,
+                                     aad.data(), static_cast<int>(aad.size())) == 1,
+                   "AES-GCM aad failed");
+        }
+        std::uint64_t remaining = cipher_len;
+        std::uint64_t processed = 0;
+        while (remaining > 0) {
+            std::size_t take = static_cast<std::size_t>(std::min<std::uint64_t>(buffer.size(), remaining));
+            input.read(reinterpret_cast<char*>(buffer.data()), static_cast<std::streamsize>(take));
+            std::streamsize got = input.gcount();
+            if (got <= 0) {
+                EVP_CIPHER_CTX_free(ctx);
+                return false;
+            }
+            Ensure(EVP_DecryptUpdate(ctx, outbuf.data(), &out_len,
+                                     buffer.data(), static_cast<int>(got)) == 1,
+                   "AES-GCM update failed");
+            if (out_len > 0) {
+                output.write(reinterpret_cast<const char*>(outbuf.data()), out_len);
+            }
+            remaining -= static_cast<std::uint64_t>(got);
+            processed += static_cast<std::uint64_t>(got);
+            if (progress_cb && cipher_len > 0) {
+                double frac = static_cast<double>(processed) / static_cast<double>(cipher_len);
+                if (frac > 1.0) {
+                    frac = 1.0;
+                }
+                progress_cb(frac);
+            }
+        }
+        std::array<std::uint8_t, basefwx::constants::kAeadTagLen> tag{};
+        input.read(reinterpret_cast<char*>(tag.data()), static_cast<std::streamsize>(tag.size()));
+        if (input.gcount() != static_cast<std::streamsize>(tag.size())) {
+            EVP_CIPHER_CTX_free(ctx);
+            return false;
+        }
+        Ensure(EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_TAG,
+                                   static_cast<int>(tag.size()), tag.data()) == 1,
+               "AES-GCM tag failed");
+        Ensure(EVP_DecryptFinal_ex(ctx, outbuf.data(), &out_len) == 1,
+               "AES-GCM auth failed");
+    } catch (...) {
+        EVP_CIPHER_CTX_free(ctx);
+        return false;
+    }
+
+    EVP_CIPHER_CTX_free(ctx);
+    return true;
+}
+
 bool ExtractTrailer(const Bytes& data, Bytes& payload, Bytes& trailer) {
     std::string magic(basefwx::constants::kImageCipherTrailerMagic.begin(),
                       basefwx::constants::kImageCipherTrailerMagic.end());
@@ -447,7 +699,8 @@ void ApplyMask(std::vector<std::uint8_t>& data, const std::vector<std::uint8_t>&
 
 std::string EncryptImageInv(const std::string& path,
                             const std::string& password,
-                            const std::string& output) {
+                            const std::string& output,
+                            bool include_trailer) {
     if (password.empty()) {
         throw std::runtime_error("Password is required for image encryption");
     }
@@ -482,12 +735,14 @@ std::string EncryptImageInv(const std::string& path,
 
     WriteImage(output_path, image, fmt);
 
-    Bytes archive_key = basefwx::crypto::HkdfSha256(basefwx::constants::kImageCipherArchiveInfo,
-                                                   material, 32);
-    Bytes aad(basefwx::constants::kImageCipherArchiveInfo.begin(),
-              basefwx::constants::kImageCipherArchiveInfo.end());
-    Bytes archive_blob = basefwx::crypto::AeadEncrypt(archive_key, original_bytes, aad);
-    AppendTrailer(output_path, archive_blob);
+    if (include_trailer) {
+        Bytes archive_key = basefwx::crypto::HkdfSha256(basefwx::constants::kImageCipherArchiveInfo,
+                                                       material, 32);
+        Bytes aad(basefwx::constants::kImageCipherArchiveInfo.begin(),
+                  basefwx::constants::kImageCipherArchiveInfo.end());
+        Bytes archive_blob = basefwx::crypto::AeadEncrypt(archive_key, original_bytes, aad);
+        AppendTrailer(output_path, archive_blob);
+    }
 
     return output_path.string();
 }
@@ -762,6 +1017,75 @@ std::filesystem::path CreateTempDir(const std::string& prefix) {
     throw std::runtime_error("Failed to create temporary directory");
 }
 
+struct ProgressReporter {
+    bool enabled = true;
+    bool printed = false;
+    bool use_ansi = false;
+    std::chrono::steady_clock::time_point last_tick{};
+    double last_fraction = -1.0;
+
+    ProgressReporter() {
+        const char* term = std::getenv("TERM");
+        const char* no_color = std::getenv("NO_COLOR");
+        use_ansi = !no_color && term && std::string(term) != "dumb";
+        last_tick = std::chrono::steady_clock::now();
+    }
+
+    static std::string RenderBar(double fraction, int width = 30) {
+        if (fraction < 0.0) {
+            fraction = 0.0;
+        } else if (fraction > 1.0) {
+            fraction = 1.0;
+        }
+        int filled = static_cast<int>(std::round(fraction * width));
+        if (filled > width) {
+            filled = width;
+        }
+        std::string bar;
+        bar.reserve(static_cast<std::size_t>(width + 2));
+        bar.push_back('(');
+        bar.append(static_cast<std::size_t>(filled), '#');
+        bar.append(static_cast<std::size_t>(width - filled), '-');
+        bar.push_back(')');
+        return bar;
+    }
+
+    void Update(double fraction, const std::string& phase, const std::filesystem::path& path) {
+        if (!enabled) {
+            return;
+        }
+        auto now = std::chrono::steady_clock::now();
+        auto delta = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_tick);
+        if (printed && delta.count() < 120 && fraction < 1.0 && std::abs(fraction - last_fraction) < 0.005) {
+            return;
+        }
+        last_tick = now;
+        last_fraction = fraction;
+        int pct = static_cast<int>(std::round(fraction * 100.0));
+        std::string bar = RenderBar(fraction);
+        std::string name = path.filename().string();
+        std::string line1 = "Overall " + bar + " " + std::to_string(pct) + "% " + phase;
+        std::string line2 = "File    " + bar + " " + std::to_string(pct) + "% " + name;
+        if (use_ansi) {
+            if (printed) {
+                std::cout << "\033[2A";
+            }
+            std::cout << "\r\033[2K" << line1 << "\n"
+                      << "\r\033[2K" << line2 << std::flush;
+        } else {
+            std::cout << line1 << "\n" << line2 << std::endl;
+        }
+        printed = true;
+    }
+
+    void Finish() {
+        if (printed) {
+            std::cout << std::endl;
+            printed = false;
+        }
+    }
+};
+
 Bytes BaseKeyFromPassword(const std::string& password) {
     Bytes material = DeriveMaterial(password);
     return Bytes(material.begin(), material.begin() + 32);
@@ -808,6 +1132,52 @@ std::vector<std::size_t> PermuteIndices(std::size_t count, std::uint64_t seed) {
     return order;
 }
 
+std::size_t ResolveMediaWorkers(std::size_t max_tasks) {
+    const char* raw = std::getenv("BASEFWX_MEDIA_WORKERS");
+    if (raw && *raw) {
+        try {
+            std::size_t parsed = static_cast<std::size_t>(std::stoul(raw));
+            if (parsed > 0) {
+                return std::min(parsed, std::max<std::size_t>(1, max_tasks));
+            }
+        } catch (const std::exception&) {
+        }
+    }
+    unsigned int hw = std::thread::hardware_concurrency();
+    std::size_t workers = hw > 0 ? static_cast<std::size_t>(hw) : 1;
+    return std::min(workers, std::max<std::size_t>(1, max_tasks));
+}
+
+template <typename Fn>
+void ParallelFor(std::size_t count, std::size_t max_workers, Fn&& fn) {
+    std::size_t workers = ResolveMediaWorkers(std::min(count, max_workers));
+    if (count == 0 || workers <= 1) {
+        for (std::size_t i = 0; i < count; ++i) {
+            fn(i);
+        }
+        return;
+    }
+    std::atomic<std::size_t> next{0};
+    std::vector<std::thread> threads;
+    threads.reserve(workers);
+    for (std::size_t w = 0; w < workers; ++w) {
+        threads.emplace_back([&]() {
+            while (true) {
+                std::size_t idx = next.fetch_add(1);
+                if (idx >= count) {
+                    break;
+                }
+                fn(idx);
+            }
+        });
+    }
+    for (auto& t : threads) {
+        if (t.joinable()) {
+            t.join();
+        }
+    }
+}
+
 Bytes ShuffleFrameBlocks(const Bytes& frame,
                          int width,
                          int height,
@@ -839,10 +1209,113 @@ Bytes ShuffleFrameBlocks(const Bytes& frame,
     return out;
 }
 
+Bytes UnshuffleFrameBlocks(const Bytes& frame,
+                           int width,
+                           int height,
+                           int channels,
+                           std::uint64_t seed,
+                           int block_size) {
+    int blocks_x = (width + block_size - 1) / block_size;
+    int blocks_y = (height + block_size - 1) / block_size;
+    std::size_t total_blocks = static_cast<std::size_t>(blocks_x) * static_cast<std::size_t>(blocks_y);
+    auto perm = PermuteIndices(total_blocks, seed);
+    Bytes out(frame.size());
+    for (std::size_t dest_idx = 0; dest_idx < total_blocks; ++dest_idx) {
+        std::size_t src_idx = perm[dest_idx];
+        int dx = static_cast<int>(dest_idx % blocks_x) * block_size;
+        int dy = static_cast<int>(dest_idx / blocks_x) * block_size;
+        int sx = static_cast<int>(src_idx % blocks_x) * block_size;
+        int sy = static_cast<int>(src_idx / blocks_x) * block_size;
+        int copy_w = std::min(block_size, width - dx);
+        copy_w = std::min(copy_w, width - sx);
+        int copy_h = std::min(block_size, height - dy);
+        copy_h = std::min(copy_h, height - sy);
+        for (int row = 0; row < copy_h; ++row) {
+            std::size_t src_off = static_cast<std::size_t>(((dy + row) * width + dx) * channels);
+            std::size_t dst_off = static_cast<std::size_t>(((sy + row) * width + sx) * channels);
+            std::size_t span = static_cast<std::size_t>(copy_w * channels);
+            std::memcpy(out.data() + dst_off, frame.data() + src_off, span);
+        }
+    }
+    return out;
+}
+
+Bytes AudioMaskTransform(const Bytes& data, const Bytes& key, const Bytes& iv) {
+    if (data.empty()) {
+        return {};
+    }
+    Bytes zeros(data.size(), 0);
+    Bytes stream = basefwx::crypto::AesCtrTransform(key, iv, zeros);
+    Bytes out = data;
+    constexpr std::uint16_t kAudioMaskBits = 12;
+    constexpr std::uint16_t mask = static_cast<std::uint16_t>((1u << kAudioMaskBits) - 1u);
+    std::size_t samples = out.size() / 2;
+    for (std::size_t i = 0; i < samples; ++i) {
+        std::size_t off = i * 2;
+        std::uint16_t sample = static_cast<std::uint16_t>(out[off])
+                               | static_cast<std::uint16_t>(out[off + 1] << 8);
+        std::uint16_t ks = static_cast<std::uint16_t>(stream[off])
+                           | static_cast<std::uint16_t>(stream[off + 1] << 8);
+        std::uint16_t mixed = static_cast<std::uint16_t>(sample ^ (ks & mask));
+        out[off] = static_cast<std::uint8_t>(mixed & 0xFFu);
+        out[off + 1] = static_cast<std::uint8_t>((mixed >> 8) & 0xFFu);
+    }
+    return out;
+}
+
+Bytes VideoMaskTransform(const Bytes& data, const Bytes& key, const Bytes& iv) {
+    if (data.empty()) {
+        return {};
+    }
+    Bytes zeros(data.size(), 0);
+    Bytes stream = basefwx::crypto::AesCtrTransform(key, iv, zeros);
+    Bytes out = data;
+    constexpr std::uint8_t kVideoMaskBits = 4;
+    constexpr std::uint8_t mask = static_cast<std::uint8_t>((1u << kVideoMaskBits) - 1u);
+    for (std::size_t i = 0; i < out.size(); ++i) {
+        out[i] = static_cast<std::uint8_t>(out[i] ^ (stream[i] & mask));
+    }
+    return out;
+}
+
+Bytes ShuffleAudioSamples(const Bytes& block, std::uint64_t seed, bool inverse) {
+    if (block.empty()) {
+        return block;
+    }
+    std::size_t samples = block.size() / 2;
+    if (samples <= 1) {
+        return block;
+    }
+    auto perm = PermuteIndices(samples, seed);
+    Bytes out(block.size());
+    if (!inverse) {
+        for (std::size_t dest_idx = 0; dest_idx < samples; ++dest_idx) {
+            std::size_t src_idx = perm[dest_idx];
+            std::size_t src_off = src_idx * 2;
+            std::size_t dst_off = dest_idx * 2;
+            out[dst_off] = block[src_off];
+            out[dst_off + 1] = block[src_off + 1];
+        }
+    } else {
+        for (std::size_t dest_idx = 0; dest_idx < samples; ++dest_idx) {
+            std::size_t src_idx = perm[dest_idx];
+            std::size_t src_off = src_idx * 2;
+            std::size_t dst_off = dest_idx * 2;
+            out[src_off] = block[dst_off];
+            out[src_off + 1] = block[dst_off + 1];
+        }
+    }
+    if (block.size() % 2) {
+        out.back() = block.back();
+    }
+    return out;
+}
+
 void ScrambleVideoRaw(const std::filesystem::path& raw_in,
                       const std::filesystem::path& raw_out,
                       const VideoInfo& video,
-                      const Bytes& base_key) {
+                      const Bytes& base_key,
+                      const std::function<void(double)>& progress_cb = {}) {
     std::size_t frame_size = static_cast<std::size_t>(video.width) * static_cast<std::size_t>(video.height) * 3u;
     if (frame_size == 0) {
         throw std::runtime_error("Invalid video dimensions");
@@ -855,6 +1328,15 @@ void ScrambleVideoRaw(const std::filesystem::path& raw_in,
     }
     std::uint64_t frame_index = 0;
     std::uint64_t group_index = 0;
+    std::uint64_t processed_frames = 0;
+    std::uint64_t total_frames = 0;
+    if (progress_cb) {
+        std::error_code ec;
+        auto bytes = std::filesystem::file_size(raw_in, ec);
+        if (!ec && frame_size > 0) {
+            total_frames = static_cast<std::uint64_t>(bytes / frame_size);
+        }
+    }
     while (true) {
         std::uint64_t group_start_index = frame_index;
         std::vector<Bytes> frames;
@@ -865,32 +1347,44 @@ void ScrambleVideoRaw(const std::filesystem::path& raw_in,
             if (input.gcount() != static_cast<std::streamsize>(frame.size())) {
                 break;
             }
-            Bytes material = UnitMaterial(base_key, "jmg-frame", frame_index, 48);
-            Bytes key(material.begin(), material.begin() + 32);
-            Bytes iv(material.begin() + 32, material.begin() + 48);
-            Bytes masked = basefwx::crypto::AesCtrTransform(key, iv, frame);
-            Bytes seed_bytes = UnitMaterial(base_key, "jmg-fblk", frame_index, 16);
-            std::uint64_t seed = 0;
-            for (std::uint8_t b : seed_bytes) {
-                seed = (seed << 8) | b;
-            }
-            Bytes shuffled = ShuffleFrameBlocks(masked, video.width, video.height, 3, seed, 16);
-            frames.push_back(std::move(shuffled));
+            frames.push_back(std::move(frame));
             ++frame_index;
         }
         if (frames.empty()) {
             break;
         }
+        std::vector<Bytes> processed(frames.size());
+        ParallelFor(frames.size(), static_cast<std::size_t>(group_frames), [&](std::size_t idx) {
+            std::uint64_t frame_id = group_start_index + idx;
+            Bytes material = UnitMaterial(base_key, "jmg-frame", frame_id, 48);
+            Bytes key(material.begin(), material.begin() + 32);
+            Bytes iv(material.begin() + 32, material.begin() + 48);
+            Bytes masked = VideoMaskTransform(frames[idx], key, iv);
+            Bytes seed_bytes = UnitMaterial(base_key, "jmg-fblk", frame_id, 16);
+            std::uint64_t seed = 0;
+            for (std::uint8_t b : seed_bytes) {
+                seed = (seed << 8) | b;
+            }
+            processed[idx] = ShuffleFrameBlocks(masked, video.width, video.height, 3, seed, 16);
+        });
         std::uint64_t seed_index = (group_index * 0x9E3779B97F4A7C15ULL) ^ group_start_index;
         Bytes seed_bytes = UnitMaterial(base_key, "jmg-fgrp", seed_index, 16);
         std::uint64_t seed = 0;
         for (std::uint8_t b : seed_bytes) {
             seed = (seed << 8) | b;
         }
-        auto perm = PermuteIndices(frames.size(), seed);
+        auto perm = PermuteIndices(processed.size(), seed);
         for (auto idx : perm) {
-            output.write(reinterpret_cast<const char*>(frames[idx].data()),
-                         static_cast<std::streamsize>(frames[idx].size()));
+            output.write(reinterpret_cast<const char*>(processed[idx].data()),
+                         static_cast<std::streamsize>(processed[idx].size()));
+        }
+        processed_frames += processed.size();
+        if (progress_cb && total_frames > 0) {
+            double frac = static_cast<double>(processed_frames) / static_cast<double>(total_frames);
+            if (frac > 1.0) {
+                frac = 1.0;
+            }
+            progress_cb(frac);
         }
         ++group_index;
     }
@@ -899,10 +1393,13 @@ void ScrambleVideoRaw(const std::filesystem::path& raw_in,
 void ScrambleAudioRaw(const std::filesystem::path& raw_in,
                       const std::filesystem::path& raw_out,
                       const AudioInfo& audio,
-                      const Bytes& base_key) {
-    int samples_per_block = std::max(1, static_cast<int>(std::round(audio.sample_rate * 0.05)));
+                      const Bytes& base_key,
+                      const std::function<void(double)>& progress_cb = {}) {
+    constexpr double kAudioBlockSeconds = 0.15;
+    constexpr double kAudioGroupSeconds = 1.0;
+    int samples_per_block = std::max(1, static_cast<int>(std::round(audio.sample_rate * kAudioBlockSeconds)));
     std::size_t block_size = static_cast<std::size_t>(samples_per_block * audio.channels * 2);
-    int group_blocks = std::max(2, static_cast<int>(std::round(1.0 / 0.05)));
+    int group_blocks = std::max(2, static_cast<int>(std::round(kAudioGroupSeconds / kAudioBlockSeconds)));
     std::ifstream input(raw_in, std::ios::binary);
     std::ofstream output(raw_out, std::ios::binary);
     if (!input || !output) {
@@ -910,6 +1407,15 @@ void ScrambleAudioRaw(const std::filesystem::path& raw_in,
     }
     std::uint64_t block_index = 0;
     std::uint64_t group_index = 0;
+    std::uint64_t processed_blocks = 0;
+    std::uint64_t total_blocks = 0;
+    if (progress_cb && block_size > 0) {
+        std::error_code ec;
+        auto bytes = std::filesystem::file_size(raw_in, ec);
+        if (!ec) {
+            total_blocks = static_cast<std::uint64_t>((bytes + block_size - 1) / block_size);
+        }
+    }
     while (true) {
         std::uint64_t group_start_index = block_index;
         std::vector<Bytes> blocks;
@@ -921,12 +1427,171 @@ void ScrambleAudioRaw(const std::filesystem::path& raw_in,
                 break;
             }
             block.resize(static_cast<std::size_t>(input.gcount()));
-            Bytes material = UnitMaterial(base_key, "jmg-ablock", block_index, 48);
+            blocks.push_back(std::move(block));
+            ++block_index;
+        }
+        if (blocks.empty()) {
+            break;
+        }
+        std::vector<Bytes> processed(blocks.size());
+        ParallelFor(blocks.size(), static_cast<std::size_t>(group_blocks), [&](std::size_t idx) {
+            std::uint64_t block_id = group_start_index + idx;
+            Bytes material = UnitMaterial(base_key, "jmg-ablock", block_id, 48);
             Bytes key(material.begin(), material.begin() + 32);
             Bytes iv(material.begin() + 32, material.begin() + 48);
-            Bytes masked = basefwx::crypto::AesCtrTransform(key, iv, block);
-            blocks.push_back(std::move(masked));
-            ++block_index;
+            Bytes masked = AudioMaskTransform(blocks[idx], key, iv);
+            Bytes seed_bytes = UnitMaterial(base_key, "jmg-asamp", block_id, 16);
+            std::uint64_t seed = 0;
+            for (std::uint8_t b : seed_bytes) {
+                seed = (seed << 8) | b;
+            }
+            processed[idx] = ShuffleAudioSamples(masked, seed, false);
+        });
+        std::uint64_t seed_index = (group_index * 0x9E3779B97F4A7C15ULL) ^ group_start_index;
+        Bytes seed_bytes = UnitMaterial(base_key, "jmg-agrp", seed_index, 16);
+        std::uint64_t seed = 0;
+        for (std::uint8_t b : seed_bytes) {
+            seed = (seed << 8) | b;
+        }
+        auto perm = PermuteIndices(processed.size(), seed);
+        for (auto idx : perm) {
+            output.write(reinterpret_cast<const char*>(processed[idx].data()),
+                         static_cast<std::streamsize>(processed[idx].size()));
+        }
+        processed_blocks += processed.size();
+        if (progress_cb && total_blocks > 0) {
+            double frac = static_cast<double>(processed_blocks) / static_cast<double>(total_blocks);
+            if (frac > 1.0) {
+                frac = 1.0;
+            }
+            progress_cb(frac);
+        }
+        ++group_index;
+    }
+}
+
+void UnscrambleVideoRaw(const std::filesystem::path& raw_in,
+                        const std::filesystem::path& raw_out,
+                        const VideoInfo& video,
+                        const Bytes& base_key,
+                        const std::function<void(double)>& progress_cb = {}) {
+    std::size_t frame_size = static_cast<std::size_t>(video.width) * static_cast<std::size_t>(video.height) * 3u;
+    if (frame_size == 0) {
+        throw std::runtime_error("Invalid video dimensions");
+    }
+    int group_frames = static_cast<int>(std::max(2.0, std::round((video.fps > 0.0 ? video.fps : 30.0) * 1.0)));
+    std::ifstream input(raw_in, std::ios::binary);
+    std::ofstream output(raw_out, std::ios::binary);
+    if (!input || !output) {
+        throw std::runtime_error("Failed to open raw video buffers");
+    }
+    std::uint64_t frame_index = 0;
+    std::uint64_t group_index = 0;
+    std::uint64_t processed_frames = 0;
+    std::uint64_t total_frames = 0;
+    if (progress_cb) {
+        std::error_code ec;
+        auto bytes = std::filesystem::file_size(raw_in, ec);
+        if (!ec && frame_size > 0) {
+            total_frames = static_cast<std::uint64_t>(bytes / frame_size);
+        }
+    }
+    while (true) {
+        std::uint64_t group_start_index = frame_index;
+        std::vector<Bytes> frames;
+        frames.reserve(static_cast<std::size_t>(group_frames));
+        for (int i = 0; i < group_frames; ++i) {
+            Bytes frame(frame_size);
+            input.read(reinterpret_cast<char*>(frame.data()), static_cast<std::streamsize>(frame.size()));
+            if (input.gcount() != static_cast<std::streamsize>(frame.size())) {
+                break;
+            }
+            frames.push_back(std::move(frame));
+        }
+        if (frames.empty()) {
+            break;
+        }
+        std::uint64_t seed_index = (group_index * 0x9E3779B97F4A7C15ULL) ^ group_start_index;
+        Bytes seed_bytes = UnitMaterial(base_key, "jmg-fgrp", seed_index, 16);
+        std::uint64_t seed = 0;
+        for (std::uint8_t b : seed_bytes) {
+            seed = (seed << 8) | b;
+        }
+        auto perm = PermuteIndices(frames.size(), seed);
+        std::vector<Bytes> ordered(frames.size());
+        for (std::size_t dest_idx = 0; dest_idx < perm.size(); ++dest_idx) {
+            std::size_t src_idx = perm[dest_idx];
+            ordered[src_idx] = std::move(frames[dest_idx]);
+        }
+        std::vector<Bytes> restored(ordered.size());
+        ParallelFor(ordered.size(), static_cast<std::size_t>(group_frames), [&](std::size_t idx) {
+            std::uint64_t frame_id = group_start_index + idx;
+            Bytes seed_bytes_local = UnitMaterial(base_key, "jmg-fblk", frame_id, 16);
+            std::uint64_t seed_local = 0;
+            for (std::uint8_t b : seed_bytes_local) {
+                seed_local = (seed_local << 8) | b;
+            }
+            Bytes unshuffled = UnshuffleFrameBlocks(ordered[idx], video.width, video.height, 3, seed_local, 16);
+            Bytes material = UnitMaterial(base_key, "jmg-frame", frame_id, 48);
+            Bytes key(material.begin(), material.begin() + 32);
+            Bytes iv(material.begin() + 32, material.begin() + 48);
+            restored[idx] = VideoMaskTransform(unshuffled, key, iv);
+        });
+        for (const auto& frame : restored) {
+            output.write(reinterpret_cast<const char*>(frame.data()),
+                         static_cast<std::streamsize>(frame.size()));
+        }
+        processed_frames += restored.size();
+        if (progress_cb && total_frames > 0) {
+            double frac = static_cast<double>(processed_frames) / static_cast<double>(total_frames);
+            if (frac > 1.0) {
+                frac = 1.0;
+            }
+            progress_cb(frac);
+        }
+        frame_index += restored.size();
+        ++group_index;
+    }
+}
+
+void UnscrambleAudioRaw(const std::filesystem::path& raw_in,
+                        const std::filesystem::path& raw_out,
+                        const AudioInfo& audio,
+                        const Bytes& base_key,
+                        const std::function<void(double)>& progress_cb = {}) {
+    constexpr double kAudioBlockSeconds = 0.15;
+    constexpr double kAudioGroupSeconds = 1.0;
+    int samples_per_block = std::max(1, static_cast<int>(std::round(audio.sample_rate * kAudioBlockSeconds)));
+    std::size_t block_size = static_cast<std::size_t>(samples_per_block * audio.channels * 2);
+    int group_blocks = std::max(2, static_cast<int>(std::round(kAudioGroupSeconds / kAudioBlockSeconds)));
+    std::ifstream input(raw_in, std::ios::binary);
+    std::ofstream output(raw_out, std::ios::binary);
+    if (!input || !output) {
+        throw std::runtime_error("Failed to open raw audio buffers");
+    }
+    std::uint64_t block_index = 0;
+    std::uint64_t group_index = 0;
+    std::uint64_t processed_blocks = 0;
+    std::uint64_t total_blocks = 0;
+    if (progress_cb && block_size > 0) {
+        std::error_code ec;
+        auto bytes = std::filesystem::file_size(raw_in, ec);
+        if (!ec) {
+            total_blocks = static_cast<std::uint64_t>((bytes + block_size - 1) / block_size);
+        }
+    }
+    while (true) {
+        std::uint64_t group_start_index = block_index;
+        std::vector<Bytes> blocks;
+        blocks.reserve(static_cast<std::size_t>(group_blocks));
+        for (int i = 0; i < group_blocks; ++i) {
+            Bytes block(block_size);
+            input.read(reinterpret_cast<char*>(block.data()), static_cast<std::streamsize>(block.size()));
+            if (input.gcount() == 0) {
+                break;
+            }
+            block.resize(static_cast<std::size_t>(input.gcount()));
+            blocks.push_back(std::move(block));
         }
         if (blocks.empty()) {
             break;
@@ -938,10 +1603,38 @@ void ScrambleAudioRaw(const std::filesystem::path& raw_in,
             seed = (seed << 8) | b;
         }
         auto perm = PermuteIndices(blocks.size(), seed);
-        for (auto idx : perm) {
-            output.write(reinterpret_cast<const char*>(blocks[idx].data()),
-                         static_cast<std::streamsize>(blocks[idx].size()));
+        std::vector<Bytes> ordered(blocks.size());
+        for (std::size_t dest_idx = 0; dest_idx < perm.size(); ++dest_idx) {
+            std::size_t src_idx = perm[dest_idx];
+            ordered[src_idx] = std::move(blocks[dest_idx]);
         }
+        std::vector<Bytes> restored(ordered.size());
+        ParallelFor(ordered.size(), static_cast<std::size_t>(group_blocks), [&](std::size_t idx) {
+            std::uint64_t block_id = group_start_index + idx;
+            Bytes seed_bytes_local = UnitMaterial(base_key, "jmg-asamp", block_id, 16);
+            std::uint64_t seed_local = 0;
+            for (std::uint8_t b : seed_bytes_local) {
+                seed_local = (seed_local << 8) | b;
+            }
+            Bytes unshuffled = ShuffleAudioSamples(ordered[idx], seed_local, true);
+            Bytes material = UnitMaterial(base_key, "jmg-ablock", block_id, 48);
+            Bytes key(material.begin(), material.begin() + 32);
+            Bytes iv(material.begin() + 32, material.begin() + 48);
+            restored[idx] = AudioMaskTransform(unshuffled, key, iv);
+        });
+        for (const auto& block : restored) {
+            output.write(reinterpret_cast<const char*>(block.data()),
+                         static_cast<std::streamsize>(block.size()));
+        }
+        processed_blocks += restored.size();
+        if (progress_cb && total_blocks > 0) {
+            double frac = static_cast<double>(processed_blocks) / static_cast<double>(total_blocks);
+            if (frac > 1.0) {
+                frac = 1.0;
+            }
+            progress_cb(frac);
+        }
+        block_index += restored.size();
         ++group_index;
     }
 }
@@ -959,12 +1652,61 @@ std::vector<std::string> EncryptMetadataArgs(const std::map<std::string, std::st
     return args;
 }
 
+std::vector<std::string> DecryptMetadataArgs(const std::map<std::string, std::string>& tags,
+                                             const std::string& password) {
+    std::vector<std::string> args;
+    for (const auto& kv : tags) {
+        try {
+            std::string dec = basefwx::pb512::B512Decode(kv.second, password, false, {});
+            args.push_back(kv.first + "=" + dec);
+        } catch (const std::exception&) {
+        }
+    }
+    return args;
+}
+
 bool IsImageExt(const std::filesystem::path& path) {
     static const std::set<std::string> exts = {
         ".png", ".jpg", ".jpeg", ".bmp", ".tga", ".gif", ".webp", ".tif", ".tiff", ".heic", ".heif", ".avif", ".ico"
     };
     std::string ext = ToLower(path.extension().string());
     return exts.count(ext) > 0;
+}
+
+std::vector<std::string> VideoCodecArgs(const std::filesystem::path& output_path) {
+    std::string ext = ToLower(output_path.extension().string());
+    if (ext == ".webm") {
+        return {"-c:v", "libvpx-vp9", "-b:v", "0", "-crf", "32", "-pix_fmt", "yuv420p"};
+    }
+    return {"-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-pix_fmt", "yuv420p"};
+}
+
+std::vector<std::string> AudioCodecArgs(const std::filesystem::path& output_path) {
+    std::string ext = ToLower(output_path.extension().string());
+    if (ext == ".mp3") {
+        return {"-c:a", "libmp3lame", "-b:a", "192k"};
+    }
+    if (ext == ".flac") {
+        return {"-c:a", "flac"};
+    }
+    if (ext == ".wav" || ext == ".aiff" || ext == ".aif") {
+        return {"-c:a", "pcm_s16le"};
+    }
+    if (ext == ".ogg" || ext == ".opus" || ext == ".webm") {
+        return {"-c:a", "libopus", "-b:a", "96k"};
+    }
+    if (ext == ".m4a" || ext == ".aac") {
+        return {"-c:a", "aac", "-b:a", "160k"};
+    }
+    return {"-c:a", "aac", "-b:a", "160k"};
+}
+
+std::vector<std::string> ContainerArgs(const std::filesystem::path& output_path) {
+    std::string ext = ToLower(output_path.extension().string());
+    if (ext == ".mp4" || ext == ".m4v" || ext == ".mov" || ext == ".m4a") {
+        return {"-movflags", "+faststart"};
+    }
+    return {};
 }
 
 }  // namespace
@@ -986,10 +1728,8 @@ std::string EncryptMedia(const std::string& path,
     if (NormalizePath(output_path.string()) == NormalizePath(input_path.string())) {
         temp_output = output_path.parent_path() / (output_path.stem().string() + "._jmg" + output_path.extension().string());
     }
-    Bytes original_bytes = ReadFileBytes(input_path);
-
     if (IsImageExt(input_path)) {
-        std::string result = EncryptImageInv(input_path.string(), password, temp_output.string());
+        std::string result = EncryptImageInv(input_path.string(), password, temp_output.string(), true);
         std::filesystem::path result_path = NormalizePath(result);
         if (result_path != temp_output) {
             temp_output = result_path;
@@ -1005,6 +1745,7 @@ std::string EncryptMedia(const std::string& path,
         return temp_output.string();
     }
 
+    ProgressReporter progress;
     VideoInfo video = ProbeVideo(input_path);
     AudioInfo audio = ProbeAudio(input_path);
     if (!video.valid && !audio.valid) {
@@ -1018,6 +1759,7 @@ std::string EncryptMedia(const std::string& path,
         std::filesystem::path raw_audio = temp_dir / "audio.raw";
         std::filesystem::path raw_audio_out = temp_dir / "audio.scr.raw";
         if (video.valid) {
+            progress.Update(0.05, "decode-video", input_path);
             RunCommand({
                 "ffmpeg", "-y", "-i", input_path.string(),
                 "-map", "0:v:0",
@@ -1027,6 +1769,7 @@ std::string EncryptMedia(const std::string& path,
             });
         }
         if (audio.valid) {
+            progress.Update(0.15, "decode-audio", input_path);
             RunCommand({
                 "ffmpeg", "-y", "-i", input_path.string(),
                 "-map", "0:a:0",
@@ -1040,10 +1783,16 @@ std::string EncryptMedia(const std::string& path,
 
         Bytes base_key = BaseKeyFromPassword(password);
         if (video.valid) {
-            ScrambleVideoRaw(raw_video, raw_video_out, video, base_key);
+            auto video_cb = [&](double frac) {
+                progress.Update(0.25 + 0.45 * frac, "jmg-video", input_path);
+            };
+            ScrambleVideoRaw(raw_video, raw_video_out, video, base_key, video_cb);
         }
         if (audio.valid) {
-            ScrambleAudioRaw(raw_audio, raw_audio_out, audio, base_key);
+            auto audio_cb = [&](double frac) {
+                progress.Update(0.70 + 0.20 * frac, "jmg-audio", input_path);
+            };
+            ScrambleAudioRaw(raw_audio, raw_audio_out, audio, base_key, audio_cb);
         }
 
         std::vector<std::string> cmd = {
@@ -1077,8 +1826,24 @@ std::string EncryptMedia(const std::string& path,
             cmd.push_back("-map_metadata");
             cmd.push_back("-1");
         }
+        if (video.valid) {
+            auto v_args = VideoCodecArgs(temp_output);
+            cmd.insert(cmd.end(), v_args.begin(), v_args.end());
+        }
+        if (audio.valid) {
+            auto a_args = AudioCodecArgs(temp_output);
+            cmd.insert(cmd.end(), a_args.begin(), a_args.end());
+        }
+        auto c_args = ContainerArgs(temp_output);
+        cmd.insert(cmd.end(), c_args.begin(), c_args.end());
         cmd.push_back(temp_output.string());
+        progress.Update(0.95, "encode", input_path);
         RunCommand(cmd);
+        auto archive_cb = [&](double frac) {
+            progress.Update(0.95 + 0.04 * frac, "archive", input_path);
+        };
+        AppendTrailerStream(temp_output, input_path, password, archive_cb);
+        progress.Update(1.0, "done", input_path);
     } catch (...) {
         std::error_code ec;
         std::filesystem::remove_all(temp_dir, ec);
@@ -1087,13 +1852,6 @@ std::string EncryptMedia(const std::string& path,
     std::error_code ec;
     std::filesystem::remove_all(temp_dir, ec);
 
-    Bytes material = DeriveMaterial(password);
-    Bytes archive_key = basefwx::crypto::HkdfSha256(basefwx::constants::kImageCipherArchiveInfo, material, 32);
-    Bytes aad(basefwx::constants::kImageCipherArchiveInfo.begin(),
-              basefwx::constants::kImageCipherArchiveInfo.end());
-    Bytes archive_blob = basefwx::crypto::AeadEncrypt(archive_key, original_bytes, aad);
-    AppendTrailer(temp_output, archive_blob);
-
     if (NormalizePath(output_path.string()) != NormalizePath(temp_output.string())) {
         std::filesystem::rename(temp_output, output_path);
         temp_output = output_path;
@@ -1101,6 +1859,7 @@ std::string EncryptMedia(const std::string& path,
     if (!keep_input && NormalizePath(output_path.string()) != NormalizePath(input_path.string())) {
         std::filesystem::remove(input_path, ec);
     }
+    progress.Finish();
     return temp_output.string();
 }
 
@@ -1114,21 +1873,161 @@ std::string DecryptMedia(const std::string& path,
     if (!std::filesystem::exists(input_path)) {
         throw std::runtime_error("Input file not found: " + input_path.string());
     }
-    Bytes file_bytes = ReadFileBytes(input_path);
-    Bytes payload;
-    Bytes trailer;
-    bool has_trailer = ExtractTrailer(file_bytes, payload, trailer);
-    if (!has_trailer || trailer.empty()) {
-        throw std::runtime_error("No media trailer found");
+    if (IsImageExt(input_path)) {
+        return DecryptImageInv(input_path.string(), password, output);
     }
-    Bytes material = DeriveMaterial(password);
-    Bytes archive_key = basefwx::crypto::HkdfSha256(basefwx::constants::kImageCipherArchiveInfo, material, 32);
-    Bytes aad(basefwx::constants::kImageCipherArchiveInfo.begin(),
-              basefwx::constants::kImageCipherArchiveInfo.end());
-    Bytes original_bytes = basefwx::crypto::AeadDecrypt(archive_key, trailer, aad);
+
     std::filesystem::path output_path = output.empty() ? input_path : NormalizePath(output);
-    WriteFileBytes(output_path, original_bytes);
-    return output_path.string();
+    std::filesystem::path temp_output = output_path;
+    std::error_code ec;
+    if (std::filesystem::equivalent(output_path, input_path, ec)) {
+        temp_output = output_path.parent_path() / (output_path.stem().string() + "._jmgdec" + output_path.extension().string());
+    }
+
+    ProgressReporter progress;
+    auto trailer_cb = [&](double frac) {
+        progress.Update(0.05 + 0.90 * frac, "archive", input_path);
+    };
+    if (TryDecryptTrailerStream(input_path, password, temp_output, trailer_cb)) {
+        progress.Update(1.0, "done", input_path);
+        if (!output_path.empty() && !std::filesystem::equivalent(output_path, temp_output, ec)) {
+            std::filesystem::rename(temp_output, output_path);
+            temp_output = output_path;
+        }
+        progress.Finish();
+        return temp_output.string();
+    }
+    std::uint64_t fallback_limit = 64ull * 1024ull * 1024ull;
+    auto file_size = std::filesystem::file_size(input_path, ec);
+    if (!ec && file_size <= fallback_limit) {
+        Bytes file_bytes = ReadFileBytes(input_path);
+        Bytes payload;
+        Bytes trailer;
+        bool has_trailer = ExtractTrailer(file_bytes, payload, trailer);
+        if (has_trailer && !trailer.empty()) {
+            Bytes material = DeriveMaterial(password);
+            Bytes archive_key = basefwx::crypto::HkdfSha256(basefwx::constants::kImageCipherArchiveInfo, material, 32);
+            Bytes aad(basefwx::constants::kImageCipherArchiveInfo.begin(),
+                      basefwx::constants::kImageCipherArchiveInfo.end());
+            Bytes original_bytes = basefwx::crypto::AeadDecrypt(archive_key, trailer, aad);
+            WriteFileBytes(temp_output, original_bytes);
+            progress.Update(1.0, "done", input_path);
+            if (!output_path.empty() && !std::filesystem::equivalent(output_path, temp_output, ec)) {
+                std::filesystem::rename(temp_output, output_path);
+                temp_output = output_path;
+            }
+            progress.Finish();
+            return temp_output.string();
+        }
+    }
+
+    VideoInfo video = ProbeVideo(input_path);
+    AudioInfo audio = ProbeAudio(input_path);
+    if (!video.valid && !audio.valid) {
+        throw std::runtime_error("Unsupported media format");
+    }
+
+    std::filesystem::path temp_dir = CreateTempDir("basefwx-media");
+    try {
+        std::filesystem::path raw_video = temp_dir / "video.raw";
+        std::filesystem::path raw_video_out = temp_dir / "video.unscr.raw";
+        std::filesystem::path raw_audio = temp_dir / "audio.raw";
+        std::filesystem::path raw_audio_out = temp_dir / "audio.unscr.raw";
+        if (video.valid) {
+            progress.Update(0.05, "decode-video", input_path);
+            RunCommand({
+                "ffmpeg", "-y", "-i", input_path.string(),
+                "-map", "0:v:0",
+                "-f", "rawvideo",
+                "-pix_fmt", "rgb24",
+                raw_video.string()
+            });
+        }
+        if (audio.valid) {
+            progress.Update(0.15, "decode-audio", input_path);
+            RunCommand({
+                "ffmpeg", "-y", "-i", input_path.string(),
+                "-map", "0:a:0",
+                "-f", "s16le",
+                "-acodec", "pcm_s16le",
+                "-ar", std::to_string(audio.sample_rate),
+                "-ac", std::to_string(audio.channels),
+                raw_audio.string()
+            });
+        }
+
+        Bytes base_key = BaseKeyFromPassword(password);
+        if (video.valid) {
+            auto video_cb = [&](double frac) {
+                progress.Update(0.25 + 0.45 * frac, "unjmg-video", input_path);
+            };
+            UnscrambleVideoRaw(raw_video, raw_video_out, video, base_key, video_cb);
+        }
+        if (audio.valid) {
+            auto audio_cb = [&](double frac) {
+                progress.Update(0.70 + 0.20 * frac, "unjmg-audio", input_path);
+            };
+            UnscrambleAudioRaw(raw_audio, raw_audio_out, audio, base_key, audio_cb);
+        }
+
+        std::vector<std::string> cmd = {
+            "ffmpeg", "-y"
+        };
+        if (video.valid) {
+            cmd.insert(cmd.end(), {
+                "-f", "rawvideo",
+                "-pix_fmt", "rgb24",
+                "-s", std::to_string(video.width) + "x" + std::to_string(video.height),
+                "-r", std::to_string(video.fps > 0.0 ? video.fps : 30.0),
+                "-i", raw_video_out.string()
+            });
+        }
+        if (audio.valid) {
+            cmd.insert(cmd.end(), {
+                "-f", "s16le",
+                "-ar", std::to_string(audio.sample_rate),
+                "-ac", std::to_string(audio.channels),
+                "-i", raw_audio_out.string(),
+                "-shortest"
+            });
+        }
+        auto tags = ProbeMetadata(input_path);
+        auto decoded = DecryptMetadataArgs(tags, password);
+        if (!decoded.empty()) {
+            for (const auto& meta : decoded) {
+                cmd.push_back("-metadata");
+                cmd.push_back(meta);
+            }
+        } else {
+            cmd.push_back("-map_metadata");
+            cmd.push_back("-1");
+        }
+        if (video.valid) {
+            auto v_args = VideoCodecArgs(temp_output);
+            cmd.insert(cmd.end(), v_args.begin(), v_args.end());
+        }
+        if (audio.valid) {
+            auto a_args = AudioCodecArgs(temp_output);
+            cmd.insert(cmd.end(), a_args.begin(), a_args.end());
+        }
+        auto c_args = ContainerArgs(temp_output);
+        cmd.insert(cmd.end(), c_args.begin(), c_args.end());
+        cmd.push_back(temp_output.string());
+        progress.Update(0.95, "encode", input_path);
+        RunCommand(cmd);
+        progress.Update(1.0, "done", input_path);
+    } catch (...) {
+        std::filesystem::remove_all(temp_dir, ec);
+        throw;
+    }
+    std::filesystem::remove_all(temp_dir, ec);
+
+    if (!output_path.empty() && !std::filesystem::equivalent(output_path, temp_output, ec)) {
+        std::filesystem::rename(temp_output, output_path);
+        temp_output = output_path;
+    }
+    progress.Finish();
+    return temp_output.string();
 }
 
 }  // namespace basefwx::imagecipher

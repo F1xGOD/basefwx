@@ -13,6 +13,8 @@ struct FileOptions {
     bool use_master = true;
     bool enable_aead = true;
     bool enable_obfuscation = true;
+    bool compress = false;
+    bool keep_input = false;
     std::size_t stream_threshold = basefwx::constants::kStreamThreshold;
     std::size_t stream_chunk_size = basefwx::constants::kStreamChunkSize;
 };

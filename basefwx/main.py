@@ -1,5 +1,6 @@
 # BASEFWX ENCRYPTION ENGINE ->
 
+import os as _os_module
 import re as _re_module
 
 
@@ -23,6 +24,11 @@ class basefwx:
     import time
     import tempfile
     import string
+    import tarfile
+    import lzma
+    import shutil
+    import subprocess
+    import math
     re = _re_module
     try:
         import colorama
@@ -44,6 +50,19 @@ class basefwx:
     from cryptography.exceptions import InvalidTag
     from cryptography.hazmat.primitives import hmac
 
+    @staticmethod
+    def _env_int(name: str) -> "basefwx.typing.Optional[int]":
+        value = _os_module.getenv(name)
+        if not value:
+            return None
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError):
+            return None
+        if parsed <= 0:
+            return None
+        return parsed
+
     MAX_INPUT_BYTES = 20 * 1024 * 1024 * 1024  # allow up to ~20 GiB per file
     PROGRESS_BAR_WIDTH = 30
     FWX_DELIM = "\x1f\x1e"
@@ -51,6 +70,11 @@ class basefwx:
     LEGACY_FWX_DELIM = "A8igTOmG"
     LEGACY_FWX_HEAVY_DELIM = "673827837628292873"
     META_DELIM = "::FWX-META::"
+    PACK_META_KEY = "ENC-P"
+    PACK_TAR_GZ = "g"
+    PACK_TAR_XZ = "x"
+    PACK_SUFFIX_GZ = ".tgz"
+    PACK_SUFFIX_XZ = ".txz"
     ENGINE_VERSION = "3.4.1"
     MASTER_PQ_ALG = "ml-kem-768"
     MASTER_PQ_PUBLIC = b"eJwBoARf+9Kzz6BzXHi8fntsVzKBAxCzV6VTNfbCvfAqh+jMdEfccE7UR4Nnbl+roH3ML55Adeabfs6kZ3CgSZijRTWJDbaUXj+LX391QXOnTa7rNEg1qTaxSa1DKmFZwY+kCRlyjP8BWUY0P9c2NLHDiHlBObDRjUyWrbb1YdiJXfITJz3bvBlnRLTQIRSpH042LZy1CwpQT+C0ISO5tc9qkDocWZ3Jx8+Avd0KcY2TP8rcCY4kY/7JR4xWiRV6e1wnz3BnQxdivx4jPusMo8VnlInHhYlSJvEIHDgqo5WjScSIKkT0UNXknxWgb5mpoB/poD4gtyCWA57iGarFM6k3oZZnRjMilMAwvQ8bGCRxnDLsnJPCEpTkDP2Ek7LDSGv6KaG3ManmIaAoZH4mpxAmePaRkTSKYuE7vMeVqeyxl394QUZrfi/YirIhfom6SYIChFzlAgHAZCPMx+9FVzmVxicnvlKRPCWITkFRnkVraxZ8x9S4OR9HzT4G0BEsj/sKOY5VeAi6c82ricH6HnaJB+eEvhjiTssSoxnBX9vUbftnLjFqTMPctY1DgmTabWz1U23rffPSqo0zeDxIlR0FD1foxs9gc9JSR/MChL2ZzFLAUqq7QBPWxHsrjN8VO86FyG64VncSQvtwEPR5kRQgEgoBkqsHHnOVBov3le/mB9oBbPDzCTw7rPchTzNWVvwDOS/bfkmQIlOKKENZLvMInF6ktaLGiAzhy0eob5g7dMFwLCnDU/iQjQqZbyIMVCqMuBlgTFHhPWgKErNwcnIMPEoYg+mstgJIq272I7VCX9usoSjWXZX6SViIpg8FrS2RFCzmXPEpbCQHcg9arbxCD+cZIWfxVmxFx1y4Od2Eb/FkZTt6Maq4zMNalRfBjX/0C0C1aetQWiJ8HCvkZufLlYwAwovRJE+7wkXDgQLMe6dwzzo6ydEJM32kJBuzhjxjMGd4BY8JGKzKVBeJhsMLaViBGw5SEiXWgZhUbECktcJDrfc6r8PBgcQwV1TpU3pTcNNHFt1YoAMCpO9XdO7cDfnbaqRbBUY0hr3sI3P0x962F7rkR45xEGzFZp9XfmsRmG5qHfSTk4EGyS0cdFoDZ51Rvw/4e738wo4QRJGkDBGagROXzbwnmpSpV+cxXvK0Su5FIaGhJQHJqTQTv94Gy710eE43GffqEuT6D4X6mRclSBNGTepgGq6laanzJSp3UcVwFZwCNjdbCB+ycdkqR77muhUgnxHAcZvRf4oXx0pnkGx2Px/gvvAaZGLmqv16jFFZj3pocKlIrVBiSduoYy/CBkehUQDoeykgZs73zhGklAi1NBTBkXjgasYySO2UuS8bSINJfKLqUHOsfbB6sEOLilCaPfCcRtqafMqYJwdXW+KwgpmXqbV0I+nyqAVMIpRmwMYjpBxEkV5CMRgHyEnMr2cBXuv8RcjZfLmMbCATfNcJdEuQUXDjfE4nr94DHERSk8y3IkE7paIUbGV4jgGnFtEYUiZ6ADewLTFDDTmFpRA7jCjytuukSqmmdchYYLIgQnRmTRk3AZbnMbwxkgwy86skVNZZYldaxFdWvulRMd1FgnQn5Q=="
@@ -92,6 +116,17 @@ class basefwx:
     USER_KDF = os.getenv("BASEFWX_USER_KDF", USER_KDF_DEFAULT).lower()
     if not _ARGON2_AVAILABLE:
         USER_KDF_ITERATIONS = 32_768
+    _TEST_KDF_ITERS = _env_int("BASEFWX_TEST_KDF_ITERS")
+    _USER_KDF_ITERS_ENV = _env_int("BASEFWX_USER_KDF_ITERS")
+    if _USER_KDF_ITERS_ENV is not None:
+        USER_KDF_ITERATIONS = _USER_KDF_ITERS_ENV
+    elif _TEST_KDF_ITERS is not None:
+        USER_KDF_ITERATIONS = _TEST_KDF_ITERS
+    _HEAVY_PBKDF2_ITERS_ENV = _env_int("BASEFWX_HEAVY_PBKDF2_ITERS")
+    if _HEAVY_PBKDF2_ITERS_ENV is not None:
+        HEAVY_PBKDF2_ITERATIONS = _HEAVY_PBKDF2_ITERS_ENV
+    elif _TEST_KDF_ITERS is not None:
+        HEAVY_PBKDF2_ITERATIONS = _TEST_KDF_ITERS
     _WARNED_ARGON2_MISSING = False
     _MASTER_PUBKEY_OVERRIDE: typing.ClassVar[typing.Optional[bytes]] = None
     _CPU_COUNT = max(1, os.cpu_count() or 1)
@@ -108,11 +143,18 @@ class basefwx:
     FWXAES_SALT_LEN = 16
     FWXAES_IV_LEN = 12
     FWXAES_PBKDF2_ITERS = 200_000
+    _FWXAES_PBKDF2_ITERS_ENV = _env_int("BASEFWX_FWXAES_PBKDF2_ITERS")
+    if _FWXAES_PBKDF2_ITERS_ENV is not None:
+        FWXAES_PBKDF2_ITERS = _FWXAES_PBKDF2_ITERS_ENV
+    elif _TEST_KDF_ITERS is not None:
+        FWXAES_PBKDF2_ITERS = _TEST_KDF_ITERS
     FWXAES_KEY_LEN = 32
     FWXAES_AAD = b"fwxAES"
     NORMALIZE_THRESHOLD = 8 * 1024
     ZW0 = "\u200b"
     ZW1 = "\u200c"
+    FWX_PACK_MAGIC = b"FWXPK1"
+    FWX_PACK_HEADER_LEN = len(FWX_PACK_MAGIC) + 1 + 8
     _CODE_MAP: typing.ClassVar[dict[str, str]] = {
         'a': 'e*1', 'b': '&hl', 'c': '*&Gs', 'd': '*YHA', 'e': 'K5a{', 'f': '(*HGA(', 'g': '*&GD2',
         'h': '+*jsGA', 'i': '(aj*a', 'j': 'g%', 'k': '&G{A', 'l': '/IHa', 'm': '*(oa', 'n': '*KA^7',
@@ -725,7 +767,8 @@ class basefwx:
         kdf_iters: "basefwx.typing.Optional[int]" = None,
         argon2_time_cost: "basefwx.typing.Optional[int]" = None,
         argon2_memory_cost: "basefwx.typing.Optional[int]" = None,
-        argon2_parallelism: "basefwx.typing.Optional[int]" = None
+        argon2_parallelism: "basefwx.typing.Optional[int]" = None,
+        pack: "basefwx.typing.Optional[str]" = None
     ) -> str:
         if strip:
             return ""
@@ -753,6 +796,8 @@ class basefwx:
             info["ENC-ARGON2-MEM"] = str(argon2_memory_cost)
         if argon2_parallelism is not None:
             info["ENC-ARGON2-PAR"] = str(argon2_parallelism)
+        if pack:
+            info[basefwx.PACK_META_KEY] = str(pack)
         data = basefwx.json.dumps(info, separators=(',', ':')).encode('utf-8')
         return basefwx.base64.b64encode(data).decode('utf-8')
 
@@ -789,6 +834,137 @@ class basefwx:
             basefwx.os.utime(path, (0, 0))
         except Exception:
             pass
+
+    @staticmethod
+    def _remove_input(
+        path: "basefwx.pathlib.Path",
+        keep_input: bool,
+        output_path: "basefwx.typing.Optional[basefwx.pathlib.Path]" = None
+    ) -> None:
+        if keep_input:
+            return
+        try:
+            if output_path is not None:
+                norm_in = basefwx._normalize_path(path)
+                norm_out = basefwx._normalize_path(output_path)
+                if norm_in == norm_out:
+                    return
+        except Exception:
+            pass
+        try:
+            if path.is_dir():
+                basefwx.shutil.rmtree(path)
+            else:
+                basefwx.os.remove(path)
+        except FileNotFoundError:
+            pass
+
+    @staticmethod
+    def _pack_mode_for_path(path: "basefwx.pathlib.Path", compress: bool) -> str:
+        if path.is_dir():
+            return basefwx.PACK_TAR_XZ if compress else basefwx.PACK_TAR_GZ
+        if compress:
+            return basefwx.PACK_TAR_XZ
+        return ""
+
+    @staticmethod
+    def _pack_input_to_archive(
+        path: "basefwx.pathlib.Path",
+        compress: bool,
+        reporter: "basefwx.typing.Optional[basefwx._ProgressReporter]" = None,
+        file_index: int = 0
+    ) -> "basefwx.typing.Optional[tuple[basefwx.pathlib.Path, str, basefwx.tempfile.TemporaryDirectory]]":
+        pack_flag = basefwx._pack_mode_for_path(path, compress)
+        if not pack_flag:
+            return None
+        temp_dir = basefwx.tempfile.TemporaryDirectory(prefix="basefwx-pack-")
+        base_name = path.stem if path.is_file() else path.name
+        suffix = basefwx.PACK_SUFFIX_XZ if pack_flag == basefwx.PACK_TAR_XZ else basefwx.PACK_SUFFIX_GZ
+        archive_path = basefwx.pathlib.Path(temp_dir.name) / f"{base_name}{suffix}"
+        if reporter:
+            reporter.update(file_index, 0.08, "pack", path)
+        mode = "w:xz" if pack_flag == basefwx.PACK_TAR_XZ else "w:gz"
+        tar_kwargs: dict[str, basefwx.typing.Any] = {}
+        if pack_flag == basefwx.PACK_TAR_XZ:
+            tar_kwargs["preset"] = 9 | basefwx.lzma.PRESET_EXTREME
+        else:
+            tar_kwargs["compresslevel"] = 1
+        with basefwx.tarfile.open(archive_path, mode, **tar_kwargs) as tar:
+            tar.add(path, arcname=path.name)
+        return archive_path, pack_flag, temp_dir
+
+    @staticmethod
+    def _is_safe_tar_path(base_dir: "basefwx.pathlib.Path", member_name: str) -> bool:
+        if not member_name:
+            return False
+        member_path = basefwx.pathlib.PurePosixPath(member_name)
+        if member_path.is_absolute():
+            return False
+        if ".." in member_path.parts:
+            return False
+        resolved_base = base_dir.resolve()
+        resolved_target = (base_dir / member_path.as_posix()).resolve(strict=False)
+        return resolved_base == resolved_target or resolved_base in resolved_target.parents
+
+    @staticmethod
+    def _unpack_archive(
+        archive_path: "basefwx.pathlib.Path",
+        pack_flag: str,
+        reporter: "basefwx.typing.Optional[basefwx._ProgressReporter]" = None,
+        file_index: int = 0,
+        target_dir: "basefwx.typing.Optional[basefwx.pathlib.Path]" = None
+    ) -> "basefwx.pathlib.Path":
+        mode = "r:xz" if pack_flag == basefwx.PACK_TAR_XZ else "r:gz"
+        target_dir = target_dir or archive_path.parent
+        roots: "basefwx.typing.Set[str]" = set()
+        if reporter:
+            reporter.update(file_index, 0.9, "unpack", archive_path)
+        with basefwx.tarfile.open(archive_path, mode) as tar:
+            members = tar.getmembers()
+            for member in members:
+                if not basefwx._is_safe_tar_path(target_dir, member.name):
+                    raise ValueError("Unsafe archive entry detected")
+                parts = basefwx.pathlib.PurePosixPath(member.name).parts
+                if parts:
+                    roots.add(parts[0])
+            tar.extractall(target_dir)
+        try:
+            archive_path.unlink()
+        except FileNotFoundError:
+            pass
+        if len(roots) == 1:
+            return target_dir / next(iter(roots))
+        return target_dir
+
+    @staticmethod
+    def _pack_flag_from_meta(meta: "basefwx.typing.Dict[str, basefwx.typing.Any]", ext: str) -> str:
+        flag = (meta.get(basefwx.PACK_META_KEY) or "").lower() if meta else ""
+        if flag in (basefwx.PACK_TAR_GZ, basefwx.PACK_TAR_XZ):
+            return flag
+        ext_lower = (ext or "").lower()
+        if ext_lower == basefwx.PACK_SUFFIX_GZ:
+            return basefwx.PACK_TAR_GZ
+        if ext_lower == basefwx.PACK_SUFFIX_XZ:
+            return basefwx.PACK_TAR_XZ
+        return ""
+
+    @staticmethod
+    def _maybe_unpack_output(
+        path: "basefwx.pathlib.Path",
+        pack_flag: str,
+        reporter: "basefwx.typing.Optional[basefwx._ProgressReporter]" = None,
+        file_index: int = 0,
+        strip_metadata: bool = False
+    ) -> "basefwx.pathlib.Path":
+        if not pack_flag:
+            return path
+        extracted = basefwx._unpack_archive(path, pack_flag, reporter, file_index)
+        if strip_metadata:
+            try:
+                basefwx._apply_strip_attributes(extracted)
+            except Exception:
+                pass
+        return extracted
 
     @staticmethod
     def _warn_on_metadata(meta: "basefwx.typing.Dict[str, basefwx.typing.Any]", expected_method: str) -> None:
@@ -1709,6 +1885,28 @@ class basefwx:
         return basefwx._bits_to_bytes(blob_bits)
 
     @staticmethod
+    def _wrap_pack_header(blob: bytes, pack_flag: str) -> bytes:
+        if pack_flag not in (basefwx.PACK_TAR_GZ, basefwx.PACK_TAR_XZ):
+            raise ValueError("Unsupported pack flag")
+        header = basefwx.FWX_PACK_MAGIC + bytes([ord(pack_flag)]) + len(blob).to_bytes(8, 'big')
+        return header + blob
+
+    @staticmethod
+    def _unwrap_pack_header(data: bytes) -> "basefwx.typing.Optional[tuple[str, bytes]]":
+        if len(data) < basefwx.FWX_PACK_HEADER_LEN:
+            return None
+        if not data.startswith(basefwx.FWX_PACK_MAGIC):
+            return None
+        flag = chr(data[len(basefwx.FWX_PACK_MAGIC)])
+        if flag not in (basefwx.PACK_TAR_GZ, basefwx.PACK_TAR_XZ):
+            return None
+        length_start = len(basefwx.FWX_PACK_MAGIC) + 1
+        length = int.from_bytes(data[length_start:length_start + 8], 'big')
+        if length != len(data) - basefwx.FWX_PACK_HEADER_LEN:
+            return None
+        return flag, data[basefwx.FWX_PACK_HEADER_LEN:]
+
+    @staticmethod
     def fwxAES_file(
         file: "basefwx.typing.Union[str, basefwx.pathlib.Path]",
         password: "basefwx.typing.Union[str, bytes, bytearray, memoryview]",
@@ -1716,7 +1914,11 @@ class basefwx:
         output: "basefwx.typing.Optional[str]" = None,
         normalize: bool = False,
         normalize_threshold: "basefwx.typing.Optional[int]" = None,
-        cover_phrase: str = "low taper fade"
+        cover_phrase: str = "low taper fade",
+        compress: bool = False,
+        ignore_media: bool = False,
+        keep_meta: bool = False,
+        keep_input: bool = False
     ) -> str:
         path = basefwx._normalize_path(file)
         threshold = basefwx.NORMALIZE_THRESHOLD if normalize_threshold is None else int(normalize_threshold)
@@ -1731,18 +1933,54 @@ class basefwx:
                     raise ValueError("Input is not a valid FWX1 blob or UTF-8 normalized text") from exc
                 blob = basefwx.normalize_unwrap(text)
             plain = basefwx.fwxAES_decrypt_raw(blob, password)
+            packed = basefwx._unwrap_pack_header(plain)
+            if packed:
+                pack_flag, archive_bytes = packed
+                dest_path = basefwx._normalize_path(output) if output else path.parent
+                dest_dir = dest_path if dest_path.exists() and dest_path.is_dir() else dest_path.parent
+                temp_dir = basefwx.tempfile.TemporaryDirectory(prefix="basefwx-pack-dec-")
+                try:
+                    suffix = basefwx.PACK_SUFFIX_XZ if pack_flag == basefwx.PACK_TAR_XZ else basefwx.PACK_SUFFIX_GZ
+                    archive_path = basefwx.pathlib.Path(temp_dir.name) / f"{path.stem}{suffix}"
+                    archive_path.write_bytes(archive_bytes)
+                    extracted = basefwx._unpack_archive(archive_path, pack_flag, target_dir=dest_dir)
+                    return str(extracted)
+                finally:
+                    temp_dir.cleanup()
             out_path = basefwx._normalize_path(output) if output else path.with_suffix('')
             with open(out_path, 'wb') as handle:
                 handle.write(plain)
             return str(out_path)
-        plaintext = path.read_bytes()
-        blob = basefwx.fwxAES_encrypt_raw(plaintext, password)
+        if not ignore_media:
+            try:
+                media_ext = path.suffix.lower()
+                if media_ext in (basefwx.MediaCipher.IMAGE_EXTS | basefwx.MediaCipher.VIDEO_EXTS | basefwx.MediaCipher.AUDIO_EXTS):
+                    return basefwx.MediaCipher.encrypt_media(
+                        str(path),
+                        password,
+                        output=output,
+                        keep_meta=keep_meta,
+                        keep_input=keep_input
+                    )
+            except Exception:
+                pass
+        pack_ctx = basefwx._pack_input_to_archive(path, compress, None, 0)
+        if pack_ctx:
+            archive_path, pack_flag, pack_temp = pack_ctx
+            try:
+                payload = basefwx._wrap_pack_header(archive_path.read_bytes(), pack_flag)
+            finally:
+                pack_temp.cleanup()
+        else:
+            payload = path.read_bytes()
+        blob = basefwx.fwxAES_encrypt_raw(payload, password)
         out_path = basefwx._normalize_path(output) if output else path.with_suffix('.fwx')
-        if normalize and len(plaintext) <= threshold:
+        if normalize and len(payload) <= threshold:
             text = basefwx.normalize_wrap(blob, cover_phrase)
             out_path.write_text(text, encoding="utf-8", newline="\n")
         else:
             out_path.write_bytes(blob)
+        basefwx._remove_input(path, keep_input, out_path)
         return str(out_path)
     # REVERSIBLE  - SECURITY: ❙
     @staticmethod
@@ -2100,14 +2338,20 @@ class basefwx:
             total_files: int = 1,
             strip_metadata: bool = False,
             use_master: bool = True,
-            master_pubkey: "basefwx.typing.Optional[bytes]" = None
+            master_pubkey: "basefwx.typing.Optional[bytes]" = None,
+            pack_flag: str = "",
+            output_path: "basefwx.typing.Optional[basefwx.pathlib.Path]" = None,
+            display_path: "basefwx.typing.Optional[basefwx.pathlib.Path]" = None,
+            keep_input: bool = False
     ) -> "basefwx.typing.Tuple[basefwx.pathlib.Path, int]":
         basefwx._ensure_existing_file(path)
         basefwx._ensure_size_limit(path)
+        display_path = display_path or path
+        output_path = output_path or path.with_suffix('.fwx')
         input_size = path.stat().st_size
         size_hint: "basefwx.typing.Optional[basefwx.typing.Tuple[int, int]]" = None
         if reporter:
-            reporter.update(file_index, 0.05, "prepare", path)
+            reporter.update(file_index, 0.05, "prepare", display_path)
 
         pubkey_bytes = master_pubkey if master_pubkey is not None else (basefwx._load_master_pq_public() if use_master else None)
         use_master_effective = use_master and not strip_metadata and pubkey_bytes is not None
@@ -2134,17 +2378,21 @@ class basefwx:
                 strip_metadata,
                 use_master,
                 master_pubkey,
-                input_size=input_size
+                pack_flag=pack_flag,
+                output_path=output_path,
+                display_path=display_path,
+                input_size=input_size,
+                keep_input=keep_input
             )
         data = path.read_bytes()
         if reporter:
-            reporter.update(file_index, 0.25, "base64", path)
+            reporter.update(file_index, 0.25, "base64", display_path)
 
         b64_payload = basefwx.base64.b64encode(data).decode('utf-8')
         ext_token = basefwx.b512encode(path.suffix or "", password, use_master=use_master_effective)
         data_token = basefwx.b512encode(b64_payload, password, use_master=use_master_effective)
         if reporter:
-            reporter.update(file_index, 0.65, "b256", path)
+            reporter.update(file_index, 0.65, "b256", display_path)
 
         kdf_used = (basefwx.USER_KDF or "argon2id").lower()
         use_aead = basefwx.ENABLE_B512_AEAD
@@ -2153,7 +2401,8 @@ class basefwx:
             strip_metadata,
             use_master_effective,
             aead="AESGCM" if use_aead else "NONE",
-            kdf=kdf_used
+            kdf=kdf_used,
+            pack=pack_flag or None
         )
         body = f"{ext_token}{basefwx.FWX_DELIM}{data_token}"
         payload = f"{metadata_blob}{basefwx.META_DELIM}{body}" if metadata_blob else body
@@ -2178,7 +2427,6 @@ class basefwx:
         else:
             output_bytes = payload_bytes
 
-        output_path = path.with_suffix('.fwx')
         with open(output_path, 'wb') as handle:
             handle.write(output_bytes)
 
@@ -2188,7 +2436,7 @@ class basefwx:
         if strip_metadata:
             basefwx._apply_strip_attributes(output_path)
             basefwx.os.chmod(output_path, 0)
-        basefwx.os.remove(path)
+        basefwx._remove_input(path, keep_input, output_path)
 
         if reporter:
             reporter.update(file_index, 1.0, "done", output_path, size_hint=size_hint)
@@ -2213,14 +2461,20 @@ class basefwx:
             strip_metadata: bool = False,
             use_master: bool = True,
             master_pubkey: "basefwx.typing.Optional[bytes]" = None,
+            pack_flag: str = "",
+            output_path: "basefwx.typing.Optional[basefwx.pathlib.Path]" = None,
+            display_path: "basefwx.typing.Optional[basefwx.pathlib.Path]" = None,
             *,
-            input_size: "basefwx.typing.Optional[int]" = None
+            input_size: "basefwx.typing.Optional[int]" = None,
+            keep_input: bool = False
     ) -> "basefwx.typing.Tuple[basefwx.pathlib.Path, int]":
         basefwx._ensure_existing_file(path)
         basefwx._ensure_size_limit(path)
+        display_path = display_path or path
+        output_path = output_path or path.with_suffix('.fwx')
         input_size = input_size if input_size is not None else path.stat().st_size
         if reporter:
-            reporter.update(file_index, 0.05, "prepare", path)
+            reporter.update(file_index, 0.05, "prepare", display_path)
         if not basefwx.ENABLE_B512_AEAD:
             raise RuntimeError("Streaming b512 encode requires AEAD mode")
 
@@ -2234,7 +2488,8 @@ class basefwx:
             "FWX512R",
             strip_metadata,
             use_master_effective,
-            mode="STREAM"
+            mode="STREAM",
+            pack=pack_flag or None
         )
         metadata_bytes = metadata_blob.encode('utf-8') if metadata_blob else b""
         metadata_len = len(metadata_bytes)
@@ -2263,24 +2518,23 @@ class basefwx:
         estimated_total_len = 4 + len_user + 4 + len_master + 4 + estimated_payload_len
         estimated_hint = (input_size, estimated_total_len)
         if reporter:
-            reporter.update(file_index, 0.12, "stream-setup", path, size_hint=estimated_hint)
+            reporter.update(file_index, 0.12, "stream-setup", display_path, size_hint=estimated_hint)
 
         temp_dir = basefwx.tempfile.TemporaryDirectory(prefix="basefwx-b512-stream-")
         cleanup_paths: "basefwx.typing.List[str]" = []
-        output_path = path.with_suffix('.fwx')
         processed_plain = 0
 
         def _seal_progress(done_plain: int) -> None:
             if not reporter:
                 return
             fraction = 0.55 + 0.44 * (done_plain / plaintext_len if plaintext_len else 0.0)
-            reporter.update(file_index, fraction, "seal", path, size_hint=estimated_hint)
+            reporter.update(file_index, fraction, "seal", display_path, size_hint=estimated_hint)
 
         def _obf_progress(done_bytes: int, total_bytes: int) -> None:
             if not reporter:
                 return
             fraction = 0.2 + 0.70 * (done_bytes / total_bytes if total_bytes else 0.0)
-            reporter.update(file_index, fraction, "pb512-stream", path, size_hint=estimated_hint)
+            reporter.update(file_index, fraction, "pb512-stream", display_path, size_hint=estimated_hint)
 
         result: "basefwx.typing.Optional[basefwx.typing.Tuple[basefwx.pathlib.Path, int]]" = None
         try:
@@ -2340,7 +2594,7 @@ class basefwx:
             if strip_metadata:
                 basefwx._apply_strip_attributes(output_path)
                 basefwx.os.chmod(output_path, 0)
-            basefwx.os.remove(path)
+            basefwx._remove_input(path, keep_input, output_path)
             if reporter:
                 reporter.update(file_index, 1.0, "done", output_path, size_hint=actual_hint)
                 reporter.finalize_file(file_index, output_path, size_hint=actual_hint)
@@ -2373,16 +2627,22 @@ class basefwx:
             strip_metadata: bool = False,
             use_master: bool = True,
             master_pubkey: "basefwx.typing.Optional[bytes]" = None,
+            pack_flag: str = "",
+            output_path: "basefwx.typing.Optional[basefwx.pathlib.Path]" = None,
+            display_path: "basefwx.typing.Optional[basefwx.pathlib.Path]" = None,
             *,
-            input_size: "basefwx.typing.Optional[int]" = None
+            input_size: "basefwx.typing.Optional[int]" = None,
+            keep_input: bool = False
     ) -> "basefwx.typing.Tuple[basefwx.pathlib.Path, int]":
         basefwx._ensure_existing_file(path)
         basefwx._ensure_size_limit(path)
+        display_path = display_path or path
+        output_path = output_path or path.with_suffix('.fwx')
         input_size = input_size if input_size is not None else path.stat().st_size
         if password == "":
             raise ValueError("Password required for AES heavy streaming mode")
         if reporter:
-            reporter.update(file_index, 0.05, "prepare", path)
+            reporter.update(file_index, 0.05, "prepare", display_path)
         chunk_size = basefwx.STREAM_CHUNK_SIZE
         pubkey_bytes = master_pubkey if master_pubkey is not None else (basefwx._load_master_pq_public() if use_master else None)
         use_master_effective = use_master and not strip_metadata and pubkey_bytes is not None
@@ -2402,7 +2662,8 @@ class basefwx:
             kdf_iters=heavy_iters,
             argon2_time_cost=heavy_argon_time,
             argon2_memory_cost=heavy_argon_mem,
-            argon2_parallelism=heavy_argon_par
+            argon2_parallelism=heavy_argon_par,
+            pack=pack_flag or None
         )
         metadata_bytes = metadata_blob.encode('utf-8') if metadata_blob else b""
         aad = metadata_bytes if metadata_bytes else b""
@@ -2428,7 +2689,7 @@ class basefwx:
         )
         estimated_hint = (input_size, estimated_len)
         if reporter:
-            reporter.update(file_index, 0.12, "stream-setup", path, size_hint=estimated_hint)
+            reporter.update(file_index, 0.12, "stream-setup", display_path, size_hint=estimated_hint)
         if use_master_effective:
             kem_ciphertext, kem_shared = basefwx.ml_kem_768.encrypt(pubkey_bytes)
             master_payload = kem_ciphertext
@@ -2461,20 +2722,19 @@ class basefwx:
             encryptor.authenticate_additional_data(aad)
         temp_dir = basefwx.tempfile.TemporaryDirectory(prefix="basefwx-stream-")
         cleanup_paths: "basefwx.typing.List[str]" = []
-        output_path = path.with_suffix('.fwx')
         processed_plain = 0
         total_plain = plaintext_len
         def _aes_progress(done_plain: int, total_plain_bytes: int) -> None:
             if not reporter:
                 return
             fraction = 0.55 + 0.44 * (done_plain / total_plain_bytes if total_plain_bytes else 0.0)
-            reporter.update(file_index, fraction, "AES512", path, size_hint=estimated_hint)
+            reporter.update(file_index, fraction, "AES512", display_path, size_hint=estimated_hint)
 
         def _obf_progress(done_bytes: int, total_bytes: int) -> None:
             if not reporter:
                 return
             fraction = 0.2 + 0.70 * (done_bytes / total_bytes if total_bytes else 0.0)
-            reporter.update(file_index, fraction, "pb512-stream", path, size_hint=estimated_hint)
+            reporter.update(file_index, fraction, "pb512-stream", display_path, size_hint=estimated_hint)
 
         try:
             with basefwx.tempfile.NamedTemporaryFile('w+b', dir=temp_dir.name, delete=False) as cipher_tmp:
@@ -2534,7 +2794,7 @@ class basefwx:
             if strip_metadata:
                 basefwx._apply_strip_attributes(output_path)
                 basefwx.os.chmod(output_path, 0)
-            basefwx.os.remove(path)
+            basefwx._remove_input(path, keep_input, output_path)
             if reporter:
                 reporter.update(file_index, 1.0, "done", output_path, size_hint=actual_hint)
                 reporter.finalize_file(file_index, output_path, size_hint=actual_hint)
@@ -2676,6 +2936,7 @@ class basefwx:
             reporter.update(file_index, 0.65, "base64", path)
 
         decoded_bytes = basefwx.base64.b64decode(data_b64)
+        pack_flag = basefwx._pack_flag_from_meta(meta, ext)
         target = path.with_suffix('')
         if ext:
             target = target.with_suffix(ext)
@@ -2685,7 +2946,9 @@ class basefwx:
 
         basefwx.os.remove(path)
 
-        if strip_metadata:
+        if pack_flag:
+            target = basefwx._maybe_unpack_output(target, pack_flag, reporter, file_index, strip_metadata)
+        elif strip_metadata:
             basefwx._apply_strip_attributes(target)
         output_len = len(decoded_bytes)
         size_hint = (input_size, output_len)
@@ -2881,6 +3144,7 @@ class basefwx:
                         raise ValueError("Streaming payload contained unexpected trailing data")
 
             target = path.with_suffix('')
+            ext_text = ""
             if ext_bytes:
                 try:
                     ext_text = ext_bytes.decode('utf-8')
@@ -2888,17 +3152,20 @@ class basefwx:
                     ext_text = ""
                 if ext_text:
                     target = target.with_suffix(ext_text)
+            pack_flag = basefwx._pack_flag_from_meta(meta, ext_text)
 
             if decoded_path is None:
                 raise RuntimeError("Missing decoded payload")
             basefwx.os.replace(decoded_path, target)
             cleanup_paths.remove(decoded_path)
-            if strip_metadata:
-                basefwx._apply_strip_attributes(target)
             basefwx.os.remove(path)
             if plaintext_path and plaintext_path in cleanup_paths:
                 basefwx.os.remove(plaintext_path)
                 cleanup_paths.remove(plaintext_path)
+            if pack_flag:
+                target = basefwx._maybe_unpack_output(target, pack_flag, reporter, file_index, strip_metadata)
+            elif strip_metadata:
+                basefwx._apply_strip_attributes(target)
             output_len = original_size
             size_hint = (input_size, output_len)
             if reporter:
@@ -2914,7 +3181,13 @@ class basefwx:
             temp_dir.cleanup()
 
     @staticmethod
-    def b512file_encode(file: str, code: str, strip_metadata: bool = False, use_master: bool = True):
+    def b512file_encode(
+        file: str,
+        code: str,
+        strip_metadata: bool = False,
+        use_master: bool = True,
+        keep_input: bool = False
+    ):
         try:
             pubkey_bytes = basefwx._load_master_pq_public() if use_master else None
             effective_use_master = use_master and not strip_metadata and pubkey_bytes is not None
@@ -2925,7 +3198,8 @@ class basefwx:
                 password,
                 strip_metadata=strip_metadata,
                 use_master=effective_use_master,
-                master_pubkey=pubkey_bytes
+                master_pubkey=pubkey_bytes,
+                keep_input=keep_input
             )
             return "SUCCESS!"
         except Exception as exc:
@@ -2939,7 +3213,9 @@ class basefwx:
             strip_metadata: bool = False,
             use_master: bool = True,
             master_pubkey: "basefwx.typing.Optional[bytes]" = None,
-            silent: bool = False
+            silent: bool = False,
+            compress: bool = False,
+            keep_input: bool = False
     ):
         paths = basefwx._coerce_file_list(files)
         encode_use_master = use_master and not strip_metadata and master_pubkey is not None
@@ -2959,14 +3235,12 @@ class basefwx:
 
             def _process_with_reporter(idx: int, path: "basefwx.pathlib.Path") -> tuple[str, str]:
                 try:
-                    basefwx._ensure_existing_file(path)
-                except FileNotFoundError:
-                    if reporter:
-                        reporter.update(idx, 0.0, "missing", path)
-                        reporter.finalize_file(idx, path)
-                    return str(path), "FAIL!"
-                try:
-                    if path.suffix.lower() == ".fwx":
+                    if not path.exists():
+                        if reporter:
+                            reporter.update(idx, 0.0, "missing", path)
+                            reporter.finalize_file(idx, path)
+                        return str(path), "FAIL!"
+                    if path.suffix.lower() == ".fwx" and path.is_file():
                         basefwx._b512_decode_path(
                             path,
                             resolved_password,
@@ -2977,16 +3251,30 @@ class basefwx:
                             decode_use_master
                         )
                     else:
-                        basefwx._b512_encode_path(
-                            path,
-                            resolved_password,
-                            reporter,
-                            idx,
-                            len(paths),
-                            strip_metadata,
-                            encode_use_master,
-                            master_pubkey
-                        )
+                        pack_ctx = basefwx._pack_input_to_archive(path, compress, reporter, idx)
+                        pack_flag = pack_ctx[1] if pack_ctx else ""
+                        pack_temp = pack_ctx[2] if pack_ctx else None
+                        source_path = pack_ctx[0] if pack_ctx else path
+                        try:
+                            basefwx._b512_encode_path(
+                                source_path,
+                                resolved_password,
+                                reporter,
+                                idx,
+                                len(paths),
+                                strip_metadata,
+                                encode_use_master,
+                                master_pubkey,
+                                pack_flag=pack_flag,
+                                output_path=path.with_suffix('.fwx'),
+                                display_path=path,
+                                keep_input=keep_input
+                            )
+                            if pack_ctx:
+                                basefwx._remove_input(path, keep_input, output_path=path.with_suffix('.fwx'))
+                        finally:
+                            if pack_temp is not None:
+                                pack_temp.cleanup()
                     return str(path), "SUCCESS!"
                 except Exception as exc:
                     if reporter:
@@ -2996,8 +3284,9 @@ class basefwx:
 
             def _process_without_reporter(path: "basefwx.pathlib.Path") -> tuple[str, str]:
                 try:
-                    basefwx._ensure_existing_file(path)
-                    if path.suffix.lower() == ".fwx":
+                    if not path.exists():
+                        return str(path), "FAIL!"
+                    if path.suffix.lower() == ".fwx" and path.is_file():
                         basefwx._b512_decode_path(
                             path,
                             resolved_password,
@@ -3008,19 +3297,31 @@ class basefwx:
                             decode_use_master
                         )
                     else:
-                        basefwx._b512_encode_path(
-                            path,
-                            resolved_password,
-                            None,
-                            0,
-                            len(paths),
-                            strip_metadata,
-                            encode_use_master,
-                            master_pubkey
-                        )
+                        pack_ctx = basefwx._pack_input_to_archive(path, compress, None, 0)
+                        pack_flag = pack_ctx[1] if pack_ctx else ""
+                        pack_temp = pack_ctx[2] if pack_ctx else None
+                        source_path = pack_ctx[0] if pack_ctx else path
+                        try:
+                            basefwx._b512_encode_path(
+                                source_path,
+                                resolved_password,
+                                None,
+                                0,
+                                len(paths),
+                                strip_metadata,
+                                encode_use_master,
+                                master_pubkey,
+                                pack_flag=pack_flag,
+                                output_path=path.with_suffix('.fwx'),
+                                display_path=path,
+                                keep_input=keep_input
+                            )
+                            if pack_ctx:
+                                basefwx._remove_input(path, keep_input, output_path=path.with_suffix('.fwx'))
+                        finally:
+                            if pack_temp is not None:
+                                pack_temp.cleanup()
                     return str(path), "SUCCESS!"
-                except FileNotFoundError:
-                    return str(path), "FAIL!"
                 except Exception:
                     return str(path), "FAIL!"
 
@@ -3235,6 +3536,514 @@ class basefwx:
             basefwx._del('archive_key')
             print(f"✅ Decrypted image → {output_path}")
             return str(output_path)
+
+    class MediaCipher:
+        """Media cipher for images/videos/audio with deterministic shuffling + AES-CTR masking."""
+
+        VIDEO_GROUP_SECONDS = 1.0
+        VIDEO_BLOCK_SIZE = 16
+        AUDIO_BLOCK_SECONDS = 0.05
+        AUDIO_GROUP_SECONDS = 1.0
+
+        IMAGE_EXTS = {
+            ".png", ".jpg", ".jpeg", ".bmp", ".tga", ".gif", ".webp",
+            ".tif", ".tiff", ".heic", ".heif", ".avif", ".ico"
+        }
+        VIDEO_EXTS = {
+            ".mp4", ".mkv", ".mov", ".avi", ".webm", ".m4v", ".flv", ".wmv",
+            ".mpg", ".mpeg", ".3gp", ".3g2", ".ts", ".m2ts"
+        }
+        AUDIO_EXTS = {
+            ".mp3", ".wav", ".flac", ".aac", ".m4a", ".ogg", ".opus", ".wma", ".aiff", ".alac"
+        }
+
+        @staticmethod
+        def _ensure_ffmpeg() -> None:
+            if basefwx.shutil.which("ffmpeg") and basefwx.shutil.which("ffprobe"):
+                return
+            raise RuntimeError("ffmpeg/ffprobe are required for audio/video processing")
+
+        @staticmethod
+        def _parse_rate(rate: str) -> float:
+            if not rate or rate == "0/0":
+                return 0.0
+            if "/" in rate:
+                num, den = rate.split("/", 1)
+                try:
+                    return float(num) / float(den)
+                except Exception:
+                    return 0.0
+            try:
+                return float(rate)
+            except Exception:
+                return 0.0
+
+        @staticmethod
+        def _probe_streams(path: "basefwx.pathlib.Path") -> "dict[str, basefwx.typing.Any]":
+            basefwx.MediaCipher._ensure_ffmpeg()
+            cmd = [
+                "ffprobe",
+                "-v", "error",
+                "-show_entries", "stream=codec_type,width,height,avg_frame_rate,r_frame_rate,sample_rate,channels",
+                "-of", "json",
+                str(path)
+            ]
+            result = basefwx.subprocess.run(cmd, capture_output=True, text=True)
+            if result.returncode != 0:
+                raise RuntimeError(f"ffprobe failed: {result.stderr.strip() or 'unknown error'}")
+            data = basefwx.json.loads(result.stdout or "{}")
+            streams = data.get("streams", []) or []
+            video = None
+            audio = None
+            for stream in streams:
+                if stream.get("codec_type") == "video" and video is None:
+                    video = stream
+                elif stream.get("codec_type") == "audio" and audio is None:
+                    audio = stream
+            info: dict[str, basefwx.typing.Any] = {}
+            if video:
+                fps = basefwx.MediaCipher._parse_rate(
+                    video.get("avg_frame_rate") or video.get("r_frame_rate") or ""
+                )
+                info["video"] = {
+                    "width": int(video.get("width") or 0),
+                    "height": int(video.get("height") or 0),
+                    "fps": fps
+                }
+            if audio:
+                info["audio"] = {
+                    "sample_rate": int(audio.get("sample_rate") or 0),
+                    "channels": int(audio.get("channels") or 0)
+                }
+            return info
+
+        @staticmethod
+        def _probe_metadata(path: "basefwx.pathlib.Path") -> "dict[str, str]":
+            basefwx.MediaCipher._ensure_ffmpeg()
+            cmd = [
+                "ffprobe",
+                "-v", "error",
+                "-show_entries", "format_tags",
+                "-of", "json",
+                str(path)
+            ]
+            result = basefwx.subprocess.run(cmd, capture_output=True, text=True)
+            if result.returncode != 0:
+                return {}
+            data = basefwx.json.loads(result.stdout or "{}")
+            tags = (data.get("format", {}) or {}).get("tags", {}) or {}
+            clean: dict[str, str] = {}
+            for key, value in tags.items():
+                if isinstance(value, str) and value:
+                    clean[str(key)] = value
+            return clean
+
+        @staticmethod
+        def _derive_base_key(password: "basefwx.typing.Union[str, bytes, bytearray, memoryview]") -> bytes:
+            return basefwx._derive_key_material(
+                basefwx._coerce_password_bytes(password),
+                basefwx.IMAGECIPHER_STREAM_INFO,
+                length=32,
+                iterations=max(200_000, basefwx.USER_KDF_ITERATIONS)
+            )
+
+        @staticmethod
+        def _unit_material(base_key: bytes, label: bytes, index: int, length: int) -> bytes:
+            info = label + index.to_bytes(8, "big")
+            return basefwx._hkdf_sha256(base_key, info=info, length=length)
+
+        @staticmethod
+        def _permute_indices(count: int, seed: int) -> "list[int]":
+            order = list(range(count))
+            st = seed & ((1 << 64) - 1)
+            for i in range(count - 1, 0, -1):
+                st, rnd = basefwx._splitmix64(st)
+                j = rnd % (i + 1)
+                if j != i:
+                    order[i], order[j] = order[j], order[i]
+            return order
+
+        @staticmethod
+        def _aes_ctr_transform(data: bytes, key: bytes, iv: bytes) -> bytes:
+            cipher = basefwx.Cipher(basefwx.algorithms.AES(key), basefwx.modes.CTR(iv))
+            encryptor = cipher.encryptor()
+            return encryptor.update(data) + encryptor.finalize()
+
+        @staticmethod
+        def _shuffle_frame_blocks(
+            frame: bytes,
+            width: int,
+            height: int,
+            channels: int,
+            seed: int,
+            block_size: int
+        ) -> bytes:
+            blocks_x = (width + block_size - 1) // block_size
+            blocks_y = (height + block_size - 1) // block_size
+            total_blocks = blocks_x * blocks_y
+            perm = basefwx.MediaCipher._permute_indices(total_blocks, seed)
+            out = bytearray(len(frame))
+            for dest_idx in range(total_blocks):
+                src_idx = perm[dest_idx]
+                dx = (dest_idx % blocks_x) * block_size
+                dy = (dest_idx // blocks_x) * block_size
+                sx = (src_idx % blocks_x) * block_size
+                sy = (src_idx // blocks_x) * block_size
+                copy_w = min(block_size, width - dx, width - sx)
+                copy_h = min(block_size, height - dy, height - sy)
+                for row in range(copy_h):
+                    src_off = ((sy + row) * width + sx) * channels
+                    dst_off = ((dy + row) * width + dx) * channels
+                    end = src_off + copy_w * channels
+                    out[dst_off:dst_off + copy_w * channels] = frame[src_off:end]
+            return bytes(out)
+
+        @staticmethod
+        def _scramble_video_raw(
+            raw_in: "basefwx.pathlib.Path",
+            raw_out: "basefwx.pathlib.Path",
+            width: int,
+            height: int,
+            fps: float,
+            base_key: bytes
+        ) -> None:
+            frame_size = width * height * 3
+            if frame_size <= 0:
+                raise ValueError("Invalid video dimensions")
+            group_frames = max(2, int(round((fps or 30.0) * basefwx.MediaCipher.VIDEO_GROUP_SECONDS)))
+            with open(raw_in, "rb") as src, open(raw_out, "wb") as dst:
+                frame_index = 0
+                group_index = 0
+                while True:
+                    group_start_index = frame_index
+                    frames: "list[bytes]" = []
+                    for _ in range(group_frames):
+                        data = src.read(frame_size)
+                        if not data or len(data) < frame_size:
+                            break
+                        material = basefwx.MediaCipher._unit_material(base_key, b"jmg-frame", frame_index, 48)
+                        key = material[:32]
+                        iv = material[32:48]
+                        masked = basefwx.MediaCipher._aes_ctr_transform(data, key, iv)
+                        seed_bytes = basefwx.MediaCipher._unit_material(base_key, b"jmg-fblk", frame_index, 16)
+                        seed = int.from_bytes(seed_bytes, "big")
+                        shuffled = basefwx.MediaCipher._shuffle_frame_blocks(
+                            masked,
+                            width,
+                            height,
+                            3,
+                            seed,
+                            basefwx.MediaCipher.VIDEO_BLOCK_SIZE
+                        )
+                        frames.append(shuffled)
+                        frame_index += 1
+                    if not frames:
+                        break
+                    seed_index = (group_index * 0x9E3779B97F4A7C15) ^ group_start_index
+                    seed_index &= (1 << 64) - 1
+                    seed_bytes = basefwx.MediaCipher._unit_material(base_key, b"jmg-fgrp", seed_index, 16)
+                    seed = int.from_bytes(seed_bytes, "big")
+                    perm = basefwx.MediaCipher._permute_indices(len(frames), seed)
+                    for idx in perm:
+                        dst.write(frames[idx])
+                    group_index += 1
+
+        @staticmethod
+        def _scramble_audio_raw(
+            raw_in: "basefwx.pathlib.Path",
+            raw_out: "basefwx.pathlib.Path",
+            sample_rate: int,
+            channels: int,
+            base_key: bytes
+        ) -> None:
+            if sample_rate <= 0 or channels <= 0:
+                raise ValueError("Invalid audio stream parameters")
+            samples_per_block = max(1, int(round(sample_rate * basefwx.MediaCipher.AUDIO_BLOCK_SECONDS)))
+            block_size = samples_per_block * channels * 2
+            group_blocks = max(2, int(round(basefwx.MediaCipher.AUDIO_GROUP_SECONDS / basefwx.MediaCipher.AUDIO_BLOCK_SECONDS)))
+            with open(raw_in, "rb") as src, open(raw_out, "wb") as dst:
+                block_index = 0
+                group_index = 0
+                while True:
+                    group_start_index = block_index
+                    blocks: "list[bytes]" = []
+                    for _ in range(group_blocks):
+                        data = src.read(block_size)
+                        if not data:
+                            break
+                        material = basefwx.MediaCipher._unit_material(base_key, b"jmg-ablock", block_index, 48)
+                        key = material[:32]
+                        iv = material[32:48]
+                        masked = basefwx.MediaCipher._aes_ctr_transform(data, key, iv)
+                        blocks.append(masked)
+                        block_index += 1
+                    if not blocks:
+                        break
+                    seed_index = (group_index * 0x9E3779B97F4A7C15) ^ group_start_index
+                    seed_index &= (1 << 64) - 1
+                    seed_bytes = basefwx.MediaCipher._unit_material(base_key, b"jmg-agrp", seed_index, 16)
+                    seed = int.from_bytes(seed_bytes, "big")
+                    perm = basefwx.MediaCipher._permute_indices(len(blocks), seed)
+                    for idx in perm:
+                        dst.write(blocks[idx])
+                    group_index += 1
+
+        @staticmethod
+        def _encrypt_metadata(
+            tags: "dict[str, str]",
+            password_text: str
+        ) -> "list[str]":
+            encoded_args: "list[str]" = []
+            for key, value in tags.items():
+                try:
+                    enc = basefwx.b512encode(value, password_text, use_master=False)
+                except Exception:
+                    continue
+                encoded_args.append(f"{key}={enc}")
+            return encoded_args
+
+        @staticmethod
+        def _append_trailer(
+            output_path: "basefwx.pathlib.Path",
+            password: "basefwx.typing.Union[str, bytes, bytearray, memoryview]",
+            original_bytes: bytes
+        ) -> None:
+            base_key = basefwx.MediaCipher._derive_base_key(password)
+            archive_key = basefwx._hkdf_sha256(base_key, info=basefwx.IMAGECIPHER_ARCHIVE_INFO, length=32)
+            archive_blob = basefwx._aead_encrypt(archive_key, original_bytes, basefwx.IMAGECIPHER_ARCHIVE_INFO)
+            with open(output_path, "ab") as handle:
+                handle.write(basefwx.IMAGECIPHER_TRAILER_MAGIC)
+                handle.write(len(archive_blob).to_bytes(4, "big"))
+                handle.write(archive_blob)
+
+        @staticmethod
+        def _decrypt_trailer(
+            file_bytes: bytes,
+            password: "basefwx.typing.Union[str, bytes, bytearray, memoryview]"
+        ) -> "basefwx.typing.Optional[bytes]":
+            magic = basefwx.IMAGECIPHER_TRAILER_MAGIC
+            marker_idx = file_bytes.rfind(magic)
+            if marker_idx < 0 or marker_idx + len(magic) + 4 > len(file_bytes):
+                return None
+            length = int.from_bytes(
+                file_bytes[marker_idx + len(magic):marker_idx + len(magic) + 4],
+                "big"
+            )
+            blob_start = marker_idx + len(magic) + 4
+            blob_end = blob_start + length
+            if blob_end > len(file_bytes):
+                return None
+            blob = file_bytes[blob_start:blob_end]
+            base_key = basefwx.MediaCipher._derive_base_key(password)
+            archive_key = basefwx._hkdf_sha256(base_key, info=basefwx.IMAGECIPHER_ARCHIVE_INFO, length=32)
+            return basefwx._aead_decrypt(archive_key, blob, basefwx.IMAGECIPHER_ARCHIVE_INFO)
+
+        @staticmethod
+        def _run_ffmpeg(cmd: "list[str]") -> None:
+            result = basefwx.subprocess.run(cmd, capture_output=True, text=True)
+            if result.returncode != 0:
+                raise RuntimeError(result.stderr.strip() or "ffmpeg failed")
+
+        @staticmethod
+        def _scramble_video(
+            path: "basefwx.pathlib.Path",
+            output_path: "basefwx.pathlib.Path",
+            password: "basefwx.typing.Union[str, bytes, bytearray, memoryview]",
+            keep_meta: bool
+        ) -> None:
+            password_text = basefwx._coerce_password_bytes(password).decode("utf-8", "ignore")
+            info = basefwx.MediaCipher._probe_streams(path)
+            video = info.get("video")
+            if not video:
+                raise ValueError("No video stream found")
+            width = int(video.get("width") or 0)
+            height = int(video.get("height") or 0)
+            fps = float(video.get("fps") or 0.0)
+            audio = info.get("audio")
+
+            temp_dir = basefwx.tempfile.TemporaryDirectory(prefix="basefwx-media-")
+            try:
+                raw_video = basefwx.pathlib.Path(temp_dir.name) / "video.raw"
+                raw_video_out = basefwx.pathlib.Path(temp_dir.name) / "video.scr.raw"
+                cmd_video = [
+                    "ffmpeg", "-y", "-i", str(path),
+                    "-map", "0:v:0",
+                    "-f", "rawvideo",
+                    "-pix_fmt", "rgb24",
+                    str(raw_video)
+                ]
+                basefwx.MediaCipher._run_ffmpeg(cmd_video)
+
+                raw_audio = None
+                raw_audio_out = None
+                sample_rate = 0
+                channels = 0
+                if audio:
+                    raw_audio = basefwx.pathlib.Path(temp_dir.name) / "audio.raw"
+                    raw_audio_out = basefwx.pathlib.Path(temp_dir.name) / "audio.scr.raw"
+                    sample_rate = int(audio.get("sample_rate") or 0)
+                    channels = int(audio.get("channels") or 0)
+                    cmd_audio = [
+                        "ffmpeg", "-y", "-i", str(path),
+                        "-map", "0:a:0",
+                        "-f", "s16le",
+                        "-acodec", "pcm_s16le",
+                        "-ar", str(sample_rate or 48000),
+                        "-ac", str(channels or 2),
+                        str(raw_audio)
+                    ]
+                    basefwx.MediaCipher._run_ffmpeg(cmd_audio)
+                    sample_rate = sample_rate or 48000
+                    channels = channels or 2
+
+                base_key = basefwx.MediaCipher._derive_base_key(password)
+                basefwx.MediaCipher._scramble_video_raw(raw_video, raw_video_out, width, height, fps, base_key)
+                if raw_audio and raw_audio_out:
+                    basefwx.MediaCipher._scramble_audio_raw(raw_audio, raw_audio_out, sample_rate, channels, base_key)
+
+                cmd = [
+                    "ffmpeg", "-y",
+                    "-f", "rawvideo",
+                    "-pix_fmt", "rgb24",
+                    "-s", f"{width}x{height}",
+                    "-r", str(fps or 30),
+                    "-i", str(raw_video_out)
+                ]
+                if raw_audio_out:
+                    cmd += [
+                        "-f", "s16le",
+                        "-ar", str(sample_rate),
+                        "-ac", str(channels),
+                        "-i", str(raw_audio_out),
+                        "-shortest"
+                    ]
+                if keep_meta:
+                    tags = basefwx.MediaCipher._probe_metadata(path)
+                    for meta in basefwx.MediaCipher._encrypt_metadata(tags, password_text):
+                        cmd += ["-metadata", meta]
+                else:
+                    cmd += ["-map_metadata", "-1"]
+                cmd.append(str(output_path))
+                basefwx.MediaCipher._run_ffmpeg(cmd)
+            finally:
+                temp_dir.cleanup()
+
+        @staticmethod
+        def _scramble_audio(
+            path: "basefwx.pathlib.Path",
+            output_path: "basefwx.pathlib.Path",
+            password: "basefwx.typing.Union[str, bytes, bytearray, memoryview]",
+            keep_meta: bool
+        ) -> None:
+            password_text = basefwx._coerce_password_bytes(password).decode("utf-8", "ignore")
+            info = basefwx.MediaCipher._probe_streams(path)
+            audio = info.get("audio")
+            if not audio:
+                raise ValueError("No audio stream found")
+            sample_rate = int(audio.get("sample_rate") or 0)
+            channels = int(audio.get("channels") or 0)
+            sample_rate = sample_rate or 48000
+            channels = channels or 2
+
+            temp_dir = basefwx.tempfile.TemporaryDirectory(prefix="basefwx-media-")
+            try:
+                raw_audio = basefwx.pathlib.Path(temp_dir.name) / "audio.raw"
+                raw_audio_out = basefwx.pathlib.Path(temp_dir.name) / "audio.scr.raw"
+                cmd_audio = [
+                    "ffmpeg", "-y", "-i", str(path),
+                    "-map", "0:a:0",
+                    "-f", "s16le",
+                    "-acodec", "pcm_s16le",
+                    "-ar", str(sample_rate),
+                    "-ac", str(channels),
+                    str(raw_audio)
+                ]
+                basefwx.MediaCipher._run_ffmpeg(cmd_audio)
+                base_key = basefwx.MediaCipher._derive_base_key(password)
+                basefwx.MediaCipher._scramble_audio_raw(raw_audio, raw_audio_out, sample_rate, channels, base_key)
+
+                cmd = [
+                    "ffmpeg", "-y",
+                    "-f", "s16le",
+                    "-ar", str(sample_rate),
+                    "-ac", str(channels),
+                    "-i", str(raw_audio_out)
+                ]
+                if keep_meta:
+                    tags = basefwx.MediaCipher._probe_metadata(path)
+                    for meta in basefwx.MediaCipher._encrypt_metadata(tags, password_text):
+                        cmd += ["-metadata", meta]
+                else:
+                    cmd += ["-map_metadata", "-1"]
+                cmd.append(str(output_path))
+                basefwx.MediaCipher._run_ffmpeg(cmd)
+            finally:
+                temp_dir.cleanup()
+
+        @staticmethod
+        def encrypt_media(
+            path: str,
+            password: "basefwx.typing.Union[str, bytes, bytearray, memoryview]",
+            output: str | None = None,
+            *,
+            keep_meta: bool = False,
+            keep_input: bool = False
+        ) -> str:
+            path_obj = basefwx._normalize_path(path)
+            basefwx._ensure_existing_file(path_obj)
+            if not password:
+                raise ValueError("Password is required for media encryption")
+            password_text = basefwx._coerce_password_bytes(password).decode("utf-8", "ignore")
+            output_path = basefwx.pathlib.Path(output) if output else path_obj
+            temp_output = output_path
+            if basefwx._normalize_path(output_path) == basefwx._normalize_path(path_obj):
+                temp_output = output_path.with_name(f"{output_path.stem}._jmg{output_path.suffix}")
+
+            original_bytes = path_obj.read_bytes()
+            suffix = path_obj.suffix.lower()
+            append_trailer = True
+            if suffix in basefwx.MediaCipher.IMAGE_EXTS:
+                result = basefwx.ImageCipher.encrypt_image_inv(str(path_obj), password_text, output=str(temp_output))
+                append_trailer = False
+            else:
+                info = basefwx.MediaCipher._probe_streams(path_obj)
+                if info.get("video"):
+                    basefwx.MediaCipher._scramble_video(path_obj, temp_output, password, keep_meta)
+                    result = str(temp_output)
+                elif info.get("audio"):
+                    basefwx.MediaCipher._scramble_audio(path_obj, temp_output, password, keep_meta)
+                    result = str(temp_output)
+                else:
+                    raise ValueError("Unsupported media format")
+
+            out_path = basefwx._normalize_path(result)
+            if out_path != temp_output:
+                temp_output = out_path
+            if append_trailer:
+                basefwx.MediaCipher._append_trailer(temp_output, password, original_bytes)
+            if basefwx._normalize_path(output_path) != basefwx._normalize_path(temp_output):
+                basefwx.os.replace(temp_output, output_path)
+                temp_output = output_path
+            basefwx._remove_input(path_obj, keep_input, output_path=temp_output)
+            return str(temp_output)
+
+        @staticmethod
+        def decrypt_media(
+            path: str,
+            password: "basefwx.typing.Union[str, bytes, bytearray, memoryview]",
+            output: str | None = None
+        ) -> str:
+            path_obj = basefwx._normalize_path(path)
+            basefwx._ensure_existing_file(path_obj)
+            if not password:
+                raise ValueError("Password is required for media decryption")
+            output_path = basefwx.pathlib.Path(output) if output else path_obj
+            data = path_obj.read_bytes()
+            plain = basefwx.MediaCipher._decrypt_trailer(data, password)
+            if plain is None:
+                raise ValueError("No media trailer found; unable to decrypt")
+            output_path.write_bytes(plain)
+            return str(output_path)
     def _aes_light_encode_path(
             path: "basefwx.pathlib.Path",
             password: str,
@@ -3242,10 +4051,16 @@ class basefwx:
             file_index: int = 0,
             strip_metadata: bool = False,
             use_master: bool = True,
-            master_pubkey: "basefwx.typing.Optional[bytes]" = None
+            master_pubkey: "basefwx.typing.Optional[bytes]" = None,
+            pack_flag: str = "",
+            output_path: "basefwx.typing.Optional[basefwx.pathlib.Path]" = None,
+            display_path: "basefwx.typing.Optional[basefwx.pathlib.Path]" = None,
+            keep_input: bool = False
     ) -> "basefwx.typing.Tuple[basefwx.pathlib.Path, int]":
         basefwx._ensure_existing_file(path)
         basefwx._ensure_size_limit(path)
+        display_path = display_path or path
+        output_path = output_path or path.with_suffix('.fwx')
         input_size = path.stat().st_size
         size_hint: "basefwx.typing.Optional[basefwx.typing.Tuple[int, int]]" = None
         if reporter:
@@ -3273,21 +4088,22 @@ class basefwx:
                     del buffer[:take_len]
                 if reporter and total:
                     fraction = 0.05 + 0.20 * (processed / total)
-                    reporter.update(file_index, fraction, "base64", path)
+                    reporter.update(file_index, fraction, "base64", display_path)
         if buffer:
             b64_parts.append(basefwx.base64.b64encode(buffer).decode('ascii'))
         b64_payload = ''.join(b64_parts)
         basefwx._del('b64_parts')
         basefwx._del('buffer')
         if reporter:
-            reporter.update(file_index, 0.25, "base64", path)
+            reporter.update(file_index, 0.25, "base64", display_path)
         kdf_used = (basefwx.USER_KDF or "argon2id").lower()
         metadata_blob = basefwx._build_metadata(
             "AES-LIGHT",
             strip_metadata,
             use_master_effective,
             kdf=kdf_used,
-            obfuscation=obfuscate_payload
+            obfuscation=obfuscate_payload,
+            pack=pack_flag or None
         )
         body = (path.suffix or "") + basefwx.FWX_DELIM + b64_payload
         plaintext = f"{metadata_blob}{basefwx.META_DELIM}{body}" if metadata_blob else body
@@ -3300,7 +4116,7 @@ class basefwx:
 
             def _enc_progress(done: int, total: int) -> None:
                 fraction = 0.55 + 0.41 * (done / total if total else 0.0)
-                reporter.update(file_index, fraction, "AES512", path, size_hint=enc_hint)
+                reporter.update(file_index, fraction, "AES512", display_path, size_hint=enc_hint)
 
             progress_cb = _enc_progress
 
@@ -3327,7 +4143,7 @@ class basefwx:
             processed_cipher += len(chunk)
             if reporter and total_cipher:
                 fraction = 0.8 + 0.12 * (processed_cipher / total_cipher)
-                reporter.update(file_index, min(fraction, 0.92), "compress", path)
+                reporter.update(file_index, min(fraction, 0.92), "compress", display_path)
         tail = compressor.flush()
         if tail:
             compressed_parts.append(tail)
@@ -3337,9 +4153,7 @@ class basefwx:
         size_hint = (input_size, output_len)
 
         if reporter:
-            reporter.update(file_index, 0.92, "compress", path, size_hint=size_hint)
-
-        output_path = path.with_suffix('.fwx')
+            reporter.update(file_index, 0.92, "compress", display_path, size_hint=size_hint)
         with open(output_path, 'wb') as handle:
             handle.write(compressed)
         basefwx._del('ciphertext')
@@ -3348,7 +4162,7 @@ class basefwx:
         if strip_metadata:
             basefwx._apply_strip_attributes(output_path)
             basefwx.os.chmod(output_path, 0)
-        basefwx.os.remove(path)
+        basefwx._remove_input(path, keep_input, output_path)
 
         if reporter:
             reporter.update(file_index, 1.0, "done", output_path, size_hint=size_hint)
@@ -3416,6 +4230,7 @@ class basefwx:
             reporter.update(file_index, 0.75, "base64", path)
 
         raw = basefwx.base64.b64decode(b64_payload)
+        pack_flag = basefwx._pack_flag_from_meta(meta, ext)
         target = path.with_suffix('')
         if ext:
             target = target.with_suffix(ext)
@@ -3425,7 +4240,9 @@ class basefwx:
 
         basefwx.os.remove(path)
 
-        if strip_metadata:
+        if pack_flag:
+            target = basefwx._maybe_unpack_output(target, pack_flag, reporter, file_index, strip_metadata)
+        elif strip_metadata:
             basefwx._apply_strip_attributes(target)
         output_len = len(raw)
         size_hint = (input_size, output_len)
@@ -3646,6 +4463,7 @@ class basefwx:
                         raise ValueError("Streaming payload contained unexpected trailing data")
 
             target = path.with_suffix('')
+            ext_text = ""
             if ext_bytes:
                 try:
                     ext_text = ext_bytes.decode('utf-8')
@@ -3653,17 +4471,20 @@ class basefwx:
                     ext_text = ""
                 if ext_text:
                     target = target.with_suffix(ext_text)
+            pack_flag = basefwx._pack_flag_from_meta(meta, ext_text)
 
             if decoded_path is None:
                 raise RuntimeError("Missing decoded payload")
             basefwx.os.replace(decoded_path, target)
             cleanup_paths.remove(decoded_path)
-            if strip_metadata:
-                basefwx._apply_strip_attributes(target)
             basefwx.os.remove(path)
             if plaintext_path and plaintext_path in cleanup_paths:
                 basefwx.os.remove(plaintext_path)
                 cleanup_paths.remove(plaintext_path)
+            if pack_flag:
+                target = basefwx._maybe_unpack_output(target, pack_flag, reporter, file_index, strip_metadata)
+            elif strip_metadata:
+                basefwx._apply_strip_attributes(target)
             output_len = original_size
             size_hint = (input_size, output_len)
             if reporter:
@@ -3686,10 +4507,16 @@ class basefwx:
             file_index: int = 0,
             strip_metadata: bool = False,
             use_master: bool = True,
-            master_pubkey: "basefwx.typing.Optional[bytes]" = None
+            master_pubkey: "basefwx.typing.Optional[bytes]" = None,
+            pack_flag: str = "",
+            output_path: "basefwx.typing.Optional[basefwx.pathlib.Path]" = None,
+            display_path: "basefwx.typing.Optional[basefwx.pathlib.Path]" = None,
+            keep_input: bool = False
     ) -> "basefwx.typing.Tuple[basefwx.pathlib.Path, int]":
         basefwx._ensure_existing_file(path)
         basefwx._ensure_size_limit(path)
+        display_path = display_path or path
+        output_path = output_path or path.with_suffix('.fwx')
         input_size = path.stat().st_size
         if input_size >= basefwx.STREAM_THRESHOLD:
             return basefwx._aes_heavy_encode_path_stream(
@@ -3700,11 +4527,15 @@ class basefwx:
                 strip_metadata,
                 use_master,
                 master_pubkey,
-                input_size=input_size
+                pack_flag=pack_flag,
+                output_path=output_path,
+                display_path=display_path,
+                input_size=input_size,
+                keep_input=keep_input
             )
         estimated_hint: "basefwx.typing.Optional[basefwx.typing.Tuple[int, int]]" = None
         if reporter:
-            reporter.update(file_index, 0.05, "prepare", path)
+            reporter.update(file_index, 0.05, "prepare", display_path)
 
         pubkey_bytes = master_pubkey if master_pubkey is not None else (basefwx._load_master_pq_public() if use_master else None)
         use_master_effective = use_master and not strip_metadata and pubkey_bytes is not None
@@ -3714,14 +4545,14 @@ class basefwx:
         heavy_argon_par = basefwx.HEAVY_ARGON2_PARALLELISM if basefwx.hash_secret_raw is not None else None
         raw = path.read_bytes()
         if reporter:
-            reporter.update(file_index, 0.25, "base64", path)
+            reporter.update(file_index, 0.25, "base64", display_path)
 
         b64_payload = basefwx.base64.b64encode(raw).decode('utf-8')
         ext_token = basefwx.pb512encode(path.suffix or "", password, use_master=use_master_effective)
         data_token = basefwx.pb512encode(b64_payload, password, use_master=use_master_effective)
 
         if reporter:
-            reporter.update(file_index, 0.55, "pb512", path)
+            reporter.update(file_index, 0.55, "pb512", display_path)
 
         kdf_used = (basefwx.USER_KDF or "argon2id").lower()
         metadata_blob = basefwx._build_metadata(
@@ -3733,7 +4564,8 @@ class basefwx:
             kdf_iters=heavy_iters,
             argon2_time_cost=heavy_argon_time,
             argon2_memory_cost=heavy_argon_mem,
-            argon2_parallelism=heavy_argon_par
+            argon2_parallelism=heavy_argon_par,
+            pack=pack_flag or None
         )
         body = f"{ext_token}{basefwx.FWX_HEAVY_DELIM}{data_token}"
         plaintext = f"{metadata_blob}{basefwx.META_DELIM}{body}" if metadata_blob else body
@@ -3751,7 +4583,7 @@ class basefwx:
 
             def _enc_progress(done: int, total: int) -> None:
                 fraction = 0.55 + 0.40 * (done / total if total else 0.0)
-                reporter.update(file_index, fraction, "AES512", path, size_hint=estimated_hint)
+                reporter.update(file_index, fraction, "AES512", display_path, size_hint=estimated_hint)
 
             progress_cb = _enc_progress
         ciphertext = basefwx.encryptAES(
@@ -3770,14 +4602,13 @@ class basefwx:
         approx_size = len(ciphertext)
         actual_hint = (input_size, approx_size)
 
-        output_path = path.with_suffix('.fwx')
         with open(output_path, 'wb') as handle:
             handle.write(ciphertext)
 
         if strip_metadata:
             basefwx._apply_strip_attributes(output_path)
             basefwx.os.chmod(output_path, 0)
-        basefwx.os.remove(path)
+        basefwx._remove_input(path, keep_input, output_path)
 
         if reporter:
             reporter.update(file_index, 1.0, "done", output_path, size_hint=actual_hint)
@@ -3887,6 +4718,7 @@ class basefwx:
             reporter.update(file_index, 0.8, "base64", path)
 
         raw = basefwx.base64.b64decode(data_b64)
+        pack_flag = basefwx._pack_flag_from_meta(meta, ext)
         target = path.with_suffix('')
         if ext:
             target = target.with_suffix(ext)
@@ -3896,7 +4728,9 @@ class basefwx:
 
         basefwx.os.remove(path)
 
-        if strip_metadata:
+        if pack_flag:
+            target = basefwx._maybe_unpack_output(target, pack_flag, reporter, file_index, strip_metadata)
+        elif strip_metadata:
             basefwx._apply_strip_attributes(target)
         output_len = len(raw)
         size_hint = (input_size, output_len)
@@ -3914,7 +4748,9 @@ class basefwx:
             strip_metadata: bool = False,
             use_master: bool = True,
             master_pubkey: "basefwx.typing.Optional[bytes]" = None,
-            silent: bool = False
+            silent: bool = False,
+            compress: bool = False,
+            keep_input: bool = False
     ):
         basefwx.sys.set_int_max_str_digits(2000000000)
         paths = basefwx._coerce_file_list(files)
@@ -3936,23 +4772,55 @@ class basefwx:
 
             def _process_with_reporter(idx: int, path: "basefwx.pathlib.Path") -> tuple[str, str]:
                 try:
-                    basefwx._ensure_existing_file(path)
-                except FileNotFoundError:
-                    if reporter:
-                        reporter.update(idx, 0.0, "missing", path)
-                        reporter.finalize_file(idx, path)
-                    return str(path), "FAIL!"
-                try:
-                    if path.suffix.lower() == ".fwx":
+                    if not path.exists():
+                        if reporter:
+                            reporter.update(idx, 0.0, "missing", path)
+                            reporter.finalize_file(idx, path)
+                        return str(path), "FAIL!"
+                    if path.suffix.lower() == ".fwx" and path.is_file():
                         if light:
                             basefwx._aes_light_decode_path(path, resolved_password, reporter, idx, strip_metadata, decode_use_master)
                         else:
                             basefwx._aes_heavy_decode_path(path, resolved_password, reporter, idx, strip_metadata, decode_use_master)
                     else:
-                        if light:
-                            basefwx._aes_light_encode_path(path, resolved_password, reporter, idx, strip_metadata, encode_use_master, master_pubkey)
-                        else:
-                            basefwx._aes_heavy_encode_path(path, resolved_password, reporter, idx, strip_metadata, encode_use_master, master_pubkey)
+                        pack_ctx = basefwx._pack_input_to_archive(path, compress, reporter, idx)
+                        pack_flag = pack_ctx[1] if pack_ctx else ""
+                        pack_temp = pack_ctx[2] if pack_ctx else None
+                        source_path = pack_ctx[0] if pack_ctx else path
+                        try:
+                            if light:
+                                basefwx._aes_light_encode_path(
+                                    source_path,
+                                    resolved_password,
+                                    reporter,
+                                    idx,
+                                    strip_metadata,
+                                    encode_use_master,
+                                    master_pubkey,
+                                    pack_flag=pack_flag,
+                                    output_path=path.with_suffix('.fwx'),
+                                    display_path=path,
+                                    keep_input=keep_input
+                                )
+                            else:
+                                basefwx._aes_heavy_encode_path(
+                                    source_path,
+                                    resolved_password,
+                                    reporter,
+                                    idx,
+                                    strip_metadata,
+                                    encode_use_master,
+                                    master_pubkey,
+                                    pack_flag=pack_flag,
+                                    output_path=path.with_suffix('.fwx'),
+                                    display_path=path,
+                                    keep_input=keep_input
+                                )
+                            if pack_ctx:
+                                basefwx._remove_input(path, keep_input, output_path=path.with_suffix('.fwx'))
+                        finally:
+                            if pack_temp is not None:
+                                pack_temp.cleanup()
                     return str(path), "SUCCESS!"
                 except KeyboardInterrupt:
                     if reporter:
@@ -3967,20 +4835,53 @@ class basefwx:
 
             def _process_without_reporter(path: "basefwx.pathlib.Path") -> tuple[str, str]:
                 try:
-                    basefwx._ensure_existing_file(path)
-                    if path.suffix.lower() == ".fwx":
+                    if not path.exists():
+                        return str(path), "FAIL!"
+                    if path.suffix.lower() == ".fwx" and path.is_file():
                         if light:
                             basefwx._aes_light_decode_path(path, resolved_password, None, 0, strip_metadata, decode_use_master)
                         else:
                             basefwx._aes_heavy_decode_path(path, resolved_password, None, 0, strip_metadata, decode_use_master)
                     else:
-                        if light:
-                            basefwx._aes_light_encode_path(path, resolved_password, None, 0, strip_metadata, encode_use_master, master_pubkey)
-                        else:
-                            basefwx._aes_heavy_encode_path(path, resolved_password, None, 0, strip_metadata, encode_use_master, master_pubkey)
+                        pack_ctx = basefwx._pack_input_to_archive(path, compress, None, 0)
+                        pack_flag = pack_ctx[1] if pack_ctx else ""
+                        pack_temp = pack_ctx[2] if pack_ctx else None
+                        source_path = pack_ctx[0] if pack_ctx else path
+                        try:
+                            if light:
+                                basefwx._aes_light_encode_path(
+                                    source_path,
+                                    resolved_password,
+                                    None,
+                                    0,
+                                    strip_metadata,
+                                    encode_use_master,
+                                    master_pubkey,
+                                    pack_flag=pack_flag,
+                                    output_path=path.with_suffix('.fwx'),
+                                    display_path=path,
+                                    keep_input=keep_input
+                                )
+                            else:
+                                basefwx._aes_heavy_encode_path(
+                                    source_path,
+                                    resolved_password,
+                                    None,
+                                    0,
+                                    strip_metadata,
+                                    encode_use_master,
+                                    master_pubkey,
+                                    pack_flag=pack_flag,
+                                    output_path=path.with_suffix('.fwx'),
+                                    display_path=path,
+                                    keep_input=keep_input
+                                )
+                            if pack_ctx:
+                                basefwx._remove_input(path, keep_input, output_path=path.with_suffix('.fwx'))
+                        finally:
+                            if pack_temp is not None:
+                                pack_temp.cleanup()
                     return str(path), "SUCCESS!"
-                except FileNotFoundError:
-                    return str(path), "FAIL!"
                 except KeyboardInterrupt:
                     raise
                 except Exception:
@@ -4332,6 +5233,26 @@ def cli(argv=None) -> int:
         default="low taper fade",
         help="Cover phrase for normalize wrapper (fwxaes only)"
     )
+    cryptin.add_argument(
+        "--compress",
+        action="store_true",
+        help="Pack files/folders to tar.gz or tar.xz before encrypting; auto-unpack on decrypt"
+    )
+    cryptin.add_argument(
+        "--ignore-media",
+        action="store_true",
+        help="Disable media auto-detection for fwxAES (use normal encryption)"
+    )
+    cryptin.add_argument(
+        "--keep-meta",
+        action="store_true",
+        help="Preserve media metadata (encrypted) when using jMG media mode"
+    )
+    cryptin.add_argument(
+        "--keep-input",
+        action="store_true",
+        help="Do not delete the input after encryption"
+    )
 
     args = parser.parse_args(argv)
 
@@ -4377,7 +5298,11 @@ def cli(argv=None) -> int:
                         password,
                         normalize=args.normalize,
                         normalize_threshold=args.normalize_threshold,
-                        cover_phrase=args.cover_phrase
+                        cover_phrase=args.cover_phrase,
+                        compress=args.compress,
+                        ignore_media=args.ignore_media,
+                        keep_meta=args.keep_meta,
+                        keep_input=args.keep_input
                     )
                     results[str(raw_path)] = "SUCCESS!"
                 except Exception as exc:
@@ -4389,7 +5314,9 @@ def cli(argv=None) -> int:
                 password,
                 strip_metadata=args.strip_metadata,
                 use_master=use_master,
-                master_pubkey=master_pub_bytes
+                master_pubkey=master_pub_bytes,
+                compress=args.compress,
+                keep_input=args.keep_input
             )
         elif normalized == "aes-light":
             result = basefwx.AESfile(
@@ -4398,7 +5325,9 @@ def cli(argv=None) -> int:
                 light=True,
                 strip_metadata=args.strip_metadata,
                 use_master=use_master,
-                master_pubkey=master_pub_bytes
+                master_pubkey=master_pub_bytes,
+                compress=args.compress,
+                keep_input=args.keep_input
             )
         else:
             result = basefwx.AESfile(
@@ -4407,7 +5336,9 @@ def cli(argv=None) -> int:
                 light=False,
                 strip_metadata=args.strip_metadata,
                 use_master=use_master,
-                master_pubkey=master_pub_bytes
+                master_pubkey=master_pub_bytes,
+                compress=args.compress,
+                keep_input=args.keep_input
             )
 
         if isinstance(result, dict):

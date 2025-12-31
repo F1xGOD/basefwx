@@ -4,6 +4,7 @@ project(basefwx_cpp LANGUAGES CXX)
 option(BASEFWX_BUILD_CLI "Build basefwx_cpp CLI" ON)
 option(BASEFWX_REQUIRE_ARGON2 "Require libargon2 for Argon2id support" OFF)
 option(BASEFWX_REQUIRE_OQS "Require liboqs for ML-KEM-768 support" OFF)
+option(BASEFWX_REQUIRE_LZMA "Require liblzma for xz support" OFF)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -15,10 +16,12 @@ find_package(PkgConfig QUIET)
 
 set(BASEFWX_HAS_ARGON2 0)
 set(BASEFWX_HAS_OQS 0)
+set(BASEFWX_HAS_LZMA 0)
 
 if(PkgConfig_FOUND)
     pkg_check_modules(ARGON2 QUIET libargon2)
     pkg_check_modules(OQS QUIET liboqs)
+    pkg_check_modules(LZMA QUIET liblzma)
 endif()
 
 if(NOT ARGON2_FOUND)
@@ -41,12 +44,26 @@ if(NOT OQS_FOUND)
     endif()
 endif()
 
+if(NOT LZMA_FOUND)
+    find_path(LZMA_INCLUDE_DIR NAMES lzma.h)
+    find_library(LZMA_LIBRARY NAMES lzma)
+    if(LZMA_INCLUDE_DIR AND LZMA_LIBRARY)
+        set(LZMA_FOUND TRUE)
+        set(LZMA_INCLUDE_DIRS ${LZMA_INCLUDE_DIR})
+        set(LZMA_LIBRARIES ${LZMA_LIBRARY})
+    endif()
+endif()
+
 if(BASEFWX_REQUIRE_ARGON2 AND NOT ARGON2_FOUND)
     message(FATAL_ERROR "libargon2 not found (install libargon2-dev or set BASEFWX_REQUIRE_ARGON2=OFF)")
 endif()
 
 if(BASEFWX_REQUIRE_OQS AND NOT OQS_FOUND)
     message(FATAL_ERROR "liboqs not found (install liboqs-dev or set BASEFWX_REQUIRE_OQS=OFF)")
+endif()
+
+if(BASEFWX_REQUIRE_LZMA AND NOT LZMA_FOUND)
+    message(FATAL_ERROR "liblzma not found (install liblzma-dev or set BASEFWX_REQUIRE_LZMA=OFF)")
 endif()
 
 if(ARGON2_FOUND)
@@ -57,12 +74,18 @@ if(OQS_FOUND)
     set(BASEFWX_HAS_OQS 1)
 endif()
 
+if(LZMA_FOUND)
+    set(BASEFWX_HAS_LZMA 1)
+endif()
+
 add_library(basefwxcpp
+    src/archive.cpp
     src/base64.cpp
     src/format.cpp
     src/basefwx.cpp
     src/crypto.cpp
     src/codec.cpp
+    src/imagecipher.cpp
     src/pb512.cpp
     src/fwxaes.cpp
     src/env.cpp
@@ -76,6 +99,7 @@ add_library(basefwxcpp
 target_include_directories(basefwxcpp
     PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/third_party
 )
 target_link_libraries(basefwxcpp PUBLIC OpenSSL::Crypto ZLIB::ZLIB)
 
@@ -89,9 +113,15 @@ if(OQS_FOUND)
     target_link_libraries(basefwxcpp PUBLIC ${OQS_LIBRARIES})
 endif()
 
+if(LZMA_FOUND)
+    target_include_directories(basefwxcpp PUBLIC ${LZMA_INCLUDE_DIRS})
+    target_link_libraries(basefwxcpp PUBLIC ${LZMA_LIBRARIES})
+endif()
+
 target_compile_definitions(basefwxcpp PUBLIC
     BASEFWX_HAS_ARGON2=${BASEFWX_HAS_ARGON2}
     BASEFWX_HAS_OQS=${BASEFWX_HAS_OQS}
+    BASEFWX_HAS_LZMA=${BASEFWX_HAS_LZMA}
 )
 
 if(BASEFWX_BUILD_CLI)

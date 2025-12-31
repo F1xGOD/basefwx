@@ -52,7 +52,8 @@ std::string Build(const std::string& method,
                   std::optional<std::uint32_t> kdf_iters,
                   std::optional<std::uint32_t> argon2_time,
                   std::optional<std::uint32_t> argon2_mem,
-                  std::optional<std::uint32_t> argon2_par) {
+                  std::optional<std::uint32_t> argon2_par,
+                  std::string_view pack) {
     if (strip) {
         return {};
     }
@@ -81,6 +82,9 @@ std::string Build(const std::string& method,
     }
     if (argon2_par.has_value()) {
         fields.emplace_back("ENC-ARGON2-PAR", std::to_string(argon2_par.value()));
+    }
+    if (!pack.empty()) {
+        fields.emplace_back(std::string(constants::kPackMetaKey), std::string(pack));
     }
 
     std::string json;

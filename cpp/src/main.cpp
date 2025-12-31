@@ -1,10 +1,39 @@
 #include "basefwx/basefwx.hpp"
 
+#include <cctype>
+#include <filesystem>
 #include <iostream>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 namespace {
+
+std::string ToLower(std::string value) {
+    for (char& ch : value) {
+        ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+    }
+    return value;
+}
+
+bool LooksLikeMediaPath(const std::filesystem::path& path) {
+    static const std::unordered_set<std::string> kImageExts = {
+        ".png", ".jpg", ".jpeg", ".bmp", ".tga", ".gif", ".webp", ".tif", ".tiff",
+        ".heic", ".heif", ".avif", ".ico"
+    };
+    static const std::unordered_set<std::string> kVideoExts = {
+        ".mp4", ".mkv", ".mov", ".avi", ".webm", ".m4v", ".flv", ".wmv",
+        ".mpg", ".mpeg", ".3gp", ".3g2", ".ts", ".m2ts"
+    };
+    static const std::unordered_set<std::string> kAudioExts = {
+        ".mp3", ".wav", ".flac", ".aac", ".m4a", ".ogg", ".opus", ".wma", ".aiff", ".alac"
+    };
+    std::string ext = ToLower(path.extension().string());
+    if (ext.empty()) {
+        return false;
+    }
+    return kImageExts.count(ext) || kVideoExts.count(ext) || kAudioExts.count(ext);
+}
 
 void PrintUsage() {
     std::cout << "Usage:\n";
@@ -15,12 +44,14 @@ void PrintUsage() {
     std::cout << "  basefwx_cpp b512-dec <text> -p <password> [--no-master] [--kdf <label>] [--pbkdf2-iters <n>]\n";
     std::cout << "  basefwx_cpp pb512-enc <text> -p <password> [--no-master] [--kdf <label>] [--pbkdf2-iters <n>]\n";
     std::cout << "  basefwx_cpp pb512-dec <text> -p <password> [--no-master] [--kdf <label>] [--pbkdf2-iters <n>]\n";
-    std::cout << "  basefwx_cpp b512file-enc <file> -p <password> [--no-master] [--strip-meta] [--no-aead] [--kdf <label>] [--pbkdf2-iters <n>]\n";
+    std::cout << "  basefwx_cpp b512file-enc <file> -p <password> [--no-master] [--strip-meta] [--no-aead] [--compress] [--keep-input] [--kdf <label>] [--pbkdf2-iters <n>]\n";
     std::cout << "  basefwx_cpp b512file-dec <file.fwx> -p <password> [--no-master] [--strip-meta] [--kdf <label>] [--pbkdf2-iters <n>]\n";
-    std::cout << "  basefwx_cpp pb512file-enc <file> -p <password> [--no-master] [--strip-meta] [--no-obf] [--kdf <label>] [--pbkdf2-iters <n>]\n";
+    std::cout << "  basefwx_cpp pb512file-enc <file> -p <password> [--no-master] [--strip-meta] [--no-obf] [--compress] [--keep-input] [--kdf <label>] [--pbkdf2-iters <n>]\n";
     std::cout << "  basefwx_cpp pb512file-dec <file.fwx> -p <password> [--no-master] [--strip-meta] [--kdf <label>] [--pbkdf2-iters <n>]\n";
-    std::cout << "  basefwx_cpp fwxaes-enc <file> -p <password> [--out <path>] [--normalize] [--threshold <n>] [--cover-phrase <text>]\n";
+    std::cout << "  basefwx_cpp fwxaes-enc <file> -p <password> [--out <path>] [--normalize] [--threshold <n>] [--cover-phrase <text>] [--compress] [--ignore-media] [--keep-meta] [--keep-input]\n";
     std::cout << "  basefwx_cpp fwxaes-dec <file> -p <password> [--out <path>]\n";
+    std::cout << "  basefwx_cpp jmge <media> -p <password> [--out <path>] [--keep-meta] [--keep-input]\n";
+    std::cout << "  basefwx_cpp jmgd <media> -p <password> [--out <path>]\n";
 }
 
 struct ParsedOptions {
@@ -37,6 +68,18 @@ struct FwxAesArgs {
     bool normalize = false;
     std::size_t threshold = 8 * 1024;
     std::string cover_phrase = "low taper fade";
+    bool compress = false;
+    bool ignore_media = false;
+    bool keep_meta = false;
+    bool keep_input = false;
+};
+
+struct ImageArgs {
+    std::string input;
+    std::string output;
+    std::string password;
+    bool keep_meta = false;
+    bool keep_input = false;
 };
 
 struct FileArgs {
@@ -46,6 +89,8 @@ struct FileArgs {
     bool strip_metadata = false;
     bool enable_aead = true;
     bool enable_obf = true;
+    bool compress = false;
+    bool keep_input = false;
     basefwx::pb512::KdfOptions kdf;
 };
 
@@ -116,6 +161,12 @@ FileArgs ParseFileArgs(int argc, char** argv, int start_index) {
         } else if (flag == "--no-obf") {
             opts.enable_obf = false;
             idx += 1;
+        } else if (flag == "--compress") {
+            opts.compress = true;
+            idx += 1;
+        } else if (flag == "--keep-input") {
+            opts.keep_input = true;
+            idx += 1;
         } else if (flag == "--kdf") {
             if (idx + 1 >= argc) {
                 throw std::runtime_error("Missing kdf label");
@@ -174,6 +225,52 @@ FwxAesArgs ParseFwxAesArgs(int argc, char** argv, int start_index) {
             }
             opts.cover_phrase = argv[idx + 1];
             idx += 2;
+        } else if (flag == "--compress") {
+            opts.compress = true;
+            idx += 1;
+        } else if (flag == "--ignore-media") {
+            opts.ignore_media = true;
+            idx += 1;
+        } else if (flag == "--keep-meta") {
+            opts.keep_meta = true;
+            idx += 1;
+        } else if (flag == "--keep-input") {
+            opts.keep_input = true;
+            idx += 1;
+        } else {
+            throw std::runtime_error("Unknown flag: " + flag);
+        }
+    }
+    return opts;
+}
+
+ImageArgs ParseImageArgs(int argc, char** argv, int start_index) {
+    ImageArgs opts;
+    if (start_index >= argc) {
+        throw std::runtime_error("Missing input path");
+    }
+    opts.input = argv[start_index];
+    int idx = start_index + 1;
+    while (idx < argc) {
+        std::string flag(argv[idx]);
+        if (flag == "-p" || flag == "--password") {
+            if (idx + 1 >= argc) {
+                throw std::runtime_error("Missing password value");
+            }
+            opts.password = argv[idx + 1];
+            idx += 2;
+        } else if (flag == "--out" || flag == "-o") {
+            if (idx + 1 >= argc) {
+                throw std::runtime_error("Missing output path");
+            }
+            opts.output = argv[idx + 1];
+            idx += 2;
+        } else if (flag == "--keep-meta") {
+            opts.keep_meta = true;
+            idx += 1;
+        } else if (flag == "--keep-input") {
+            opts.keep_input = true;
+            idx += 1;
         } else {
             throw std::runtime_error("Unknown flag: " + flag);
         }
@@ -251,6 +348,8 @@ int main(int argc, char** argv) {
             file_opts.use_master = opts.use_master;
             file_opts.enable_aead = opts.enable_aead;
             file_opts.enable_obfuscation = opts.enable_obf;
+            file_opts.compress = opts.compress;
+            file_opts.keep_input = opts.keep_input;
             if (command == "b512file-enc") {
                 std::cout << basefwx::filecodec::B512EncodeFile(opts.input, opts.password, file_opts, opts.kdf) << "\n";
             } else if (command == "b512file-dec") {
@@ -269,7 +368,11 @@ int main(int argc, char** argv) {
             }
             if (opts.output.empty()) {
                 if (command == "fwxaes-enc") {
-                    opts.output = opts.input + ".fwx";
+                    if (!opts.ignore_media && LooksLikeMediaPath(std::filesystem::path(opts.input))) {
+                        opts.output = opts.input;
+                    } else {
+                        opts.output = opts.input + ".fwx";
+                    }
                 } else if (opts.input.size() >= 4 && opts.input.rfind(".fwx") == opts.input.size() - 4) {
                     opts.output = opts.input.substr(0, opts.input.size() - 4);
                 } else {
@@ -277,13 +380,35 @@ int main(int argc, char** argv) {
                 }
             }
             if (command == "fwxaes-enc") {
+                if (!opts.ignore_media && LooksLikeMediaPath(std::filesystem::path(opts.input))) {
+                    try {
+                        std::cout << basefwx::Jmge(opts.input, opts.password, opts.output, opts.keep_meta, opts.keep_input) << "\n";
+                        return 0;
+                    } catch (const std::exception&) {
+                        // Fall back to standard fwxAES if media processing fails.
+                    }
+                }
                 basefwx::fwxaes::NormalizeOptions norm;
                 norm.enabled = opts.normalize;
                 norm.threshold = opts.threshold;
                 norm.cover_phrase = opts.cover_phrase;
-                basefwx::fwxaes::EncryptFile(opts.input, opts.output, opts.password, {}, norm);
+                basefwx::fwxaes::PackOptions pack_opts;
+                pack_opts.compress = opts.compress;
+                basefwx::fwxaes::EncryptFile(opts.input, opts.output, opts.password, {}, norm, pack_opts, opts.keep_input);
             } else {
                 basefwx::fwxaes::DecryptFile(opts.input, opts.output, opts.password);
+            }
+            return 0;
+        }
+        if (command == "jmge" || command == "jmgd") {
+            ImageArgs opts = ParseImageArgs(argc, argv, 2);
+            if (opts.password.empty()) {
+                throw std::runtime_error("Password is required for jmg");
+            }
+            if (command == "jmge") {
+                std::cout << basefwx::Jmge(opts.input, opts.password, opts.output, opts.keep_meta, opts.keep_input) << "\n";
+            } else {
+                std::cout << basefwx::Jmgd(opts.input, opts.password, opts.output) << "\n";
             }
             return 0;
         }

@@ -40,4 +40,11 @@ std::string B512Decode(const std::string& input, const std::string& password, bo
 std::string Pb512Encode(const std::string& input, const std::string& password, bool use_master, const KdfOptions& kdf);
 std::string Pb512Decode(const std::string& input, const std::string& password, bool use_master, const KdfOptions& kdf);
 
+std::string Jmge(const std::string& path,
+                 const std::string& password,
+                 const std::string& output = {},
+                 bool keep_meta = false,
+                 bool keep_input = false);
+std::string Jmgd(const std::string& path, const std::string& password, const std::string& output = {});
+
 }  // namespace basefwx

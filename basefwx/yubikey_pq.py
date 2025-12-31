@@ -19,6 +19,7 @@ from typing import Any, Dict, Mapping, Optional, Tuple
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 
 try:
     from fido2.client import (
@@ -97,6 +98,8 @@ class YubiKeyPQKeyStore:
     STATE_PATH = STATE_DIR / "yubikey_pq_keys.json"
     WRAP_SALT_BYTES = 32
     AES_NONCE_BYTES = 12
+    USER_ID_SALT = b"basefwx.webauthn.user.v1"
+    USER_ID_ITERS = 100_000
     _PUB_KEY_PARAMS = (
         PublicKeyCredentialParameters(PublicKeyCredentialType.PUBLIC_KEY, -7),
     )
@@ -210,10 +213,15 @@ class YubiKeyPQKeyStore:
         client, device = self._connect()
         try:
             rp = PublicKeyCredentialRpEntity(id=self.RP_ID, name=self.RP_NAME)
-            user_id = hashes.Hash(hashes.SHA3_256())
-            user_id.update(label.encode("utf-8"))
+            kdf = PBKDF2HMAC(
+                algorithm=hashes.SHA256(),
+                length=32,
+                salt=self.USER_ID_SALT,
+                iterations=self.USER_ID_ITERS,
+            )
+            user_id = kdf.derive(label.encode("utf-8"))
             user = PublicKeyCredentialUserEntity(
-                id=user_id.finalize(),
+                id=user_id,
                 name=label,
                 display_name=label,
             )

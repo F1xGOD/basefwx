@@ -1,5 +1,6 @@
 #include "basefwx/imagecipher.hpp"
 
+#include "basefwx/basefwx.hpp"
 #include "basefwx/constants.hpp"
 #include "basefwx/crypto.hpp"
 #include "basefwx/env.hpp"
@@ -129,10 +130,26 @@ std::uint32_t ResolveImageKdfIterations() {
     return std::max<std::uint32_t>(200000, parsed);
 }
 
+std::uint32_t HardenImageIterations(const std::string& password, std::uint32_t iters) {
+    if (password.empty()) {
+        return iters;
+    }
+    if (!basefwx::env::Get("BASEFWX_TEST_KDF_ITERS").empty()) {
+        return iters;
+    }
+    if (password.size() < basefwx::constants::kShortPasswordMin) {
+        if (iters < basefwx::constants::kShortPbkdf2Iterations) {
+            iters = static_cast<std::uint32_t>(basefwx::constants::kShortPbkdf2Iterations);
+        }
+    }
+    return iters;
+}
+
 Bytes DeriveMaterial(const std::string& password) {
     Bytes salt(basefwx::constants::kImageCipherStreamInfo.begin(),
                basefwx::constants::kImageCipherStreamInfo.end());
     std::uint32_t iters = ResolveImageKdfIterations();
+    iters = HardenImageIterations(password, iters);
     return basefwx::crypto::Pbkdf2HmacSha256(password, salt, iters, 64);
 }
 
@@ -701,7 +718,8 @@ std::string EncryptImageInv(const std::string& path,
                             const std::string& password,
                             const std::string& output,
                             bool include_trailer) {
-    if (password.empty()) {
+    std::string resolved = basefwx::ResolvePassword(password);
+    if (resolved.empty()) {
         throw std::runtime_error("Password is required for image encryption");
     }
     std::filesystem::path input_path = NormalizePath(path);
@@ -718,7 +736,7 @@ std::string EncryptImageInv(const std::string& path,
     std::vector<std::size_t> perm;
     Bytes material;
 
-    BuildMaskAndShuffle(password, num_pixels, image.channels, mask, rotations, perm, material);
+    BuildMaskAndShuffle(resolved, num_pixels, image.channels, mask, rotations, perm, material);
 
     ApplyMask(image.pixels, mask);
     ApplyRotation(image.pixels, num_pixels, image.channels, rotations, false);
@@ -750,7 +768,8 @@ std::string EncryptImageInv(const std::string& path,
 std::string DecryptImageInv(const std::string& path,
                             const std::string& password,
                             const std::string& output) {
-    if (password.empty()) {
+    std::string resolved = basefwx::ResolvePassword(password);
+    if (resolved.empty()) {
         throw std::runtime_error("Password is required for image decryption");
     }
     std::filesystem::path input_path = NormalizePath(path);
@@ -763,7 +782,7 @@ std::string DecryptImageInv(const std::string& path,
     Bytes trailer;
     bool has_trailer = ExtractTrailer(file_bytes, payload, trailer);
 
-    Bytes material = DeriveMaterial(password);
+    Bytes material = DeriveMaterial(resolved);
     Bytes archive_key = basefwx::crypto::HkdfSha256(basefwx::constants::kImageCipherArchiveInfo,
                                                    material, 32);
     Bytes aad(basefwx::constants::kImageCipherArchiveInfo.begin(),
@@ -785,7 +804,7 @@ std::string DecryptImageInv(const std::string& path,
     std::vector<std::uint8_t> rotations;
     std::vector<std::size_t> perm;
     Bytes material_unused;
-    BuildMaskAndShuffle(password, num_pixels, image.channels, mask, rotations, perm, material_unused);
+    BuildMaskAndShuffle(resolved, num_pixels, image.channels, mask, rotations, perm, material_unused);
 
     ApplyPermutation(image.pixels, num_pixels, image.channels, perm, true);
     ApplyRotation(image.pixels, num_pixels, image.channels, rotations, true);
@@ -1716,7 +1735,8 @@ std::string EncryptMedia(const std::string& path,
                          const std::string& output,
                          bool keep_meta,
                          bool keep_input) {
-    if (password.empty()) {
+    std::string resolved = basefwx::ResolvePassword(password);
+    if (resolved.empty()) {
         throw std::runtime_error("Password is required for media encryption");
     }
     std::filesystem::path input_path = NormalizePath(path);
@@ -1729,7 +1749,7 @@ std::string EncryptMedia(const std::string& path,
         temp_output = output_path.parent_path() / (output_path.stem().string() + "._jmg" + output_path.extension().string());
     }
     if (IsImageExt(input_path)) {
-        std::string result = EncryptImageInv(input_path.string(), password, temp_output.string(), true);
+        std::string result = EncryptImageInv(input_path.string(), resolved, temp_output.string(), true);
         std::filesystem::path result_path = NormalizePath(result);
         if (result_path != temp_output) {
             temp_output = result_path;
@@ -1746,10 +1766,21 @@ std::string EncryptMedia(const std::string& path,
     }
 
     ProgressReporter progress;
-    VideoInfo video = ProbeVideo(input_path);
-    AudioInfo audio = ProbeAudio(input_path);
+    VideoInfo video;
+    AudioInfo audio;
+    try {
+        video = ProbeVideo(input_path);
+        audio = ProbeAudio(input_path);
+    } catch (const std::exception&) {
+        video.valid = false;
+        audio.valid = false;
+    }
     if (!video.valid && !audio.valid) {
-        throw std::runtime_error("Unsupported media format");
+        std::filesystem::path fallback_out = output.empty()
+            ? input_path.parent_path() / (input_path.stem().string() + ".fwx")
+            : output_path;
+        basefwx::fwxaes::EncryptFile(input_path.string(), fallback_out.string(), resolved, {}, {}, {}, keep_input);
+        return fallback_out.string();
     }
 
     std::filesystem::path temp_dir = CreateTempDir("basefwx-media");
@@ -1781,7 +1812,7 @@ std::string EncryptMedia(const std::string& path,
             });
         }
 
-        Bytes base_key = BaseKeyFromPassword(password);
+        Bytes base_key = BaseKeyFromPassword(resolved);
         if (video.valid) {
             auto video_cb = [&](double frac) {
                 progress.Update(0.25 + 0.45 * frac, "jmg-video", input_path);
@@ -1818,7 +1849,7 @@ std::string EncryptMedia(const std::string& path,
         }
         if (keep_meta) {
             auto tags = ProbeMetadata(input_path);
-            for (const auto& meta : EncryptMetadataArgs(tags, password)) {
+            for (const auto& meta : EncryptMetadataArgs(tags, resolved)) {
                 cmd.push_back("-metadata");
                 cmd.push_back(meta);
             }
@@ -1842,7 +1873,7 @@ std::string EncryptMedia(const std::string& path,
         auto archive_cb = [&](double frac) {
             progress.Update(0.95 + 0.04 * frac, "archive", input_path);
         };
-        AppendTrailerStream(temp_output, input_path, password, archive_cb);
+        AppendTrailerStream(temp_output, input_path, resolved, archive_cb);
         progress.Update(1.0, "done", input_path);
     } catch (...) {
         std::error_code ec;
@@ -1866,7 +1897,8 @@ std::string EncryptMedia(const std::string& path,
 std::string DecryptMedia(const std::string& path,
                          const std::string& password,
                          const std::string& output) {
-    if (password.empty()) {
+    std::string resolved = basefwx::ResolvePassword(password);
+    if (resolved.empty()) {
         throw std::runtime_error("Password is required for media decryption");
     }
     std::filesystem::path input_path = NormalizePath(path);
@@ -1874,7 +1906,7 @@ std::string DecryptMedia(const std::string& path,
         throw std::runtime_error("Input file not found: " + input_path.string());
     }
     if (IsImageExt(input_path)) {
-        return DecryptImageInv(input_path.string(), password, output);
+        return DecryptImageInv(input_path.string(), resolved, output);
     }
 
     std::filesystem::path output_path = output.empty() ? input_path : NormalizePath(output);
@@ -1888,7 +1920,7 @@ std::string DecryptMedia(const std::string& path,
     auto trailer_cb = [&](double frac) {
         progress.Update(0.05 + 0.90 * frac, "archive", input_path);
     };
-    if (TryDecryptTrailerStream(input_path, password, temp_output, trailer_cb)) {
+    if (TryDecryptTrailerStream(input_path, resolved, temp_output, trailer_cb)) {
         progress.Update(1.0, "done", input_path);
         if (!output_path.empty() && !std::filesystem::equivalent(output_path, temp_output, ec)) {
             std::filesystem::rename(temp_output, output_path);
@@ -1905,7 +1937,7 @@ std::string DecryptMedia(const std::string& path,
         Bytes trailer;
         bool has_trailer = ExtractTrailer(file_bytes, payload, trailer);
         if (has_trailer && !trailer.empty()) {
-            Bytes material = DeriveMaterial(password);
+            Bytes material = DeriveMaterial(resolved);
             Bytes archive_key = basefwx::crypto::HkdfSha256(basefwx::constants::kImageCipherArchiveInfo, material, 32);
             Bytes aad(basefwx::constants::kImageCipherArchiveInfo.begin(),
                       basefwx::constants::kImageCipherArchiveInfo.end());
@@ -1921,9 +1953,31 @@ std::string DecryptMedia(const std::string& path,
         }
     }
 
-    VideoInfo video = ProbeVideo(input_path);
-    AudioInfo audio = ProbeAudio(input_path);
+    VideoInfo video;
+    AudioInfo audio;
+    try {
+        video = ProbeVideo(input_path);
+        audio = ProbeAudio(input_path);
+    } catch (const std::exception&) {
+        video.valid = false;
+        audio.valid = false;
+    }
     if (!video.valid && !audio.valid) {
+        bool can_fwx = input_path.extension() == ".fwx";
+        if (!can_fwx) {
+            std::ifstream probe(input_path, std::ios::binary);
+            char magic[4] = {};
+            if (probe.read(magic, sizeof(magic))) {
+                can_fwx = std::string_view(magic, sizeof(magic)) == "FWX1";
+            }
+        }
+        if (can_fwx) {
+            std::filesystem::path fallback_out = output.empty()
+                ? input_path.parent_path() / input_path.stem()
+                : output_path;
+            basefwx::fwxaes::DecryptFile(input_path.string(), fallback_out.string(), resolved);
+            return fallback_out.string();
+        }
         throw std::runtime_error("Unsupported media format");
     }
 
@@ -1956,7 +2010,7 @@ std::string DecryptMedia(const std::string& path,
             });
         }
 
-        Bytes base_key = BaseKeyFromPassword(password);
+        Bytes base_key = BaseKeyFromPassword(resolved);
         if (video.valid) {
             auto video_cb = [&](double frac) {
                 progress.Update(0.25 + 0.45 * frac, "unjmg-video", input_path);
@@ -1992,7 +2046,7 @@ std::string DecryptMedia(const std::string& path,
             });
         }
         auto tags = ProbeMetadata(input_path);
-        auto decoded = DecryptMetadataArgs(tags, password);
+        auto decoded = DecryptMetadataArgs(tags, resolved);
         if (!decoded.empty()) {
             for (const auto& meta : decoded) {
                 cmd.push_back("-metadata");

@@ -22,6 +22,7 @@ struct InspectResult {
 
 std::vector<std::uint8_t> ReadFile(const std::string& path);
 InspectResult InspectBlob(const std::vector<std::uint8_t>& blob);
+std::string ResolvePassword(const std::string& input);
 
 std::string B256Encode(const std::string& input);
 std::string B256Decode(const std::string& input);

@@ -86,6 +86,7 @@ add_library(basefwxcpp
     src/crypto.cpp
     src/codec.cpp
     src/imagecipher.cpp
+    src/ec.cpp
     src/pb512.cpp
     src/fwxaes.cpp
     src/env.cpp

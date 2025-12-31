@@ -22,4 +22,32 @@ def jMGd(path: str, password: str, output: str | None = None): return basefwx.Im
 def b512encodefile(file: str, code: str, strip_metadata: bool = False, use_master: bool = True): return basefwx.b512file_encode(file, code, strip_metadata=strip_metadata, use_master=use_master)
 def b512decodefile(file: str, code: str="", strip_metadata: bool = False, use_master: bool = True): return basefwx.b512file_decode(file, code, strip_metadata=strip_metadata, use_master=use_master)
 def b512handlefile(file: str, code: str="", strip_metadata: bool = False, use_master: bool = True, silent: bool = False): return basefwx.b512file(file, code, strip_metadata=strip_metadata, use_master=use_master, silent=silent)
-def fwxAES(file: str, code: str="", light: bool = True, strip_metadata: bool = False, use_master: bool = True, silent: bool = False): return basefwx.AESfile(file, code, light, strip_metadata=strip_metadata, use_master=use_master, silent=silent)
+def fwxAES(
+    file: str,
+    code: str = "",
+    light: bool = True,
+    strip_metadata: bool = False,
+    use_master: bool = True,
+    silent: bool = False,
+    *,
+    output: str | None = None,
+    normalize: bool = False,
+    normalize_threshold: int | None = None,
+    cover_phrase: str = "low taper fade",
+    legacy: bool = False
+):
+    if legacy:
+        return basefwx.AESfile(file, code, light, strip_metadata=strip_metadata, use_master=use_master, silent=silent)
+    return basefwx.fwxAES_file(
+        file,
+        code,
+        output=output,
+        normalize=normalize,
+        normalize_threshold=normalize_threshold,
+        cover_phrase=cover_phrase
+    )
+
+def fwxAES_encrypt_raw(plaintext: bytes, password: str | bytes): return basefwx.fwxAES_encrypt_raw(plaintext, password)
+def fwxAES_decrypt_raw(blob: bytes, password: str | bytes): return basefwx.fwxAES_decrypt_raw(blob, password)
+def normalize_wrap(blob: bytes, cover_phrase: str = "low taper fade"): return basefwx.normalize_wrap(blob, cover_phrase)
+def normalize_unwrap(text: str): return basefwx.normalize_unwrap(text)

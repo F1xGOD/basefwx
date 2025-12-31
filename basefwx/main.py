@@ -7,6 +7,7 @@ class basefwx:
     import base64
     import concurrent.futures
     import enum
+    import threading
     import sys
     import secrets
     import pathlib
@@ -23,6 +24,11 @@ class basefwx:
     import tempfile
     import string
     re = _re_module
+    try:
+        import colorama
+        colorama.init()  # Initialize colorama for cross-platform color support
+    except ImportError:
+        pass  # Colorama is optional
     from cryptography.hazmat.primitives import hashes, padding
     from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
     from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
@@ -40,10 +46,12 @@ class basefwx:
 
     MAX_INPUT_BYTES = 20 * 1024 * 1024 * 1024  # allow up to ~20 GiB per file
     PROGRESS_BAR_WIDTH = 30
-    FWX_DELIM = "A8igTOmG"
-    FWX_HEAVY_DELIM = "673827837628292873"
+    FWX_DELIM = "\x1f\x1e"
+    FWX_HEAVY_DELIM = "\x1f\x1d"
+    LEGACY_FWX_DELIM = "A8igTOmG"
+    LEGACY_FWX_HEAVY_DELIM = "673827837628292873"
     META_DELIM = "::FWX-META::"
-    ENGINE_VERSION = "3.2.0"
+    ENGINE_VERSION = "3.4.1"
     MASTER_PQ_ALG = "ml-kem-768"
     MASTER_PQ_PUBLIC = b"eJwBoARf+9Kzz6BzXHi8fntsVzKBAxCzV6VTNfbCvfAqh+jMdEfccE7UR4Nnbl+roH3ML55Adeabfs6kZ3CgSZijRTWJDbaUXj+LX391QXOnTa7rNEg1qTaxSa1DKmFZwY+kCRlyjP8BWUY0P9c2NLHDiHlBObDRjUyWrbb1YdiJXfITJz3bvBlnRLTQIRSpH042LZy1CwpQT+C0ISO5tc9qkDocWZ3Jx8+Avd0KcY2TP8rcCY4kY/7JR4xWiRV6e1wnz3BnQxdivx4jPusMo8VnlInHhYlSJvEIHDgqo5WjScSIKkT0UNXknxWgb5mpoB/poD4gtyCWA57iGarFM6k3oZZnRjMilMAwvQ8bGCRxnDLsnJPCEpTkDP2Ek7LDSGv6KaG3ManmIaAoZH4mpxAmePaRkTSKYuE7vMeVqeyxl394QUZrfi/YirIhfom6SYIChFzlAgHAZCPMx+9FVzmVxicnvlKRPCWITkFRnkVraxZ8x9S4OR9HzT4G0BEsj/sKOY5VeAi6c82ricH6HnaJB+eEvhjiTssSoxnBX9vUbftnLjFqTMPctY1DgmTabWz1U23rffPSqo0zeDxIlR0FD1foxs9gc9JSR/MChL2ZzFLAUqq7QBPWxHsrjN8VO86FyG64VncSQvtwEPR5kRQgEgoBkqsHHnOVBov3le/mB9oBbPDzCTw7rPchTzNWVvwDOS/bfkmQIlOKKENZLvMInF6ktaLGiAzhy0eob5g7dMFwLCnDU/iQjQqZbyIMVCqMuBlgTFHhPWgKErNwcnIMPEoYg+mstgJIq272I7VCX9usoSjWXZX6SViIpg8FrS2RFCzmXPEpbCQHcg9arbxCD+cZIWfxVmxFx1y4Od2Eb/FkZTt6Maq4zMNalRfBjX/0C0C1aetQWiJ8HCvkZufLlYwAwovRJE+7wkXDgQLMe6dwzzo6ydEJM32kJBuzhjxjMGd4BY8JGKzKVBeJhsMLaViBGw5SEiXWgZhUbECktcJDrfc6r8PBgcQwV1TpU3pTcNNHFt1YoAMCpO9XdO7cDfnbaqRbBUY0hr3sI3P0x962F7rkR45xEGzFZp9XfmsRmG5qHfSTk4EGyS0cdFoDZ51Rvw/4e738wo4QRJGkDBGagROXzbwnmpSpV+cxXvK0Su5FIaGhJQHJqTQTv94Gy710eE43GffqEuT6D4X6mRclSBNGTepgGq6laanzJSp3UcVwFZwCNjdbCB+ycdkqR77muhUgnxHAcZvRf4oXx0pnkGx2Px/gvvAaZGLmqv16jFFZj3pocKlIrVBiSduoYy/CBkehUQDoeykgZs73zhGklAi1NBTBkXjgasYySO2UuS8bSINJfKLqUHOsfbB6sEOLilCaPfCcRtqafMqYJwdXW+KwgpmXqbV0I+nyqAVMIpRmwMYjpBxEkV5CMRgHyEnMr2cBXuv8RcjZfLmMbCATfNcJdEuQUXDjfE4nr94DHERSk8y3IkE7paIUbGV4jgGnFtEYUiZ6ADewLTFDDTmFpRA7jCjytuukSqmmdchYYLIgQnRmTRk3AZbnMbwxkgwy86skVNZZYldaxFdWvulRMd1FgnQn5Q=="
     IMAGECIPHER_SCRAMBLE_CONTEXT = b'basefwx.imagecipher.scramble.v1'
@@ -67,7 +75,7 @@ class basefwx:
     HEAVY_PBKDF2_ITERATIONS = 1_000_000
     HEAVY_ARGON2_TIME_COST = 5
     HEAVY_ARGON2_MEMORY_COST = 2 ** 17
-    HEAVY_ARGON2_PARALLELISM = 4
+    HEAVY_ARGON2_PARALLELISM = max(1, os.cpu_count() or 1)
     OFB_FAST_MIN = 64 * 1024
     PERM_FAST_MIN = 4 * 1024
     USER_KDF_SALT_SIZE = 16
@@ -94,6 +102,17 @@ class basefwx:
     AEAD_TAG_LEN = 16
     EPHEMERAL_KEY_LEN = 32
     USER_WRAP_FIXED_LEN = USER_KDF_SALT_SIZE + AEAD_NONCE_LEN + AEAD_TAG_LEN + EPHEMERAL_KEY_LEN  # salt + nonce + tag + key
+    FWXAES_MAGIC = b"FWX1"
+    FWXAES_ALGO = 0x01
+    FWXAES_KDF_PBKDF2 = 0x01
+    FWXAES_SALT_LEN = 16
+    FWXAES_IV_LEN = 12
+    FWXAES_PBKDF2_ITERS = 200_000
+    FWXAES_KEY_LEN = 32
+    FWXAES_AAD = b"fwxAES"
+    NORMALIZE_THRESHOLD = 8 * 1024
+    ZW0 = "\u200b"
+    ZW1 = "\u200c"
     _CODE_MAP: typing.ClassVar[dict[str, str]] = {
         'a': 'e*1', 'b': '&hl', 'c': '*&Gs', 'd': '*YHA', 'e': 'K5a{', 'f': '(*HGA(', 'g': '*&GD2',
         'h': '+*jsGA', 'i': '(aj*a', 'j': 'g%', 'k': '&G{A', 'l': '/IHa', 'm': '*(oa', 'n': '*KA^7',
@@ -127,20 +146,62 @@ class basefwx:
             self._min_interval = max(0.0, float(min_interval))
             self._is_tty = bool(getattr(self.stream, "isatty", lambda: False)())
             self._last_render = 0.0
-            self._cached_lines: "basefwx.typing.Optional[tuple[str, str]]" = None
             self._last_fraction: dict[int, float] = {}
+            self._lock = basefwx.threading.Lock()
+            # Get terminal width, default to 80 if not available
+            try:
+                import shutil
+                self._term_width = shutil.get_terminal_size().columns
+            except Exception:
+                self._term_width = 80
+            
+            # Try to import colorama for cross-platform color support
+            try:
+                import colorama
+                self._has_colors = True
+                self._green = colorama.Fore.GREEN
+                self._reset = colorama.Fore.RESET
+            except ImportError:
+                self._has_colors = False
+                self._green = ""
+                self._reset = ""
+            term = basefwx.os.getenv("TERM")
+            self._supports_ansi = self._is_tty and (
+                basefwx.os.name != "nt"
+                or self._has_colors
+                or basefwx.os.getenv("WT_SESSION")
+                or basefwx.os.getenv("ANSICON")
+                or (term and term != "dumb")
+            )
+                
+        def reset_terminal_state(self):
+            """Ensure terminal is in a clean state for subsequent output"""
+            with self._lock:
+                if self._printed:
+                    # Always print a newline to ensure the cursor is at the start of a fresh line
+                    try:
+                        self.stream.write("\n")
+                        self.stream.flush()
+                    except Exception:
+                        print()
+                self._printed = False
 
-        @staticmethod
-        def _render_bar(fraction: float, width: int | None = None) -> str:
+        def _render_bar(self, fraction: float, width: int | None = None) -> str:
             width = width or basefwx.PROGRESS_BAR_WIDTH
             fraction = max(0.0, min(1.0, fraction))
             filled = int(fraction * width)
-            bar = '=' * filled
-            if filled < width:
-                bar += '>'
-                bar += '.' * (width - filled - 1)
-            bar = bar.ljust(width, '.')
-            return f"|{bar}| {fraction * 100:6.2f}%"
+            
+            # Style similar to bar.py - use block characters for filled part
+            if filled >= width and fraction >= 1.0:
+                bar = '❚' * width  # Use block character for filled bar
+                if self._has_colors:
+                    return f"({self._green}{'❚' * width}{self._reset})"
+                return f"({'❚' * width})"
+            else:
+                filled_part = '❚' * filled
+                empty_part = '❚' * (width - filled)
+                # No color when not complete
+                return f"({filled_part}{empty_part})"
 
         @staticmethod
         def _format_size_hint(size_hint: "basefwx.typing.Tuple[int, int]") -> str:
@@ -149,31 +210,103 @@ class basefwx:
 
         def _write(self, line1: str, line2: str, force: bool = False) -> None:
             now = basefwx.time.monotonic()
-            self._cached_lines = (line1, line2)
-            if not self._is_tty:
-                if not force and self._printed:
-                    return
-                self.stream.write(line1 + '\n')
-                self.stream.write(line2 + '\n')
-                self.stream.flush()
-                self._printed = True
-                self._last_render = now
-                self._cached_lines = None
-                return
+            
+            # Rate limiting: skip if too soon since last update (unless forced)
             if not force and self._printed and (now - self._last_render) < self._min_interval:
                 return
-            cached = self._cached_lines
-            if cached is None:
-                return
-            line1, line2 = cached
-            if self._printed:
-                self.stream.write('\r\033[2F')  # move up two lines and reset column
-            self.stream.write('\r\033[2K' + line1 + '\n')
-            self.stream.write('\r\033[2K' + line2 + '\n')
-            self.stream.flush()
+            
+            # Instead of truncating with ellipsis, we'll preserve filenames by intelligently trimming
+            # middle parts of the line if needed
+            max_width = self._term_width
+            
+            # For line1, simple truncation is fine as it doesn't contain filenames
+            if len(line1) > max_width:
+                line1 = line1[:max_width]
+                
+            # For line2, we need to be smarter to preserve filenames
+            if len(line2) > max_width:
+                # Extract parts of the line - we want to keep the filename in brackets intact
+                parts = line2.split("[")
+                
+                if len(parts) > 1:
+                    # We have something in brackets
+                    prefix = parts[0]  # Everything before the [
+                    
+                    # Get the content including and after the bracket
+                    rest = "[" + "[".join(parts[1:])
+                    
+                    # Further split to isolate the filename
+                    filename_parts = rest.split("]", 1)
+                    if len(filename_parts) > 1:
+                        # We have found a proper [...] bracket pair
+                        filename = filename_parts[0] + "]"  # The filename with brackets
+                        suffix = filename_parts[1] if len(filename_parts) > 1 else ""
+                        
+                        # Calculate available space
+                        avail_prefix_space = max(10, max_width - len(filename) - len(suffix) - 5)
+                        
+                        # Make sure we show the most important parts
+                        if len(prefix) > avail_prefix_space:
+                            prefix = prefix[:avail_prefix_space]
+                        
+                        # Construct the line with priority to filename
+                        line2 = prefix + filename + suffix
+                        
+                        # Final safety check
+                        if len(line2) > max_width:
+                            line2 = line2[:max_width]
+                    else:
+                        # No closing bracket found, just truncate
+                        line2 = line2[:max_width]
+                else:
+                    # No brackets found, just truncate
+                    line2 = line2[:max_width]
+            
+            if self._is_tty and self._supports_ansi:
+                # Two-line in-place update using ANSI cursor controls.
+                if self._printed:
+                    # Move cursor up one line and return to column 0.
+                    self.stream.write("\x1b[1A\r")
+                else:
+                    # Clear any partial line (e.g. unittest dots) before first render.
+                    self.stream.write("\r\x1b[2K")
+                # Clear and render line1.
+                self.stream.write("\r\x1b[2K")
+                self.stream.write(line1)
+                self.stream.write("\n")
+                # Clear and render line2.
+                self.stream.write("\r\x1b[2K")
+                self.stream.write(line2)
+                self.stream.flush()
+            elif self._is_tty:
+                # Best-effort fallback without ANSI cursor movement.
+                if not self._printed:
+                    try:
+                        self.stream.write("\r")
+                        self.stream.write(" " * self._term_width)
+                        self.stream.write("\r")
+                    except Exception:
+                        pass
+                try:
+                    self.stream.write(line1 + "\n")
+                    self.stream.write(line2)
+                    self.stream.flush()
+                except Exception:
+                    print(line1)
+                    print(line2, end="")
+            else:
+                # Non-TTY mode: only print on first call or when forced
+                if not self._printed or force:
+                    try:
+                        self.stream.write(line1 + "\n")
+                        self.stream.write(line2 + "\n")
+                        self.stream.flush()
+                    except Exception:
+                        print(line1)
+                        print(line2)
+            
             self._printed = True
             self._last_render = now
-            self._cached_lines = None
 
         def update(
             self,
@@ -184,40 +317,51 @@ class basefwx:
             *,
             size_hint: "basefwx.typing.Optional[basefwx.typing.Tuple[int, int]]" = None
         ) -> None:
-            # threshold: consider "almost done" as done for display logic
-            THRESH = 0.98
-
             # clamp fraction and ensure float
             fraction = max(0.0, min(1.0, float(fraction)))
 
-            # compute overall fraction and bars
-            overall_fraction = (file_index + fraction) / self.total_files
-            overall = self._render_bar(overall_fraction)
-            current = self._render_bar(fraction)
-
-            # compute a human-friendly "files complete" value:
-            # treat fraction >= THRESH as fully completed for the counter
-            completed_files = file_index + (1 if fraction >= THRESH else 0)
-            # clamp just in case
-            completed_files = min(self.total_files, max(0, int(completed_files)))
-
-            label = path.name if path else ""
-            line1 = f"\rOverall {overall} ({completed_files}/{self.total_files} files complete)"
-            hint_text = f" ({self._format_size_hint(size_hint)})" if size_hint else ""
-            label_text = f" [{label}]" if label else ""
-            line2 = f"\rFile    {current} phase: {phase}{hint_text}{label_text}"
-
-            # If non-tty, avoid spamming a near-final 100% line: let finalize_file() print final authoritative line.
-            if not self._is_tty and fraction >= THRESH:
-                # cache lines so finalize_file can still force output if needed,
-                # but don't actually write them now to avoid duplicate final prints.
-                self._cached_lines = (line1, line2)
+            with self._lock:
+                # Track per-file progress to support parallel updates.
                 self._last_fraction[file_index] = fraction
-                return
+                overall_fraction = sum(self._last_fraction.values()) / self.total_files
+                overall = self._render_bar(overall_fraction)
+                current = self._render_bar(fraction)
 
-            # normal write path
-            self._write(line1, line2)
-            self._last_fraction[file_index] = fraction
+                # files complete counter: count fully finished files
+                completed_files = sum(1 for frac in self._last_fraction.values() if frac >= 1.0)
+
+                label = path.name if path else ""
+                # build status message: show progress correctly
+                if self.total_files == 1:
+                    if fraction < 0.1:  # Show progress on current file in early stages
+                        status_text = f"processing {label}" if label else "processing"
+                    elif fraction < 1.0:
+                        status_text = f"{phase} {label}" if label else phase
+                    else:
+                        status_text = "complete"
+                else:
+                    if fraction < 1.0:
+                        status_text = f"{completed_files} complete, processing {label}" if label else f"{completed_files} complete"
+                    else:
+                        status_text = f"{completed_files}/{self.total_files} files"
+
+                # Format similar to bar.py with better spacing
+                percent_overall = f"{overall_fraction * 100:3.0f}%"
+                percent_file = f"{fraction * 100:3.0f}%"
+
+                hint_text = f" ({self._format_size_hint(size_hint)})" if size_hint else ""
+                label_text = f" [{label}]" if label else ""
+
+                # Clean formatting with consistent spacing
+                line1 = f"Overall {overall} {percent_overall} {status_text}"
+                line2 = f"File    {current} {percent_file} phase: {phase}{hint_text}{label_text}"
+
+                # Remove any possible newline characters that might be in the phase name
+                line1 = line1.replace("\n", " ")
+                line2 = line2.replace("\n", " ")
+
+                # normal write path
+                self._write(line1, line2)
 
         def finalize_file(
             self,
@@ -226,24 +370,39 @@ class basefwx:
             *,
             size_hint: "basefwx.typing.Optional[basefwx.typing.Tuple[int, int]]" = None
         ) -> None:
-            THRESH = 0.999
-            last_fraction = self._last_fraction.pop(file_index, None)
+            with self._lock:
+                # always print final completion status
+                self._last_fraction[file_index] = 1.0
+                overall_fraction = sum(self._last_fraction.values()) / self.total_files
+                overall = self._render_bar(overall_fraction)
+                label = path.name if path else ""
+                current = self._render_bar(1.0)
 
-            # if TTY and we already printed almost-complete, skip duplicate final
-            if self._is_tty and last_fraction is not None and last_fraction >= THRESH:
-                return
+                # Format like bar.py with completion indicator
+                percent_overall = f"{overall_fraction * 100:3.0f}%"
+                status_text = f"{sum(1 for frac in self._last_fraction.values() if frac >= 1.0)}/{self.total_files} files"
 
-            overall_fraction = (file_index + 1) / self.total_files
-            overall = self._render_bar(overall_fraction)
-            label = path.name if path else ""
-            current = self._render_bar(1.0)
-            line1 = f"\rOverall {overall} ({file_index + 1}/{self.total_files} files complete)"
-            hint_text = f" ({self._format_size_hint(size_hint)})" if size_hint else ""
-            label_text = f" [{label}]" if label else ""
-            line2 = f"\rFile    {current} phase: done{hint_text}{label_text}"
+                hint_text = f" ({self._format_size_hint(size_hint)})" if size_hint else ""
+                label_text = f" [{label}]" if label else ""
 
-            # force final output (overwriting in TTY or printing in non-TTY)
-            self._write(line1, line2, force=True)
+                # Show green checkmark for completed file
+                completion_indicator = f" {self._green}✓{self._reset}" if self._has_colors else " ✓"
+
+                line1 = f"Overall {overall} {percent_overall} {status_text}"
+                line2 = f"File    {current} 100% phase: done{hint_text}{label_text}{completion_indicator}"
+
+                # force final output (overwriting in TTY or printing in non-TTY)
+                self._write(line1, line2, force=True)
+
+                # Print a newline to finalize the output
+                try:
+                    self.stream.write("\n")
+                    self.stream.flush()
+                except Exception:
+                    print()
+
+                # Reset the printed state so future progress starts fresh
+                self._printed = False
 
             
 
@@ -502,7 +661,7 @@ class basefwx:
         def encode_file(
             cls,
             src_path: "basefwx.pathlib.Path",
-            dst_handle,
+            dst_handle: "basefwx.typing.Optional[basefwx.typing.Any]",
             password: str,
             salt: bytes,
             *,
@@ -519,7 +678,8 @@ class basefwx:
                     if not chunk:
                         break
                     obf_chunk = encoder.encode_chunk(chunk)
-                    dst_handle.write(obf_chunk)
+                    if dst_handle is not None:
+                        dst_handle.write(obf_chunk)
                     forward_chunk(obf_chunk)
                     processed += len(chunk)
                     if progress_cb:
@@ -611,6 +771,17 @@ class basefwx:
         if basefwx.META_DELIM in payload:
             return payload.split(basefwx.META_DELIM, 1)
         return "", payload
+
+    @staticmethod
+    def _split_with_delims(
+        payload: str,
+        delims: "basefwx.typing.Iterable[str]",
+        label: str
+    ) -> "basefwx.typing.Tuple[str, str]":
+        for delim in delims:
+            if delim and delim in payload:
+                return payload.split(delim, 1)
+        raise ValueError(f"Malformed {label} payload")
 
     @staticmethod
     def _apply_strip_attributes(path: "basefwx.pathlib.Path") -> None:
@@ -1131,7 +1302,7 @@ class basefwx:
                     salt,
                     time_cost=argon2_time_cost or 3,
                     memory_cost=argon2_memory_cost or (2 ** 15),
-                    parallelism=argon2_parallelism or 4
+                    parallelism=argon2_parallelism or basefwx._CPU_COUNT
                 )
         return basefwx._derive_user_key_pbkdf2(password, salt, iterations=iterations)
 
@@ -1411,6 +1582,168 @@ class basefwx:
         basefwx._del('user_derived_key')
         basefwx._del('kem_shared')
         return plaintext
+
+    @staticmethod
+    def _coerce_password_bytes(
+        password: "basefwx.typing.Union[str, bytes, bytearray, memoryview]"
+    ) -> bytes:
+        if isinstance(password, str):
+            return password.encode("utf-8")
+        if isinstance(password, (bytes, bytearray, memoryview)):
+            return bytes(password)
+        raise TypeError(f"Unsupported password type: {type(password)!r}")
+
+    @staticmethod
+    def _kdf_pbkdf2_raw(password: bytes, salt: bytes, iters: int) -> bytes:
+        kdf = basefwx.PBKDF2HMAC(
+            algorithm=basefwx.hashes.SHA256(),
+            length=basefwx.FWXAES_KEY_LEN,
+            salt=salt,
+            iterations=iters
+        )
+        return kdf.derive(password)
+
+    @staticmethod
+    def fwxAES_encrypt_raw(
+        plaintext: bytes,
+        password: "basefwx.typing.Union[str, bytes, bytearray, memoryview]"
+    ) -> bytes:
+        if not isinstance(plaintext, (bytes, bytearray, memoryview)):
+            raise TypeError("fwxAES_encrypt_raw expects bytes")
+        pw = basefwx._coerce_password_bytes(password)
+        salt = basefwx.os.urandom(basefwx.FWXAES_SALT_LEN)
+        iv = basefwx.os.urandom(basefwx.FWXAES_IV_LEN)
+        key = basefwx._kdf_pbkdf2_raw(pw, salt, basefwx.FWXAES_PBKDF2_ITERS)
+        aesgcm = basefwx.AESGCM(key)
+        ct = aesgcm.encrypt(iv, bytes(plaintext), basefwx.FWXAES_AAD)
+        header = bytearray()
+        header += basefwx.FWXAES_MAGIC
+        header += bytes([
+            basefwx.FWXAES_ALGO,
+            basefwx.FWXAES_KDF_PBKDF2,
+            basefwx.FWXAES_SALT_LEN,
+            basefwx.FWXAES_IV_LEN
+        ])
+        header += basefwx.struct.pack(">I", basefwx.FWXAES_PBKDF2_ITERS)
+        header += basefwx.struct.pack(">I", len(ct))
+        return bytes(header) + salt + iv + ct
+
+    @staticmethod
+    def fwxAES_decrypt_raw(
+        blob: bytes,
+        password: "basefwx.typing.Union[str, bytes, bytearray, memoryview]"
+    ) -> bytes:
+        if not isinstance(blob, (bytes, bytearray, memoryview)):
+            raise TypeError("fwxAES_decrypt_raw expects bytes")
+        blob_bytes = bytes(blob)
+        header_len = 4 + 1 + 1 + 1 + 1 + 4 + 4
+        if len(blob_bytes) < header_len:
+            raise ValueError("fwxAES blob too short")
+        if blob_bytes[:4] != basefwx.FWXAES_MAGIC:
+            raise ValueError("fwxAES bad magic")
+        algo, kdf, salt_len, iv_len = blob_bytes[4], blob_bytes[5], blob_bytes[6], blob_bytes[7]
+        if algo != basefwx.FWXAES_ALGO or kdf != basefwx.FWXAES_KDF_PBKDF2:
+            raise ValueError("fwxAES unsupported algo/kdf")
+        iters = basefwx.struct.unpack(">I", blob_bytes[8:12])[0]
+        ct_len = basefwx.struct.unpack(">I", blob_bytes[12:16])[0]
+        off = 16
+        if len(blob_bytes) < off + salt_len + iv_len + ct_len:
+            raise ValueError("fwxAES blob truncated")
+        salt = blob_bytes[off:off + salt_len]
+        off += salt_len
+        iv = blob_bytes[off:off + iv_len]
+        off += iv_len
+        ct = blob_bytes[off:off + ct_len]
+        pw = basefwx._coerce_password_bytes(password)
+        key = basefwx._kdf_pbkdf2_raw(pw, salt, iters)
+        aesgcm = basefwx.AESGCM(key)
+        return aesgcm.decrypt(iv, ct, basefwx.FWXAES_AAD)
+
+    @staticmethod
+    def _bytes_to_bits(data: bytes) -> str:
+        return "".join(f"{b:08b}" for b in data)
+
+    @staticmethod
+    def _bits_to_bytes(bits: str) -> bytes:
+        if len(bits) % 8:
+            raise ValueError("bits not multiple of 8")
+        return bytes(int(bits[i:i + 8], 2) for i in range(0, len(bits), 8))
+
+    @staticmethod
+    def normalize_wrap(blob: bytes, cover_phrase: str = "low taper fade") -> str:
+        if not cover_phrase.strip():
+            raise ValueError("cover_phrase empty")
+        payload = basefwx.struct.pack(">I", len(blob)) + blob
+        bits = basefwx._bytes_to_bits(payload)
+        words = cover_phrase.split()
+        token_count = len(bits) + 1
+        repeats = (token_count + len(words) - 1) // len(words)
+        tokens = (words * repeats)[:token_count]
+        out_parts: "basefwx.typing.List[str]" = []
+        bit_idx = 0
+        for idx, token in enumerate(tokens):
+            if idx > 0:
+                out_parts.append(" ")
+                out_parts.append(basefwx.ZW1 if bits[bit_idx] == "1" else basefwx.ZW0)
+                bit_idx += 1
+            out_parts.append(token)
+        if bit_idx != len(bits):
+            raise RuntimeError("failed to embed all bits")
+        return "".join(out_parts)
+
+    @staticmethod
+    def normalize_unwrap(text: str) -> bytes:
+        bits: "basefwx.typing.List[str]" = []
+        for ch in text:
+            if ch == basefwx.ZW0:
+                bits.append("0")
+            elif ch == basefwx.ZW1:
+                bits.append("1")
+        if len(bits) < 32:
+            raise ValueError("not enough hidden data")
+        length = int("".join(bits[:32]), 2)
+        needed = 32 + length * 8
+        if len(bits) < needed:
+            raise ValueError("hidden data truncated")
+        blob_bits = "".join(bits[32:needed])
+        return basefwx._bits_to_bytes(blob_bits)
+
+    @staticmethod
+    def fwxAES_file(
+        file: "basefwx.typing.Union[str, basefwx.pathlib.Path]",
+        password: "basefwx.typing.Union[str, bytes, bytearray, memoryview]",
+        *,
+        output: "basefwx.typing.Optional[str]" = None,
+        normalize: bool = False,
+        normalize_threshold: "basefwx.typing.Optional[int]" = None,
+        cover_phrase: str = "low taper fade"
+    ) -> str:
+        path = basefwx._normalize_path(file)
+        threshold = basefwx.NORMALIZE_THRESHOLD if normalize_threshold is None else int(normalize_threshold)
+        if path.suffix.lower() == ".fwx":
+            data = path.read_bytes()
+            if data.startswith(basefwx.FWXAES_MAGIC):
+                blob = data
+            else:
+                try:
+                    text = data.decode("utf-8")
+                except UnicodeDecodeError as exc:
+                    raise ValueError("Input is not a valid FWX1 blob or UTF-8 normalized text") from exc
+                blob = basefwx.normalize_unwrap(text)
+            plain = basefwx.fwxAES_decrypt_raw(blob, password)
+            out_path = basefwx._normalize_path(output) if output else path.with_suffix('')
+            with open(out_path, 'wb') as handle:
+                handle.write(plain)
+            return str(out_path)
+        plaintext = path.read_bytes()
+        blob = basefwx.fwxAES_encrypt_raw(plaintext, password)
+        out_path = basefwx._normalize_path(output) if output else path.with_suffix('.fwx')
+        if normalize and len(plaintext) <= threshold:
+            text = basefwx.normalize_wrap(blob, cover_phrase)
+            out_path.write_text(text, encoding="utf-8", newline="\n")
+        else:
+            out_path.write_bytes(blob)
+        return str(out_path)
     # REVERSIBLE  - SECURITY: ❙
     @staticmethod
     def b64encode(string: str):
@@ -1951,14 +2284,19 @@ class basefwx:
 
         result: "basefwx.typing.Optional[basefwx.typing.Tuple[basefwx.pathlib.Path, int]]" = None
         try:
-            with basefwx.tempfile.NamedTemporaryFile('w+b', dir=temp_dir.name, delete=False) as payload_tmp, \
-                 basefwx.tempfile.NamedTemporaryFile('w+b', dir=temp_dir.name, delete=False) as obf_tmp:
-                cleanup_paths.extend([payload_tmp.name, obf_tmp.name])
-                payload_tmp.write(metadata_len.to_bytes(4, 'big'))
+            payload_len = estimated_payload_len
+            with basefwx.tempfile.NamedTemporaryFile('w+b', dir=temp_dir.name, delete=False) as final_tmp:
+                cleanup_paths.append(final_tmp.name)
+                final_tmp.write(len_user.to_bytes(4, 'big'))
+                final_tmp.write(user_blob)
+                final_tmp.write(len_master.to_bytes(4, 'big'))
+                final_tmp.write(master_blob)
+                final_tmp.write(payload_len.to_bytes(4, 'big'))
+                final_tmp.write(metadata_len.to_bytes(4, 'big'))
                 if metadata_bytes:
-                    payload_tmp.write(metadata_bytes)
+                    final_tmp.write(metadata_bytes)
                 nonce = basefwx.os.urandom(basefwx.AEAD_NONCE_LEN)
-                payload_tmp.write(nonce)
+                final_tmp.write(nonce)
                 encryptor = basefwx.Cipher(
                     basefwx.algorithms.AES(aead_key),
                     basefwx.modes.GCM(nonce)
@@ -1972,7 +2310,7 @@ class basefwx:
                         return
                     ct = encryptor.update(data)
                     if ct:
-                        payload_tmp.write(ct)
+                        final_tmp.write(ct)
                     processed_plain += len(data)
                     _seal_progress(processed_plain)
 
@@ -1981,7 +2319,7 @@ class basefwx:
                 _write_plain(stream_header_bytes)
                 basefwx._StreamObfuscator.encode_file(
                     path,
-                    obf_tmp,
+                    None,
                     password,
                     stream_salt,
                     chunk_size=chunk_size,
@@ -1990,43 +2328,27 @@ class basefwx:
                 )
                 tail = encryptor.finalize()
                 if tail:
-                    payload_tmp.write(tail)
-                payload_tmp.write(encryptor.tag)
-                payload_len = payload_tmp.tell()
-                payload_tmp.flush()
-                payload_tmp.seek(0)
-
-                with basefwx.tempfile.NamedTemporaryFile('w+b', dir=temp_dir.name, delete=False) as final_tmp:
-                    cleanup_paths.append(final_tmp.name)
-                    final_tmp.write(len_user.to_bytes(4, 'big'))
-                    final_tmp.write(user_blob)
-                    final_tmp.write(len_master.to_bytes(4, 'big'))
-                    final_tmp.write(master_blob)
-                    final_tmp.write(payload_len.to_bytes(4, 'big'))
-                    while True:
-                        chunk = payload_tmp.read(basefwx.STREAM_CHUNK_SIZE)
-                        if not chunk:
-                            break
-                        final_tmp.write(chunk)
-                    final_tmp.flush()
-                    final_tmp_path = final_tmp.name
+                    final_tmp.write(tail)
+                final_tmp.write(encryptor.tag)
+                final_tmp.flush()
+                final_tmp_path = final_tmp.name
 
             actual_size = basefwx.os.path.getsize(final_tmp_path)
             actual_hint = (input_size, actual_size)
             basefwx.os.replace(final_tmp_path, output_path)
             cleanup_paths.remove(final_tmp_path)
-            basefwx.os.remove(obf_tmp.name)
-            cleanup_paths.remove(obf_tmp.name)
             if strip_metadata:
                 basefwx._apply_strip_attributes(output_path)
                 basefwx.os.chmod(output_path, 0)
             basefwx.os.remove(path)
-            human = basefwx._human_readable_size(actual_size)
-            if not basefwx._SILENT_MODE:
-                print(f"{output_path.name}: approx output size {human}")
             if reporter:
                 reporter.update(file_index, 1.0, "done", output_path, size_hint=actual_hint)
                 reporter.finalize_file(file_index, output_path, size_hint=actual_hint)
+            else:
+                # Only print size info if no progress reporter (to avoid corrupting progress display)
+                human = basefwx._human_readable_size(actual_size)
+                if not basefwx._SILENT_MODE:
+                    print(f"{output_path.name}: approx output size {human}")
             result = (output_path, actual_size)
         finally:
             for temp_path in cleanup_paths:
@@ -2155,9 +2477,8 @@ class basefwx:
             reporter.update(file_index, fraction, "pb512-stream", path, size_hint=estimated_hint)
 
         try:
-            with basefwx.tempfile.NamedTemporaryFile('w+b', dir=temp_dir.name, delete=False) as obf_tmp, \
-                 basefwx.tempfile.NamedTemporaryFile('w+b', dir=temp_dir.name, delete=False) as cipher_tmp:
-                cleanup_paths.extend([obf_tmp.name, cipher_tmp.name])
+            with basefwx.tempfile.NamedTemporaryFile('w+b', dir=temp_dir.name, delete=False) as cipher_tmp:
+                cleanup_paths.append(cipher_tmp.name)
                 len_user = len(ephemeral_enc_user)
                 len_master = len(master_payload)
                 cipher_tmp.write(len_user.to_bytes(4, 'big'))
@@ -2187,7 +2508,7 @@ class basefwx:
                 _write_plain(stream_header_bytes)
                 basefwx._StreamObfuscator.encode_file(
                     path,
-                    obf_tmp,
+                    None,
                     password,
                     stream_salt,
                     chunk_size=chunk_size,
@@ -2206,7 +2527,6 @@ class basefwx:
                 cipher_tmp.write(payload_len.to_bytes(4, 'big'))
                 cipher_tmp.flush()
                 cipher_tmp_path = cipher_tmp.name
-                obf_tmp_path = obf_tmp.name
             actual_size = basefwx.os.path.getsize(cipher_tmp_path)
             actual_hint = (input_size, actual_size)
             basefwx.os.replace(cipher_tmp_path, output_path)
@@ -2215,14 +2535,14 @@ class basefwx:
                 basefwx._apply_strip_attributes(output_path)
                 basefwx.os.chmod(output_path, 0)
             basefwx.os.remove(path)
-            basefwx.os.remove(obf_tmp_path)
-            cleanup_paths.remove(obf_tmp_path)
-            human = basefwx._human_readable_size(actual_size)
-            if not basefwx._SILENT_MODE:
-                print(f"{output_path.name}: approx output size {human}")
             if reporter:
                 reporter.update(file_index, 1.0, "done", output_path, size_hint=actual_hint)
                 reporter.finalize_file(file_index, output_path, size_hint=actual_hint)
+            else:
+                # Only print size info if no progress reporter (to avoid corrupting progress display)
+                human = basefwx._human_readable_size(actual_size)
+                if not basefwx._SILENT_MODE:
+                    print(f"{output_path.name}: approx output size {human}")
             return output_path, actual_size
         finally:
             basefwx._del('ephemeral_key')
@@ -2340,10 +2660,11 @@ class basefwx:
             use_master_effective = False
         basefwx._warn_on_metadata(meta, "FWX512R")
 
-        try:
-            header, payload = content_core.split(basefwx.FWX_DELIM, 1)
-        except ValueError as exc:
-            raise ValueError("Malformed FWX container") from exc
+        header, payload = basefwx._split_with_delims(
+            content_core,
+            (basefwx.FWX_DELIM, basefwx.LEGACY_FWX_DELIM),
+            "FWX container"
+        )
 
         if reporter:
             reporter.update(file_index, 0.35, "b256", path)
@@ -2703,16 +3024,32 @@ class basefwx:
                 except Exception:
                     return str(path), "FAIL!"
 
-            if reporter is None and len(paths) > 1 and basefwx._CPU_COUNT > 1:
+            use_parallel = len(paths) > 1 and basefwx._CPU_COUNT > 1
+            if use_parallel:
                 max_workers = min(len(paths), basefwx._CPU_COUNT)
-                with basefwx.concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-                    for file_id, status in executor.map(_process_without_reporter, paths):
-                        results[file_id] = status
+                if reporter:
+                    items = list(enumerate(paths))
+
+                    def _dispatch(item: "tuple[int, basefwx.pathlib.Path]") -> tuple[str, str]:
+                        idx, path = item
+                        return _process_with_reporter(idx, path)
+
+                    with basefwx.concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+                        for file_id, status in executor.map(_dispatch, items):
+                            results[file_id] = status
+                else:
+                    with basefwx.concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+                        for file_id, status in executor.map(_process_without_reporter, paths):
+                            results[file_id] = status
             else:
                 for idx, path in enumerate(paths):
                     file_id, status = _process_with_reporter(idx, path)
                     results[file_id] = status
 
+            # Reset the terminal state before returning results
+            if reporter:
+                reporter.reset_terminal_state()
+                
             if len(paths) == 1:
                 final_result = next(iter(results.values()))
             else:
@@ -3067,7 +3404,11 @@ class basefwx:
         basefwx._warn_on_metadata(meta, "AES-LIGHT")
 
         try:
-            ext, b64_payload = payload.split(basefwx.FWX_DELIM, 1)
+            ext, b64_payload = basefwx._split_with_delims(
+                payload,
+                (basefwx.FWX_DELIM, basefwx.LEGACY_FWX_DELIM),
+                "FWX payload"
+            )
         except ValueError as exc:
             raise ValueError("Malformed FWX light payload") from exc
 
@@ -3438,13 +3779,14 @@ class basefwx:
             basefwx.os.chmod(output_path, 0)
         basefwx.os.remove(path)
 
-        human = basefwx._human_readable_size(approx_size)
-        if not basefwx._SILENT_MODE:
-            print(f"{output_path.name}: approx output size {human}")
-
         if reporter:
             reporter.update(file_index, 1.0, "done", output_path, size_hint=actual_hint)
             reporter.finalize_file(file_index, output_path, size_hint=actual_hint)
+        else:
+            # Only print size info if no progress reporter (to avoid corrupting progress display)
+            human = basefwx._human_readable_size(approx_size)
+            if not basefwx._SILENT_MODE:
+                print(f"{output_path.name}: approx output size {human}")
 
         return output_path, approx_size
 
@@ -3529,10 +3871,11 @@ class basefwx:
             use_master_effective = False
         basefwx._warn_on_metadata(meta, "AES-HEAVY")
 
-        try:
-            ext_token, data_token = payload.split(basefwx.FWX_HEAVY_DELIM, 1)
-        except ValueError as exc:
-            raise ValueError("Malformed FWX heavy payload") from exc
+        ext_token, data_token = basefwx._split_with_delims(
+            payload,
+            (basefwx.FWX_HEAVY_DELIM, basefwx.LEGACY_FWX_HEAVY_DELIM),
+            "FWX heavy"
+        )
 
         if reporter:
             reporter.update(file_index, 0.6, "pb512", path)
@@ -3643,34 +3986,64 @@ class basefwx:
                 except Exception:
                     return str(path), "FAIL!"
 
-            cancel_idx: "basefwx.typing.Optional[int]" = None
-            try:
-                if reporter is None and len(paths) > 1 and basefwx._CPU_COUNT > 1:
-                    max_workers = min(len(paths), basefwx._CPU_COUNT)
-                    with basefwx.concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-                        for file_id, status in executor.map(_process_without_reporter, paths):
+            use_parallel = len(paths) > 1 and basefwx._CPU_COUNT > 1
+            if use_parallel:
+                max_workers = min(len(paths), basefwx._CPU_COUNT)
+                executor = basefwx.concurrent.futures.ThreadPoolExecutor(max_workers=max_workers)
+                futures: "dict[basefwx.concurrent.futures.Future, tuple[int | None, basefwx.pathlib.Path]]" = {}
+                shutdown_now = False
+                try:
+                    if reporter:
+                        for idx, path in enumerate(paths):
+                            futures[executor.submit(_process_with_reporter, idx, path)] = (idx, path)
+                    else:
+                        for path in paths:
+                            futures[executor.submit(_process_without_reporter, path)] = (None, path)
+                    try:
+                        for future in basefwx.concurrent.futures.as_completed(futures):
+                            file_id, status = future.result()
                             results[file_id] = status
-                else:
+                    except KeyboardInterrupt:
+                        shutdown_now = True
+                        for future, meta in futures.items():
+                            if not future.done():
+                                future.cancel()
+                                idx, rest_path = meta
+                                if reporter and idx is not None:
+                                    reporter.update(idx, 0.0, "cancelled", rest_path)
+                                    reporter.finalize_file(idx, rest_path)
+                                results[str(rest_path)] = "CANCELLED"
+                        executor.shutdown(wait=False, cancel_futures=True)
+                        if len(paths) == 1:
+                            return "CANCELLED"
+                        return results
+                finally:
+                    executor.shutdown(wait=not shutdown_now, cancel_futures=True)
+            else:
+                try:
                     for idx, path in enumerate(paths):
                         try:
                             file_id, status = _process_with_reporter(idx, path)
                             results[file_id] = status
                         except KeyboardInterrupt:
-                            cancel_idx = idx
                             results[str(path)] = "CANCELLED"
                             raise
-            except KeyboardInterrupt:
-                for idx, rest_path in enumerate(paths):
-                    key = str(rest_path)
-                    if key not in results:
-                        if reporter:
-                            reporter.update(idx, 0.0, "cancelled", rest_path)
-                            reporter.finalize_file(idx, rest_path)
-                        results[key] = "CANCELLED"
-                if len(paths) == 1:
-                    return "CANCELLED"
-                return results
+                except KeyboardInterrupt:
+                    for idx, rest_path in enumerate(paths):
+                        key = str(rest_path)
+                        if key not in results:
+                            if reporter:
+                                reporter.update(idx, 0.0, "cancelled", rest_path)
+                                reporter.finalize_file(idx, rest_path)
+                            results[key] = "CANCELLED"
+                    if len(paths) == 1:
+                        return "CANCELLED"
+                    return results
 
+            # Reset the terminal state before returning results
+            if reporter:
+                reporter.reset_terminal_state()
+                
             if len(paths) == 1:
                 return next(iter(results.values()))
             return results
@@ -3943,6 +4316,22 @@ def cli(argv=None) -> int:
         default=None,
         help="Path to ML-KEM public key used for master key wrapping"
     )
+    cryptin.add_argument(
+        "--normalize",
+        action="store_true",
+        help="Wrap fwxAES output in zero-width cover text (fwxaes only)"
+    )
+    cryptin.add_argument(
+        "--normalize-threshold",
+        type=int,
+        default=None,
+        help="Max plaintext bytes for normalize wrapper (fwxaes only)"
+    )
+    cryptin.add_argument(
+        "--cover-phrase",
+        default="low taper fade",
+        help="Cover phrase for normalize wrapper (fwxaes only)"
+    )
 
     args = parser.parse_args(argv)
 
@@ -3964,6 +4353,7 @@ def cli(argv=None) -> int:
             "512": "b512",
             "b512": "b512",
             "fwx512": "b512",
+            "fwxaes": "fwxaes",
             "aes": "aes-light",
             "aes-light": "aes-light",
             "256": "aes-light",
@@ -3978,7 +4368,22 @@ def cli(argv=None) -> int:
         if not normalized:
             parser.error(f"Unsupported method '{args.method}'")
 
-        if normalized == "b512":
+        if normalized == "fwxaes":
+            results = {}
+            for raw_path in args.paths:
+                try:
+                    basefwx.fwxAES_file(
+                        raw_path,
+                        password,
+                        normalize=args.normalize,
+                        normalize_threshold=args.normalize_threshold,
+                        cover_phrase=args.cover_phrase
+                    )
+                    results[str(raw_path)] = "SUCCESS!"
+                except Exception as exc:
+                    results[str(raw_path)] = f"FAIL! {exc}"
+            result = results if len(args.paths) > 1 else next(iter(results.values()))
+        elif normalized == "b512":
             result = basefwx.b512file(
                 args.paths,
                 password,
@@ -4013,6 +4418,7 @@ def cli(argv=None) -> int:
                     failures += 1
             return 0 if failures == 0 else 1
 
+        # Print an extra newline to ensure separation from progress output
         print(result)
         return 0 if result == "SUCCESS!" else 1
 

@@ -137,9 +137,12 @@ public:
     explicit Pcg64Rng(std::uint64_t seed) {
         std::array<std::uint64_t, 4> state = SeedSequenceState(seed);
         Seed(state[0], state[1], state[2], state[3]);
+        has_uint32_ = false;
+        uinteger_ = 0;
+        Next64();  // Align with NumPy PCG64 output sequence.
     }
 
-    std::uint64_t Next() {
+    std::uint64_t Next64() {
         __uint128_t old_state = state_;
         Step();
         std::uint64_t high = static_cast<std::uint64_t>(old_state >> 64);
@@ -149,14 +152,40 @@ public:
         return Rotr64(xorshifted, rot);
     }
 
-    std::uint64_t Bounded(std::uint64_t bound) {
-        std::uint64_t threshold = static_cast<std::uint64_t>(-bound) % bound;
-        for (;;) {
-            std::uint64_t r = Next();
-            if (r >= threshold) {
-                return r % bound;
-            }
+    std::uint32_t Next32() {
+        if (has_uint32_) {
+            has_uint32_ = false;
+            return uinteger_;
         }
+        std::uint64_t next = Next64();
+        has_uint32_ = true;
+        uinteger_ = static_cast<std::uint32_t>(next >> 32);
+        return static_cast<std::uint32_t>(next & 0xFFFFFFFFu);
+    }
+
+    std::uint64_t RandomInterval(std::uint64_t max) {
+        if (max == 0) {
+            return 0;
+        }
+        std::uint64_t mask = max;
+        mask |= mask >> 1;
+        mask |= mask >> 2;
+        mask |= mask >> 4;
+        mask |= mask >> 8;
+        mask |= mask >> 16;
+        mask |= mask >> 32;
+        if (max <= 0xFFFFFFFFu) {
+            std::uint64_t value = 0;
+            do {
+                value = static_cast<std::uint64_t>(Next32()) & mask;
+            } while (value > max);
+            return value;
+        }
+        std::uint64_t value = 0;
+        do {
+            value = Next64() & mask;
+        } while (value > max);
+        return value;
     }
 
 private:
@@ -181,6 +210,8 @@ private:
 
     __uint128_t state_{0};
     __uint128_t inc_{0};
+    bool has_uint32_{false};
+    std::uint32_t uinteger_{0};
 };
 
 std::uint64_t Seed64FromBytes(const Bytes& seed_bytes) {
@@ -225,20 +256,13 @@ void PermuteInPlace(Bytes& data, std::uint64_t seed) {
         return;
     }
     if (n >= kPermFastMin) {
-        std::vector<std::size_t> perm(n);
-        for (std::size_t i = 0; i < n; ++i) {
-            perm[i] = i;
-        }
         Pcg64Rng rng(seed);
         for (std::size_t i = n - 1; i > 0; --i) {
-            std::size_t j = static_cast<std::size_t>(rng.Bounded(i + 1));
-            std::swap(perm[i], perm[j]);
+            std::size_t j = static_cast<std::size_t>(rng.RandomInterval(i));
+            if (j != i) {
+                std::swap(data[i], data[j]);
+            }
         }
-        Bytes out(n);
-        for (std::size_t i = 0; i < n; ++i) {
-            out[i] = data[perm[i]];
-        }
-        data.swap(out);
         return;
     }
     std::uint64_t state = seed;
@@ -257,24 +281,18 @@ void UnpermuteInPlace(Bytes& data, std::uint64_t seed) {
         return;
     }
     if (n >= kPermFastMin) {
-        std::vector<std::size_t> perm(n);
-        for (std::size_t i = 0; i < n; ++i) {
-            perm[i] = i;
-        }
         Pcg64Rng rng(seed);
+        std::vector<std::size_t> swaps(n);
         for (std::size_t i = n - 1; i > 0; --i) {
-            std::size_t j = static_cast<std::size_t>(rng.Bounded(i + 1));
-            std::swap(perm[i], perm[j]);
+            std::size_t j = static_cast<std::size_t>(rng.RandomInterval(i));
+            swaps[i] = j;
         }
-        std::vector<std::size_t> inv(n);
-        for (std::size_t i = 0; i < n; ++i) {
-            inv[perm[i]] = i;
+        for (std::size_t i = 1; i < n; ++i) {
+            std::size_t j = swaps[i];
+            if (j != i) {
+                std::swap(data[i], data[j]);
+            }
         }
-        Bytes out(n);
-        for (std::size_t i = 0; i < n; ++i) {
-            out[i] = data[inv[i]];
-        }
-        data.swap(out);
         return;
     }
     std::vector<std::pair<std::size_t, std::size_t>> swaps;
@@ -389,6 +407,20 @@ Bytes ApplyAesCtr(EVP_CIPHER_CTX* ctx, const Bytes& input) {
     return output;
 }
 
+void ApplyAesCtrInPlace(EVP_CIPHER_CTX* ctx, Bytes& buffer) {
+    if (buffer.empty()) {
+        return;
+    }
+    int out_len = 0;
+    if (EVP_EncryptUpdate(ctx, buffer.data(), &out_len, buffer.data(),
+                          static_cast<int>(buffer.size())) != 1) {
+        throw std::runtime_error("AES-CTR update failed");
+    }
+    if (out_len != static_cast<int>(buffer.size())) {
+        throw std::runtime_error("AES-CTR output size mismatch");
+    }
+}
+
 }  // namespace
 
 Bytes ObfuscateBytes(const Bytes& data, const Bytes& key) {
@@ -477,7 +509,8 @@ Bytes StreamObfuscator::EncodeChunk(const Bytes& chunk) {
         return {};
     }
     ChunkParams params = NextParams(perm_material_, chunk_index_);
-    Bytes buffer = ApplyAesCtr(static_cast<EVP_CIPHER_CTX*>(ctx_), chunk);
+    Bytes buffer = chunk;
+    ApplyAesCtrInPlace(static_cast<EVP_CIPHER_CTX*>(ctx_), buffer);
     if (params.swap) {
         SwapNibblesInPlace(buffer);
     }
@@ -501,8 +534,38 @@ Bytes StreamObfuscator::DecodeChunk(const Bytes& chunk) {
     if (params.swap) {
         SwapNibblesInPlace(buffer);
     }
-    buffer = ApplyAesCtr(static_cast<EVP_CIPHER_CTX*>(ctx_), buffer);
+    ApplyAesCtrInPlace(static_cast<EVP_CIPHER_CTX*>(ctx_), buffer);
     return buffer;
+}
+
+void StreamObfuscator::EncodeChunkInPlace(Bytes& buffer) {
+    if (buffer.empty()) {
+        return;
+    }
+    ChunkParams params = NextParams(perm_material_, chunk_index_);
+    ApplyAesCtrInPlace(static_cast<EVP_CIPHER_CTX*>(ctx_), buffer);
+    if (params.swap) {
+        SwapNibblesInPlace(buffer);
+    }
+    if (params.rotation) {
+        RotateLeftInPlace(buffer, params.rotation);
+    }
+    PermuteInPlace(buffer, params.seed);
+}
+
+void StreamObfuscator::DecodeChunkInPlace(Bytes& buffer) {
+    if (buffer.empty()) {
+        return;
+    }
+    ChunkParams params = NextParams(perm_material_, chunk_index_);
+    UnpermuteInPlace(buffer, params.seed);
+    if (params.rotation) {
+        RotateRightInPlace(buffer, params.rotation);
+    }
+    if (params.swap) {
+        SwapNibblesInPlace(buffer);
+    }
+    ApplyAesCtrInPlace(static_cast<EVP_CIPHER_CTX*>(ctx_), buffer);
 }
 
 }  // namespace basefwx::obf

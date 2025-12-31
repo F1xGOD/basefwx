@@ -1063,6 +1063,186 @@ class basefwx:
         raise FileNotFoundError('No master_pq.sk private key found')
 
     @staticmethod
+    def _default_master_ec_public_path() -> "basefwx.pathlib.Path":
+        return basefwx.pathlib.Path('~/master_ec_public.pem').expanduser()
+
+    @staticmethod
+    def _default_master_ec_private_path() -> "basefwx.pathlib.Path":
+        return basefwx.pathlib.Path('~/master_ec_private.pem').expanduser()
+
+    @staticmethod
+    def _decode_ec_public_key(raw: bytes) -> "basefwx.ec.EllipticCurvePublicKey":
+        if not raw:
+            raise ValueError("Empty EC public key data")
+        loaders = (
+            lambda data: basefwx.serialization.load_pem_public_key(data),
+            lambda data: basefwx.serialization.load_pem_private_key(data, password=None).public_key(),
+            lambda data: basefwx.serialization.load_der_public_key(data),
+            lambda data: basefwx.serialization.load_der_private_key(data, password=None).public_key(),
+        )
+        for loader in loaders:
+            try:
+                key = loader(raw)
+            except Exception:
+                continue
+            if isinstance(key, basefwx.ec.EllipticCurvePublicKey):
+                return key
+        raise ValueError("Unsupported EC public key format")
+
+    @staticmethod
+    def _decode_ec_private_key(raw: bytes) -> "basefwx.ec.EllipticCurvePrivateKey":
+        if not raw:
+            raise ValueError("Empty EC private key data")
+        loaders = (
+            lambda data: basefwx.serialization.load_pem_private_key(data, password=None),
+            lambda data: basefwx.serialization.load_der_private_key(data, password=None),
+        )
+        for loader in loaders:
+            try:
+                key = loader(raw)
+            except Exception:
+                continue
+            if isinstance(key, basefwx.ec.EllipticCurvePrivateKey):
+                return key
+        raise ValueError("Unsupported EC private key format")
+
+    @staticmethod
+    def _write_ec_keypair(
+        public_path: "basefwx.pathlib.Path",
+        private_path: "basefwx.pathlib.Path"
+    ) -> "tuple[basefwx.ec.EllipticCurvePublicKey, basefwx.ec.EllipticCurvePrivateKey]":
+        private_key = basefwx.ec.generate_private_key(basefwx.ec.SECP521R1())
+        public_key = private_key.public_key()
+        private_bytes = private_key.private_bytes(
+            encoding=basefwx.serialization.Encoding.PEM,
+            format=basefwx.serialization.PrivateFormat.PKCS8,
+            encryption_algorithm=basefwx.serialization.NoEncryption()
+        )
+        public_bytes = public_key.public_bytes(
+            encoding=basefwx.serialization.Encoding.PEM,
+            format=basefwx.serialization.PublicFormat.SubjectPublicKeyInfo
+        )
+        private_path.parent.mkdir(parents=True, exist_ok=True)
+        public_path.parent.mkdir(parents=True, exist_ok=True)
+        private_path.write_bytes(private_bytes)
+        public_path.write_bytes(public_bytes)
+        try:
+            basefwx.os.chmod(private_path, 0o600)
+        except Exception:
+            pass
+        try:
+            basefwx.os.chmod(public_path, 0o644)
+        except Exception:
+            pass
+        return public_key, private_key
+
+    @staticmethod
+    def _load_master_ec_public(
+        create_if_missing: bool = False
+    ) -> "basefwx.typing.Optional[basefwx.ec.EllipticCurvePublicKey]":
+        env_pub = basefwx.os.getenv(basefwx.MASTER_EC_PUBLIC_ENV)
+        env_priv = basefwx.os.getenv(basefwx.MASTER_EC_PRIVATE_ENV)
+        if env_pub:
+            pub_path = basefwx.pathlib.Path(env_pub).expanduser()
+            if pub_path.exists():
+                return basefwx._decode_ec_public_key(pub_path.read_bytes())
+            if create_if_missing:
+                priv_path = basefwx.pathlib.Path(env_priv).expanduser() if env_priv else basefwx._default_master_ec_private_path()
+                public_key, _ = basefwx._write_ec_keypair(pub_path, priv_path)
+                return public_key
+            return None
+        pub_path = basefwx._default_master_ec_public_path()
+        priv_path = basefwx._default_master_ec_private_path()
+        if pub_path.exists():
+            return basefwx._decode_ec_public_key(pub_path.read_bytes())
+        if priv_path.exists():
+            private_key = basefwx._decode_ec_private_key(priv_path.read_bytes())
+            public_key = private_key.public_key()
+            if not pub_path.exists():
+                try:
+                    pub_path.write_bytes(public_key.public_bytes(
+                        encoding=basefwx.serialization.Encoding.PEM,
+                        format=basefwx.serialization.PublicFormat.SubjectPublicKeyInfo
+                    ))
+                    basefwx.os.chmod(pub_path, 0o644)
+                except Exception:
+                    pass
+            return public_key
+        if create_if_missing:
+            public_key, _ = basefwx._write_ec_keypair(pub_path, priv_path)
+            return public_key
+        return None
+
+    @staticmethod
+    def _load_master_ec_private() -> "basefwx.ec.EllipticCurvePrivateKey":
+        candidates = []
+        env_priv = basefwx.os.getenv(basefwx.MASTER_EC_PRIVATE_ENV)
+        if env_priv:
+            candidates.append(basefwx.pathlib.Path(env_priv).expanduser())
+        candidates.append(basefwx._default_master_ec_private_path())
+        candidates.append(basefwx.pathlib.Path(r'W:\master_ec_private.pem'))
+        for path in candidates:
+            if path.exists():
+                return basefwx._decode_ec_private_key(path.read_bytes())
+        raise FileNotFoundError("No master EC private key found")
+
+    @staticmethod
+    def _ec_kem_enc(
+        public_key: "basefwx.ec.EllipticCurvePublicKey"
+    ) -> "tuple[bytes, bytes]":
+        if public_key is None:
+            raise ValueError("EC public key required for master wrap")
+        ephemeral_key = basefwx.ec.generate_private_key(basefwx.ec.SECP521R1())
+        shared = ephemeral_key.exchange(basefwx.ec.ECDH(), public_key)
+        epk_bytes = ephemeral_key.public_key().public_bytes(
+            encoding=basefwx.serialization.Encoding.X962,
+            format=basefwx.serialization.PublicFormat.UncompressedPoint
+        )
+        if len(epk_bytes) > 0xFFFF:
+            raise ValueError("EC public key encoding too large")
+        header = basefwx.MASTER_EC_MAGIC + len(epk_bytes).to_bytes(2, "big")
+        return header + epk_bytes, shared
+
+    @staticmethod
+    def _ec_kem_dec(master_blob: bytes) -> bytes:
+        if not master_blob.startswith(basefwx.MASTER_EC_MAGIC):
+            raise ValueError("Invalid EC master blob")
+        if len(master_blob) < 5:
+            raise ValueError("Malformed EC master blob")
+        length = int.from_bytes(master_blob[3:5], "big")
+        start = 5
+        end = start + length
+        if len(master_blob) < end:
+            raise ValueError("Truncated EC master blob")
+        epk_bytes = master_blob[start:end]
+        public_key = basefwx.ec.EllipticCurvePublicKey.from_encoded_point(
+            basefwx.ec.SECP521R1(),
+            epk_bytes
+        )
+        private_key = basefwx._load_master_ec_private()
+        return private_key.exchange(basefwx.ec.ECDH(), public_key)
+
+    @staticmethod
+    def _resolve_master_usage(
+        use_master: bool,
+        master_pubkey: "basefwx.typing.Optional[bytes]",
+        *,
+        create_if_missing: bool = False
+    ) -> "tuple[basefwx.typing.Optional[bytes], bool]":
+        if not use_master:
+            return None, False
+        if master_pubkey is not None:
+            return master_pubkey, True
+        pq_pub = basefwx._load_master_pq_public()
+        if pq_pub is not None:
+            return pq_pub, True
+        try:
+            ec_pub = basefwx._load_master_ec_public(create_if_missing=create_if_missing)
+        except Exception:
+            ec_pub = None
+        return None, ec_pub is not None
+
+    @staticmethod
     def _kem_derive_key(shared: bytes, length: int = 32) -> bytes:
         return basefwx._hkdf_sha256(shared, length=length)
 
@@ -1179,7 +1359,7 @@ class basefwx:
 
     @staticmethod
     def _prepare_mask_key(
-        password: str,
+        password: "basefwx.typing.Union[str, bytes, bytearray, memoryview]",
         use_master: bool,
         *,
         mask_info: bytes,
@@ -1189,13 +1369,24 @@ class basefwx:
         if require_password and not password:
             raise ValueError("Password required for this mode")
         pubkey = basefwx._load_master_pq_public() if use_master else None
-        use_master_effective = use_master and pubkey is not None
+        ec_pub = None
+        if use_master and pubkey is None:
+            try:
+                ec_pub = basefwx._load_master_ec_public(create_if_missing=True)
+            except Exception:
+                ec_pub = None
+        use_master_effective = use_master and (pubkey is not None or ec_pub is not None)
         if not password and not use_master_effective:
             raise ValueError("Password required when PQ master key wrapping is disabled")
         if use_master_effective:
-            kem_ct, kem_shared = basefwx.ml_kem_768.encrypt(pubkey)
-            master_blob = kem_ct
-            mask_key = basefwx._hkdf_sha256(kem_shared, info=mask_info)
+            if pubkey is not None:
+                kem_ct, kem_shared = basefwx.ml_kem_768.encrypt(pubkey)
+                master_blob = kem_ct
+                mask_key = basefwx._hkdf_sha256(kem_shared, info=mask_info)
+            else:
+                ec_blob, ec_shared = basefwx._ec_kem_enc(ec_pub)
+                master_blob = ec_blob
+                mask_key = basefwx._hkdf_sha256(ec_shared, info=mask_info)
         else:
             master_blob = b""
             mask_key = basefwx.os.urandom(32)
@@ -1219,7 +1410,7 @@ class basefwx:
     def _recover_mask_key_from_blob(
         user_blob: bytes,
         master_blob: bytes,
-        password: str,
+        password: "basefwx.typing.Union[str, bytes, bytearray, memoryview]",
         use_master: bool,
         *,
         mask_info: bytes,
@@ -1230,6 +1421,9 @@ class basefwx:
         if master_present:
             if not use_master:
                 raise ValueError("Master key required to decode this payload")
+            if master_blob.startswith(basefwx.MASTER_EC_MAGIC):
+                shared = basefwx._ec_kem_dec(master_blob)
+                return basefwx._hkdf_sha256(shared, info=mask_info)
             private_key = basefwx._load_master_pq_private()
             shared = basefwx.ml_kem_768.decrypt(private_key, master_blob)
             return basefwx._hkdf_sha256(shared, info=mask_info)
@@ -1287,6 +1481,13 @@ class basefwx:
             context_bytes = context.encode('utf-8')
         else:
             context_bytes = bytes(context)
+        iterations, _, _, _ = basefwx._harden_kdf_params(
+            secret_bytes,
+            iterations=iterations,
+            argon2_time_cost=basefwx.SHORT_ARGON2_TIME_COST,
+            argon2_memory_cost=basefwx.SHORT_ARGON2_MEMORY_COST,
+            argon2_parallelism=basefwx.SHORT_ARGON2_PARALLELISM
+        )
         return basefwx.hashlib.pbkdf2_hmac(
             'sha256',
             secret_bytes,
@@ -1357,6 +1558,11 @@ class basefwx:
     ) -> "basefwx.typing.Union[str, bytes]":
         if isinstance(password, (bytes, bytearray, memoryview)):
             return bytes(password)
+        if isinstance(password, basefwx.pathlib.Path):
+            candidate = password.expanduser()
+            if candidate.is_file():
+                return candidate.read_bytes()
+            return str(candidate)
         if password == "":
             if not use_master:
                 raise ValueError("Password required when master key usage is disabled")
@@ -1513,7 +1719,7 @@ class basefwx:
     @staticmethod
     def encryptAES(
         plaintext: str,
-        user_key: str,
+        user_key: "basefwx.typing.Union[str, bytes, bytearray, memoryview]",
         use_master: bool = True,
         *,
         metadata_blob: "basefwx.typing.Optional[str]" = None,
@@ -1526,6 +1732,7 @@ class basefwx:
         argon2_memory_cost: "basefwx.typing.Optional[int]" = None,
         argon2_parallelism: "basefwx.typing.Optional[int]" = None
     ) -> bytes:
+        user_key = basefwx._resolve_password(user_key, use_master=use_master)
         if not user_key and not use_master:
             raise ValueError("Cannot encrypt without user password or master key")
         basefwx.sys.set_int_max_str_digits(2000000000)
@@ -1533,11 +1740,22 @@ class basefwx:
         metadata_bytes = metadata_blob.encode('utf-8') if metadata_blob else b''
         aad = metadata_bytes if metadata_bytes else b''
         pq_public = master_public_key if master_public_key is not None else (basefwx._load_master_pq_public() if use_master else None)
-        use_master_effective = use_master and pq_public is not None
+        ec_public = None
+        if use_master and pq_public is None:
+            try:
+                ec_public = basefwx._load_master_ec_public(create_if_missing=True)
+            except Exception:
+                ec_public = None
+        use_master_effective = use_master and (pq_public is not None or ec_public is not None)
         if use_master_effective:
-            kem_ciphertext, kem_shared = basefwx.ml_kem_768.encrypt(pq_public)
-            master_payload = kem_ciphertext
-            ephemeral_key = basefwx._kem_derive_key(kem_shared)
+            if pq_public is not None:
+                kem_ciphertext, kem_shared = basefwx.ml_kem_768.encrypt(pq_public)
+                master_payload = kem_ciphertext
+                ephemeral_key = basefwx._kem_derive_key(kem_shared)
+            else:
+                ec_blob, ec_shared = basefwx._ec_kem_enc(ec_public)
+                master_payload = ec_blob
+                ephemeral_key = basefwx._kem_derive_key(ec_shared)
         else:
             master_payload = b""
             ephemeral_key = basefwx.os.urandom(32)
@@ -1598,13 +1816,14 @@ class basefwx:
     @staticmethod
     def decryptAES(
         encrypted_blob: bytes,
-        key: str = "",
+        key: "basefwx.typing.Union[str, bytes, bytearray, memoryview]" = "",
         use_master: bool = True,
         *,
         master_public_key: "basefwx.typing.Optional[bytes]" = None,
         allow_legacy: "basefwx.typing.Optional[bool]" = None,
         progress_callback: "basefwx.typing.Optional[basefwx.typing.Callable[[int, int], None]]" = None
     ) -> str:
+        key = basefwx._resolve_password(key, use_master=use_master)
         basefwx.sys.set_int_max_str_digits(2000000000)
 
         def read_chunk(in_bytes, offset):
@@ -1620,8 +1839,11 @@ class basefwx:
             if master_present:
                 if not use_master:
                     raise ValueError("Master key required to decrypt this payload (legacy)")
-                private_key = basefwx._load_master_pq_private()
-                kem_shared = basefwx.ml_kem_768.decrypt(private_key, master_blob)
+                if master_blob.startswith(basefwx.MASTER_EC_MAGIC):
+                    kem_shared = basefwx._ec_kem_dec(master_blob)
+                else:
+                    private_key = basefwx._load_master_pq_private()
+                    kem_shared = basefwx.ml_kem_768.decrypt(private_key, master_blob)
                 ephemeral_key = basefwx._kem_derive_key(kem_shared)
             elif user_present:
                 if not key:
@@ -1714,8 +1936,11 @@ class basefwx:
         if master_blob_present:
             if not use_master:
                 raise ValueError("Master key required to decrypt this payload")
-            private_key = basefwx._load_master_pq_private()
-            kem_shared = basefwx.ml_kem_768.decrypt(private_key, ephemeral_enc_master)
+            if ephemeral_enc_master.startswith(basefwx.MASTER_EC_MAGIC):
+                kem_shared = basefwx._ec_kem_dec(ephemeral_enc_master)
+            else:
+                private_key = basefwx._load_master_pq_private()
+                kem_shared = basefwx.ml_kem_768.decrypt(private_key, ephemeral_enc_master)
             ephemeral_key = basefwx._kem_derive_key(kem_shared)
         elif user_blob_present:
             if not key:
@@ -1847,6 +2072,7 @@ class basefwx:
     ) -> bytes:
         if not isinstance(plaintext, (bytes, bytearray, memoryview)):
             raise TypeError("fwxAES_encrypt_raw expects bytes")
+        password = basefwx._resolve_password(password, use_master=True)
         pw = basefwx._coerce_password_bytes(password)
         salt = basefwx.os.urandom(basefwx.FWXAES_SALT_LEN)
         iv = basefwx.os.urandom(basefwx.FWXAES_IV_LEN)
@@ -1873,6 +2099,7 @@ class basefwx:
     ) -> bytes:
         if not isinstance(blob, (bytes, bytearray, memoryview)):
             raise TypeError("fwxAES_decrypt_raw expects bytes")
+        password = basefwx._resolve_password(password, use_master=True)
         blob_bytes = bytes(blob)
         header_len = 4 + 1 + 1 + 1 + 1 + 4 + 4
         if len(blob_bytes) < header_len:
@@ -1982,6 +2209,7 @@ class basefwx:
         keep_meta: bool = False,
         keep_input: bool = False
     ) -> str:
+        password = basefwx._resolve_password(password, use_master=True)
         path = basefwx._normalize_path(file)
         threshold = basefwx.NORMALIZE_THRESHOLD if normalize_threshold is None else int(normalize_threshold)
         if path.suffix.lower() == ".fwx":
@@ -2076,6 +2304,7 @@ class basefwx:
         """
         Reversible obfuscation helper; confidentiality comes from AEAD layers, not this routine.
         """
+        p = basefwx._resolve_password(p, use_master=use_master)
         mask_key, user_blob, master_blob, _ = basefwx._prepare_mask_key(
             p,
             use_master,
@@ -2095,6 +2324,7 @@ class basefwx:
 
     @staticmethod
     def pb512decode(digs, key, use_master: bool = True):
+        key = basefwx._resolve_password(key, use_master=use_master)
         if not key and not use_master:
             raise ValueError("Password required when PQ master key wrapping is disabled")
         try:
@@ -2234,6 +2464,7 @@ class basefwx:
 
     @staticmethod
     def b512encode(string, user_key, use_master: bool = True):
+        user_key = basefwx._resolve_password(user_key, use_master=use_master)
         if not user_key and not use_master:
             raise ValueError("Password required when PQ master key wrapping is disabled")
         mask_key, user_blob, master_blob, _ = basefwx._prepare_mask_key(
@@ -2255,6 +2486,7 @@ class basefwx:
 
     @staticmethod
     def b512decode(enc, key="", use_master: bool = True):
+        key = basefwx._resolve_password(key, use_master=use_master)
         if not key and not use_master:
             raise ValueError("Password required when PQ master key wrapping is disabled")
         try:
@@ -2415,8 +2647,12 @@ class basefwx:
         if reporter:
             reporter.update(file_index, 0.05, "prepare", display_path)
 
-        pubkey_bytes = master_pubkey if master_pubkey is not None else (basefwx._load_master_pq_public() if use_master else None)
-        use_master_effective = use_master and not strip_metadata and pubkey_bytes is not None
+        pubkey_bytes, master_available = basefwx._resolve_master_usage(
+            use_master and not strip_metadata,
+            master_pubkey,
+            create_if_missing=True
+        )
+        use_master_effective = (use_master and not strip_metadata) and master_available
         heavy_iters = basefwx.HEAVY_PBKDF2_ITERATIONS
         heavy_argon_time = basefwx.HEAVY_ARGON2_TIME_COST if basefwx.hash_secret_raw is not None else None
         heavy_argon_mem = basefwx.HEAVY_ARGON2_MEMORY_COST if basefwx.hash_secret_raw is not None else None
@@ -2541,8 +2777,12 @@ class basefwx:
             raise RuntimeError("Streaming b512 encode requires AEAD mode")
 
         chunk_size = basefwx.STREAM_CHUNK_SIZE
-        pubkey_bytes = master_pubkey if master_pubkey is not None else (basefwx._load_master_pq_public() if use_master else None)
-        use_master_effective = use_master and not strip_metadata and pubkey_bytes is not None
+        pubkey_bytes, master_available = basefwx._resolve_master_usage(
+            use_master and not strip_metadata,
+            master_pubkey,
+            create_if_missing=True
+        )
+        use_master_effective = (use_master and not strip_metadata) and master_available
         stream_salt = basefwx._StreamObfuscator.generate_salt()
         ext_bytes = (path.suffix or "").encode('utf-8')
 
@@ -2706,8 +2946,12 @@ class basefwx:
         if reporter:
             reporter.update(file_index, 0.05, "prepare", display_path)
         chunk_size = basefwx.STREAM_CHUNK_SIZE
-        pubkey_bytes = master_pubkey if master_pubkey is not None else (basefwx._load_master_pq_public() if use_master else None)
-        use_master_effective = use_master and not strip_metadata and pubkey_bytes is not None
+        pubkey_bytes, master_available = basefwx._resolve_master_usage(
+            use_master and not strip_metadata,
+            master_pubkey,
+            create_if_missing=True
+        )
+        use_master_effective = (use_master and not strip_metadata) and master_available
         kdf_used = (basefwx.USER_KDF or "argon2id").lower()
         heavy_iters = basefwx.HEAVY_PBKDF2_ITERATIONS
         heavy_argon_time = basefwx.HEAVY_ARGON2_TIME_COST if basefwx.hash_secret_raw is not None else None
@@ -3251,8 +3495,12 @@ class basefwx:
         keep_input: bool = False
     ):
         try:
-            pubkey_bytes = basefwx._load_master_pq_public() if use_master else None
-            effective_use_master = use_master and not strip_metadata and pubkey_bytes is not None
+            pubkey_bytes, master_available = basefwx._resolve_master_usage(
+                use_master and not strip_metadata,
+                None,
+                create_if_missing=True
+            )
+            effective_use_master = (use_master and not strip_metadata) and master_available
             password = basefwx._resolve_password(code, use_master=effective_use_master)
             path = basefwx._normalize_path(file)
             basefwx._b512_encode_path(
@@ -3280,7 +3528,12 @@ class basefwx:
             keep_input: bool = False
     ):
         paths = basefwx._coerce_file_list(files)
-        encode_use_master = use_master and not strip_metadata and master_pubkey is not None
+        pubkey_bytes, master_available = basefwx._resolve_master_usage(
+            use_master and not strip_metadata,
+            master_pubkey,
+            create_if_missing=True
+        )
+        encode_use_master = (use_master and not strip_metadata) and master_available
         decode_use_master = use_master and not strip_metadata
         try:
             resolved_password = basefwx._resolve_password(password, use_master=encode_use_master)
@@ -3326,7 +3579,7 @@ class basefwx:
                                 len(paths),
                                 strip_metadata,
                                 encode_use_master,
-                                master_pubkey,
+                                pubkey_bytes,
                                 pack_flag=pack_flag,
                                 output_path=path.with_suffix('.fwx'),
                                 display_path=path,
@@ -3372,7 +3625,7 @@ class basefwx:
                                 len(paths),
                                 strip_metadata,
                                 encode_use_master,
-                                master_pubkey,
+                                pubkey_bytes,
                                 pack_flag=pack_flag,
                                 output_path=path.with_suffix('.fwx'),
                                 display_path=path,
@@ -3450,7 +3703,11 @@ class basefwx:
             return arr, work_mode, format_name
 
         @staticmethod
-        def _image_primitives(password: str, num_pixels: int, channels: int) -> "basefwx.typing.Tuple[basefwx.np.ndarray, basefwx.typing.Optional[basefwx.np.ndarray], basefwx.np.ndarray, bytes]":
+        def _image_primitives(
+            password: "basefwx.typing.Union[str, bytes, bytearray, memoryview]",
+            num_pixels: int,
+            channels: int
+        ) -> "basefwx.typing.Tuple[basefwx.np.ndarray, basefwx.typing.Optional[basefwx.np.ndarray], basefwx.np.ndarray, bytes]":
             if not password:
                 raise ValueError('Password is required for image encryption')
             material = basefwx._derive_key_material(
@@ -3478,13 +3735,14 @@ class basefwx:
         @staticmethod
         def encrypt_image_inv(
             path: str,
-            password: str,
+            password: "basefwx.typing.Union[str, bytes, bytearray, memoryview]",
             output: str | None = None,
             *,
             include_trailer: bool = True
         ) -> str:
             path_obj = basefwx.pathlib.Path(path)
             basefwx._ensure_existing_file(path_obj)
+            password = basefwx._resolve_password(password, use_master=True)
             output_path = basefwx.pathlib.Path(output) if output else basefwx.ImageCipher._default_encrypted_path(path_obj)
             original_bytes = path_obj.read_bytes()
             arr, mode, fmt = basefwx.ImageCipher._load_image(path_obj, original_bytes)
@@ -3535,9 +3793,14 @@ class basefwx:
             return str(output_path)
 
         @staticmethod
-        def decrypt_image_inv(path: str, password: str, output: str | None = None) -> str:
+        def decrypt_image_inv(
+            path: str,
+            password: "basefwx.typing.Union[str, bytes, bytearray, memoryview]",
+            output: str | None = None
+        ) -> str:
             path_obj = basefwx.pathlib.Path(path)
             basefwx._ensure_existing_file(path_obj)
+            password = basefwx._resolve_password(password, use_master=True)
             output_path = basefwx.pathlib.Path(output) if output else basefwx.ImageCipher._default_decrypted_path(path_obj)
             file_bytes = path_obj.read_bytes()
             magic = basefwx.IMAGECIPHER_TRAILER_MAGIC
@@ -4242,12 +4505,12 @@ class basefwx:
         @staticmethod
         def _encrypt_metadata(
             tags: "dict[str, str]",
-            password_text: str
+            password: "basefwx.typing.Union[str, bytes, bytearray, memoryview]"
         ) -> "list[str]":
             encoded_args: "list[str]" = []
             for key, value in tags.items():
                 try:
-                    enc = basefwx.b512encode(value, password_text, use_master=False)
+                    enc = basefwx.b512encode(value, password, use_master=False)
                 except Exception:
                     continue
                 encoded_args.append(f"{key}={enc}")
@@ -4256,12 +4519,12 @@ class basefwx:
         @staticmethod
         def _decrypt_metadata(
             tags: "dict[str, str]",
-            password_text: str
+            password: "basefwx.typing.Union[str, bytes, bytearray, memoryview]"
         ) -> "list[str]":
             decoded_args: "list[str]" = []
             for key, value in tags.items():
                 try:
-                    dec = basefwx.b512decode(value, password_text, use_master=False)
+                    dec = basefwx.b512decode(value, password, use_master=False)
                 except Exception:
                     continue
                 decoded_args.append(f"{key}={dec}")
@@ -4427,7 +4690,6 @@ class basefwx:
             display_path: "basefwx.typing.Optional[basefwx.pathlib.Path]" = None
         ) -> None:
             display_path = display_path or path
-            password_text = basefwx._coerce_password_bytes(password).decode("utf-8", "ignore")
             info = basefwx.MediaCipher._probe_streams(path)
             video = info.get("video")
             if not video:
@@ -4526,7 +4788,7 @@ class basefwx:
                     ]
                 if keep_meta:
                     tags = basefwx.MediaCipher._probe_metadata(path)
-                    for meta in basefwx.MediaCipher._encrypt_metadata(tags, password_text):
+                    for meta in basefwx.MediaCipher._encrypt_metadata(tags, password):
                         cmd += ["-metadata", meta]
                 else:
                     cmd += ["-map_metadata", "-1"]
@@ -4552,7 +4814,6 @@ class basefwx:
             display_path: "basefwx.typing.Optional[basefwx.pathlib.Path]" = None
         ) -> None:
             display_path = display_path or path
-            password_text = basefwx._coerce_password_bytes(password).decode("utf-8", "ignore")
             info = basefwx.MediaCipher._probe_streams(path)
             audio = info.get("audio")
             if not audio:
@@ -4605,7 +4866,7 @@ class basefwx:
                 ]
                 if keep_meta:
                     tags = basefwx.MediaCipher._probe_metadata(path)
-                    for meta in basefwx.MediaCipher._encrypt_metadata(tags, password_text):
+                    for meta in basefwx.MediaCipher._encrypt_metadata(tags, password):
                         cmd += ["-metadata", meta]
                 else:
                     cmd += ["-map_metadata", "-1"]
@@ -4628,7 +4889,6 @@ class basefwx:
             display_path: "basefwx.typing.Optional[basefwx.pathlib.Path]" = None
         ) -> None:
             display_path = display_path or path
-            password_text = basefwx._coerce_password_bytes(password).decode("utf-8", "ignore")
             info = basefwx.MediaCipher._probe_streams(path)
             video = info.get("video")
             if not video:
@@ -4727,7 +4987,7 @@ class basefwx:
                         "-shortest"
                     ]
                 tags = basefwx.MediaCipher._probe_metadata(path)
-                decoded = basefwx.MediaCipher._decrypt_metadata(tags, password_text)
+                decoded = basefwx.MediaCipher._decrypt_metadata(tags, password)
                 if decoded:
                     for meta in decoded:
                         cmd += ["-metadata", meta]
@@ -4754,7 +5014,6 @@ class basefwx:
             display_path: "basefwx.typing.Optional[basefwx.pathlib.Path]" = None
         ) -> None:
             display_path = display_path or path
-            password_text = basefwx._coerce_password_bytes(password).decode("utf-8", "ignore")
             info = basefwx.MediaCipher._probe_streams(path)
             audio = info.get("audio")
             if not audio:
@@ -4806,7 +5065,7 @@ class basefwx:
                     "-i", str(raw_audio_out)
                 ]
                 tags = basefwx.MediaCipher._probe_metadata(path)
-                decoded = basefwx.MediaCipher._decrypt_metadata(tags, password_text)
+                decoded = basefwx.MediaCipher._decrypt_metadata(tags, password)
                 if decoded:
                     for meta in decoded:
                         cmd += ["-metadata", meta]
@@ -4833,11 +5092,11 @@ class basefwx:
             file_index: int = 0,
             display_path: "basefwx.typing.Optional[basefwx.pathlib.Path]" = None
         ) -> str:
+            password = basefwx._resolve_password(password, use_master=True)
             path_obj = basefwx._normalize_path(path)
             basefwx._ensure_existing_file(path_obj)
             if not password:
                 raise ValueError("Password is required for media encryption")
-            password_text = basefwx._coerce_password_bytes(password).decode("utf-8", "ignore")
             display_path = display_path or path_obj
             output_path = basefwx.pathlib.Path(output) if output else path_obj
             temp_output = output_path
@@ -4854,12 +5113,15 @@ class basefwx:
                 if suffix in basefwx.MediaCipher.IMAGE_EXTS:
                     result = basefwx.ImageCipher.encrypt_image_inv(
                         str(path_obj),
-                        password_text,
+                        password,
                         output=str(temp_output),
                         include_trailer=True
                     )
                 else:
-                    info = basefwx.MediaCipher._probe_streams(path_obj)
+                    try:
+                        info = basefwx.MediaCipher._probe_streams(path_obj)
+                    except Exception:
+                        info = {}
                     if info.get("video"):
                         basefwx.MediaCipher._scramble_video(
                             path_obj,
@@ -4885,7 +5147,14 @@ class basefwx:
                         result = str(temp_output)
                         append_trailer = True
                     else:
-                        raise ValueError("Unsupported media format")
+                        fallback_out = output_path if output else path_obj.with_suffix(".fwx")
+                        return basefwx.fwxAES_file(
+                            str(path_obj),
+                            password,
+                            output=str(fallback_out),
+                            ignore_media=True,
+                            keep_input=keep_input
+                        )
 
                 out_path = basefwx._normalize_path(result)
                 if out_path != temp_output:
@@ -4922,6 +5191,7 @@ class basefwx:
             file_index: int = 0,
             display_path: "basefwx.typing.Optional[basefwx.pathlib.Path]" = None
         ) -> str:
+            password = basefwx._resolve_password(password, use_master=True)
             path_obj = basefwx._normalize_path(path)
             basefwx._ensure_existing_file(path_obj)
             if not password:
@@ -4942,7 +5212,7 @@ class basefwx:
                 if suffix in basefwx.MediaCipher.IMAGE_EXTS:
                     result = basefwx.ImageCipher.decrypt_image_inv(
                         str(path_obj),
-                        basefwx._coerce_password_bytes(password).decode("utf-8", "ignore"),
+                        password,
                         output=str(temp_output)
                     )
                 else:
@@ -4971,7 +5241,10 @@ class basefwx:
                                 temp_output.write_bytes(plain)
                                 result = str(temp_output)
                     if not result:
-                        info = basefwx.MediaCipher._probe_streams(path_obj)
+                        try:
+                            info = basefwx.MediaCipher._probe_streams(path_obj)
+                        except Exception:
+                            info = {}
                         if info.get("video"):
                             basefwx.MediaCipher._unscramble_video(
                                 path_obj,
@@ -4993,6 +5266,21 @@ class basefwx:
                             )
                             result = str(temp_output)
                         else:
+                            fallback_out = output_path if output else path_obj.with_suffix("")
+                            can_fwx = path_obj.suffix.lower() == ".fwx"
+                            if not can_fwx:
+                                try:
+                                    with open(path_obj, "rb") as handle:
+                                        can_fwx = handle.read(4) == basefwx.FWXAES_MAGIC
+                                except Exception:
+                                    can_fwx = False
+                            if can_fwx:
+                                return basefwx.fwxAES_file(
+                                    str(path_obj),
+                                    password,
+                                    output=str(fallback_out),
+                                    ignore_media=True
+                                )
                             raise ValueError("Unsupported media format")
                 if local_reporter:
                     local_reporter.update(file_index, 1.0, "done", display_path)
@@ -5026,8 +5314,12 @@ class basefwx:
         if reporter:
             reporter.update(file_index, 0.05, "prepare", path)
 
-        pubkey_bytes = master_pubkey if master_pubkey is not None else (basefwx._load_master_pq_public() if use_master else None)
-        use_master_effective = use_master and not strip_metadata and pubkey_bytes is not None
+        pubkey_bytes, master_available = basefwx._resolve_master_usage(
+            use_master and not strip_metadata,
+            master_pubkey,
+            create_if_missing=True
+        )
+        use_master_effective = (use_master and not strip_metadata) and master_available
         obfuscate_payload = input_size <= basefwx.STREAM_THRESHOLD
         chunk_size = max(3, basefwx.STREAM_CHUNK_SIZE)
         buffer = bytearray()
@@ -5497,8 +5789,12 @@ class basefwx:
         if reporter:
             reporter.update(file_index, 0.05, "prepare", display_path)
 
-        pubkey_bytes = master_pubkey if master_pubkey is not None else (basefwx._load_master_pq_public() if use_master else None)
-        use_master_effective = use_master and not strip_metadata and pubkey_bytes is not None
+        pubkey_bytes, master_available = basefwx._resolve_master_usage(
+            use_master and not strip_metadata,
+            master_pubkey,
+            create_if_missing=True
+        )
+        use_master_effective = (use_master and not strip_metadata) and master_available
         heavy_iters = basefwx.HEAVY_PBKDF2_ITERATIONS
         heavy_argon_time = basefwx.HEAVY_ARGON2_TIME_COST if basefwx.hash_secret_raw is not None else None
         heavy_argon_mem = basefwx.HEAVY_ARGON2_MEMORY_COST if basefwx.hash_secret_raw is not None else None
@@ -5715,7 +6011,12 @@ class basefwx:
         basefwx.sys.set_int_max_str_digits(2000000000)
         paths = basefwx._coerce_file_list(files)
 
-        encode_use_master = use_master and not strip_metadata and master_pubkey is not None
+        pubkey_bytes, master_available = basefwx._resolve_master_usage(
+            use_master and not strip_metadata,
+            master_pubkey,
+            create_if_missing=True
+        )
+        encode_use_master = (use_master and not strip_metadata) and master_available
         decode_use_master = use_master and not strip_metadata
         try:
             resolved_password = basefwx._resolve_password(password, use_master=encode_use_master)
@@ -5756,7 +6057,7 @@ class basefwx:
                                     idx,
                                     strip_metadata,
                                     encode_use_master,
-                                    master_pubkey,
+                                    pubkey_bytes,
                                     pack_flag=pack_flag,
                                     output_path=path.with_suffix('.fwx'),
                                     display_path=path,
@@ -5770,7 +6071,7 @@ class basefwx:
                                     idx,
                                     strip_metadata,
                                     encode_use_master,
-                                    master_pubkey,
+                                    pubkey_bytes,
                                     pack_flag=pack_flag,
                                     output_path=path.with_suffix('.fwx'),
                                     display_path=path,
@@ -5816,7 +6117,7 @@ class basefwx:
                                     0,
                                     strip_metadata,
                                     encode_use_master,
-                                    master_pubkey,
+                                    pubkey_bytes,
                                     pack_flag=pack_flag,
                                     output_path=path.with_suffix('.fwx'),
                                     display_path=path,
@@ -5830,7 +6131,7 @@ class basefwx:
                                     0,
                                     strip_metadata,
                                     encode_use_master,
-                                    master_pubkey,
+                                    pubkey_bytes,
                                     pack_flag=pack_flag,
                                     output_path=path.with_suffix('.fwx'),
                                     display_path=path,

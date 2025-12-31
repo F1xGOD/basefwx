@@ -45,6 +45,21 @@ std::uint32_t ResolveTestIters(std::uint32_t fallback) {
     }
 }
 
+std::uint32_t HardenPbkdf2Iterations(const std::string& password, std::uint32_t iters) {
+    if (password.empty()) {
+        return iters;
+    }
+    if (!basefwx::env::Get("BASEFWX_TEST_KDF_ITERS").empty()) {
+        return iters;
+    }
+    if (password.size() < basefwx::constants::kShortPasswordMin) {
+        if (iters < basefwx::constants::kShortPbkdf2Iterations) {
+            iters = static_cast<std::uint32_t>(basefwx::constants::kShortPbkdf2Iterations);
+        }
+    }
+    return iters;
+}
+
 void PutU32Be(std::vector<std::uint8_t>& out, std::uint32_t value) {
     out.push_back(static_cast<std::uint8_t>((value >> 24) & 0xFF));
     out.push_back(static_cast<std::uint8_t>((value >> 16) & 0xFF));
@@ -157,11 +172,13 @@ void WriteText(const std::string& path, const std::string& text) {
 }  // namespace
 
 Bytes EncryptRaw(const Bytes& plaintext, const std::string& password, const Options& options) {
+    std::string resolved = basefwx::ResolvePassword(password);
     Options effective = options;
     effective.pbkdf2_iters = ResolveTestIters(options.pbkdf2_iters);
+    effective.pbkdf2_iters = HardenPbkdf2Iterations(resolved, effective.pbkdf2_iters);
     Bytes salt = basefwx::crypto::RandomBytes(effective.salt_len);
     Bytes iv = basefwx::crypto::RandomBytes(effective.iv_len);
-    Bytes key = basefwx::crypto::Pbkdf2HmacSha256(password, salt, effective.pbkdf2_iters, 32);
+    Bytes key = basefwx::crypto::Pbkdf2HmacSha256(resolved, salt, effective.pbkdf2_iters, 32);
     Bytes aad(kAadBytes, kAadBytes + sizeof(kAadBytes));
     Bytes ct = basefwx::crypto::AesGcmEncryptWithIv(key, iv, plaintext, aad);
 
@@ -181,6 +198,7 @@ Bytes EncryptRaw(const Bytes& plaintext, const std::string& password, const Opti
 }
 
 Bytes DecryptRaw(const Bytes& blob, const std::string& password) {
+    std::string resolved = basefwx::ResolvePassword(password);
     const std::size_t header_len = 16;
     if (blob.size() < header_len) {
         throw std::runtime_error("fwxAES blob too short");
@@ -208,7 +226,7 @@ Bytes DecryptRaw(const Bytes& blob, const std::string& password) {
     offset += iv_len;
     Bytes ct(blob.begin() + offset, blob.begin() + offset + ct_len);
 
-    Bytes key = basefwx::crypto::Pbkdf2HmacSha256(password, salt, iters, 32);
+    Bytes key = basefwx::crypto::Pbkdf2HmacSha256(resolved, salt, iters, 32);
     Bytes aad(kAadBytes, kAadBytes + sizeof(kAadBytes));
     return basefwx::crypto::AesGcmDecryptWithIv(key, iv, ct, aad);
 }

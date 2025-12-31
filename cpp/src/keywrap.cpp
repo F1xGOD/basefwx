@@ -1,7 +1,9 @@
 #include "basefwx/keywrap.hpp"
 
+#include "basefwx/basefwx.hpp"
 #include "basefwx/constants.hpp"
 #include "basefwx/crypto.hpp"
+#include "basefwx/ec.hpp"
 #include "basefwx/env.hpp"
 #include "basefwx/pq.hpp"
 
@@ -40,6 +42,32 @@ std::string DefaultKdfLabel() {
 #else
     return "pbkdf2";
 #endif
+}
+
+bool SkipShortHardening() {
+    return !basefwx::env::Get("BASEFWX_TEST_KDF_ITERS").empty();
+}
+
+basefwx::pb512::KdfOptions HardenKdfOptions(const std::string& password,
+                                            const basefwx::pb512::KdfOptions& kdf) {
+    if (password.empty() || SkipShortHardening()) {
+        return kdf;
+    }
+    if (password.size() >= basefwx::constants::kShortPasswordMin) {
+        return kdf;
+    }
+    basefwx::pb512::KdfOptions hardened = kdf;
+    hardened.pbkdf2_iterations = std::max(
+        hardened.pbkdf2_iterations,
+        static_cast<std::size_t>(basefwx::constants::kShortPbkdf2Iterations)
+    );
+    hardened.argon2_time_cost = std::max(hardened.argon2_time_cost,
+                                         basefwx::constants::kShortArgon2TimeCost);
+    hardened.argon2_memory_cost = std::max(hardened.argon2_memory_cost,
+                                           basefwx::constants::kShortArgon2MemoryCost);
+    hardened.argon2_parallelism = std::max(hardened.argon2_parallelism,
+                                           basefwx::constants::DefaultArgon2Parallelism());
+    return hardened;
 }
 
 }  // namespace
@@ -101,31 +129,49 @@ MaskKeyResult PrepareMaskKey(const std::string& password,
                              bool require_password,
                              std::string_view aad,
                              const basefwx::pb512::KdfOptions& kdf) {
-    if (require_password && password.empty()) {
+    std::string resolved = basefwx::ResolvePassword(password);
+    if (require_password && resolved.empty()) {
         throw std::runtime_error("Password required for this mode");
     }
-    std::optional<Bytes> pubkey;
+    std::optional<Bytes> pq_pub;
+    std::optional<Bytes> ec_pub;
     if (use_master) {
-        pubkey = basefwx::pq::LoadMasterPublicKey();
+        pq_pub = basefwx::pq::LoadMasterPublicKey();
+        if (!pq_pub.has_value()) {
+            try {
+                ec_pub = basefwx::ec::LoadMasterPublicKey(true);
+            } catch (const std::exception&) {
+                ec_pub = std::nullopt;
+            }
+        }
     }
-    bool use_master_effective = use_master && pubkey.has_value();
-    if (password.empty() && !use_master_effective) {
+    bool use_master_effective = use_master && (pq_pub.has_value() || ec_pub.has_value());
+    if (resolved.empty() && !use_master_effective) {
         throw std::runtime_error("Password required when master key is unavailable");
     }
 
     MaskKeyResult result;
     result.used_master = use_master_effective;
     if (use_master_effective) {
-        basefwx::pq::KemResult kem = basefwx::pq::KemEncrypt(*pubkey);
-        result.master_blob = kem.ciphertext;
-        result.mask_key = basefwx::crypto::HkdfSha256(mask_info, kem.shared, 32);
+        if (pq_pub.has_value()) {
+            basefwx::pq::KemResult kem = basefwx::pq::KemEncrypt(*pq_pub);
+            result.master_blob = kem.ciphertext;
+            result.mask_key = basefwx::crypto::HkdfSha256(mask_info, kem.shared, 32);
+        } else if (ec_pub.has_value()) {
+            basefwx::ec::KemResult kem = basefwx::ec::KemEncrypt(*ec_pub);
+            result.master_blob = kem.blob;
+            result.mask_key = basefwx::crypto::HkdfSha256(mask_info, kem.shared, 32);
+        } else {
+            result.mask_key = basefwx::crypto::RandomBytes(32);
+        }
     } else {
         result.mask_key = basefwx::crypto::RandomBytes(32);
     }
     Bytes salt = basefwx::crypto::RandomBytes(kUserKdfSaltSize);
-    if (!password.empty()) {
-        std::string label = ResolveKdfLabel(kdf.label);
-        Bytes user_key = DeriveUserKeyWithLabel(password, salt, label, kdf);
+    if (!resolved.empty()) {
+        basefwx::pb512::KdfOptions kdf_opts = HardenKdfOptions(resolved, kdf);
+        std::string label = ResolveKdfLabel(kdf_opts.label);
+        Bytes user_key = DeriveUserKeyWithLabel(resolved, salt, label, kdf_opts);
         Bytes aad_bytes = ToBytes(aad);
         Bytes wrapped = basefwx::crypto::AeadEncrypt(user_key, result.mask_key, aad_bytes);
 
@@ -149,9 +195,15 @@ Bytes RecoverMaskKey(const Bytes& user_blob,
                      std::string_view mask_info,
                      std::string_view aad,
                      const basefwx::pb512::KdfOptions& kdf) {
+    std::string resolved = basefwx::ResolvePassword(password);
     if (!master_blob.empty()) {
         if (!use_master) {
             throw std::runtime_error("Master key required to decode this payload");
+        }
+        if (basefwx::ec::IsEcMasterBlob(master_blob)) {
+            Bytes private_key = basefwx::ec::LoadMasterPrivateKey();
+            Bytes shared = basefwx::ec::KemDecrypt(private_key, master_blob);
+            return basefwx::crypto::HkdfSha256(mask_info, shared, 32);
         }
         Bytes private_key = basefwx::pq::LoadMasterPrivateKey();
         Bytes shared = basefwx::pq::KemDecrypt(private_key, master_blob);
@@ -160,7 +212,7 @@ Bytes RecoverMaskKey(const Bytes& user_blob,
     if (user_blob.empty()) {
         throw std::runtime_error("Ciphertext missing key transport data");
     }
-    if (password.empty()) {
+    if (resolved.empty()) {
         throw std::runtime_error("Password required to decode this payload");
     }
     if (user_blob.size() < 1) {
@@ -184,7 +236,8 @@ Bytes RecoverMaskKey(const Bytes& user_blob,
     Bytes aad_bytes = ToBytes(aad);
 
     try {
-        Bytes user_key = DeriveUserKeyWithLabel(password, salt, label, kdf);
+        basefwx::pb512::KdfOptions kdf_opts = HardenKdfOptions(resolved, kdf);
+        Bytes user_key = DeriveUserKeyWithLabel(resolved, salt, label, kdf_opts);
         return basefwx::crypto::AeadDecrypt(user_key, wrapped, aad_bytes);
     } catch (const std::exception&) {
         if (label != "pbkdf2" || !kdf.allow_pbkdf2_fallback) {
@@ -194,7 +247,7 @@ Bytes RecoverMaskKey(const Bytes& user_blob,
 
     basefwx::pb512::KdfOptions fallback = kdf;
     fallback.pbkdf2_iterations = basefwx::constants::kUserKdfIterationsFallback;
-    Bytes user_key = DeriveUserKeyWithLabel(password, salt, label, fallback);
+    Bytes user_key = DeriveUserKeyWithLabel(resolved, salt, label, fallback);
     return basefwx::crypto::AeadDecrypt(user_key, wrapped, aad_bytes);
 }
 

@@ -828,14 +828,27 @@ struct VideoInfo {
     int width = 0;
     int height = 0;
     double fps = 0.0;
+    std::uint64_t bit_rate = 0;
     bool valid = false;
 };
 
 struct AudioInfo {
     int sample_rate = 0;
     int channels = 0;
+    std::uint64_t bit_rate = 0;
     bool valid = false;
 };
+
+struct FormatInfo {
+    double duration = 0.0;
+    std::uint64_t bit_rate = 0;
+    bool valid = false;
+};
+
+constexpr double kJmgTargetGrowth = 1.1;
+constexpr double kJmgMaxGrowth = 2.0;
+constexpr std::uint64_t kJmgMinAudioBps = 64000;
+constexpr std::uint64_t kJmgMinVideoBps = 200000;
 
 std::string QuoteArg(const std::string& arg) {
     std::string out;
@@ -927,7 +940,7 @@ VideoInfo ProbeVideo(const std::filesystem::path& path) {
     std::vector<std::string> cmd = {
         "ffprobe", "-v", "error",
         "-select_streams", "v:0",
-        "-show_entries", "stream=width,height,avg_frame_rate,r_frame_rate",
+        "-show_entries", "stream=width,height,avg_frame_rate,r_frame_rate,bit_rate",
         "-of", "default=nw=1:nk=1",
         path.string()
     };
@@ -954,6 +967,13 @@ VideoInfo ProbeVideo(const std::filesystem::path& path) {
     if (fps <= 0.0 && lines.size() >= 4) {
         fps = ParseRate(lines[3]);
     }
+    if (lines.size() >= 5) {
+        try {
+            info.bit_rate = static_cast<std::uint64_t>(std::stoull(lines[4]));
+        } catch (const std::exception&) {
+            info.bit_rate = 0;
+        }
+    }
     info.fps = fps;
     info.valid = info.width > 0 && info.height > 0;
     return info;
@@ -964,7 +984,7 @@ AudioInfo ProbeAudio(const std::filesystem::path& path) {
     std::vector<std::string> cmd = {
         "ffprobe", "-v", "error",
         "-select_streams", "a:0",
-        "-show_entries", "stream=sample_rate,channels",
+        "-show_entries", "stream=sample_rate,channels,bit_rate",
         "-of", "default=nw=1:nk=1",
         path.string()
     };
@@ -983,6 +1003,13 @@ AudioInfo ProbeAudio(const std::filesystem::path& path) {
         info.channels = std::stoi(lines[1]);
     } catch (const std::exception&) {
         return info;
+    }
+    if (lines.size() >= 3) {
+        try {
+            info.bit_rate = static_cast<std::uint64_t>(std::stoull(lines[2]));
+        } catch (const std::exception&) {
+            info.bit_rate = 0;
+        }
     }
     info.valid = info.sample_rate > 0 && info.channels > 0;
     return info;
@@ -1019,6 +1046,97 @@ std::map<std::string, std::string> ProbeMetadata(const std::filesystem::path& pa
         }
     }
     return tags;
+}
+
+FormatInfo ProbeFormat(const std::filesystem::path& path) {
+    FormatInfo info;
+    std::vector<std::string> cmd = {
+        "ffprobe", "-v", "error",
+        "-show_entries", "format=duration,bit_rate",
+        "-of", "default=nw=1:nk=1",
+        path.string()
+    };
+    std::string out;
+    try {
+        out = RunCommandCapture(cmd);
+    } catch (const std::exception&) {
+        return info;
+    }
+    auto lines = SplitLines(out);
+    if (lines.empty()) {
+        return info;
+    }
+    if (!lines.empty()) {
+        try {
+            info.duration = std::stod(lines[0]);
+        } catch (const std::exception&) {
+            info.duration = 0.0;
+        }
+    }
+    if (lines.size() >= 2) {
+        try {
+            info.bit_rate = static_cast<std::uint64_t>(std::stoull(lines[1]));
+        } catch (const std::exception&) {
+            info.bit_rate = 0;
+        }
+    }
+    info.valid = info.duration > 0.0 || info.bit_rate > 0;
+    return info;
+}
+
+struct BitrateTargets {
+    std::optional<std::uint64_t> video;
+    std::optional<std::uint64_t> audio;
+};
+
+BitrateTargets EstimateBitrates(const std::filesystem::path& path,
+                                const VideoInfo& video,
+                                const AudioInfo& audio) {
+    FormatInfo fmt = ProbeFormat(path);
+    std::uint64_t total_bps = fmt.bit_rate;
+    if (total_bps == 0 && fmt.duration > 0.0) {
+        std::error_code ec;
+        auto bytes = std::filesystem::file_size(path, ec);
+        if (!ec && fmt.duration > 0.0) {
+            total_bps = static_cast<std::uint64_t>((bytes * 8.0) / fmt.duration);
+        }
+    }
+    std::uint64_t video_bps = video.bit_rate;
+    std::uint64_t audio_bps = audio.bit_rate;
+    if (total_bps > 0) {
+        std::uint64_t target_total = static_cast<std::uint64_t>(total_bps * kJmgTargetGrowth);
+        std::uint64_t max_total = static_cast<std::uint64_t>(total_bps * kJmgMaxGrowth);
+        if (target_total == 0) {
+            target_total = total_bps;
+        }
+        if (target_total > max_total) {
+            target_total = max_total;
+        }
+        if (video.valid && video_bps == 0) {
+            if (audio_bps > 0) {
+                video_bps = target_total > audio_bps ? (target_total - audio_bps) : target_total;
+            } else {
+                video_bps = std::max<std::uint64_t>(kJmgMinVideoBps, static_cast<std::uint64_t>(target_total * 0.85));
+            }
+        }
+        if (audio.valid && audio_bps == 0) {
+            audio_bps = std::max<std::uint64_t>(kJmgMinAudioBps, static_cast<std::uint64_t>(target_total * 0.15));
+        }
+        if (video_bps > 0) {
+            video_bps = std::min(video_bps, max_total);
+        }
+        if (audio_bps > 0) {
+            audio_bps = std::min(audio_bps, max_total);
+        }
+    }
+    BitrateTargets targets;
+    if (video.valid && video_bps > 0) {
+        targets.video = video_bps;
+    }
+    if (audio.valid && audio_bps > 0) {
+        targets.audio = audio_bps;
+    }
+    return targets;
 }
 
 std::filesystem::path CreateTempDir(const std::string& prefix) {
@@ -1064,7 +1182,7 @@ struct ProgressReporter {
         bar.reserve(static_cast<std::size_t>(width + 2));
         bar.push_back('(');
         bar.append(static_cast<std::size_t>(filled), '#');
-        bar.append(static_cast<std::size_t>(width - filled), '-');
+        bar.append(static_cast<std::size_t>(width - filled), ' ');
         bar.push_back(')');
         return bar;
     }
@@ -1266,7 +1384,7 @@ Bytes AudioMaskTransform(const Bytes& data, const Bytes& key, const Bytes& iv) {
     Bytes zeros(data.size(), 0);
     Bytes stream = basefwx::crypto::AesCtrTransform(key, iv, zeros);
     Bytes out = data;
-    constexpr std::uint16_t kAudioMaskBits = 12;
+    constexpr std::uint16_t kAudioMaskBits = 13;
     constexpr std::uint16_t mask = static_cast<std::uint16_t>((1u << kAudioMaskBits) - 1u);
     std::size_t samples = out.size() / 2;
     for (std::size_t i = 0; i < samples; ++i) {
@@ -1289,7 +1407,7 @@ Bytes VideoMaskTransform(const Bytes& data, const Bytes& key, const Bytes& iv) {
     Bytes zeros(data.size(), 0);
     Bytes stream = basefwx::crypto::AesCtrTransform(key, iv, zeros);
     Bytes out = data;
-    constexpr std::uint8_t kVideoMaskBits = 4;
+    constexpr std::uint8_t kVideoMaskBits = 6;
     constexpr std::uint8_t mask = static_cast<std::uint8_t>((1u << kVideoMaskBits) - 1u);
     for (std::size_t i = 0; i < out.size(); ++i) {
         out[i] = static_cast<std::uint8_t>(out[i] ^ (stream[i] & mask));
@@ -1384,7 +1502,7 @@ void ScrambleVideoRaw(const std::filesystem::path& raw_in,
             for (std::uint8_t b : seed_bytes) {
                 seed = (seed << 8) | b;
             }
-            processed[idx] = ShuffleFrameBlocks(masked, video.width, video.height, 3, seed, 16);
+            processed[idx] = ShuffleFrameBlocks(masked, video.width, video.height, 3, seed, 2);
         });
         std::uint64_t seed_index = (group_index * 0x9E3779B97F4A7C15ULL) ^ group_start_index;
         Bytes seed_bytes = UnitMaterial(base_key, "jmg-fgrp", seed_index, 16);
@@ -1550,7 +1668,7 @@ void UnscrambleVideoRaw(const std::filesystem::path& raw_in,
             for (std::uint8_t b : seed_bytes_local) {
                 seed_local = (seed_local << 8) | b;
             }
-            Bytes unshuffled = UnshuffleFrameBlocks(ordered[idx], video.width, video.height, 3, seed_local, 16);
+            Bytes unshuffled = UnshuffleFrameBlocks(ordered[idx], video.width, video.height, 3, seed_local, 2);
             Bytes material = UnitMaterial(base_key, "jmg-frame", frame_id, 48);
             Bytes key(material.begin(), material.begin() + 32);
             Bytes iv(material.begin() + 32, material.begin() + 48);
@@ -1692,18 +1810,39 @@ bool IsImageExt(const std::filesystem::path& path) {
     return exts.count(ext) > 0;
 }
 
-std::vector<std::string> VideoCodecArgs(const std::filesystem::path& output_path) {
+std::vector<std::string> VideoCodecArgs(const std::filesystem::path& output_path,
+                                        std::optional<std::uint64_t> target_bps) {
     std::string ext = ToLower(output_path.extension().string());
     if (ext == ".webm") {
+        if (target_bps.has_value()) {
+            std::uint64_t kbps = std::max<std::uint64_t>(100, target_bps.value() / 1000);
+            return {"-c:v", "libvpx-vp9", "-b:v", std::to_string(kbps) + "k", "-crf", "33", "-pix_fmt", "yuv420p"};
+        }
         return {"-c:v", "libvpx-vp9", "-b:v", "0", "-crf", "32", "-pix_fmt", "yuv420p"};
+    }
+    if (target_bps.has_value()) {
+        std::uint64_t kbps = std::max<std::uint64_t>(100, target_bps.value() / 1000);
+        return {
+            "-c:v", "libx264",
+            "-preset", "veryfast",
+            "-b:v", std::to_string(kbps) + "k",
+            "-maxrate", std::to_string(kbps) + "k",
+            "-bufsize", std::to_string(kbps * 2) + "k",
+            "-pix_fmt", "yuv420p"
+        };
     }
     return {"-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-pix_fmt", "yuv420p"};
 }
 
-std::vector<std::string> AudioCodecArgs(const std::filesystem::path& output_path) {
+std::vector<std::string> AudioCodecArgs(const std::filesystem::path& output_path,
+                                        std::optional<std::uint64_t> target_bps) {
     std::string ext = ToLower(output_path.extension().string());
+    std::uint64_t kbps = 0;
+    if (target_bps.has_value()) {
+        kbps = std::max<std::uint64_t>(48, target_bps.value() / 1000);
+    }
     if (ext == ".mp3") {
-        return {"-c:a", "libmp3lame", "-b:a", "192k"};
+        return {"-c:a", "libmp3lame", "-b:a", std::to_string(kbps > 0 ? kbps : 192) + "k"};
     }
     if (ext == ".flac") {
         return {"-c:a", "flac"};
@@ -1712,12 +1851,12 @@ std::vector<std::string> AudioCodecArgs(const std::filesystem::path& output_path
         return {"-c:a", "pcm_s16le"};
     }
     if (ext == ".ogg" || ext == ".opus" || ext == ".webm") {
-        return {"-c:a", "libopus", "-b:a", "96k"};
+        return {"-c:a", "libopus", "-b:a", std::to_string(kbps > 0 ? kbps : 96) + "k"};
     }
     if (ext == ".m4a" || ext == ".aac") {
-        return {"-c:a", "aac", "-b:a", "160k"};
+        return {"-c:a", "aac", "-b:a", std::to_string(kbps > 0 ? kbps : 160) + "k"};
     }
-    return {"-c:a", "aac", "-b:a", "160k"};
+    return {"-c:a", "aac", "-b:a", std::to_string(kbps > 0 ? kbps : 160) + "k"};
 }
 
 std::vector<std::string> ContainerArgs(const std::filesystem::path& output_path) {
@@ -1783,6 +1922,7 @@ std::string EncryptMedia(const std::string& path,
         return fallback_out.string();
     }
 
+    BitrateTargets targets = EstimateBitrates(input_path, video, audio);
     std::filesystem::path temp_dir = CreateTempDir("basefwx-media");
     try {
         std::filesystem::path raw_video = temp_dir / "video.raw";
@@ -1858,11 +1998,11 @@ std::string EncryptMedia(const std::string& path,
             cmd.push_back("-1");
         }
         if (video.valid) {
-            auto v_args = VideoCodecArgs(temp_output);
+            auto v_args = VideoCodecArgs(temp_output, targets.video);
             cmd.insert(cmd.end(), v_args.begin(), v_args.end());
         }
         if (audio.valid) {
-            auto a_args = AudioCodecArgs(temp_output);
+            auto a_args = AudioCodecArgs(temp_output, targets.audio);
             cmd.insert(cmd.end(), a_args.begin(), a_args.end());
         }
         auto c_args = ContainerArgs(temp_output);
@@ -1981,6 +2121,7 @@ std::string DecryptMedia(const std::string& path,
         throw std::runtime_error("Unsupported media format");
     }
 
+    BitrateTargets targets = EstimateBitrates(input_path, video, audio);
     std::filesystem::path temp_dir = CreateTempDir("basefwx-media");
     try {
         std::filesystem::path raw_video = temp_dir / "video.raw";
@@ -2057,11 +2198,11 @@ std::string DecryptMedia(const std::string& path,
             cmd.push_back("-1");
         }
         if (video.valid) {
-            auto v_args = VideoCodecArgs(temp_output);
+            auto v_args = VideoCodecArgs(temp_output, targets.video);
             cmd.insert(cmd.end(), v_args.begin(), v_args.end());
         }
         if (audio.valid) {
-            auto a_args = AudioCodecArgs(temp_output);
+            auto a_args = AudioCodecArgs(temp_output, targets.audio);
             cmd.insert(cmd.end(), a_args.begin(), a_args.end());
         }
         auto c_args = ContainerArgs(temp_output);

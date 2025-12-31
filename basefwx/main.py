@@ -251,7 +251,7 @@ class basefwx:
                 return f"({'❚' * width})"
             else:
                 filled_part = '❚' * filled
-                empty_part = '❚' * (width - filled)
+                empty_part = ' ' * (width - filled)
                 # No color when not complete
                 return f"({filled_part}{empty_part})"
 
@@ -412,8 +412,9 @@ class basefwx:
                 line1 = line1.replace("\n", " ")
                 line2 = line2.replace("\n", " ")
 
-                # normal write path
-                self._write(line1, line2)
+                # normal write path; force final updates so 100% renders
+                force = fraction >= 1.0 or overall_fraction >= 1.0
+                self._write(line1, line2, force=force)
 
         def finalize_file(
             self,
@@ -3873,11 +3874,15 @@ class basefwx:
         """Media cipher for images/videos/audio with deterministic shuffling + AES-CTR masking."""
 
         VIDEO_GROUP_SECONDS = 1.0
-        VIDEO_BLOCK_SIZE = 16
-        VIDEO_MASK_BITS = 4
+        VIDEO_BLOCK_SIZE = 2
+        VIDEO_MASK_BITS = 6
         AUDIO_BLOCK_SECONDS = 0.15
         AUDIO_GROUP_SECONDS = 1.0
-        AUDIO_MASK_BITS = 12
+        AUDIO_MASK_BITS = 13
+        JMG_TARGET_GROWTH = 1.1
+        JMG_MAX_GROWTH = 2.0
+        JMG_MIN_AUDIO_BPS = 64_000
+        JMG_MIN_VIDEO_BPS = 200_000
         TRAILER_FALLBACK_MAX = 64 * 1024 * 1024
 
         IMAGE_EXTS = {
@@ -3919,7 +3924,9 @@ class basefwx:
             cmd = [
                 "ffprobe",
                 "-v", "error",
-                "-show_entries", "stream=codec_type,width,height,avg_frame_rate,r_frame_rate,sample_rate,channels",
+                "-show_entries",
+                "stream=codec_type,width,height,avg_frame_rate,r_frame_rate,sample_rate,channels,bit_rate"
+                ":format=duration,bit_rate",
                 "-of", "json",
                 str(path)
             ]
@@ -3936,21 +3943,74 @@ class basefwx:
                 elif stream.get("codec_type") == "audio" and audio is None:
                     audio = stream
             info: dict[str, basefwx.typing.Any] = {}
+            fmt = data.get("format", {}) or {}
+            try:
+                info["duration"] = float(fmt.get("duration") or 0.0)
+            except Exception:
+                info["duration"] = 0.0
+            try:
+                info["bit_rate"] = int(float(fmt.get("bit_rate") or 0.0))
+            except Exception:
+                info["bit_rate"] = 0
             if video:
                 fps = basefwx.MediaCipher._parse_rate(
                     video.get("avg_frame_rate") or video.get("r_frame_rate") or ""
                 )
+                try:
+                    video_bps = int(float(video.get("bit_rate") or 0.0))
+                except Exception:
+                    video_bps = 0
                 info["video"] = {
                     "width": int(video.get("width") or 0),
                     "height": int(video.get("height") or 0),
-                    "fps": fps
+                    "fps": fps,
+                    "bit_rate": video_bps
                 }
             if audio:
+                try:
+                    audio_bps = int(float(audio.get("bit_rate") or 0.0))
+                except Exception:
+                    audio_bps = 0
                 info["audio"] = {
                     "sample_rate": int(audio.get("sample_rate") or 0),
-                    "channels": int(audio.get("channels") or 0)
+                    "channels": int(audio.get("channels") or 0),
+                    "bit_rate": audio_bps
                 }
             return info
+
+        @staticmethod
+        def _estimate_bitrates(
+            path: "basefwx.pathlib.Path",
+            info: "dict[str, basefwx.typing.Any]"
+        ) -> "tuple[int | None, int | None]":
+            total_bps = int(info.get("bit_rate") or 0)
+            duration = float(info.get("duration") or 0.0)
+            if total_bps <= 0 and duration > 0:
+                try:
+                    total_bps = int(path.stat().st_size * 8 / duration)
+                except Exception:
+                    total_bps = 0
+            video_bps = int((info.get("video") or {}).get("bit_rate") or 0)
+            audio_bps = int((info.get("audio") or {}).get("bit_rate") or 0)
+            if total_bps > 0:
+                target_total = int(total_bps * basefwx.MediaCipher.JMG_TARGET_GROWTH)
+                max_total = int(total_bps * basefwx.MediaCipher.JMG_MAX_GROWTH)
+                if target_total <= 0:
+                    target_total = total_bps
+                if target_total > max_total:
+                    target_total = max_total
+                if info.get("video") and video_bps <= 0:
+                    if audio_bps > 0:
+                        video_bps = max(1, target_total - audio_bps)
+                    else:
+                        video_bps = max(basefwx.MediaCipher.JMG_MIN_VIDEO_BPS, int(target_total * 0.85))
+                if info.get("audio") and audio_bps <= 0:
+                    audio_bps = max(basefwx.MediaCipher.JMG_MIN_AUDIO_BPS, int(target_total * 0.15))
+                if video_bps > 0:
+                    video_bps = min(video_bps, max_total)
+                if audio_bps > 0:
+                    audio_bps = min(audio_bps, max_total)
+            return (video_bps or None), (audio_bps or None)
 
         @staticmethod
         def _probe_metadata(path: "basefwx.pathlib.Path") -> "dict[str, str]":
@@ -4045,26 +4105,48 @@ class basefwx:
             return bytes(out)
 
         @staticmethod
-        def _ffmpeg_video_codec_args(output_path: "basefwx.pathlib.Path") -> "list[str]":
+        def _ffmpeg_video_codec_args(
+            output_path: "basefwx.pathlib.Path",
+            target_bitrate: int | None = None
+        ) -> "list[str]":
             ext = output_path.suffix.lower()
+            if target_bitrate and target_bitrate > 0:
+                kbps = max(100, target_bitrate // 1000)
+                if ext == ".webm":
+                    return ["-c:v", "libvpx-vp9", "-b:v", f"{kbps}k", "-crf", "33", "-pix_fmt", "yuv420p"]
+                return [
+                    "-c:v", "libx264",
+                    "-preset", "veryfast",
+                    "-b:v", f"{kbps}k",
+                    "-maxrate", f"{kbps}k",
+                    "-bufsize", f"{kbps * 2}k",
+                    "-pix_fmt", "yuv420p"
+                ]
             if ext == ".webm":
                 return ["-c:v", "libvpx-vp9", "-b:v", "0", "-crf", "32", "-pix_fmt", "yuv420p"]
             return ["-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-pix_fmt", "yuv420p"]
 
         @staticmethod
-        def _ffmpeg_audio_codec_args(output_path: "basefwx.pathlib.Path") -> "list[str]":
+        def _ffmpeg_audio_codec_args(
+            output_path: "basefwx.pathlib.Path",
+            target_bitrate: int | None = None
+        ) -> "list[str]":
             ext = output_path.suffix.lower()
+            if target_bitrate and target_bitrate > 0:
+                kbps = max(48, target_bitrate // 1000)
+            else:
+                kbps = 0
             if ext == ".mp3":
-                return ["-c:a", "libmp3lame", "-b:a", "192k"]
+                return ["-c:a", "libmp3lame", "-b:a", f"{kbps or 192}k"]
             if ext in {".flac"}:
                 return ["-c:a", "flac"]
             if ext in {".wav", ".aiff", ".aif"}:
                 return ["-c:a", "pcm_s16le"]
             if ext in {".ogg", ".opus", ".webm"}:
-                return ["-c:a", "libopus", "-b:a", "96k"]
+                return ["-c:a", "libopus", "-b:a", f"{kbps or 96}k"]
             if ext in {".m4a", ".aac"}:
-                return ["-c:a", "aac", "-b:a", "160k"]
-            return ["-c:a", "aac", "-b:a", "160k"]
+                return ["-c:a", "aac", "-b:a", f"{kbps or 160}k"]
+            return ["-c:a", "aac", "-b:a", f"{kbps or 160}k"]
 
         @staticmethod
         def _ffmpeg_container_args(output_path: "basefwx.pathlib.Path") -> "list[str]":
@@ -4698,6 +4780,8 @@ class basefwx:
             height = int(video.get("height") or 0)
             fps = float(video.get("fps") or 0.0)
             audio = info.get("audio")
+            video_bps, audio_bps = basefwx.MediaCipher._estimate_bitrates(path, info)
+            video_bps, audio_bps = basefwx.MediaCipher._estimate_bitrates(path, info)
 
             if reporter:
                 reporter.update(file_index, 0.05, "probe", display_path)
@@ -4792,9 +4876,9 @@ class basefwx:
                         cmd += ["-metadata", meta]
                 else:
                     cmd += ["-map_metadata", "-1"]
-                cmd += basefwx.MediaCipher._ffmpeg_video_codec_args(output_path)
+                cmd += basefwx.MediaCipher._ffmpeg_video_codec_args(output_path, video_bps)
                 if raw_audio_out:
-                    cmd += basefwx.MediaCipher._ffmpeg_audio_codec_args(output_path)
+                    cmd += basefwx.MediaCipher._ffmpeg_audio_codec_args(output_path, audio_bps)
                 cmd += basefwx.MediaCipher._ffmpeg_container_args(output_path)
                 cmd.append(str(output_path))
                 basefwx.MediaCipher._run_ffmpeg(cmd)
@@ -4822,6 +4906,7 @@ class basefwx:
             channels = int(audio.get("channels") or 0)
             sample_rate = sample_rate or 48000
             channels = channels or 2
+            _, audio_bps = basefwx.MediaCipher._estimate_bitrates(path, info)
 
             if reporter:
                 reporter.update(file_index, 0.05, "probe", display_path)
@@ -4870,7 +4955,7 @@ class basefwx:
                         cmd += ["-metadata", meta]
                 else:
                     cmd += ["-map_metadata", "-1"]
-                cmd += basefwx.MediaCipher._ffmpeg_audio_codec_args(output_path)
+                cmd += basefwx.MediaCipher._ffmpeg_audio_codec_args(output_path, audio_bps)
                 cmd += basefwx.MediaCipher._ffmpeg_container_args(output_path)
                 cmd.append(str(output_path))
                 basefwx.MediaCipher._run_ffmpeg(cmd)
@@ -4993,9 +5078,9 @@ class basefwx:
                         cmd += ["-metadata", meta]
                 else:
                     cmd += ["-map_metadata", "-1"]
-                cmd += basefwx.MediaCipher._ffmpeg_video_codec_args(output_path)
+                cmd += basefwx.MediaCipher._ffmpeg_video_codec_args(output_path, video_bps)
                 if raw_audio_out:
-                    cmd += basefwx.MediaCipher._ffmpeg_audio_codec_args(output_path)
+                    cmd += basefwx.MediaCipher._ffmpeg_audio_codec_args(output_path, audio_bps)
                 cmd += basefwx.MediaCipher._ffmpeg_container_args(output_path)
                 cmd.append(str(output_path))
                 basefwx.MediaCipher._run_ffmpeg(cmd)
@@ -5018,6 +5103,7 @@ class basefwx:
             audio = info.get("audio")
             if not audio:
                 raise ValueError("No audio stream found")
+            _, audio_bps = basefwx.MediaCipher._estimate_bitrates(path, info)
             sample_rate = int(audio.get("sample_rate") or 0)
             channels = int(audio.get("channels") or 0)
             sample_rate = sample_rate or 48000
@@ -5071,7 +5157,7 @@ class basefwx:
                         cmd += ["-metadata", meta]
                 else:
                     cmd += ["-map_metadata", "-1"]
-                cmd += basefwx.MediaCipher._ffmpeg_audio_codec_args(output_path)
+                cmd += basefwx.MediaCipher._ffmpeg_audio_codec_args(output_path, audio_bps)
                 cmd += basefwx.MediaCipher._ffmpeg_container_args(output_path)
                 cmd.append(str(output_path))
                 basefwx.MediaCipher._run_ffmpeg(cmd)

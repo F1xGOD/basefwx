@@ -498,10 +498,20 @@ class CryptographyIntegrationTests(unittest.TestCase):
         nonces = set()
         password = "nonce-pass"
         basefwx.ENABLE_OBFUSCATION = True
+        # Avoid heavy KDF costs in a tight loop; this test only checks nonce uniqueness.
+        fast_kdf = "pbkdf2"
+        fast_iters = 1024
         for i in range(iterations):
             metadata = basefwx._build_metadata("NONCE", False, False)
             plaintext = f"{metadata}{basefwx.META_DELIM}nonce-{i}"
-            blob = basefwx.encryptAES(plaintext, password, use_master=False, metadata_blob=metadata)
+            blob = basefwx.encryptAES(
+                plaintext,
+                password,
+                use_master=False,
+                metadata_blob=metadata,
+                kdf=fast_kdf,
+                kdf_iterations=fast_iters,
+            )
             offset = 0
             user_len = int.from_bytes(blob[offset:offset + 4], 'big')
             offset += 4 + user_len

@@ -9,7 +9,7 @@ ALL RIGHTS RESERVED
 |_|     |_(_/ \_)\______)_|   \_||_|_|   \___)
 
 FixCraft® Inc. FWX Encryption ©  
-Version - v3.4.0 😎 OCT 14 2025 (3 AM) GMT-8  
+Version - v3.4.1 😎 DEC 30 2025 (11 PM) GMT-8  
 By F1xGOD 💀  
 Donate Crypto (Monero):  
 48BKksKRWEgixzz1Yec3BH54ybDNCkmmWHLGtXRY42NPJqBowaeD5RTELqgABD1GzBT97pqrjW5PJHsNWzVyQ8zuL6tRBcY

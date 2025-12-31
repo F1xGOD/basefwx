@@ -633,14 +633,15 @@ std::string B512EncodeFileStream(const std::filesystem::path& input,
     }
     Bytes buffer(chunk_size);
     while (input_stream) {
+        buffer.resize(chunk_size);
         input_stream.read(reinterpret_cast<char*>(buffer.data()), static_cast<std::streamsize>(buffer.size()));
         std::streamsize got = input_stream.gcount();
         if (got <= 0) {
             break;
         }
-        Bytes chunk(buffer.begin(), buffer.begin() + got);
-        Bytes obf_chunk = obfuscator.EncodeChunk(chunk);
-        Bytes ct = encryptor.Update(obf_chunk);
+        buffer.resize(static_cast<std::size_t>(got));
+        obfuscator.EncodeChunkInPlace(buffer);
+        Bytes ct = encryptor.Update(buffer);
         output.write(reinterpret_cast<const char*>(ct.data()), static_cast<std::streamsize>(ct.size()));
     }
 
@@ -762,12 +763,12 @@ std::string B512DecodeFileStream(const std::filesystem::path& input,
     Bytes buffer(options.stream_chunk_size);
     while (remaining > 0) {
         std::size_t take = static_cast<std::size_t>(std::min<std::uint64_t>(remaining, buffer.size()));
+        buffer.resize(take);
         handle.read(reinterpret_cast<char*>(buffer.data()), static_cast<std::streamsize>(take));
         if (handle.gcount() != static_cast<std::streamsize>(take)) {
             throw std::runtime_error("Ciphertext truncated");
         }
-        Bytes chunk(buffer.begin(), buffer.begin() + static_cast<std::ptrdiff_t>(take));
-        Bytes plain = decryptor.Update(chunk);
+        Bytes plain = decryptor.Update(buffer);
         if (!plain.empty()) {
             plain_out.write(reinterpret_cast<const char*>(plain.data()), static_cast<std::streamsize>(plain.size()));
         }
@@ -859,14 +860,15 @@ std::string B512DecodeFileStream(const std::filesystem::path& input,
     while (processed < original_size) {
         std::size_t take = static_cast<std::size_t>(
             std::min<std::uint64_t>(chunk_size, original_size - processed));
+        chunk_buf_bytes.resize(take);
         plain_in.read(reinterpret_cast<char*>(chunk_buf_bytes.data()), static_cast<std::streamsize>(take));
         if (plain_in.gcount() != static_cast<std::streamsize>(take)) {
             throw std::runtime_error("Streaming payload truncated");
         }
-        Bytes chunk(chunk_buf_bytes.begin(), chunk_buf_bytes.begin() + static_cast<std::ptrdiff_t>(take));
-        Bytes plain = decoder.DecodeChunk(chunk);
-        out.write(reinterpret_cast<const char*>(plain.data()), static_cast<std::streamsize>(plain.size()));
-        processed += plain.size();
+        decoder.DecodeChunkInPlace(chunk_buf_bytes);
+        out.write(reinterpret_cast<const char*>(chunk_buf_bytes.data()),
+                  static_cast<std::streamsize>(chunk_buf_bytes.size()));
+        processed += static_cast<std::uint64_t>(chunk_buf_bytes.size());
     }
     out.flush();
     plain_in.close();
@@ -1190,14 +1192,15 @@ std::string Pb512EncodeFileStream(const std::filesystem::path& input,
     }
     Bytes buffer(chunk_size);
     while (input_stream) {
+        buffer.resize(chunk_size);
         input_stream.read(reinterpret_cast<char*>(buffer.data()), static_cast<std::streamsize>(buffer.size()));
         std::streamsize got = input_stream.gcount();
         if (got <= 0) {
             break;
         }
-        Bytes chunk(buffer.begin(), buffer.begin() + got);
-        Bytes obf_chunk = obfuscator.EncodeChunk(chunk);
-        Bytes ct = encryptor.Update(obf_chunk);
+        buffer.resize(static_cast<std::size_t>(got));
+        obfuscator.EncodeChunkInPlace(buffer);
+        Bytes ct = encryptor.Update(buffer);
         output.write(reinterpret_cast<const char*>(ct.data()), static_cast<std::streamsize>(ct.size()));
     }
 
@@ -1349,12 +1352,12 @@ std::string Pb512DecodeFileStream(const std::filesystem::path& input,
     Bytes buffer(options.stream_chunk_size);
     while (remaining > 0) {
         std::size_t take = static_cast<std::size_t>(std::min<std::uint64_t>(remaining, buffer.size()));
+        buffer.resize(take);
         handle.read(reinterpret_cast<char*>(buffer.data()), static_cast<std::streamsize>(take));
         if (handle.gcount() != static_cast<std::streamsize>(take)) {
             throw std::runtime_error("Ciphertext truncated");
         }
-        Bytes chunk(buffer.begin(), buffer.begin() + static_cast<std::ptrdiff_t>(take));
-        Bytes plain = decryptor.Update(chunk);
+        Bytes plain = decryptor.Update(buffer);
         if (!plain.empty()) {
             plain_out.write(reinterpret_cast<const char*>(plain.data()), static_cast<std::streamsize>(plain.size()));
         }
@@ -1446,14 +1449,15 @@ std::string Pb512DecodeFileStream(const std::filesystem::path& input,
     while (processed < original_size) {
         std::size_t take = static_cast<std::size_t>(
             std::min<std::uint64_t>(chunk_size, original_size - processed));
+        chunk_buf_bytes.resize(take);
         plain_in.read(reinterpret_cast<char*>(chunk_buf_bytes.data()), static_cast<std::streamsize>(take));
         if (plain_in.gcount() != static_cast<std::streamsize>(take)) {
             throw std::runtime_error("Streaming payload truncated");
         }
-        Bytes chunk(chunk_buf_bytes.begin(), chunk_buf_bytes.begin() + static_cast<std::ptrdiff_t>(take));
-        Bytes plain = decoder.DecodeChunk(chunk);
-        out.write(reinterpret_cast<const char*>(plain.data()), static_cast<std::streamsize>(plain.size()));
-        processed += plain.size();
+        decoder.DecodeChunkInPlace(chunk_buf_bytes);
+        out.write(reinterpret_cast<const char*>(chunk_buf_bytes.data()),
+                  static_cast<std::streamsize>(chunk_buf_bytes.size()));
+        processed += static_cast<std::uint64_t>(chunk_buf_bytes.size());
     }
     out.flush();
     plain_in.close();

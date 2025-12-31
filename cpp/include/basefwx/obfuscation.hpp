@@ -25,6 +25,8 @@ public:
 
     Bytes EncodeChunk(const Bytes& chunk);
     Bytes DecodeChunk(const Bytes& chunk);
+    void EncodeChunkInPlace(Bytes& buffer);
+    void DecodeChunkInPlace(Bytes& buffer);
 
 private:
     StreamObfuscator(Bytes perm_material, void* ctx);

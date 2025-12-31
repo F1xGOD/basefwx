@@ -3640,10 +3640,17 @@ class basefwx:
 
         @staticmethod
         def _derive_base_key(password: "basefwx.typing.Union[str, bytes, bytearray, memoryview]") -> bytes:
+            material = basefwx.MediaCipher._derive_media_material(password)
+            return material[:32]
+
+        @staticmethod
+        def _derive_media_material(
+            password: "basefwx.typing.Union[str, bytes, bytearray, memoryview]"
+        ) -> bytes:
             return basefwx._derive_key_material(
                 basefwx._coerce_password_bytes(password),
                 basefwx.IMAGECIPHER_STREAM_INFO,
-                length=32,
+                length=64,
                 iterations=max(200_000, basefwx.USER_KDF_ITERATIONS)
             )
 
@@ -3808,8 +3815,8 @@ class basefwx:
             password: "basefwx.typing.Union[str, bytes, bytearray, memoryview]",
             original_bytes: bytes
         ) -> None:
-            base_key = basefwx.MediaCipher._derive_base_key(password)
-            archive_key = basefwx._hkdf_sha256(base_key, info=basefwx.IMAGECIPHER_ARCHIVE_INFO, length=32)
+            material = basefwx.MediaCipher._derive_media_material(password)
+            archive_key = basefwx._hkdf_sha256(material, info=basefwx.IMAGECIPHER_ARCHIVE_INFO, length=32)
             archive_blob = basefwx._aead_encrypt(archive_key, original_bytes, basefwx.IMAGECIPHER_ARCHIVE_INFO)
             with open(output_path, "ab") as handle:
                 handle.write(basefwx.IMAGECIPHER_TRAILER_MAGIC)
@@ -3834,8 +3841,8 @@ class basefwx:
             if blob_end > len(file_bytes):
                 return None
             blob = file_bytes[blob_start:blob_end]
-            base_key = basefwx.MediaCipher._derive_base_key(password)
-            archive_key = basefwx._hkdf_sha256(base_key, info=basefwx.IMAGECIPHER_ARCHIVE_INFO, length=32)
+            material = basefwx.MediaCipher._derive_media_material(password)
+            archive_key = basefwx._hkdf_sha256(material, info=basefwx.IMAGECIPHER_ARCHIVE_INFO, length=32)
             return basefwx._aead_decrypt(archive_key, blob, basefwx.IMAGECIPHER_ARCHIVE_INFO)
 
         @staticmethod

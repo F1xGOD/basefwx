@@ -3,6 +3,7 @@
 #include "basefwx/constants.hpp"
 #include "basefwx/crypto.hpp"
 #include "basefwx/env.hpp"
+#include "basefwx/pb512.hpp"
 
 #define STB_IMAGE_IMPLEMENTATION
 #define STBI_FAILURE_USERMSG
@@ -950,7 +951,7 @@ std::vector<std::string> EncryptMetadataArgs(const std::map<std::string, std::st
     std::vector<std::string> args;
     for (const auto& kv : tags) {
         try {
-            std::string enc = basefwx::B512Encode(kv.second, password, false, {});
+            std::string enc = basefwx::pb512::B512Encode(kv.second, password, false, {});
             args.push_back(kv.first + "=" + enc);
         } catch (const std::exception&) {
         }

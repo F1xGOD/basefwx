@@ -60,12 +60,13 @@ payload matches the AES file format.
 - libargon2 for Argon2id KDF parity with Python defaults.
 - liboqs for ML-KEM-768 master-key wrapping.
 - zlib for baked key decoding.
+- liblzma (xz) for tar.xz packing in `--compress` mode.
 
 Quick install hints:
 
-- Ubuntu/Debian: `sudo apt install libssl-dev libargon2-dev liboqs-dev zlib1g-dev`
-- Arch: `sudo pacman -S openssl argon2 liboqs zlib`
-- macOS (brew): `brew install openssl@3 argon2 liboqs zlib`
+- Ubuntu/Debian: `sudo apt install libssl-dev libargon2-dev liboqs-dev zlib1g-dev liblzma-dev`
+- Arch: `sudo pacman -S openssl argon2 liboqs zlib xz`
+- macOS (brew): `brew install openssl@3 argon2 liboqs zlib xz`
 
 ## Next steps
 

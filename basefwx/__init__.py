@@ -16,8 +16,24 @@ def a512decode(string: str): return basefwx.a512decode(string)
 def b512decode(string: str, code: str="", use_master: bool = True): return basefwx.b512decode(string, code, use_master=use_master)
 def pb512decode(string: str, code: str="", use_master: bool = True): return basefwx.pb512decode(string, code, use_master=use_master)
 
-def jMGe(path: str, password: str, output: str | None = None): return basefwx.ImageCipher.encrypt_image_inv(path, password, output=output)
-def jMGd(path: str, password: str, output: str | None = None): return basefwx.ImageCipher.decrypt_image_inv(path, password, output=output)
+def jMGe(
+    path: str,
+    password: str,
+    output: str | None = None,
+    *,
+    keep_meta: bool = False,
+    keep_input: bool = False
+):
+    return basefwx.MediaCipher.encrypt_media(
+        path,
+        password,
+        output=output,
+        keep_meta=keep_meta,
+        keep_input=keep_input
+    )
+
+def jMGd(path: str, password: str, output: str | None = None):
+    return basefwx.MediaCipher.decrypt_media(path, password, output=output)
 
 def b512encodefile(file: str, code: str, strip_metadata: bool = False, use_master: bool = True): return basefwx.b512file_encode(file, code, strip_metadata=strip_metadata, use_master=use_master)
 def b512decodefile(file: str, code: str="", strip_metadata: bool = False, use_master: bool = True): return basefwx.b512file_decode(file, code, strip_metadata=strip_metadata, use_master=use_master)
@@ -34,17 +50,31 @@ def fwxAES(
     normalize: bool = False,
     normalize_threshold: int | None = None,
     cover_phrase: str = "low taper fade",
-    legacy: bool = False
+    legacy: bool = False,
+    ignore_media: bool = False,
+    keep_meta: bool = False,
+    keep_input: bool = False
 ):
     if legacy:
-        return basefwx.AESfile(file, code, light, strip_metadata=strip_metadata, use_master=use_master, silent=silent)
+        return basefwx.AESfile(
+            file,
+            code,
+            light,
+            strip_metadata=strip_metadata,
+            use_master=use_master,
+            silent=silent,
+            keep_input=keep_input
+        )
     return basefwx.fwxAES_file(
         file,
         code,
         output=output,
         normalize=normalize,
         normalize_threshold=normalize_threshold,
-        cover_phrase=cover_phrase
+        cover_phrase=cover_phrase,
+        ignore_media=ignore_media,
+        keep_meta=keep_meta,
+        keep_input=keep_input
     )
 
 def fwxAES_encrypt_raw(plaintext: bytes, password: str | bytes): return basefwx.fwxAES_encrypt_raw(plaintext, password)

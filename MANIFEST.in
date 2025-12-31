@@ -1,0 +1,22 @@
+include README.md
+include LICENCE
+include pyproject.toml
+include setup.py
+
+recursive-include basefwx *.py
+recursive-exclude basefwx __pycache__ *.pyc *.pyo
+
+prune .github
+prune cpp
+prune scripts
+prune tests
+prune src
+prune basefwx.egg-info
+prune .venv
+prune .tmp_basefwx_tests
+
+exclude diagnose.log
+exclude MASS.py
+exclude PROGRESS_*.md
+exclude test_progress_demo.py
+exclude verify_progress.py

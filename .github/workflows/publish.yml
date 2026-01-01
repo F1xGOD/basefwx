@@ -120,7 +120,30 @@ jobs:
       - name: Install GnuPG
         shell: pwsh
         run: |
-          choco install gnupg -y --no-progress
+          if (Get-Command gpg -ErrorAction SilentlyContinue) {
+            gpg --version | Select-Object -First 1
+            exit 0
+          }
+          choco install gnupg -y --no-progress --limit-output --execution-timeout 1200
+          if (-not (Get-Command gpg -ErrorAction SilentlyContinue)) {
+            Write-Host "Chocolatey install incomplete; trying winget fallback"
+            winget install -e --id GnuPG.GnuPG --accept-source-agreements --accept-package-agreements
+          }
+          if (-not (Get-Command gpg -ErrorAction SilentlyContinue)) {
+            $candidates = @(
+              "$env:ProgramFiles\\GnuPG\\bin\\gpg.exe",
+              "$env:ProgramFiles(x86)\\GnuPG\\bin\\gpg.exe"
+            )
+            foreach ($candidate in $candidates) {
+              if (Test-Path $candidate) {
+                $env:Path = (Split-Path $candidate) + ";" + $env:Path
+                break
+              }
+            }
+          }
+          if (-not (Get-Command gpg -ErrorAction SilentlyContinue)) {
+            throw "gpg not available after install"
+          }
 
       - name: Configure
         run: |

@@ -28,6 +28,28 @@ const setText = (id, value) => {
   }
 };
 
+const getAssetBase = () => {
+  const base = document.documentElement.dataset.assetBase;
+  return base || "assets/";
+};
+
+const initBrandMask = () => {
+  if (!window.CSS || !CSS.supports) {
+    return;
+  }
+  const base = getAssetBase();
+  const maskUrl = new URL(`${base}basefwx-white.svg`, window.location.href).toString();
+  const supportsMask =
+    CSS.supports("mask-image", `url(\"${maskUrl}\")`) ||
+    CSS.supports("-webkit-mask-image", `url(\"${maskUrl}\")`);
+  if (!supportsMask) {
+    return;
+  }
+  const img = new Image();
+  img.onload = () => document.documentElement.classList.add("mask-ready");
+  img.src = maskUrl;
+};
+
 const setLink = (selector, url) => {
   const el = document.querySelector(selector);
   if (!el) return;
@@ -136,6 +158,11 @@ const loadVirusTotal = async () => {
 };
 
 document.addEventListener("DOMContentLoaded", () => {
-  loadRelease();
-  loadVirusTotal();
+  initBrandMask();
+  if (document.getElementById("release-version")) {
+    loadRelease();
+  }
+  if (document.getElementById("vt-table")) {
+    loadVirusTotal();
+  }
 });

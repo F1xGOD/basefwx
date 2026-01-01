@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-asset-base="{{ '/assets/' | relative_url }}">
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -7,12 +7,14 @@
     <meta name="description" content="{{ page.title }} documentation for BaseFWX.">
     <link rel="icon" type="image/svg+xml" href="{{ '/assets/basefwx-white.svg' | relative_url }}">
     <link rel="stylesheet" href="{{ '/assets/site.css' | relative_url }}">
+    <script src="{{ '/assets/site.js' | relative_url }}" defer></script>
   </head>
   <body>
     <div class="doc-container">
       <header class="doc-header">
         <a class="doc-brand" href="{{ '/' | relative_url }}">
           <span class="brand-mark" aria-hidden="true">
+            <span class="brand-icon" aria-hidden="true"></span>
             <span class="brand-cutout" aria-hidden="true"></span>
           </span>
           <span>

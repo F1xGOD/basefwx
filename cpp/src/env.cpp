@@ -34,4 +34,21 @@ bool IsEnabled(std::string_view name, bool default_value) {
     return value == "1" || value == "true" || value == "yes" || value == "on";
 }
 
+std::string HomeDir() {
+    std::string value = Get("USERPROFILE");
+    if (!value.empty()) {
+        return value;
+    }
+    value = Get("HOME");
+    if (!value.empty()) {
+        return value;
+    }
+    std::string drive = Get("HOMEDRIVE");
+    std::string path = Get("HOMEPATH");
+    if (!drive.empty() || !path.empty()) {
+        return drive + path;
+    }
+    return {};
+}
+
 }  // namespace basefwx::env

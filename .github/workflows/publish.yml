@@ -42,7 +42,7 @@ jobs:
       - name: Install system deps
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake build-essential libssl-dev zlib1g-dev upx-ucl
+          sudo apt-get install -y cmake build-essential libssl-dev zlib1g-dev
 
       - name: Configure
         run: |
@@ -51,12 +51,11 @@ jobs:
       - name: Build
         run: cmake --build cpp/build --config Release
 
-      - name: Strip + UPX
+      - name: Strip
         run: |
           mkdir -p dist
           cp cpp/build/basefwx_cpp dist/basefwx-linux
           strip dist/basefwx-linux
-          upx dist/basefwx-linux
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -243,17 +242,59 @@ jobs:
             exit 1
           fi
 
+          rate_limit_sec=20
+          last_ts=0
+          vt_request() {
+            local method="$1"
+            local url="$2"
+            shift 2
+            local now elapsed sleep_for response http_code body
+
+            now=$(date +%s)
+            if [ "$last_ts" -ne 0 ]; then
+              elapsed=$((now - last_ts))
+              if [ "$elapsed" -lt "$rate_limit_sec" ]; then
+                sleep_for=$((rate_limit_sec - elapsed))
+                sleep "$sleep_for"
+              fi
+            fi
+            last_ts=$(date +%s)
+
+            response=$(curl -sS -w "\n%{http_code}" --request "$method" "$url" "$@")
+            http_code=$(printf '%s' "$response" | tail -n1)
+            body=$(printf '%s' "$response" | sed '$d')
+
+            if [ "$http_code" = "429" ]; then
+              sleep 60
+              response=$(curl -sS -w "\n%{http_code}" --request "$method" "$url" "$@")
+              http_code=$(printf '%s' "$response" | tail -n1)
+              body=$(printf '%s' "$response" | sed '$d')
+            fi
+
+            if [ "$http_code" -lt 200 ] || [ "$http_code" -ge 300 ]; then
+              echo "VirusTotal request failed ($http_code): $body" >&2
+              return 1
+            fi
+
+            printf '%s' "$body"
+          }
+
           tag="${GITHUB_REF_NAME}"
           repo="${GITHUB_REPOSITORY}"
           generated_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           json=$(jq -n --arg generated_at "$generated_at" --arg release_tag "$tag" --arg repo "$repo" \
             '{generated_at:$generated_at, release_tag:$release_tag, repo:$repo, files:[]}')
 
-          for file in dist_out/basefwx-linux dist_out/basefwx-windows.exe dist_out/basefwx-mac; do
+          files=(dist_out/basefwx-linux dist_out/basefwx-windows.exe dist_out/basefwx-mac)
+          names=()
+          ids=()
+          statuses=()
+          analyses=()
+
+          for file in "${files[@]}"; do
             name="$(basename "$file")"
             echo "Submitting $name to VirusTotal..."
-            submit=$(curl -sS --request POST \
-              --url https://www.virustotal.com/api/v3/files \
+            submit=$(vt_request POST "https://www.virustotal.com/api/v3/files" \
               --header "accept: application/json" \
               --header "x-apikey: ${VIRUSTOTAL_API_KEY}" \
               --form file="@$file")
@@ -262,20 +303,43 @@ jobs:
               echo "VirusTotal upload failed for $name: $submit"
               exit 1
             fi
+            names+=("$name")
+            ids+=("$analysis_id")
+            statuses+=("queued")
+            analyses+=("")
+          done
 
-            analysis=""
-            status="queued"
-            for _ in $(seq 1 40); do
-              analysis=$(curl -sS --request GET \
-                --url "https://www.virustotal.com/api/v3/analyses/${analysis_id}" \
+          sleep 60
+
+          for attempt in 1 2; do
+            pending=0
+            for idx in "${!ids[@]}"; do
+              if [ "${statuses[$idx]}" = "completed" ]; then
+                continue
+              fi
+              analysis=$(vt_request GET "https://www.virustotal.com/api/v3/analyses/${ids[$idx]}" \
                 --header "accept: application/json" \
                 --header "x-apikey: ${VIRUSTOTAL_API_KEY}")
               status=$(echo "$analysis" | jq -r '.data.attributes.status // empty')
-              if [ "$status" = "completed" ]; then
-                break
+              analyses[$idx]="$analysis"
+              statuses[$idx]="$status"
+              if [ "$status" != "completed" ]; then
+                pending=1
               fi
-              sleep 15
             done
+            if [ "$pending" -eq 0 ]; then
+              break
+            fi
+            sleep 60
+          done
+
+          for idx in "${!names[@]}"; do
+            name="${names[$idx]}"
+            analysis="${analyses[$idx]}"
+            status="${statuses[$idx]}"
+            if [ -z "$analysis" ]; then
+              analysis="{}"
+            fi
 
             stats=$(echo "$analysis" | jq '.data.attributes.stats // {}')
             analysis_url=$(echo "$analysis" | jq -r '.data.links.self // empty')
@@ -286,7 +350,7 @@ jobs:
 
             json=$(jq \
               --arg name "$name" \
-              --arg analysis_id "$analysis_id" \
+              --arg analysis_id "${ids[$idx]}" \
               --arg analysis_url "$analysis_url" \
               --arg item_url "$item_url" \
               --arg sha256 "$sha256" \

@@ -76,7 +76,7 @@ class basefwx:
     PACK_TAR_XZ = "x"
     PACK_SUFFIX_GZ = ".tgz"
     PACK_SUFFIX_XZ = ".txz"
-    ENGINE_VERSION = "3.5.2"
+    ENGINE_VERSION = "3.5.3"
     MASTER_PQ_ALG = "ml-kem-768"
     MASTER_PQ_PUBLIC = b"eJwBoARf+/rkrYxhXn0CNFqTkzQUrIYloydzGrqpIuWXi+qnLO/XRnspzQBDwwTKLW3Ku6Zwii1AfriFM5t8PtugqMNFt/5HoHxIZLGkytTWKP3IKoP7EH2HFu14b5bagh+KIFTWoW12qZqLRNjJLBHZmzxasEIsN7AnsOiokMHxt4XwoLk5fscIhXSANBZpHUVEO+NkBhg5UnvzWkzAqPm6rEvCfE+CHxgFg1SjBJeFfVMyzpKpsUi6iCGXSl6nZuTkr10btfi8RHCEfxDrfhcJk0bsKMWEI6wVY23KQXXlmcJ4VydGZ/ZbjWhVbX6bo0DKqG5IlwpTDPJIwlumRpxbBog8JG10p8PTaRJEAKfiVo7jiD1Aki7hYqmyyBn2Q0RFy03Bm/Rpy1zlK3DahaaoMj1mJrJ5ff2FYYVsBQbrywcDUcdHUkIpUqwrrRyqdEIHq1T6AiKHmf2KHTXQnLuZpJ3Ih59bkH1GC2UzbEIWzFSImvQDkswCBW9cF0tFYCNnReiReb57XAjaW3smdOg1o9oyk2IbyptJtNe1teHoPsMJkBGin/ugUeFmEOa0f8lTEmK4u1/GxHrQxD65kxm2IHT4NPM8Z5oqQ9z0WthUE5MouNrZLK8EltZQzAcZJ/g7CesRi40qFecyD14hDPBcr6cEV6yqOXXrcDRQVCUhuYRyUNqrFe4JPks2kZlxXjABHMD1PHVzfJpsAtsTDJa2EdpoAkKRvfg2QOK6CpYix6zIyB1yGwdCG8L2QS9DQefDQntXDlwSIieqRrwmiWcba4mSgwfxsoH2SIbQPZKbtEA4XNGqen1CcldAw1w2mnO3otspreJEBZJjVSihGcoyVjWap9dWc0pLffeDC5mUyOTzWUQ3XBAxX817G9rIbFyMQ+4AdeP2zL/nk9s2wYuZT2MEbwTHW/6UJQXbRf+svg9Kq//ryl/YRiaxdK2xRkP7oaBBVbyyXxYUJEhXOD7cUar8HsGZlXmiDSxzCBZSJG+4ooAgOKfEx6liOvqHBQKrsG4ylg3JQqmKBUdXcf6cMImRqS4MFM23vQkSPqIckxGgkrJGDKLGg8DKsuOqUvkzexAWviAIJQZsJsqjUl2stBgnltsyysE2cdI5Poh7KgOFV27bfi4iCpFSXc46Aa2jjN0WFYAgfhcRXgvIanJ3L8/sPrR7QKvpTtPFSfdcBipqp8vRdYImF5HceU1TU+QwtOcmCKDmaDTBGtJLZDXYJ3/2VQAEr8Mhk1WxGQsWUikZBi9pHTTbh93gvl9gLaGlxlRCjwzSqcJVXF80UiVMA06hfDnzi9MFpIGZL0czax+1zwdLFsnnHLGLzm/YpgrUBIk0gTgMVhqiu0+JyagxwrXCsDmGbhj8PzJGUeR8xhoxzOtTMgtaFwekbEAss+JGzuZJeakDxhMJEvvbKabIFDeQLsImO4eaAslqXyNoSg7AtnDlHfzTTFvwk2/UppeXNmcEC9n1UyfyWNW6qAZRJe5zQkijzLfkGKWsR/ksjmUQwMHwOOWVQ8qqUapYxsmbZkosPBXRDNBhY6PNjfciD2hRoIqrd/pnkJ6cZd1FQyxge6FA3PMpHw=="
     MASTER_EC_MAGIC = b"EC1"
@@ -6945,6 +6945,70 @@ class basefwx:
 def cli(argv=None) -> int:
     import argparse
 
+    def _cli_config_path() -> "basefwx.pathlib.Path":
+        cfg = _os_module.getenv("BASEFWX_CLI_CONFIG")
+        if cfg:
+            return basefwx.pathlib.Path(cfg).expanduser()
+        xdg = _os_module.getenv("XDG_CONFIG_HOME")
+        if xdg:
+            return basefwx.pathlib.Path(xdg) / "basefwx" / "cli.conf"
+        appdata = _os_module.getenv("APPDATA")
+        if appdata:
+            return basefwx.pathlib.Path(appdata) / "basefwx" / "cli.conf"
+        return basefwx.pathlib.Path("~/.config/basefwx/cli.conf").expanduser()
+
+    def _cli_plain_mode() -> bool:
+        if _os_module.getenv("BASEFWX_CLI_PLAIN"):
+            return True
+        if _os_module.getenv("NO_COLOR"):
+            return True
+        style = (_os_module.getenv("BASEFWX_CLI_STYLE") or "").strip().lower()
+        if style in {"plain", "boring", "0", "false", "off"}:
+            return True
+        if style in {"color", "emoji", "on"}:
+            return False
+        cfg_path = _cli_config_path()
+        try:
+            if cfg_path.exists():
+                data = cfg_path.read_text(encoding="utf-8").lower()
+                if "plain=1" in data or "plain=true" in data:
+                    return True
+                if "style=plain" in data or "mode=plain" in data or "boring=1" in data:
+                    return True
+        except OSError:
+            pass
+        return False
+
+    class _CliTheme:
+        def __init__(self, plain: bool):
+            self.plain = plain
+            self.reset = "" if plain else "\033[0m"
+            self.bold = "" if plain else "\033[1m"
+            self.red = "" if plain else "\033[31m"
+            self.green = "" if plain else "\033[32m"
+            self.yellow = "" if plain else "\033[33m"
+            self.cyan = "" if plain else "\033[36m"
+
+        def _wrap(self, msg: str, color: str, emoji: str | None = None) -> str:
+            if self.plain:
+                return msg
+            prefix = f"{emoji} " if emoji else ""
+            return f"{self.bold}{color}{prefix}{msg}{self.reset}"
+
+        def ok(self, msg: str) -> str:
+            return self._wrap(msg, self.green, "✅")
+
+        def warn(self, msg: str) -> str:
+            return self._wrap(msg, self.yellow, "⚠️")
+
+        def err(self, msg: str) -> str:
+            return self._wrap(msg, self.red, "❌")
+
+        def info(self, msg: str) -> str:
+            return self._wrap(msg, self.cyan, "✨")
+
+    theme = _CliTheme(_cli_plain_mode())
+
     parser = argparse.ArgumentParser(prog="basefwx", description="BASEFWX encryption toolkit")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
@@ -7041,7 +7105,7 @@ def cli(argv=None) -> int:
         try:
             master_pub_bytes = basefwx._resolve_master_pubkey_path(args.master_pub_path)
         except FileNotFoundError as exc:
-            print(f"Failed to load master public key: {exc}")
+            print(theme.err(f"Failed to load master public key: {exc}"))
             return 1
         basefwx._set_master_pubkey_override(master_pub_bytes)
         method_map = {
@@ -7119,13 +7183,19 @@ def cli(argv=None) -> int:
         if isinstance(result, dict):
             failures = 0
             for path, status in result.items():
-                print(f"{path}: {status}")
+                if status == "SUCCESS!":
+                    print(theme.ok(f"{path}: {status}"))
+                else:
+                    print(theme.err(f"{path}: {status}"))
                 if status != "SUCCESS!":
                     failures += 1
             return 0 if failures == 0 else 1
 
         # Print an extra newline to ensure separation from progress output
-        print(result)
+        if result == "SUCCESS!":
+            print(theme.ok(result))
+        else:
+            print(result)
         return 0 if result == "SUCCESS!" else 1
 
     return 0

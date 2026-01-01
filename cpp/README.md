@@ -1,7 +1,7 @@
 # basefwx C++ port (WIP)
 
 This folder is the start of a C++ rewrite intended to stay wire-compatible with
-BaseFWX 3.5.2. The initial focus is shared codecs (b256/b512/pb512) and
+BaseFWX 3.5.3. The initial focus is shared codecs (b256/b512/pb512) and
 file-format parsing so we can inspect payloads and validate blob structure before
 porting the full AES file pipeline.
 

@@ -34,6 +34,7 @@ diagnose.log
 htmlcov/
 
 PROGRESS_*.md
+progress_*.md
 test_progress_demo.py
 verify_progress.py
 test.txt

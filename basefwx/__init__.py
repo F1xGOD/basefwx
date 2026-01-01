@@ -18,7 +18,7 @@ def pb512decode(string: str, code: str="", use_master: bool = True): return base
 
 def jMGe(
     path: str,
-    password: str,
+    password: str = "",
     output: str | None = None,
     *,
     keep_meta: bool = False,
@@ -32,7 +32,7 @@ def jMGe(
         keep_input=keep_input
     )
 
-def jMGd(path: str, password: str, output: str | None = None):
+def jMGd(path: str, password: str = "", output: str | None = None):
     return basefwx.MediaCipher.decrypt_media(path, password, output=output)
 
 def b512encodefile(file: str, code: str, strip_metadata: bool = False, use_master: bool = True): return basefwx.b512file_encode(file, code, strip_metadata=strip_metadata, use_master=use_master)
@@ -64,11 +64,12 @@ def fwxAES(
             use_master=use_master,
             silent=silent,
             keep_input=keep_input
-        )
+    )
     return basefwx.fwxAES_file(
         file,
         code,
         output=output,
+        use_master=use_master,
         normalize=normalize,
         normalize_threshold=normalize_threshold,
         cover_phrase=cover_phrase,
@@ -77,7 +78,9 @@ def fwxAES(
         keep_input=keep_input
     )
 
-def fwxAES_encrypt_raw(plaintext: bytes, password: str | bytes): return basefwx.fwxAES_encrypt_raw(plaintext, password)
-def fwxAES_decrypt_raw(blob: bytes, password: str | bytes): return basefwx.fwxAES_decrypt_raw(blob, password)
+def fwxAES_encrypt_raw(plaintext: bytes, password: str | bytes, use_master: bool = True):
+    return basefwx.fwxAES_encrypt_raw(plaintext, password, use_master=use_master)
+def fwxAES_decrypt_raw(blob: bytes, password: str | bytes, use_master: bool = True):
+    return basefwx.fwxAES_decrypt_raw(blob, password, use_master=use_master)
 def normalize_wrap(blob: bytes, cover_phrase: str = "low taper fade"): return basefwx.normalize_wrap(blob, cover_phrase)
 def normalize_unwrap(text: str): return basefwx.normalize_unwrap(text)

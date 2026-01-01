@@ -107,8 +107,10 @@ jobs:
       - name: Setup vcpkg
         uses: lukka/run-vcpkg@v11
         with:
-          vcpkgArguments: "openssl zlib"
-          vcpkgTriplet: "x64-windows"
+          vcpkgDirectory: ${{ github.workspace }}\\vcpkg
+          runVcpkgInstall: true
+          vcpkgJsonGlob: "cpp/vcpkg.json"
+          vcpkgConfigurationJsonGlob: "cpp/vcpkg-configuration.json"
 
       - name: Install UPX (optional)
         shell: pwsh
@@ -122,7 +124,7 @@ jobs:
 
       - name: Configure
         run: |
-          cmake -S cpp -B cpp/build -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" -DVCPKG_TARGET_TRIPLET=x64-windows -DBASEFWX_REQUIRE_ARGON2=OFF -DBASEFWX_REQUIRE_OQS=OFF
+          cmake -S cpp -B cpp/build -DCMAKE_TOOLCHAIN_FILE="${{ github.workspace }}\\vcpkg\\scripts\\buildsystems\\vcpkg.cmake" -DVCPKG_TARGET_TRIPLET=x64-windows -DBASEFWX_REQUIRE_ARGON2=OFF -DBASEFWX_REQUIRE_OQS=OFF
 
       - name: Build
         run: cmake --build cpp/build --config Release

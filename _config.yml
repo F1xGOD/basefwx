@@ -1,0 +1,28 @@
+title: BaseFWX
+markdown: kramdown
+theme: null
+exclude:
+  - basefwx
+  - cpp
+  - tests
+  - scripts
+  - src
+  - .github
+  - .venv
+  - build
+  - dist
+  - pyproject.toml
+  - setup.py
+  - MANIFEST.in
+  - README.md
+  - SECURITY.md
+  - LICENCE
+  - diagnose.log
+  - PR.txt
+  - PROGRESS_BAR_FIX.md
+  - PROGRESS_FINAL_FIX.md
+  - PROGRESS_FIX_SUMMARY.md
+  - PROGRESS_INPLACE_FIX.md
+  - test_progress_demo.py
+  - verify_progress.py
+  - test.txt

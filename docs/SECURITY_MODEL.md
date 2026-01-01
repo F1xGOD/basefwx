@@ -1,3 +1,8 @@
+---
+layout: doc
+title: Security Model
+---
+
 # Security Model
 
 ## Overview

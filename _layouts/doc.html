@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{{ page.title }} | BaseFWX</title>
+    <meta name="description" content="{{ page.title }} documentation for BaseFWX.">
+    <link rel="icon" type="image/svg+xml" href="{{ '/assets/basefwx-white.svg' | relative_url }}">
+    <link rel="stylesheet" href="{{ '/assets/site.css' | relative_url }}">
+  </head>
+  <body>
+    <div class="doc-container">
+      <header class="doc-header">
+        <a class="doc-brand" href="{{ '/' | relative_url }}">
+          <span class="brand-mark" aria-hidden="true">
+            <span class="brand-cutout" aria-hidden="true"></span>
+          </span>
+          <span>
+            <span class="brand-name">FixCraft</span>
+            <span class="brand-sub">About BaseFWX</span>
+          </span>
+        </a>
+        <nav class="doc-nav">
+          <a href="{{ '/' | relative_url }}">Portal</a>
+          <a href="{{ '/docs/CLI.html' | relative_url }}">CLI</a>
+          <a href="{{ '/docs/SECURITY_MODEL.html' | relative_url }}">Security</a>
+          <a href="{{ '/docs/RELEASE.html' | relative_url }}">Release</a>
+          <a href="https://github.com/F1xGOD/basefwx" target="_blank" rel="noopener">GitHub</a>
+        </nav>
+      </header>
+      <article class="doc-article">
+        {{ content }}
+      </article>
+    </div>
+  </body>
+</html>

@@ -1,3 +1,8 @@
+---
+layout: doc
+title: CLI
+---
+
 # CLI
 
 ## Python CLI

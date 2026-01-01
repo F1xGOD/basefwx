@@ -14,8 +14,8 @@
   --green: #3fe18c;
   --orange: #f2a14a;
   --amber: #f4c04f;
-  --red: #ff6b6b;
-  --burnt: #ff9c5b;
+  --red: #f08a4b;
+  --burnt: #c74848;
 }
 
 * { box-sizing: border-box; }
@@ -209,6 +209,13 @@ nav a:hover {
 
 .btn.secondary:visited {
   color: var(--text);
+}
+
+.btn.disabled,
+a.disabled {
+  pointer-events: none;
+  opacity: 0.5;
+  filter: grayscale(0.2);
 }
 
 .hero-panel {

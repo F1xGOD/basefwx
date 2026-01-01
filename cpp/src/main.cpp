@@ -1,6 +1,7 @@
 #include "basefwx/basefwx.hpp"
 
 #include <cctype>
+#include <cstdlib>
 #include <filesystem>
 #include <iostream>
 #include <string>
@@ -35,23 +36,34 @@ bool LooksLikeMediaPath(const std::filesystem::path& path) {
     return kImageExts.count(ext) || kVideoExts.count(ext) || kAudioExts.count(ext);
 }
 
+void ApplyMasterPubPath(const std::string& path) {
+    if (path.empty()) {
+        return;
+    }
+#if defined(_WIN32)
+    _putenv_s("BASEFWX_MASTER_PQ_PUB", path.c_str());
+#else
+    setenv("BASEFWX_MASTER_PQ_PUB", path.c_str(), 1);
+#endif
+}
+
 void PrintUsage() {
     std::cout << "Usage:\n";
     std::cout << "  basefwx_cpp info <file.fwx>\n";
     std::cout << "  basefwx_cpp b256-enc <text>\n";
     std::cout << "  basefwx_cpp b256-dec <text>\n";
-    std::cout << "  basefwx_cpp b512-enc <text> -p <password> [--no-master] [--kdf <label>] [--pbkdf2-iters <n>]\n";
-    std::cout << "  basefwx_cpp b512-dec <text> -p <password> [--no-master] [--kdf <label>] [--pbkdf2-iters <n>]\n";
-    std::cout << "  basefwx_cpp pb512-enc <text> -p <password> [--no-master] [--kdf <label>] [--pbkdf2-iters <n>]\n";
-    std::cout << "  basefwx_cpp pb512-dec <text> -p <password> [--no-master] [--kdf <label>] [--pbkdf2-iters <n>]\n";
-    std::cout << "  basefwx_cpp b512file-enc <file> -p <password> [--no-master] [--strip-meta] [--no-aead] [--compress] [--keep-input] [--kdf <label>] [--pbkdf2-iters <n>]\n";
-    std::cout << "  basefwx_cpp b512file-dec <file.fwx> -p <password> [--no-master] [--strip-meta] [--kdf <label>] [--pbkdf2-iters <n>]\n";
-    std::cout << "  basefwx_cpp pb512file-enc <file> -p <password> [--no-master] [--strip-meta] [--no-obf] [--compress] [--keep-input] [--kdf <label>] [--pbkdf2-iters <n>]\n";
-    std::cout << "  basefwx_cpp pb512file-dec <file.fwx> -p <password> [--no-master] [--strip-meta] [--kdf <label>] [--pbkdf2-iters <n>]\n";
-    std::cout << "  basefwx_cpp fwxaes-enc <file> -p <password> [--out <path>] [--normalize] [--threshold <n>] [--cover-phrase <text>] [--compress] [--ignore-media] [--keep-meta] [--keep-input]\n";
-    std::cout << "  basefwx_cpp fwxaes-dec <file> -p <password> [--out <path>]\n";
-    std::cout << "  basefwx_cpp jmge <media> -p <password> [--out <path>] [--keep-meta] [--keep-input]\n";
-    std::cout << "  basefwx_cpp jmgd <media> -p <password> [--out <path>]\n";
+    std::cout << "  basefwx_cpp b512-enc <text> [-p <password>] [--master-pub <path>] [--no-master] [--kdf <label>] [--pbkdf2-iters <n>]\n";
+    std::cout << "  basefwx_cpp b512-dec <text> [-p <password>] [--master-pub <path>] [--no-master] [--kdf <label>] [--pbkdf2-iters <n>]\n";
+    std::cout << "  basefwx_cpp pb512-enc <text> [-p <password>] [--master-pub <path>] [--no-master] [--kdf <label>] [--pbkdf2-iters <n>]\n";
+    std::cout << "  basefwx_cpp pb512-dec <text> [-p <password>] [--master-pub <path>] [--no-master] [--kdf <label>] [--pbkdf2-iters <n>]\n";
+    std::cout << "  basefwx_cpp b512file-enc <file> [-p <password>] [--master-pub <path>] [--no-master] [--strip-meta] [--no-aead] [--compress] [--keep-input] [--kdf <label>] [--pbkdf2-iters <n>]\n";
+    std::cout << "  basefwx_cpp b512file-dec <file.fwx> [-p <password>] [--master-pub <path>] [--no-master] [--strip-meta] [--kdf <label>] [--pbkdf2-iters <n>]\n";
+    std::cout << "  basefwx_cpp pb512file-enc <file> [-p <password>] [--master-pub <path>] [--no-master] [--strip-meta] [--no-obf] [--compress] [--keep-input] [--kdf <label>] [--pbkdf2-iters <n>]\n";
+    std::cout << "  basefwx_cpp pb512file-dec <file.fwx> [-p <password>] [--master-pub <path>] [--no-master] [--strip-meta] [--kdf <label>] [--pbkdf2-iters <n>]\n";
+    std::cout << "  basefwx_cpp fwxaes-enc <file> [-p <password>] [--master-pub <path>] [--no-master] [--out <path>] [--normalize] [--threshold <n>] [--cover-phrase <text>] [--compress] [--ignore-media] [--keep-meta] [--keep-input]\n";
+    std::cout << "  basefwx_cpp fwxaes-dec <file> [-p <password>] [--master-pub <path>] [--no-master] [--out <path>]\n";
+    std::cout << "  basefwx_cpp jmge <media> [-p <password>] [--master-pub <path>] [--out <path>] [--keep-meta] [--keep-input]\n";
+    std::cout << "  basefwx_cpp jmgd <media> [-p <password>] [--master-pub <path>] [--out <path>]\n";
 }
 
 struct ParsedOptions {
@@ -65,6 +77,7 @@ struct FwxAesArgs {
     std::string input;
     std::string output;
     std::string password;
+    bool use_master = true;
     bool normalize = false;
     std::size_t threshold = 8 * 1024;
     std::string cover_phrase = "low taper fade";
@@ -112,6 +125,12 @@ ParsedOptions ParseCodecArgs(int argc, char** argv, int start_index) {
         } else if (flag == "--no-master") {
             opts.use_master = false;
             idx += 1;
+        } else if (flag == "--master-pub" || flag == "--use-master-pub") {
+            if (idx + 1 >= argc) {
+                throw std::runtime_error("Missing master public key path");
+            }
+            ApplyMasterPubPath(argv[idx + 1]);
+            idx += 2;
         } else if (flag == "--kdf") {
             if (idx + 1 >= argc) {
                 throw std::runtime_error("Missing kdf label");
@@ -152,6 +171,12 @@ FileArgs ParseFileArgs(int argc, char** argv, int start_index) {
         } else if (flag == "--no-master") {
             opts.use_master = false;
             idx += 1;
+        } else if (flag == "--master-pub" || flag == "--use-master-pub") {
+            if (idx + 1 >= argc) {
+                throw std::runtime_error("Missing master public key path");
+            }
+            ApplyMasterPubPath(argv[idx + 1]);
+            idx += 2;
         } else if (flag == "--strip-meta") {
             opts.strip_metadata = true;
             idx += 1;
@@ -203,6 +228,15 @@ FwxAesArgs ParseFwxAesArgs(int argc, char** argv, int start_index) {
                 throw std::runtime_error("Missing password value");
             }
             opts.password = argv[idx + 1];
+            idx += 2;
+        } else if (flag == "--no-master") {
+            opts.use_master = false;
+            idx += 1;
+        } else if (flag == "--master-pub" || flag == "--use-master-pub") {
+            if (idx + 1 >= argc) {
+                throw std::runtime_error("Missing master public key path");
+            }
+            ApplyMasterPubPath(argv[idx + 1]);
             idx += 2;
         } else if (flag == "--out" || flag == "-o") {
             if (idx + 1 >= argc) {
@@ -258,6 +292,12 @@ ImageArgs ParseImageArgs(int argc, char** argv, int start_index) {
                 throw std::runtime_error("Missing password value");
             }
             opts.password = argv[idx + 1];
+            idx += 2;
+        } else if (flag == "--master-pub" || flag == "--use-master-pub") {
+            if (idx + 1 >= argc) {
+                throw std::runtime_error("Missing master public key path");
+            }
+            ApplyMasterPubPath(argv[idx + 1]);
             idx += 2;
         } else if (flag == "--out" || flag == "-o") {
             if (idx + 1 >= argc) {
@@ -363,8 +403,8 @@ int main(int argc, char** argv) {
         }
         if (command == "fwxaes-enc" || command == "fwxaes-dec") {
             FwxAesArgs opts = ParseFwxAesArgs(argc, argv, 2);
-            if (opts.password.empty()) {
-                throw std::runtime_error("Password is required for fwxaes");
+            if (opts.password.empty() && !opts.use_master) {
+                throw std::runtime_error("Password required when master key usage is disabled");
             }
             if (opts.output.empty()) {
                 if (command == "fwxaes-enc") {
@@ -394,17 +434,16 @@ int main(int argc, char** argv) {
                 norm.cover_phrase = opts.cover_phrase;
                 basefwx::fwxaes::PackOptions pack_opts;
                 pack_opts.compress = opts.compress;
-                basefwx::fwxaes::EncryptFile(opts.input, opts.output, opts.password, {}, norm, pack_opts, opts.keep_input);
+                basefwx::fwxaes::Options fwxaes_opts;
+                fwxaes_opts.use_master = opts.use_master;
+                basefwx::fwxaes::EncryptFile(opts.input, opts.output, opts.password, fwxaes_opts, norm, pack_opts, opts.keep_input);
             } else {
-                basefwx::fwxaes::DecryptFile(opts.input, opts.output, opts.password);
+                basefwx::fwxaes::DecryptFile(opts.input, opts.output, opts.password, opts.use_master);
             }
             return 0;
         }
         if (command == "jmge" || command == "jmgd") {
             ImageArgs opts = ParseImageArgs(argc, argv, 2);
-            if (opts.password.empty()) {
-                throw std::runtime_error("Password is required for jmg");
-            }
             if (command == "jmge") {
                 std::cout << basefwx::Jmge(opts.input, opts.password, opts.output, opts.keep_meta, opts.keep_input) << "\n";
             } else {

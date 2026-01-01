@@ -17,6 +17,9 @@ setup(
         "pillow>=10.0.0",
         "pqcrypto>=0.3.4",
     ],
+    extras_require={
+        "argon2": ["argon2-cffi>=23.1.0"],
+    },
     python_requires=">=3.10",
     author="F1xGOD",
     author_email="f1xgodim@gmail.com",

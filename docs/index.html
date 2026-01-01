@@ -1,0 +1,332 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>BASEFWX Documentation</title>
+    <style>
+      :root {
+        --bg: #0b0c12;
+        --panel: #141826;
+        --panel-2: #101423;
+        --accent: #7d3cff;
+        --accent-2: #b08bff;
+        --text: #e7e9f3;
+        --muted: #a2a7bd;
+        --border: #252b3f;
+        --shadow: rgba(0, 0, 0, 0.35);
+      }
+
+      * { box-sizing: border-box; }
+
+      body {
+        margin: 0;
+        font-family: "Space Grotesk", "Sora", "IBM Plex Sans", sans-serif;
+        color: var(--text);
+        background:
+          radial-gradient(1200px 700px at 15% -10%, rgba(125, 60, 255, 0.15), transparent 60%),
+          radial-gradient(900px 600px at 85% 10%, rgba(176, 139, 255, 0.18), transparent 55%),
+          var(--bg);
+        line-height: 1.6;
+      }
+
+      a { color: inherit; text-decoration: none; }
+
+      .container {
+        max-width: 1080px;
+        margin: 0 auto;
+        padding: 32px 24px 80px;
+      }
+
+      header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 24px;
+        padding: 16px 0 32px;
+      }
+
+      .logo {
+        display: flex;
+        align-items: center;
+        gap: 16px;
+        font-weight: 600;
+        letter-spacing: 0.5px;
+      }
+
+      .logo-badge {
+        width: 44px;
+        height: 44px;
+        border-radius: 12px;
+        background: linear-gradient(135deg, rgba(125, 60, 255, 0.9), rgba(176, 139, 255, 0.6));
+        box-shadow: 0 10px 30px rgba(125, 60, 255, 0.35);
+      }
+
+      nav {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 16px;
+        font-size: 14px;
+        color: var(--muted);
+      }
+
+      nav a {
+        padding: 6px 12px;
+        border-radius: 999px;
+        border: 1px solid transparent;
+      }
+
+      nav a:hover {
+        border-color: var(--border);
+        color: var(--text);
+      }
+
+      .hero {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) minmax(0, 0.8fr);
+        gap: 32px;
+        align-items: center;
+        padding: 32px;
+        background: linear-gradient(135deg, rgba(20, 24, 38, 0.95), rgba(16, 20, 35, 0.9));
+        border: 1px solid var(--border);
+        border-radius: 24px;
+        box-shadow: 0 20px 60px var(--shadow);
+      }
+
+      .hero h1 {
+        margin: 0 0 12px;
+        font-size: 42px;
+        line-height: 1.1;
+      }
+
+      .hero p {
+        margin: 0 0 24px;
+        color: var(--muted);
+        font-size: 17px;
+      }
+
+      .hero .cta {
+        display: inline-flex;
+        align-items: center;
+        gap: 10px;
+        padding: 12px 18px;
+        border-radius: 12px;
+        background: var(--accent);
+        color: #ffffff;
+        font-weight: 600;
+        box-shadow: 0 12px 30px rgba(125, 60, 255, 0.35);
+      }
+
+      .hero .cta.secondary {
+        background: transparent;
+        border: 1px solid var(--border);
+        color: var(--text);
+        box-shadow: none;
+      }
+
+      .hero .cta-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+      }
+
+      .hero-card {
+        background: rgba(11, 12, 18, 0.6);
+        border: 1px solid var(--border);
+        border-radius: 18px;
+        padding: 20px;
+      }
+
+      .hero-card h3 {
+        margin: 0 0 10px;
+        font-size: 18px;
+      }
+
+      .hero-card code {
+        display: block;
+        background: #0f1322;
+        border: 1px solid var(--border);
+        padding: 12px;
+        border-radius: 12px;
+        font-size: 13px;
+        color: var(--accent-2);
+        overflow-x: auto;
+      }
+
+      section {
+        margin-top: 56px;
+      }
+
+      .section-title {
+        font-size: 22px;
+        margin-bottom: 18px;
+      }
+
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+        gap: 18px;
+      }
+
+      .card {
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 16px;
+        padding: 18px;
+        transition: transform 0.2s ease, border-color 0.2s ease;
+      }
+
+      .card:hover {
+        transform: translateY(-4px);
+        border-color: rgba(125, 60, 255, 0.5);
+      }
+
+      .card h4 {
+        margin: 0 0 6px;
+        font-size: 16px;
+      }
+
+      .card p {
+        margin: 0;
+        color: var(--muted);
+        font-size: 14px;
+      }
+
+      .pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 6px 10px;
+        background: rgba(125, 60, 255, 0.12);
+        border: 1px solid rgba(125, 60, 255, 0.4);
+        border-radius: 999px;
+        font-size: 12px;
+        color: var(--accent-2);
+        margin-bottom: 14px;
+      }
+
+      footer {
+        margin-top: 64px;
+        color: var(--muted);
+        font-size: 13px;
+        text-align: center;
+      }
+
+      @media (max-width: 900px) {
+        .hero {
+          grid-template-columns: 1fr;
+        }
+        .hero h1 {
+          font-size: 34px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <header>
+        <div class="logo">
+          <div class="logo-badge"></div>
+          <div>
+            <div>BASEFWX</div>
+            <div style="font-size:12px;color:var(--muted);">Docs Hub</div>
+          </div>
+        </div>
+        <nav>
+          <a href="#getting-started">Getting Started</a>
+          <a href="#docs">Docs</a>
+          <a href="#releases">Releases</a>
+          <a href="#support">Support</a>
+        </nav>
+      </header>
+
+      <section class="hero" id="getting-started">
+        <div>
+          <div class="pill">FixCraft Purple Edition</div>
+          <h1>Secure, cross-compatible encryption for files and media.</h1>
+          <p>
+            BASEFWX pairs post-quantum key wrapping with AES-GCM, ships a native C++ core,
+            and keeps Python/C++ formats interoperable. Use it for file encryption, jMG media
+            scrambling, and reversible data workflows.
+          </p>
+          <div class="cta-row">
+            <a class="cta" href="../README.md">Read README</a>
+            <a class="cta secondary" href="CLI.md">CLI Reference</a>
+          </div>
+        </div>
+        <div class="hero-card">
+          <h3>Quick Start</h3>
+          <code>pip install basefwx
+python -m basefwx cryptin aes-light file.bin -p "pass"
+python -m basefwx cryptin aes-light file.bin.fwx -p "pass"</code>
+        </div>
+      </section>
+
+      <section id="docs">
+        <div class="section-title">Documentation</div>
+        <div class="grid">
+          <a class="card" href="CLI.md">
+            <h4>CLI & Usage</h4>
+            <p>Commands, flags, and master-key workflows.</p>
+          </a>
+          <a class="card" href="SECURITY_MODEL.md">
+            <h4>Security Model</h4>
+            <p>Threat model, key paths, and AEAD details.</p>
+          </a>
+          <a class="card" href="TESTING.md">
+            <h4>Testing</h4>
+            <p>How to run the suite, fast modes, and fixtures.</p>
+          </a>
+          <a class="card" href="RELEASE.md">
+            <h4>Release & Signing</h4>
+            <p>GPG key setup, signatures, and hashes.</p>
+          </a>
+          <a class="card" href="CONTRIBUTING.md">
+            <h4>Contributing</h4>
+            <p>How to propose changes and report issues.</p>
+          </a>
+        </div>
+      </section>
+
+      <section id="releases">
+        <div class="section-title">Release Artifacts</div>
+        <div class="grid">
+          <div class="card">
+            <h4>Linux</h4>
+            <p>basefwx-linux + .sha256/.md5 + .sig</p>
+          </div>
+          <div class="card">
+            <h4>Windows</h4>
+            <p>basefwx-windows.exe + .sha256/.md5 + .sig</p>
+          </div>
+          <div class="card">
+            <h4>macOS</h4>
+            <p>basefwx-mac + .sha256/.md5 + .sig</p>
+          </div>
+        </div>
+      </section>
+
+      <section id="support">
+        <div class="section-title">Support</div>
+        <div class="grid">
+          <a class="card" href="https://github.com/F1xGOD/basefwx/issues">
+            <h4>Issues</h4>
+            <p>Report bugs or request features.</p>
+          </a>
+          <a class="card" href="../SECURITY.md">
+            <h4>Security</h4>
+            <p>Responsible disclosure guidance.</p>
+          </a>
+          <a class="card" href="https://discord.gg/3eRHYkjgk8">
+            <h4>Discord</h4>
+            <p>Community chat and updates.</p>
+          </a>
+        </div>
+      </section>
+
+      <footer>
+        FixCraft BASEFWX Documentation
+      </footer>
+    </div>
+  </body>
+</html>

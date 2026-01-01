@@ -53,18 +53,37 @@ jobs:
       - name: Strip + UPX
         run: |
           mkdir -p dist
-          cp cpp/build/basefwx_cpp dist/basefwx
-          strip dist/basefwx
-          upx dist/basefwx
+          cp cpp/build/basefwx_cpp dist/basefwx-linux
+          strip dist/basefwx-linux
+          upx dist/basefwx-linux
 
-      - name: Package
+      - name: Generate hashes
         run: |
-          tar -czf basefwx-linux-x86_64.tar.gz -C dist basefwx
+          cd dist
+          sha256sum basefwx-linux > basefwx-linux.sha256
+          md5sum basefwx-linux > basefwx-linux.md5
+
+      - name: Import GPG key
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+        run: |
+          echo "$GPG_PRIVATE_KEY" | gpg --batch --import
+
+      - name: Sign binary
+        env:
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+        run: |
+          gpg --batch --yes --pinentry-mode loopback --passphrase "$GPG_PASSPHRASE" \
+            --detach-sign -o dist/basefwx-linux.sig dist/basefwx-linux
 
       - name: Upload release asset
         uses: softprops/action-gh-release@v2
         with:
-          files: basefwx-linux-x86_64.tar.gz
+          files: |
+            dist/basefwx-linux
+            dist/basefwx-linux.sha256
+            dist/basefwx-linux.md5
+            dist/basefwx-linux.sig
 
   build-cli-windows:
     runs-on: windows-latest
@@ -83,6 +102,10 @@ jobs:
         run: |
           choco install upx -y --no-progress
         continue-on-error: true
+      - name: Install GnuPG
+        shell: pwsh
+        run: |
+          choco install gnupg -y --no-progress
 
       - name: Configure
         run: |
@@ -91,26 +114,106 @@ jobs:
       - name: Build
         run: cmake --build cpp/build --config Release
 
-      - name: Package
+      - name: Prepare binary
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force dist | Out-Null
           $bin = "cpp/build/Release/basefwx_cpp.exe"
           if (!(Test-Path $bin)) { $bin = "cpp/build/basefwx_cpp.exe" }
           if (!(Test-Path $bin)) { throw "basefwx_cpp.exe not found" }
-          Copy-Item $bin dist/basefwx.exe
+          Copy-Item $bin dist/basefwx-windows.exe
+          $strip = Get-Command llvm-strip -ErrorAction SilentlyContinue
+          if ($strip) { & $strip.Path dist\\basefwx-windows.exe }
           $upx = Get-Command upx -ErrorAction SilentlyContinue
-          if ($upx) { & $upx.Path dist\\basefwx.exe }
-          Compress-Archive -Path dist\\basefwx.exe -DestinationPath basefwx-windows-x86_64.zip
+          if ($upx) { & $upx.Path dist\\basefwx-windows.exe }
+
+      - name: Generate hashes
+        shell: pwsh
+        run: |
+          $sha = Get-FileHash dist\\basefwx-windows.exe -Algorithm SHA256
+          "$($sha.Hash)  basefwx-windows.exe" | Set-Content dist\\basefwx-windows.exe.sha256
+          $md5 = Get-FileHash dist\\basefwx-windows.exe -Algorithm MD5
+          "$($md5.Hash)  basefwx-windows.exe" | Set-Content dist\\basefwx-windows.exe.md5
+
+      - name: Import GPG key
+        shell: pwsh
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+        run: |
+          $env:GPG_PRIVATE_KEY | gpg --batch --import
+
+      - name: Sign binary
+        shell: pwsh
+        env:
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+        run: |
+          gpg --batch --yes --pinentry-mode loopback --passphrase "$env:GPG_PASSPHRASE" `
+            --detach-sign -o dist\\basefwx-windows.exe.sig dist\\basefwx-windows.exe
 
       - name: Upload release asset
         uses: softprops/action-gh-release@v2
         with:
-          files: basefwx-windows-x86_64.zip
+          files: |
+            dist/basefwx-windows.exe
+            dist/basefwx-windows.exe.sha256
+            dist/basefwx-windows.exe.md5
+            dist/basefwx-windows.exe.sig
+
+  build-cli-macos:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install system deps
+        run: |
+          brew update
+          brew install openssl@3 gnupg
+
+      - name: Configure
+        run: |
+          cmake -S cpp -B cpp/build -DCMAKE_BUILD_TYPE=Release -DBASEFWX_REQUIRE_ARGON2=OFF -DBASEFWX_REQUIRE_OQS=OFF -DOPENSSL_ROOT_DIR="$(brew --prefix openssl@3)"
+
+      - name: Build
+        run: cmake --build cpp/build --config Release
+
+      - name: Strip
+        run: |
+          mkdir -p dist
+          cp cpp/build/basefwx_cpp dist/basefwx-mac
+          strip -x dist/basefwx-mac
+
+      - name: Generate hashes
+        run: |
+          cd dist
+          shasum -a 256 basefwx-mac > basefwx-mac.sha256
+          md5 -r basefwx-mac > basefwx-mac.md5
+
+      - name: Import GPG key
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+        run: |
+          echo "$GPG_PRIVATE_KEY" | gpg --batch --import
+
+      - name: Sign binary
+        env:
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+        run: |
+          gpg --batch --yes --pinentry-mode loopback --passphrase "$GPG_PASSPHRASE" \
+            --detach-sign -o dist/basefwx-mac.sig dist/basefwx-mac
+
+      - name: Upload release asset
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/basefwx-mac
+            dist/basefwx-mac.sha256
+            dist/basefwx-mac.md5
+            dist/basefwx-mac.sig
 
   publish-pypi:
     runs-on: ubuntu-latest
-    needs: [light-tests, build-cli-linux, build-cli-windows]
+    needs: [light-tests, build-cli-linux, build-cli-windows, build-cli-macos]
     steps:
       - name: Checkout
         uses: actions/checkout@v4

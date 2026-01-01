@@ -1,0 +1,67 @@
+{
+  "generated_at": "2026-01-01T13:24:05Z",
+  "release_tag": "v3.5.3",
+  "repo": "F1xGOD/basefwx",
+  "files": [
+    {
+      "name": "basefwx-linux",
+      "analysis_id": "MjU5ODhjZjgxYmUyOGYzMWRmMWMwMDI4ODM5MWJiN2Q6MTc2NzI3Mzg0Ng==",
+      "analysis_url": "https://www.virustotal.com/api/v3/analyses/MjU5ODhjZjgxYmUyOGYzMWRmMWMwMDI4ODM5MWJiN2Q6MTc2NzI3Mzg0Ng==",
+      "item_url": "https://www.virustotal.com/api/v3/files/f8681bff00789b1447d92c968a0d40d8d11107ad6462f69e74dbccf645898baf",
+      "sha256": "f8681bff00789b1447d92c968a0d40d8d11107ad6462f69e74dbccf645898baf",
+      "md5": "25988cf81be28f31df1c00288391bb7d",
+      "sha1": "fde0670a8bfe9c9c9712255843f81cdad56cf42d",
+      "status": "completed",
+      "stats": {
+        "malicious": 0,
+        "suspicious": 0,
+        "undetected": 65,
+        "harmless": 0,
+        "timeout": 0,
+        "confirmed-timeout": 0,
+        "failure": 0,
+        "type-unsupported": 11
+      }
+    },
+    {
+      "name": "basefwx-windows.exe",
+      "analysis_id": "ZTQ1ODkzZWRlOGRkMGJlMzdhNDk1NmY2NjE3MjAxMGE6MTc2NzI3Mzg0OA==",
+      "analysis_url": "https://www.virustotal.com/api/v3/analyses/ZTQ1ODkzZWRlOGRkMGJlMzdhNDk1NmY2NjE3MjAxMGE6MTc2NzI3Mzg0OA==",
+      "item_url": "https://www.virustotal.com/api/v3/files/e6ff5164b69726ad874ee94eae9444cadfa945fd200cbe74befbbdddddea1766",
+      "sha256": "e6ff5164b69726ad874ee94eae9444cadfa945fd200cbe74befbbdddddea1766",
+      "md5": "e45893ede8dd0be37a4956f66172010a",
+      "sha1": "313aa8111a207eda9eb6924cfb5c65de09ff357b",
+      "status": "completed",
+      "stats": {
+        "malicious": 1,
+        "suspicious": 0,
+        "undetected": 71,
+        "harmless": 0,
+        "timeout": 0,
+        "confirmed-timeout": 0,
+        "failure": 0,
+        "type-unsupported": 4
+      }
+    },
+    {
+      "name": "basefwx-mac",
+      "analysis_id": "YzAxNDgzNjQ0MGFlNzY1YzhiOTIwZjJkMjlmNmJhZTI6MTc2NzI3Mzg0OA==",
+      "analysis_url": "https://www.virustotal.com/api/v3/analyses/YzAxNDgzNjQ0MGFlNzY1YzhiOTIwZjJkMjlmNmJhZTI6MTc2NzI3Mzg0OA==",
+      "item_url": "https://www.virustotal.com/api/v3/files/3138fa09cab18c85e9712193d6b5b4d4e48e60c2e5e9b6d62d331b16eeef5915",
+      "sha256": "3138fa09cab18c85e9712193d6b5b4d4e48e60c2e5e9b6d62d331b16eeef5915",
+      "md5": "c014836440ae765c8b920f2d29f6bae2",
+      "sha1": "9b80610ed82c915588721c9ab75a4ebccb17ab93",
+      "status": "completed",
+      "stats": {
+        "malicious": 0,
+        "suspicious": 0,
+        "undetected": 63,
+        "harmless": 0,
+        "timeout": 0,
+        "confirmed-timeout": 0,
+        "failure": 0,
+        "type-unsupported": 13
+      }
+    }
+  ]
+}

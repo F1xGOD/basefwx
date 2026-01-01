@@ -97,8 +97,8 @@ const getResultsBases = (tag) => {
   const mainBase = `https://raw.githubusercontent.com/${repo}/main/results`;
   const tagBase = tag ? `https://raw.githubusercontent.com/${repo}/results/${tag}/results` : "";
   return {
-    primary: tagBase || mainBase,
-    fallback: mainBase
+    primary: mainBase,
+    fallback: tagBase || mainBase
   };
 };
 
@@ -184,17 +184,40 @@ const loadVirusTotal = async () => {
     summary.className = "status-pill ok";
 
     tableBody.innerHTML = "";
+    const toGuiLink = (file) => {
+      if (file.sha256) {
+        return `https://www.virustotal.com/gui/file/${file.sha256}`;
+      }
+      if (file.item_url) {
+        const match = file.item_url.match(/\/files\/([^/?]+)/);
+        if (match) {
+          return `https://www.virustotal.com/gui/file/${match[1]}`;
+        }
+      }
+      return "";
+    };
+
     files.forEach((file) => {
       const row = document.createElement("tr");
-      const link = file.item_url || (file.sha256 ? `https://www.virustotal.com/gui/file/${file.sha256}` : "");
+      const link = toGuiLink(file);
       const stats = file.stats || {};
+      const malicious = Number(stats.malicious ?? 0);
+      const suspicious = Number(stats.suspicious ?? 0);
+      const undetected = Number(stats.undetected ?? 0);
+      const ok = undetected > 61 && suspicious < 3 && malicious <= 1;
+      const statusIcon = ok ? "&#10003;" : "&#8212;";
+      const statusClass = ok ? "vt-check ok" : "vt-check neutral";
+      const statusLabel = ok ? "VirusTotal pass" : "VirusTotal review";
 
       row.innerHTML = `
-        <td class="mono">${file.name || ""}</td>
-        <td>${stats.malicious ?? 0}</td>
-        <td>${stats.suspicious ?? 0}</td>
-        <td>${stats.undetected ?? 0}</td>
-        <td><a href="${link}" target="_blank" rel="noopener">View report</a></td>
+        <td class="mono">
+          <span class="${statusClass}" aria-label="${statusLabel}" title="${statusLabel}">${statusIcon}</span>
+          ${file.name || ""}
+        </td>
+        <td>${malicious}</td>
+        <td>${suspicious}</td>
+        <td>${undetected}</td>
+        <td><a class="vt-btn" href="${link}" target="_blank" rel="noopener">View report</a></td>
       `;
       tableBody.appendChild(row);
     });

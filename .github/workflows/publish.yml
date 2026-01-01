@@ -80,6 +80,11 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-vcpkg-
 
+      - name: Prepare vcpkg cache dir
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force "${{ github.workspace }}\\vcpkg_binary_cache" | Out-Null
+
       - name: Setup vcpkg
         uses: lukka/run-vcpkg@v11
         with:

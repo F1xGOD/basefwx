@@ -389,6 +389,8 @@ jobs:
 
       - name: Store VirusTotal results in repo
         continue-on-error: true
+        env:
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
         run: |
           tag="${GITHUB_REF_NAME}"
           mkdir -p results
@@ -404,6 +406,19 @@ jobs:
           cp dist_out/basefwx-mac.md5 results/basefwx-mac.md5
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          key_id="$(gpg --list-secret-keys --with-colons | awk -F: '/^sec:/ {print $5; exit}')"
+          if [ -z "$key_id" ]; then
+            echo "No GPG signing key available"
+            exit 1
+          fi
+          git config user.signingkey "$key_id"
+          git config commit.gpgsign true
+          cat > gpg-wrapper.sh <<'EOF'
+          #!/usr/bin/env bash
+          exec gpg --batch --yes --pinentry-mode loopback --passphrase "$GPG_PASSPHRASE" "$@"
+          EOF
+          chmod +x gpg-wrapper.sh
+          git config gpg.program "$PWD/gpg-wrapper.sh"
           branch="results/${tag}"
           git checkout -B "$branch"
           git add results/

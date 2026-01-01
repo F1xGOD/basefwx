@@ -420,8 +420,8 @@ section {
 .vt-table td {
   padding: 14px 16px;
   border-bottom: none;
-  text-align: left;
-  vertical-align: top;
+  text-align: center;
+  vertical-align: middle;
 }
 
 .vt-table th {
@@ -430,6 +430,7 @@ section {
   letter-spacing: 1.2px;
   color: var(--muted);
   background: var(--panel);
+  text-align: left;
 }
 
 .vt-table thead th:first-child {
@@ -533,6 +534,10 @@ section {
 .vt-table tbody td:last-child {
   border-top-right-radius: 12px;
   border-bottom-right-radius: 12px;
+}
+
+.vt-table tbody td:first-child {
+  text-align: left;
 }
 
 .mono {

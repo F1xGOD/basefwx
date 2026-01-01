@@ -1,5 +1,5 @@
 <h1 align="center">
-<img src="src/ui/basefwx.svg" width="300">
+<img src="https://raw.githubusercontent.com/f1xgod/basefwx/main/src/ui/basefwx.svg" width="300">
 </h1><br>
 
 [![PyPI version](https://img.shields.io/pypi/v/basefwx)](https://pypi.org/project/basefwx/)

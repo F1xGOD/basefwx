@@ -388,6 +388,7 @@ jobs:
             dist_out/results.txt
 
       - name: Store VirusTotal results in repo
+        continue-on-error: true
         run: |
           tag="${GITHUB_REF_NAME}"
           mkdir -p results
@@ -395,15 +396,23 @@ jobs:
           cp dist_out/virustotal-results.txt "results/virustotal-${tag}.txt"
           cp dist_out/virustotal-results.json results/virustotal-latest.json
           cp dist_out/virustotal-results.txt results/virustotal-latest.txt
+          cp dist_out/basefwx-linux.sha256 results/basefwx-linux.sha256
+          cp dist_out/basefwx-linux.md5 results/basefwx-linux.md5
+          cp dist_out/basefwx-windows.exe.sha256 results/basefwx-windows.exe.sha256
+          cp dist_out/basefwx-windows.exe.md5 results/basefwx-windows.exe.md5
+          cp dist_out/basefwx-mac.sha256 results/basefwx-mac.sha256
+          cp dist_out/basefwx-mac.md5 results/basefwx-mac.md5
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          branch="results/${tag}"
+          git checkout -B "$branch"
           git add results/
           if git diff --cached --quiet; then
             echo "No results changes"
             exit 0
           fi
           git commit -m "chore: add VirusTotal results for ${tag}"
-          git push
+          git push origin "$branch"
 
   publish-pypi:
     runs-on: ubuntu-latest

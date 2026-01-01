@@ -41,6 +41,11 @@
 
 #include <openssl/evp.h>
 
+#if defined(_WIN32)
+#define popen _popen
+#define pclose _pclose
+#endif
+
 namespace basefwx::imagecipher {
 
 namespace {

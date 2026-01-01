@@ -8,6 +8,10 @@
 #include <cstring>
 #include <stdexcept>
 
+#if defined(_MSC_VER) && !defined(__clang__)
+#include <intrin.h>
+#endif
+
 #include <openssl/evp.h>
 
 namespace basefwx::obf {
@@ -30,6 +34,43 @@ constexpr std::uint32_t kXShift = 16U;
 
 constexpr std::uint64_t kPcgMultiplierHigh = 2549297995355413924ULL;
 constexpr std::uint64_t kPcgMultiplierLow = 4865540595714422341ULL;
+
+#if defined(_MSC_VER) && !defined(__clang__)
+struct UInt128 {
+    std::uint64_t hi;
+    std::uint64_t lo;
+};
+
+UInt128 MakeUInt128(std::uint64_t hi, std::uint64_t lo) {
+    return {hi, lo};
+}
+
+UInt128 Add128(UInt128 a, UInt128 b) {
+    UInt128 out;
+    out.lo = a.lo + b.lo;
+    out.hi = a.hi + b.hi + (out.lo < a.lo ? 1ULL : 0ULL);
+    return out;
+}
+
+UInt128 ShiftLeft1(UInt128 value) {
+    UInt128 out;
+    out.hi = (value.hi << 1) | (value.lo >> 63);
+    out.lo = value.lo << 1;
+    return out;
+}
+
+UInt128 Mul128(UInt128 a, UInt128 b) {
+    std::uint64_t hi0 = 0;
+    std::uint64_t lo0 = _umul128(a.lo, b.lo, &hi0);
+    std::uint64_t hi_dummy = 0;
+    std::uint64_t lo1 = _umul128(a.lo, b.hi, &hi_dummy);
+    std::uint64_t lo2 = _umul128(a.hi, b.lo, &hi_dummy);
+    UInt128 out;
+    out.lo = lo0;
+    out.hi = hi0 + lo1 + lo2;
+    return out;
+}
+#endif
 
 std::uint64_t SplitMix64(std::uint64_t& state) {
     std::uint64_t z = state + kSplitMix64Increment;
@@ -143,10 +184,17 @@ public:
     }
 
     std::uint64_t Next64() {
+#if defined(_MSC_VER) && !defined(__clang__)
+        UInt128 old_state = state_;
+        Step();
+        std::uint64_t high = old_state.hi;
+        std::uint64_t low = old_state.lo;
+#else
         __uint128_t old_state = state_;
         Step();
         std::uint64_t high = static_cast<std::uint64_t>(old_state >> 64);
         std::uint64_t low = static_cast<std::uint64_t>(old_state);
+#endif
         std::uint64_t xorshifted = high ^ low;
         std::uint64_t rot = high >> 58u;
         return Rotr64(xorshifted, rot);
@@ -193,6 +241,16 @@ private:
               std::uint64_t seed_low,
               std::uint64_t inc_high,
               std::uint64_t inc_low) {
+#if defined(_MSC_VER) && !defined(__clang__)
+        UInt128 initstate = MakeUInt128(seed_high, seed_low);
+        UInt128 initseq = MakeUInt128(inc_high, inc_low);
+        state_ = {0, 0};
+        inc_ = ShiftLeft1(initseq);
+        inc_.lo |= 1ULL;
+        Step();
+        state_ = Add128(state_, initstate);
+        Step();
+#else
         __uint128_t initstate = (static_cast<__uint128_t>(seed_high) << 64) | seed_low;
         __uint128_t initseq = (static_cast<__uint128_t>(inc_high) << 64) | inc_low;
         state_ = 0;
@@ -200,16 +258,27 @@ private:
         Step();
         state_ += initstate;
         Step();
+#endif
     }
 
     void Step() {
+#if defined(_MSC_VER) && !defined(__clang__)
+        UInt128 multiplier = MakeUInt128(kPcgMultiplierHigh, kPcgMultiplierLow);
+        state_ = Add128(Mul128(state_, multiplier), inc_);
+#else
         const __uint128_t multiplier =
             (static_cast<__uint128_t>(kPcgMultiplierHigh) << 64) | kPcgMultiplierLow;
         state_ = state_ * multiplier + inc_;
+#endif
     }
 
+#if defined(_MSC_VER) && !defined(__clang__)
+    UInt128 state_{0, 0};
+    UInt128 inc_{0, 0};
+#else
     __uint128_t state_{0};
     __uint128_t inc_{0};
+#endif
     bool has_uint32_{false};
     std::uint32_t uinteger_{0};
 };

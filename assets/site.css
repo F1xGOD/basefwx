@@ -443,7 +443,7 @@ section {
 }
 
 .vt-table tbody tr {
-  background: var(--panel);
+  background: transparent;
 }
 
 .vt-table .mono {
@@ -456,51 +456,42 @@ section {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 18px;
-  height: 18px;
-  border-radius: 999px;
+  width: 20px;
+  height: 20px;
   font-size: 11px;
   font-weight: 700;
-  border: 1px solid var(--border);
+  border: none;
   color: var(--muted);
-  background: rgba(255, 255, 255, 0.06);
+  background: transparent;
   line-height: 1;
   vertical-align: middle;
 }
 
 .vt-check .vt-icon {
-  width: 12px;
-  height: 12px;
+  width: 14px;
+  height: 14px;
   display: block;
   fill: currentColor;
 }
 
 .vt-check.ok {
   color: var(--green);
-  border-color: rgba(63, 225, 140, 0.5);
-  background: linear-gradient(135deg, rgba(63, 225, 140, 0.35), rgba(63, 225, 140, 0.08));
-  box-shadow: 0 6px 16px rgba(63, 225, 140, 0.2);
 }
 
 .vt-check.warn {
   color: var(--amber);
-  border-color: rgba(244, 192, 79, 0.55);
-  background: linear-gradient(135deg, rgba(244, 192, 79, 0.3), rgba(244, 192, 79, 0.08));
-  box-shadow: 0 6px 16px rgba(244, 192, 79, 0.2);
 }
 
 .vt-check.bad {
   color: var(--red);
-  border-color: rgba(255, 107, 107, 0.6);
-  background: linear-gradient(135deg, rgba(255, 107, 107, 0.35), rgba(255, 107, 107, 0.08));
-  box-shadow: 0 6px 16px rgba(255, 107, 107, 0.2);
 }
 
 .vt-check.hash {
   color: var(--burnt);
-  border-color: rgba(255, 156, 91, 0.6);
-  background: linear-gradient(135deg, rgba(255, 156, 91, 0.35), rgba(255, 156, 91, 0.08));
-  box-shadow: 0 6px 16px rgba(255, 156, 91, 0.2);
+}
+
+.vt-table tbody td {
+  background: var(--panel);
 }
 
 .vt-btn {

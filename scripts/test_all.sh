@@ -381,9 +381,9 @@ cpp_fwxAES_wrong() {
     local enc="$2"
     local dec="$3"
     log "STEP: $CPP_BIN fwxaes-enc $input"
-    "$CPP_BIN" fwxaes-enc "$input" -p "$PW" --out "$enc" || return $?
+    "$CPP_BIN" fwxaes-enc "$input" -p "$PW" --no-master --out "$enc" || return $?
     log "STEP: $CPP_BIN fwxaes-dec $enc (wrong pw)"
-    "$CPP_BIN" fwxaes-dec "$enc" -p "$BAD_PW" --out "$dec" >/dev/null 2>&1
+    "$CPP_BIN" fwxaes-dec "$enc" -p "$BAD_PW" --no-master --out "$dec" >/dev/null 2>&1
     local rc=$?
     if (( rc == 0 )); then
         log "Unexpected success for fwxaes wrong password"
@@ -914,9 +914,9 @@ def cmd_fwxaes_dec(args: list[str]) -> int:
 
 def cmd_fwxaes_wrong(args: list[str]) -> int:
     inp, enc, dec, pw, bad_pw = args
-    basefwx.fwxAES_file(inp, pw, output=enc)
+    basefwx.fwxAES_file(inp, pw, output=enc, use_master=False)
     try:
-        basefwx.fwxAES_file(enc, bad_pw, output=dec)
+        basefwx.fwxAES_file(enc, bad_pw, output=dec, use_master=False)
     except Exception:
         return 0
     return 1
@@ -1430,12 +1430,16 @@ compare_speed() {
     fi
     local diff_s
     diff_s=$(format_ns "$diff_ns")
-    local pct_raw pct_abs pct_equal
+    local pct_raw pct_abs pct_equal display_equal
     pct_raw=$(awk -v py="$py_ns" -v cpp="$cpp_ns" 'BEGIN { if (py <= 0) { printf "0.0"; } else { val=(py-cpp)/py*100; if (val<0) val=-val; printf "%.6f", val; } }')
     pct_abs=$(awk -v v="$pct_raw" 'BEGIN { printf "%.2f", v; }')
     pct_equal=$(awk -v v="$pct_raw" 'BEGIN { if (v < 0.01) print 1; else print 0; }')
+    display_equal=0
+    if [[ "$py_s" == "$cpp_s" || "$diff_s" == "0.000" ]]; then
+        display_equal=1
+    fi
     local verdict=""
-    if (( pct_equal == 1 )); then
+    if (( pct_equal == 1 || display_equal == 1 )); then
         verdict="${CYAN}☕ equal${RESET}"
     elif (( py_ns >= cpp_ns )); then
         verdict="${GREEN}${EMOJI_FAST} C++ +${pct_abs}% faster${RESET}"

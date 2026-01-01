@@ -3,398 +3,19 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>BaseFWX Docs</title>
+    <title>About BaseFWX</title>
     <meta name="description" content="BaseFWX secure toolkit documentation, downloads, signatures, and VirusTotal results.">
-    <style>
-      @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap');
-
-      :root {
-        --bg: #0b0c12;
-        --panel: #141826;
-        --panel-2: #101423;
-        --panel-3: #0f1220;
-        --accent: #7d3cff;
-        --accent-2: #b08bff;
-        --text: #e7e9f3;
-        --muted: #a2a7bd;
-        --border: #262c40;
-        --shadow: rgba(0, 0, 0, 0.35);
-        --green: #3fe18c;
-        --orange: #f2a14a;
-      }
-
-      * { box-sizing: border-box; }
-
-      body {
-        margin: 0;
-        font-family: "Space Grotesk", "Sora", "IBM Plex Sans", sans-serif;
-        color: var(--text);
-        background:
-          radial-gradient(1100px 700px at 10% -10%, rgba(125, 60, 255, 0.2), transparent 55%),
-          radial-gradient(1000px 600px at 90% 5%, rgba(176, 139, 255, 0.2), transparent 60%),
-          var(--bg);
-        line-height: 1.6;
-      }
-
-      body::before {
-        content: "";
-        position: fixed;
-        inset: 0;
-        background-image:
-          linear-gradient(rgba(255, 255, 255, 0.03) 1px, transparent 1px),
-          linear-gradient(90deg, rgba(255, 255, 255, 0.03) 1px, transparent 1px);
-        background-size: 40px 40px;
-        opacity: 0.25;
-        pointer-events: none;
-        z-index: -1;
-      }
-
-      a { color: inherit; text-decoration: none; }
-
-      .container {
-        max-width: 1120px;
-        margin: 0 auto;
-        padding: 28px 24px 96px;
-      }
-
-      .site-header {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 24px;
-        padding: 12px 0 32px;
-      }
-
-      .brand {
-        display: flex;
-        align-items: center;
-        gap: 14px;
-        font-weight: 600;
-        letter-spacing: 0.6px;
-      }
-
-      .brand-mark {
-        width: 44px;
-        height: 44px;
-        border-radius: 12px;
-        background: linear-gradient(135deg, rgba(125, 60, 255, 0.95), rgba(176, 139, 255, 0.6));
-        box-shadow: 0 14px 35px rgba(125, 60, 255, 0.35);
-      }
-
-      .brand-name {
-        font-size: 18px;
-      }
-
-      .brand-sub {
-        display: block;
-        font-size: 12px;
-        color: var(--muted);
-      }
-
-      nav {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 12px;
-        font-size: 13px;
-        color: var(--muted);
-      }
-
-      nav a {
-        padding: 6px 12px;
-        border-radius: 999px;
-        border: 1px solid transparent;
-      }
-
-      nav a:hover {
-        border-color: var(--border);
-        color: var(--text);
-      }
-
-      .hero {
-        display: grid;
-        grid-template-columns: minmax(0, 1.1fr) minmax(0, 0.9fr);
-        gap: 28px;
-        align-items: stretch;
-        padding: 32px;
-        border-radius: 24px;
-        background: linear-gradient(140deg, rgba(20, 24, 38, 0.95), rgba(11, 14, 24, 0.9));
-        border: 1px solid var(--border);
-        box-shadow: 0 25px 60px var(--shadow);
-        animation: rise 0.7s ease both;
-      }
-
-      .hero h1 {
-        margin: 0 0 12px;
-        font-size: 44px;
-        line-height: 1.05;
-      }
-
-      .hero p {
-        margin: 0 0 24px;
-        color: var(--muted);
-        font-size: 16px;
-      }
-
-      .cta-row {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 12px;
-      }
-
-      .btn {
-        display: inline-flex;
-        align-items: center;
-        gap: 8px;
-        padding: 12px 18px;
-        border-radius: 12px;
-        background: var(--accent);
-        color: #ffffff;
-        font-weight: 600;
-        box-shadow: 0 12px 30px rgba(125, 60, 255, 0.35);
-        transition: transform 0.2s ease, box-shadow 0.2s ease;
-      }
-
-      .btn:hover {
-        transform: translateY(-2px);
-        box-shadow: 0 18px 36px rgba(125, 60, 255, 0.4);
-      }
-
-      .btn.secondary {
-        background: transparent;
-        border: 1px solid var(--border);
-        box-shadow: none;
-      }
-
-      .hero-panel {
-        background: var(--panel-3);
-        border: 1px solid var(--border);
-        border-radius: 18px;
-        padding: 20px;
-        display: flex;
-        flex-direction: column;
-        justify-content: space-between;
-      }
-
-      .meta {
-        font-size: 12px;
-        text-transform: uppercase;
-        letter-spacing: 1.6px;
-        color: var(--muted);
-      }
-
-      .panel-title {
-        margin: 12px 0 10px;
-        font-size: 22px;
-      }
-
-      .meta-row {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 12px;
-        font-size: 13px;
-        color: var(--muted);
-      }
-
-      .panel-foot {
-        margin-top: 16px;
-        display: flex;
-        gap: 10px;
-      }
-
-      section {
-        margin-top: 64px;
-        animation: rise 0.7s ease both;
-      }
-
-      .section-title {
-        font-size: 22px;
-        margin-bottom: 12px;
-      }
-
-      .section-lead {
-        color: var(--muted);
-        margin-top: 0;
-        max-width: 680px;
-      }
-
-      .grid {
-        display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-        gap: 18px;
-      }
-
-      .card {
-        background: var(--panel);
-        border: 1px solid var(--border);
-        border-radius: 16px;
-        padding: 18px;
-        transition: transform 0.2s ease, border-color 0.2s ease;
-      }
-
-      .card:hover {
-        transform: translateY(-4px);
-        border-color: rgba(125, 60, 255, 0.5);
-      }
-
-      .card h4 {
-        margin: 0 0 6px;
-        font-size: 16px;
-      }
-
-      .card p {
-        margin: 0;
-        color: var(--muted);
-        font-size: 14px;
-      }
-
-      .download-grid {
-        display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-        gap: 18px;
-      }
-
-      .download-card {
-        background: var(--panel);
-        border: 1px solid var(--border);
-        border-radius: 18px;
-        padding: 20px;
-        display: flex;
-        flex-direction: column;
-        gap: 14px;
-      }
-
-      .download-card h3 {
-        margin: 0;
-        font-size: 18px;
-      }
-
-      .chip {
-        display: inline-flex;
-        align-items: center;
-        gap: 6px;
-        padding: 6px 10px;
-        background: rgba(125, 60, 255, 0.12);
-        border: 1px solid rgba(125, 60, 255, 0.4);
-        border-radius: 999px;
-        font-size: 12px;
-        color: var(--accent-2);
-      }
-
-      .hash-block {
-        background: var(--panel-2);
-        border: 1px solid var(--border);
-        border-radius: 12px;
-        padding: 12px;
-      }
-
-      .hash-title {
-        font-size: 11px;
-        text-transform: uppercase;
-        letter-spacing: 1.4px;
-        color: var(--muted);
-        margin-bottom: 6px;
-      }
-
-      .hash-value {
-        font-family: "JetBrains Mono", "Fira Code", monospace;
-        font-size: 12px;
-        color: #cfd5f1;
-        word-break: break-all;
-      }
-
-      .link-row {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 10px;
-        font-size: 13px;
-      }
-
-      .link-row a {
-        color: var(--accent-2);
-      }
-
-      .status-pill {
-        display: inline-flex;
-        align-items: center;
-        gap: 6px;
-        padding: 6px 10px;
-        border-radius: 999px;
-        font-size: 12px;
-      }
-
-      .status-pill.ok { background: rgba(63, 225, 140, 0.14); color: var(--green); border: 1px solid rgba(63, 225, 140, 0.4); }
-      .status-pill.warn { background: rgba(242, 161, 74, 0.14); color: var(--orange); border: 1px solid rgba(242, 161, 74, 0.4); }
-
-      .vt-table {
-        width: 100%;
-        border-collapse: collapse;
-        font-size: 13px;
-        background: var(--panel);
-        border-radius: 16px;
-        overflow: hidden;
-      }
-
-      .vt-table th,
-      .vt-table td {
-        padding: 12px 14px;
-        border-bottom: 1px solid var(--border);
-        text-align: left;
-      }
-
-      .vt-table th {
-        font-size: 12px;
-        text-transform: uppercase;
-        letter-spacing: 1.2px;
-        color: var(--muted);
-      }
-
-      .mono {
-        font-family: "JetBrains Mono", "Fira Code", monospace;
-        font-size: 12px;
-      }
-
-      footer {
-        margin-top: 72px;
-        color: var(--muted);
-        font-size: 13px;
-        text-align: center;
-      }
-
-      @keyframes rise {
-        from { opacity: 0; transform: translateY(10px); }
-        to { opacity: 1; transform: translateY(0); }
-      }
-
-      @media (max-width: 900px) {
-        .hero {
-          grid-template-columns: 1fr;
-        }
-        .hero h1 {
-          font-size: 34px;
-        }
-      }
-
-      @media (max-width: 640px) {
-        .site-header {
-          flex-direction: column;
-          align-items: flex-start;
-        }
-        .panel-foot {
-          flex-direction: column;
-        }
-        .vt-table th,
-        .vt-table td {
-          font-size: 12px;
-          padding: 10px;
-        }
-      }
-    </style>
+    <link rel="icon" type="image/svg+xml" href="assets/basefwx-white.svg">
+    <link rel="stylesheet" href="assets/site.css">
+    <script src="assets/site.js" defer></script>
   </head>
   <body>
     <div class="container">
       <header class="site-header">
         <div class="brand">
-          <div class="brand-mark"></div>
+          <div class="brand-mark" aria-hidden="true">
+            <span class="brand-cutout" aria-hidden="true"></span>
+          </div>
           <div>
             <div class="brand-name">FixCraft</div>
             <div class="brand-sub">BaseFWX secure toolkit</div>
@@ -412,7 +33,7 @@
       <section class="hero" id="top">
         <div>
           <div class="chip">Cross-compatible Python and C++ encryption</div>
-          <h1>Secure, verifiable releases for BaseFWX.</h1>
+          <h1>About BaseFWX</h1>
           <p>
             BaseFWX pairs post-quantum key wrapping with AES-GCM, ships a native C++ core,
             and keeps Python and C++ formats interoperable across fwxAES, b512, pb512, and jMG.
@@ -421,7 +42,7 @@
           <div class="cta-row">
             <a class="btn" id="download-cta" href="https://github.com/F1xGOD/basefwx/releases" target="_blank" rel="noopener">Download CLI</a>
             <a class="btn secondary" href="https://github.com/F1xGOD/basefwx#readme" target="_blank" rel="noopener">Read README</a>
-            <a class="btn secondary" href="https://github.com/F1xGOD/basefwx/blob/main/docs/CLI.md" target="_blank" rel="noopener">CLI Reference</a>
+            <a class="btn secondary" href="docs/CLI.html">CLI Reference</a>
           </div>
         </div>
         <div class="hero-panel" id="release-card">
@@ -454,7 +75,7 @@
             <div class="hash-block">
               <div class="hash-title">SHA256</div>
               <div class="hash-value" data-hash="linux.sha256">Awaiting release asset...</div>
-              <div class="hash-title" style="margin-top:10px;">MD5</div>
+              <div class="hash-title">MD5</div>
               <div class="hash-value" data-hash="linux.md5">Awaiting release asset...</div>
             </div>
           </article>
@@ -469,7 +90,7 @@
             <div class="hash-block">
               <div class="hash-title">SHA256</div>
               <div class="hash-value" data-hash="windows.sha256">Awaiting release asset...</div>
-              <div class="hash-title" style="margin-top:10px;">MD5</div>
+              <div class="hash-title">MD5</div>
               <div class="hash-value" data-hash="windows.md5">Awaiting release asset...</div>
             </div>
           </article>
@@ -484,7 +105,7 @@
             <div class="hash-block">
               <div class="hash-title">SHA256</div>
               <div class="hash-value" data-hash="mac.sha256">Awaiting release asset...</div>
-              <div class="hash-title" style="margin-top:10px;">MD5</div>
+              <div class="hash-title">MD5</div>
               <div class="hash-value" data-hash="mac.md5">Awaiting release asset...</div>
             </div>
           </article>
@@ -554,25 +175,25 @@
       </section>
 
       <section id="docs">
-        <div class="section-title">Documentation</div>
+        <div class="section-title">Docs</div>
         <div class="grid">
-          <a class="card" href="https://github.com/F1xGOD/basefwx/blob/main/docs/CLI.md" target="_blank" rel="noopener">
+          <a class="card" href="docs/CLI.html">
             <h4>CLI and Usage</h4>
             <p>Commands, flags, and master-key workflows.</p>
           </a>
-          <a class="card" href="https://github.com/F1xGOD/basefwx/blob/main/docs/SECURITY_MODEL.md" target="_blank" rel="noopener">
+          <a class="card" href="docs/SECURITY_MODEL.html">
             <h4>Security Model</h4>
             <p>Threat model, key paths, and AEAD details.</p>
           </a>
-          <a class="card" href="https://github.com/F1xGOD/basefwx/blob/main/docs/TESTING.md" target="_blank" rel="noopener">
+          <a class="card" href="docs/TESTING.html">
             <h4>Testing</h4>
             <p>Fast modes, fixtures, and CI parity.</p>
           </a>
-          <a class="card" href="https://github.com/F1xGOD/basefwx/blob/main/docs/RELEASE.md" target="_blank" rel="noopener">
+          <a class="card" href="docs/RELEASE.html">
             <h4>Release and Signing</h4>
             <p>GPG key setup, hashes, and verification steps.</p>
           </a>
-          <a class="card" href="https://github.com/F1xGOD/basefwx/blob/main/docs/CONTRIBUTING.md" target="_blank" rel="noopener">
+          <a class="card" href="docs/CONTRIBUTING.html">
             <h4>Contributing</h4>
             <p>How to propose changes and report issues.</p>
           </a>
@@ -601,144 +222,5 @@
         FixCraft BaseFWX Documentation and Release Portal
       </footer>
     </div>
-
-    <script>
-      const repo = "F1xGOD/basefwx";
-      const releaseApi = `https://api.github.com/repos/${repo}/releases/latest`;
-      const assetMap = {
-        linux: {
-          bin: "basefwx-linux",
-          sha256: "basefwx-linux.sha256",
-          md5: "basefwx-linux.md5",
-          sig: "basefwx-linux.sig"
-        },
-        windows: {
-          bin: "basefwx-windows.exe",
-          sha256: "basefwx-windows.exe.sha256",
-          md5: "basefwx-windows.exe.md5",
-          sig: "basefwx-windows.exe.sig"
-        },
-        mac: {
-          bin: "basefwx-mac",
-          sha256: "basefwx-mac.sha256",
-          md5: "basefwx-mac.md5",
-          sig: "basefwx-mac.sig"
-        }
-      };
-
-      const setText = (id, value) => {
-        const el = document.getElementById(id);
-        if (el) {
-          el.textContent = value;
-        }
-      };
-
-      const setLink = (selector, url) => {
-        const el = document.querySelector(selector);
-        if (!el) return;
-        if (url) {
-          el.href = url;
-          el.setAttribute("target", "_blank");
-          el.setAttribute("rel", "noopener");
-          el.classList.remove("disabled");
-        } else {
-          el.href = "#";
-        }
-      };
-
-      const parseHash = (content) => {
-        const parts = content.trim().split(/\s+/);
-        return parts.length ? parts[0] : "";
-      };
-
-      const fillHash = async (selector, url) => {
-        const el = document.querySelector(`[data-hash="${selector}"]`);
-        if (!el) return;
-        if (!url) {
-          el.textContent = "Hash not available";
-          return;
-        }
-        try {
-          const text = await fetch(url).then((resp) => resp.text());
-          el.textContent = parseHash(text);
-        } catch (err) {
-          el.textContent = "Unable to load hash";
-        }
-      };
-
-      const loadRelease = async () => {
-        try {
-          const response = await fetch(releaseApi);
-          if (!response.ok) {
-            throw new Error("release fetch failed");
-          }
-          const data = await response.json();
-          const assets = data.assets || [];
-          const assetLookup = new Map(assets.map((asset) => [asset.name, asset]));
-
-          setText("release-version", data.name || data.tag_name || "Latest release");
-          setText("release-date", data.published_at ? new Date(data.published_at).toLocaleDateString() : "Release date pending");
-          setText("release-assets", `${assets.length} assets`);
-          setLink("#release-link", data.html_url);
-          setLink("#download-cta", data.html_url);
-
-          Object.entries(assetMap).forEach(([key, values]) => {
-            const binAsset = assetLookup.get(values.bin);
-            const sigAsset = assetLookup.get(values.sig);
-            setLink(`[data-download="${key}"]`, binAsset ? binAsset.browser_download_url : null);
-            setLink(`[data-asset="${key}.sig"]`, sigAsset ? sigAsset.browser_download_url : null);
-            fillHash(`${key}.sha256`, assetLookup.get(values.sha256)?.browser_download_url || "");
-            fillHash(`${key}.md5`, assetLookup.get(values.md5)?.browser_download_url || "");
-          });
-        } catch (err) {
-          setText("release-version", "Release data unavailable");
-          setText("release-date", "Check GitHub for details");
-          setText("release-assets", "-");
-        }
-      };
-
-      const loadVirusTotal = async () => {
-        const summary = document.getElementById("vt-summary");
-        const tableBody = document.querySelector("#vt-table tbody");
-        try {
-          const resultsUrl = new URL("results/virustotal-latest.json", window.location.href).toString();
-          const resultsTxt = new URL("results/virustotal-latest.txt", window.location.href).toString();
-          setLink("#vt-results-text", resultsTxt);
-          setLink("#vt-results-json", resultsUrl);
-          const response = await fetch(resultsUrl);
-          if (!response.ok) {
-            throw new Error("vt results not found");
-          }
-          const data = await response.json();
-          const files = data.files || [];
-
-          summary.textContent = `Report generated ${new Date(data.generated_at).toLocaleString()} for ${data.release_tag || "latest"}`;
-          summary.className = "status-pill ok";
-
-          tableBody.innerHTML = "";
-          files.forEach((file) => {
-            const row = document.createElement("tr");
-            const link = file.item_url || (file.sha256 ? `https://www.virustotal.com/gui/file/${file.sha256}` : "");
-            const stats = file.stats || {};
-
-            row.innerHTML = `
-              <td class="mono">${file.name || ""}</td>
-              <td>${stats.malicious ?? 0}</td>
-              <td>${stats.suspicious ?? 0}</td>
-              <td>${stats.undetected ?? 0}</td>
-              <td><a href="${link}" target="_blank" rel="noopener">View report</a></td>
-            `;
-            tableBody.appendChild(row);
-          });
-        } catch (err) {
-          summary.textContent = "VirusTotal results not available yet.";
-          summary.className = "status-pill warn";
-          tableBody.innerHTML = "<tr><td colspan=\"5\" class=\"mono\">No results found.</td></tr>";
-        }
-      };
-
-      loadRelease();
-      loadVirusTotal();
-    </script>
   </body>
 </html>

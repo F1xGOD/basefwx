@@ -1,3 +1,8 @@
+---
+layout: doc
+title: Contributing
+---
+
 # Contributing
 
 Thanks for helping improve BASEFWX.

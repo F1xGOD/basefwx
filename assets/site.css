@@ -443,6 +443,54 @@ section {
   background: var(--panel);
 }
 
+.vt-check {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  margin-right: 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.vt-check.ok {
+  color: var(--green);
+  border-color: rgba(63, 225, 140, 0.5);
+  background: rgba(63, 225, 140, 0.16);
+}
+
+.vt-check.neutral {
+  color: var(--muted);
+  border-color: rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.vt-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(125, 60, 255, 0.35);
+  background: rgba(125, 60, 255, 0.12);
+  color: #dcd4ff;
+  font-size: 12px;
+  font-weight: 600;
+  text-decoration: none;
+  transition: transform 0.2s ease, box-shadow 0.2s ease, color 0.2s ease;
+}
+
+.vt-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 10px 18px rgba(125, 60, 255, 0.25);
+  color: #ffffff;
+}
+
 .vt-table tbody td:first-child {
   border-top-left-radius: 12px;
   border-bottom-left-radius: 12px;

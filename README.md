@@ -7,7 +7,7 @@
 [![CI](https://img.shields.io/github/actions/workflow/status/F1xGOD/basefwx/ci.yml?label=CI)](https://github.com/F1xGOD/basefwx/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/actions/workflow/status/F1xGOD/basefwx/publish.yml?label=Release)](https://github.com/F1xGOD/basefwx/actions/workflows/publish.yml)
 [![CodeQL](https://img.shields.io/github/actions/workflow/status/F1xGOD/basefwx/codeql.yml?label=CodeQL)](https://github.com/F1xGOD/basefwx/actions/workflows/codeql.yml)
-[![License](https://img.shields.io/github/license/F1xGOD/basefwx?style=flat)](LICENCE)
+[![License](https://img.shields.io/github/license/F1xGOD/basefwx?style=flat)](https://github.com/F1xGOD/basefwx/blob/main/LICENCE)
 [![Discord](https://img.shields.io/discord/1130897522051788821?color=7289da&label=Discord&logo=discord&logoColor=ffffff)](https://discord.gg/3eRHYkjgk8)
 
 BASEFWX is a hybrid post-quantum + AEAD encryption toolkit for files and media, with cross-compatible Python and C++ implementations.
@@ -46,14 +46,14 @@ pip install basefwx[argon2]
 Documentation
 -------------
 
-- Docs home (HTML): docs/index.html
-- CLI and usage: docs/CLI.md
-- Security model: docs/SECURITY_MODEL.md
-- Testing and benchmarks: docs/TESTING.md
-- Release & signing: docs/RELEASE.md
-- Contributing and code of conduct: docs/CONTRIBUTING.md
+- [Docs home (HTML)](https://github.com/F1xGOD/basefwx/blob/main/docs/index.html)
+- [CLI and usage](https://github.com/F1xGOD/basefwx/blob/main/docs/CLI.md)
+- [Security model](https://github.com/F1xGOD/basefwx/blob/main/docs/SECURITY_MODEL.md)
+- [Testing and benchmarks](https://github.com/F1xGOD/basefwx/blob/main/docs/TESTING.md)
+- [Release & signing](https://github.com/F1xGOD/basefwx/blob/main/docs/RELEASE.md)
+- [Contributing and code of conduct](https://github.com/F1xGOD/basefwx/blob/main/docs/CONTRIBUTING.md)
 
 License
 -------
 
-See LICENCE.
+See https://github.com/F1xGOD/basefwx/blob/main/LICENCE.

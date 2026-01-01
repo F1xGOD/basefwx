@@ -1,5 +1,6 @@
 const repo = "F1xGOD/basefwx";
 const releaseApi = `https://api.github.com/repos/${repo}/releases/latest`;
+let latestReleaseTag = "";
 const assetMap = {
   linux: {
     bin: "basefwx-linux",
@@ -68,19 +69,37 @@ const parseHash = (content) => {
   return parts.length ? parts[0] : "";
 };
 
-const fillHash = async (selector, url) => {
+const fillHash = async (selector, urls) => {
   const el = document.querySelector(`[data-hash="${selector}"]`);
   if (!el) return;
-  if (!url) {
+  const candidates = Array.isArray(urls) ? urls.filter(Boolean) : urls ? [urls] : [];
+  if (!candidates.length) {
     el.textContent = "Hash not available";
     return;
   }
-  try {
-    const text = await fetch(url).then((resp) => resp.text());
-    el.textContent = parseHash(text);
-  } catch (err) {
-    el.textContent = "Unable to load hash";
+  for (const url of candidates) {
+    try {
+      const resp = await fetch(url);
+      if (!resp.ok) {
+        continue;
+      }
+      const text = await resp.text();
+      el.textContent = parseHash(text);
+      return;
+    } catch (err) {
+      continue;
+    }
   }
+  el.textContent = "Unable to load hash";
+};
+
+const getResultsBases = (tag) => {
+  const mainBase = `https://raw.githubusercontent.com/${repo}/main/results`;
+  const tagBase = tag ? `https://raw.githubusercontent.com/${repo}/results/${tag}/results` : "";
+  return {
+    primary: tagBase || mainBase,
+    fallback: mainBase
+  };
 };
 
 const loadRelease = async () => {
@@ -90,8 +109,11 @@ const loadRelease = async () => {
       throw new Error("release fetch failed");
     }
     const data = await response.json();
+    latestReleaseTag = data.tag_name || "";
     const assets = data.assets || [];
     const assetLookup = new Map(assets.map((asset) => [asset.name, asset]));
+    const resultsBases = getResultsBases(latestReleaseTag);
+    const localResultsBase = new URL("results/", window.location.href).toString();
 
     setText("release-version", data.name || data.tag_name || "Latest release");
     setText(
@@ -107,8 +129,16 @@ const loadRelease = async () => {
       const sigAsset = assetLookup.get(values.sig);
       setLink(`[data-download="${key}"]`, binAsset ? binAsset.browser_download_url : null);
       setLink(`[data-asset="${key}.sig"]`, sigAsset ? sigAsset.browser_download_url : null);
-      fillHash(`${key}.sha256`, assetLookup.get(values.sha256)?.browser_download_url || "");
-      fillHash(`${key}.md5`, assetLookup.get(values.md5)?.browser_download_url || "");
+      fillHash(`${key}.sha256`, [
+        `${resultsBases.primary}/${values.sha256}`,
+        `${resultsBases.fallback}/${values.sha256}`,
+        `${localResultsBase}${values.sha256}`
+      ]);
+      fillHash(`${key}.md5`, [
+        `${resultsBases.primary}/${values.md5}`,
+        `${resultsBases.fallback}/${values.md5}`,
+        `${localResultsBase}${values.md5}`
+      ]);
     });
   } catch (err) {
     setText("release-version", "Release data unavailable");
@@ -121,14 +151,32 @@ const loadVirusTotal = async () => {
   const summary = document.getElementById("vt-summary");
   const tableBody = document.querySelector("#vt-table tbody");
   try {
-    const resultsUrl = new URL("results/virustotal-latest.json", window.location.href).toString();
-    const resultsTxt = new URL("results/virustotal-latest.txt", window.location.href).toString();
-    setLink("#vt-results-text", resultsTxt);
-    setLink("#vt-results-json", resultsUrl);
-    const response = await fetch(resultsUrl);
-    if (!response.ok) {
+    const resultsBases = getResultsBases(latestReleaseTag);
+    const localBase = new URL("results/", window.location.href).toString();
+    const candidates = [
+      `${resultsBases.primary}/virustotal-latest.json`,
+      latestReleaseTag ? `${resultsBases.primary}/virustotal-${latestReleaseTag}.json` : "",
+      `${resultsBases.fallback}/virustotal-latest.json`,
+      latestReleaseTag ? `${resultsBases.fallback}/virustotal-${latestReleaseTag}.json` : "",
+      `${localBase}virustotal-latest.json`
+    ].filter(Boolean);
+
+    let resultsUrl = "";
+    let response = null;
+    for (const candidate of candidates) {
+      const attempt = await fetch(candidate);
+      if (attempt.ok) {
+        resultsUrl = candidate;
+        response = attempt;
+        break;
+      }
+    }
+    if (!response) {
       throw new Error("vt results not found");
     }
+    const resultsTxt = resultsUrl.replace(/\.json$/, ".txt");
+    setLink("#vt-results-text", resultsTxt);
+    setLink("#vt-results-json", resultsUrl);
     const data = await response.json();
     const files = data.files || [];
 
@@ -159,10 +207,13 @@ const loadVirusTotal = async () => {
 
 document.addEventListener("DOMContentLoaded", () => {
   initBrandMask();
-  if (document.getElementById("release-version")) {
-    loadRelease();
-  }
-  if (document.getElementById("vt-table")) {
-    loadVirusTotal();
-  }
+  const run = async () => {
+    if (document.getElementById("release-version")) {
+      await loadRelease();
+    }
+    if (document.getElementById("vt-table")) {
+      await loadVirusTotal();
+    }
+  };
+  run();
 });

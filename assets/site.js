@@ -1,6 +1,27 @@
 const repo = "F1xGOD/basefwx";
 const releaseApi = `https://api.github.com/repos/${repo}/releases/latest`;
 let latestReleaseTag = "";
+const vtHashes = new Map();
+const VT_OK_ICON = `
+  <svg class="vt-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 -960 960 960" aria-hidden="true">
+    <path d="M382-240 154-468l57-57 171 171 367-367 57 57-424 424Z" />
+  </svg>
+`;
+const VT_WARN_ICON = `
+  <svg class="vt-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 -960 960 960" aria-hidden="true">
+    <path d="m40-120 440-760 440 760H40Zm138-80h604L480-720 178-200Zm302-40q17 0 28.5-11.5T520-280q0-17-11.5-28.5T480-320q-17 0-28.5 11.5T440-280q0 17 11.5 28.5T480-240Zm-40-120h80v-200h-80v200Zm40-100Z" />
+  </svg>
+`;
+const VT_BAD_ICON = `
+  <svg class="vt-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 -960 960 960" aria-hidden="true">
+    <path d="M330-120 120-330v-300l210-210h300l210 210v300L630-120H330Zm36-190 114-114 114 114 56-56-114-114 114-114-56-56-114 114-114-114-56 56 114 114-114 114 56 56Zm-2 110h232l164-164v-232L596-760H364L200-596v232l164 164Zm116-280Z" />
+  </svg>
+`;
+const VT_HASH_ICON = `
+  <svg class="vt-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 -960 960 960" aria-hidden="true">
+    <path d="m840-234-80-80v-446q0-17 11.5-28.5T800-800q17 0 28.5 11.5T840-760v526ZM360-714l-80-80v-6q0-17 11.5-28.5T320-840q17 0 28.5 11.5T360-800v86Zm160 160-80-80v-246q0-17 11.5-28.5T480-920q17 0 28.5 11.5T520-880v326Zm160 81h-80v-367q0-17 11.5-28.5T640-880q17 0 28.5 11.5T680-840v367Zm37 343L360-487v224L212-367l157 229q5 8 14 13t19 5h278q10 0 19.5-2.5T717-130ZM402-40q-30 0-56-13.5T303-92L48-465l24-23q19-19 45-22t47 12l116 81v-150L27-820l57-57L876-85l-57 57-44-44q-20 15-44 23.5T680-40H402Zm137-268Zm61-165Z" />
+  </svg>
+`;
 const assetMap = {
   linux: {
     bin: "basefwx-linux",
@@ -64,38 +85,23 @@ const setLink = (selector, url) => {
   }
 };
 
-const parseHash = (content) => {
-  const parts = content.trim().split(/\s+/);
-  return parts.length ? parts[0] : "";
-};
-
-const fillHash = async (selector, urls) => {
+const setHashText = (selector, value) => {
   const el = document.querySelector(`[data-hash="${selector}"]`);
   if (!el) return;
-  const candidates = Array.isArray(urls) ? urls.filter(Boolean) : urls ? [urls] : [];
-  if (!candidates.length) {
-    el.textContent = "Hash not available";
-    return;
-  }
-  for (const url of candidates) {
-    try {
-      const resp = await fetch(url);
-      if (!resp.ok) {
-        continue;
-      }
-      const text = await resp.text();
-      el.textContent = parseHash(text);
-      return;
-    } catch (err) {
-      continue;
-    }
-  }
-  el.textContent = "Unable to load hash";
+  el.textContent = value;
+};
+
+const applyVtHashes = () => {
+  Object.entries(assetMap).forEach(([key, values]) => {
+    const match = vtHashes.get(values.bin);
+    setHashText(`${key}.sha256`, match?.sha256 || "Hash not available");
+    setHashText(`${key}.md5`, match?.md5 || "Hash not available");
+  });
 };
 
 const getResultsBases = (tag) => {
-  const mainBase = `https://raw.githubusercontent.com/${repo}/main/results`;
-  const tagBase = tag ? `https://raw.githubusercontent.com/${repo}/results/${tag}/results` : "";
+  const mainBase = `https://raw.githubusercontent.com/${repo}/refs/heads/main/results`;
+  const tagBase = tag ? `https://raw.githubusercontent.com/${repo}/refs/heads/results/${tag}/results` : "";
   return {
     primary: mainBase,
     fallback: tagBase || mainBase
@@ -112,8 +118,6 @@ const loadRelease = async () => {
     latestReleaseTag = data.tag_name || "";
     const assets = data.assets || [];
     const assetLookup = new Map(assets.map((asset) => [asset.name, asset]));
-    const resultsBases = getResultsBases(latestReleaseTag);
-    const localResultsBase = new URL("results/", window.location.href).toString();
 
     setText("release-version", data.name || data.tag_name || "Latest release");
     setText(
@@ -129,16 +133,8 @@ const loadRelease = async () => {
       const sigAsset = assetLookup.get(values.sig);
       setLink(`[data-download="${key}"]`, binAsset ? binAsset.browser_download_url : null);
       setLink(`[data-asset="${key}.sig"]`, sigAsset ? sigAsset.browser_download_url : null);
-      fillHash(`${key}.sha256`, [
-        `${resultsBases.primary}/${values.sha256}`,
-        `${resultsBases.fallback}/${values.sha256}`,
-        `${localResultsBase}${values.sha256}`
-      ]);
-      fillHash(`${key}.md5`, [
-        `${resultsBases.primary}/${values.md5}`,
-        `${resultsBases.fallback}/${values.md5}`,
-        `${localResultsBase}${values.md5}`
-      ]);
+      setHashText(`${key}.sha256`, "Awaiting VirusTotal");
+      setHashText(`${key}.md5`, "Awaiting VirusTotal");
     });
   } catch (err) {
     setText("release-version", "Release data unavailable");
@@ -184,6 +180,7 @@ const loadVirusTotal = async () => {
     summary.className = "status-pill ok";
 
     tableBody.innerHTML = "";
+    vtHashes.clear();
     const toGuiLink = (file) => {
       if (file.sha256) {
         return `https://www.virustotal.com/gui/file/${file.sha256}`;
@@ -205,9 +202,30 @@ const loadVirusTotal = async () => {
       const suspicious = Number(stats.suspicious ?? 0);
       const undetected = Number(stats.undetected ?? 0);
       const ok = undetected > 61 && suspicious < 3 && malicious <= 1;
-      const statusIcon = ok ? "&#10003;" : "&#8212;";
-      const statusClass = ok ? "vt-check ok" : "vt-check neutral";
-      const statusLabel = ok ? "VirusTotal pass" : "VirusTotal review";
+      const validSha256 = typeof file.sha256 === "string" && /^[a-f0-9]{64}$/i.test(file.sha256);
+      const validMd5 = typeof file.md5 === "string" && /^[a-f0-9]{32}$/i.test(file.md5);
+      const hashIssue = !validSha256 || !validMd5;
+      let statusIcon = VT_WARN_ICON;
+      let statusClass = "vt-check warn";
+      let statusLabel = "VirusTotal caution";
+      if (hashIssue) {
+        statusIcon = VT_HASH_ICON;
+        statusClass = "vt-check hash";
+        statusLabel = "Hash or signature metadata issue";
+      } else if (malicious > 4 || suspicious > 12) {
+        statusIcon = VT_BAD_ICON;
+        statusClass = "vt-check bad";
+        statusLabel = "VirusTotal high risk";
+      } else if (ok) {
+        statusIcon = VT_OK_ICON;
+        statusClass = "vt-check ok";
+        statusLabel = "VirusTotal pass";
+      }
+
+      vtHashes.set(file.name || "", {
+        sha256: file.sha256 || "",
+        md5: file.md5 || ""
+      });
 
       row.innerHTML = `
         <td class="mono">
@@ -221,6 +239,7 @@ const loadVirusTotal = async () => {
       `;
       tableBody.appendChild(row);
     });
+    applyVtHashes();
   } catch (err) {
     summary.textContent = "VirusTotal results not available yet.";
     summary.className = "status-pill warn";

@@ -459,20 +459,23 @@ section {
 .vt-table tbody td {
   position: relative;
   z-index: 1;
+  font-weight: 500;
 }
 
-.vt-table .mono {
+.vt-table tbody td.mono {
   display: flex;
   align-items: center;
   gap: 10px;
+  height: 100%;
+  font-weight: 600;
 }
 
 .vt-check {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 20px;
-  height: 20px;
+  width: 22px;
+  height: 22px;
   font-size: 11px;
   font-weight: 700;
   border: none;
@@ -480,11 +483,12 @@ section {
   background: transparent;
   line-height: 1;
   vertical-align: middle;
+  flex-shrink: 0;
 }
 
 .vt-check .vt-icon {
-  width: 14px;
-  height: 14px;
+  width: 15px;
+  height: 15px;
   display: block;
   fill: currentColor;
 }

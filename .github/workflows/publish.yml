@@ -92,7 +92,6 @@ jobs:
           runVcpkgInstall: true
           vcpkgJsonGlob: "cpp/vcpkg.json"
           vcpkgConfigurationJsonGlob: "cpp/vcpkg-configuration.json"
-          doNotUpdateVcpkg: true
           binaryCachePath: ${{ github.workspace }}\\vcpkg_binary_cache
 
       - name: Configure

@@ -3,18 +3,24 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>BASEFWX Documentation</title>
+    <title>BaseFWX Docs</title>
+    <meta name="description" content="BaseFWX secure toolkit documentation, downloads, signatures, and VirusTotal results.">
     <style>
+      @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap');
+
       :root {
         --bg: #0b0c12;
         --panel: #141826;
         --panel-2: #101423;
+        --panel-3: #0f1220;
         --accent: #7d3cff;
         --accent-2: #b08bff;
         --text: #e7e9f3;
         --muted: #a2a7bd;
-        --border: #252b3f;
+        --border: #262c40;
         --shadow: rgba(0, 0, 0, 0.35);
+        --green: #3fe18c;
+        --orange: #f2a14a;
       }
 
       * { box-sizing: border-box; }
@@ -24,49 +30,72 @@
         font-family: "Space Grotesk", "Sora", "IBM Plex Sans", sans-serif;
         color: var(--text);
         background:
-          radial-gradient(1200px 700px at 15% -10%, rgba(125, 60, 255, 0.15), transparent 60%),
-          radial-gradient(900px 600px at 85% 10%, rgba(176, 139, 255, 0.18), transparent 55%),
+          radial-gradient(1100px 700px at 10% -10%, rgba(125, 60, 255, 0.2), transparent 55%),
+          radial-gradient(1000px 600px at 90% 5%, rgba(176, 139, 255, 0.2), transparent 60%),
           var(--bg);
         line-height: 1.6;
+      }
+
+      body::before {
+        content: "";
+        position: fixed;
+        inset: 0;
+        background-image:
+          linear-gradient(rgba(255, 255, 255, 0.03) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(255, 255, 255, 0.03) 1px, transparent 1px);
+        background-size: 40px 40px;
+        opacity: 0.25;
+        pointer-events: none;
+        z-index: -1;
       }
 
       a { color: inherit; text-decoration: none; }
 
       .container {
-        max-width: 1080px;
+        max-width: 1120px;
         margin: 0 auto;
-        padding: 32px 24px 80px;
+        padding: 28px 24px 96px;
       }
 
-      header {
+      .site-header {
         display: flex;
         align-items: center;
         justify-content: space-between;
         gap: 24px;
-        padding: 16px 0 32px;
+        padding: 12px 0 32px;
       }
 
-      .logo {
+      .brand {
         display: flex;
         align-items: center;
-        gap: 16px;
+        gap: 14px;
         font-weight: 600;
-        letter-spacing: 0.5px;
+        letter-spacing: 0.6px;
       }
 
-      .logo-badge {
+      .brand-mark {
         width: 44px;
         height: 44px;
         border-radius: 12px;
-        background: linear-gradient(135deg, rgba(125, 60, 255, 0.9), rgba(176, 139, 255, 0.6));
-        box-shadow: 0 10px 30px rgba(125, 60, 255, 0.35);
+        background: linear-gradient(135deg, rgba(125, 60, 255, 0.95), rgba(176, 139, 255, 0.6));
+        box-shadow: 0 14px 35px rgba(125, 60, 255, 0.35);
+      }
+
+      .brand-name {
+        font-size: 18px;
+      }
+
+      .brand-sub {
+        display: block;
+        font-size: 12px;
+        color: var(--muted);
       }
 
       nav {
         display: flex;
         flex-wrap: wrap;
-        gap: 16px;
-        font-size: 14px;
+        gap: 12px;
+        font-size: 13px;
         color: var(--muted);
       }
 
@@ -83,83 +112,109 @@
 
       .hero {
         display: grid;
-        grid-template-columns: minmax(0, 1fr) minmax(0, 0.8fr);
-        gap: 32px;
-        align-items: center;
+        grid-template-columns: minmax(0, 1.1fr) minmax(0, 0.9fr);
+        gap: 28px;
+        align-items: stretch;
         padding: 32px;
-        background: linear-gradient(135deg, rgba(20, 24, 38, 0.95), rgba(16, 20, 35, 0.9));
-        border: 1px solid var(--border);
         border-radius: 24px;
-        box-shadow: 0 20px 60px var(--shadow);
+        background: linear-gradient(140deg, rgba(20, 24, 38, 0.95), rgba(11, 14, 24, 0.9));
+        border: 1px solid var(--border);
+        box-shadow: 0 25px 60px var(--shadow);
+        animation: rise 0.7s ease both;
       }
 
       .hero h1 {
         margin: 0 0 12px;
-        font-size: 42px;
-        line-height: 1.1;
+        font-size: 44px;
+        line-height: 1.05;
       }
 
       .hero p {
         margin: 0 0 24px;
         color: var(--muted);
-        font-size: 17px;
+        font-size: 16px;
       }
 
-      .hero .cta {
+      .cta-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+      }
+
+      .btn {
         display: inline-flex;
         align-items: center;
-        gap: 10px;
+        gap: 8px;
         padding: 12px 18px;
         border-radius: 12px;
         background: var(--accent);
         color: #ffffff;
         font-weight: 600;
         box-shadow: 0 12px 30px rgba(125, 60, 255, 0.35);
+        transition: transform 0.2s ease, box-shadow 0.2s ease;
       }
 
-      .hero .cta.secondary {
+      .btn:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 18px 36px rgba(125, 60, 255, 0.4);
+      }
+
+      .btn.secondary {
         background: transparent;
         border: 1px solid var(--border);
-        color: var(--text);
         box-shadow: none;
       }
 
-      .hero .cta-row {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 12px;
-      }
-
-      .hero-card {
-        background: rgba(11, 12, 18, 0.6);
+      .hero-panel {
+        background: var(--panel-3);
         border: 1px solid var(--border);
         border-radius: 18px;
         padding: 20px;
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;
       }
 
-      .hero-card h3 {
-        margin: 0 0 10px;
-        font-size: 18px;
+      .meta {
+        font-size: 12px;
+        text-transform: uppercase;
+        letter-spacing: 1.6px;
+        color: var(--muted);
       }
 
-      .hero-card code {
-        display: block;
-        background: #0f1322;
-        border: 1px solid var(--border);
-        padding: 12px;
-        border-radius: 12px;
+      .panel-title {
+        margin: 12px 0 10px;
+        font-size: 22px;
+      }
+
+      .meta-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
         font-size: 13px;
-        color: var(--accent-2);
-        overflow-x: auto;
+        color: var(--muted);
+      }
+
+      .panel-foot {
+        margin-top: 16px;
+        display: flex;
+        gap: 10px;
       }
 
       section {
-        margin-top: 56px;
+        margin-top: 64px;
+        animation: rise 0.7s ease both;
       }
 
       .section-title {
         font-size: 22px;
-        margin-bottom: 18px;
+        margin-bottom: 12px;
+      }
+
+      .section-lead {
+        color: var(--muted);
+        margin-top: 0;
+        max-width: 680px;
       }
 
       .grid {
@@ -192,7 +247,28 @@
         font-size: 14px;
       }
 
-      .pill {
+      .download-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+        gap: 18px;
+      }
+
+      .download-card {
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 18px;
+        padding: 20px;
+        display: flex;
+        flex-direction: column;
+        gap: 14px;
+      }
+
+      .download-card h3 {
+        margin: 0;
+        font-size: 18px;
+      }
+
+      .chip {
         display: inline-flex;
         align-items: center;
         gap: 6px;
@@ -202,14 +278,91 @@
         border-radius: 999px;
         font-size: 12px;
         color: var(--accent-2);
-        margin-bottom: 14px;
+      }
+
+      .hash-block {
+        background: var(--panel-2);
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        padding: 12px;
+      }
+
+      .hash-title {
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 1.4px;
+        color: var(--muted);
+        margin-bottom: 6px;
+      }
+
+      .hash-value {
+        font-family: "JetBrains Mono", "Fira Code", monospace;
+        font-size: 12px;
+        color: #cfd5f1;
+        word-break: break-all;
+      }
+
+      .link-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        font-size: 13px;
+      }
+
+      .link-row a {
+        color: var(--accent-2);
+      }
+
+      .status-pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 6px 10px;
+        border-radius: 999px;
+        font-size: 12px;
+      }
+
+      .status-pill.ok { background: rgba(63, 225, 140, 0.14); color: var(--green); border: 1px solid rgba(63, 225, 140, 0.4); }
+      .status-pill.warn { background: rgba(242, 161, 74, 0.14); color: var(--orange); border: 1px solid rgba(242, 161, 74, 0.4); }
+
+      .vt-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 13px;
+        background: var(--panel);
+        border-radius: 16px;
+        overflow: hidden;
+      }
+
+      .vt-table th,
+      .vt-table td {
+        padding: 12px 14px;
+        border-bottom: 1px solid var(--border);
+        text-align: left;
+      }
+
+      .vt-table th {
+        font-size: 12px;
+        text-transform: uppercase;
+        letter-spacing: 1.2px;
+        color: var(--muted);
+      }
+
+      .mono {
+        font-family: "JetBrains Mono", "Fira Code", monospace;
+        font-size: 12px;
       }
 
       footer {
-        margin-top: 64px;
+        margin-top: 72px;
         color: var(--muted);
         font-size: 13px;
         text-align: center;
+      }
+
+      @keyframes rise {
+        from { opacity: 0; transform: translateY(10px); }
+        to { opacity: 1; transform: translateY(0); }
       }
 
       @media (max-width: 900px) {
@@ -220,45 +373,183 @@
           font-size: 34px;
         }
       }
+
+      @media (max-width: 640px) {
+        .site-header {
+          flex-direction: column;
+          align-items: flex-start;
+        }
+        .panel-foot {
+          flex-direction: column;
+        }
+        .vt-table th,
+        .vt-table td {
+          font-size: 12px;
+          padding: 10px;
+        }
+      }
     </style>
   </head>
   <body>
     <div class="container">
-      <header>
-        <div class="logo">
-          <div class="logo-badge"></div>
+      <header class="site-header">
+        <div class="brand">
+          <div class="brand-mark"></div>
           <div>
-            <div>BASEFWX</div>
-            <div style="font-size:12px;color:var(--muted);">Docs Hub</div>
+            <div class="brand-name">FixCraft</div>
+            <div class="brand-sub">BaseFWX secure toolkit</div>
           </div>
         </div>
         <nav>
-          <a href="#getting-started">Getting Started</a>
+          <a href="#downloads">Downloads</a>
+          <a href="#integrity">Integrity</a>
+          <a href="#virustotal">VirusTotal</a>
           <a href="#docs">Docs</a>
-          <a href="#releases">Releases</a>
           <a href="#support">Support</a>
         </nav>
       </header>
 
-      <section class="hero" id="getting-started">
+      <section class="hero" id="top">
         <div>
-          <div class="pill">FixCraft Purple Edition</div>
-          <h1>Secure, cross-compatible encryption for files and media.</h1>
+          <div class="chip">Cross-compatible Python and C++ encryption</div>
+          <h1>Secure, verifiable releases for BaseFWX.</h1>
           <p>
-            BASEFWX pairs post-quantum key wrapping with AES-GCM, ships a native C++ core,
-            and keeps Python/C++ formats interoperable. Use it for file encryption, jMG media
-            scrambling, and reversible data workflows.
+            BaseFWX pairs post-quantum key wrapping with AES-GCM, ships a native C++ core,
+            and keeps Python and C++ formats interoperable across fwxAES, b512, pb512, and jMG.
+            This portal tracks signed binaries, hashes, and VirusTotal results for each release.
           </p>
           <div class="cta-row">
-            <a class="cta" href="../README.md">Read README</a>
-            <a class="cta secondary" href="CLI.md">CLI Reference</a>
+            <a class="btn" id="download-cta" href="https://github.com/F1xGOD/basefwx/releases" target="_blank" rel="noopener">Download CLI</a>
+            <a class="btn secondary" href="../README.md">Read README</a>
+            <a class="btn secondary" href="CLI.md">CLI Reference</a>
           </div>
         </div>
-        <div class="hero-card">
-          <h3>Quick Start</h3>
-          <code>pip install basefwx
-python -m basefwx cryptin aes-light file.bin -p "pass"
-python -m basefwx cryptin aes-light file.bin.fwx -p "pass"</code>
+        <div class="hero-panel" id="release-card">
+          <div>
+            <div class="meta">Latest release</div>
+            <div class="panel-title" id="release-version">Loading...</div>
+            <div class="meta-row">
+              <span id="release-date">Fetching date</span>
+              <span id="release-assets">0 assets</span>
+            </div>
+          </div>
+          <div class="panel-foot">
+            <a class="btn secondary" id="release-link" href="https://github.com/F1xGOD/basefwx/releases" target="_blank" rel="noopener">View on GitHub</a>
+          </div>
+        </div>
+      </section>
+
+      <section id="downloads">
+        <div class="section-title">Download CLI</div>
+        <p class="section-lead">Direct links to signed binaries with attached hash and signature files.</p>
+        <div class="download-grid">
+          <article class="download-card" data-os="linux">
+            <span class="chip">Linux</span>
+            <h3>basefwx-linux</h3>
+            <p class="section-lead">Optimized for Ubuntu runners and portable Linux distributions.</p>
+            <div class="link-row">
+              <a class="btn" data-download="linux" href="#">Download</a>
+              <a data-asset="linux.sig" href="#">Signature</a>
+            </div>
+            <div class="hash-block">
+              <div class="hash-title">SHA256</div>
+              <div class="hash-value" data-hash="linux.sha256">Awaiting release asset...</div>
+              <div class="hash-title" style="margin-top:10px;">MD5</div>
+              <div class="hash-value" data-hash="linux.md5">Awaiting release asset...</div>
+            </div>
+          </article>
+          <article class="download-card" data-os="windows">
+            <span class="chip">Windows</span>
+            <h3>basefwx-windows.exe</h3>
+            <p class="section-lead">Native Windows CLI build with vcpkg-managed dependencies.</p>
+            <div class="link-row">
+              <a class="btn" data-download="windows" href="#">Download</a>
+              <a data-asset="windows.sig" href="#">Signature</a>
+            </div>
+            <div class="hash-block">
+              <div class="hash-title">SHA256</div>
+              <div class="hash-value" data-hash="windows.sha256">Awaiting release asset...</div>
+              <div class="hash-title" style="margin-top:10px;">MD5</div>
+              <div class="hash-value" data-hash="windows.md5">Awaiting release asset...</div>
+            </div>
+          </article>
+          <article class="download-card" data-os="mac">
+            <span class="chip">macOS</span>
+            <h3>basefwx-mac</h3>
+            <p class="section-lead">macOS CLI build with OpenSSL 3 support.</p>
+            <div class="link-row">
+              <a class="btn" data-download="mac" href="#">Download</a>
+              <a data-asset="mac.sig" href="#">Signature</a>
+            </div>
+            <div class="hash-block">
+              <div class="hash-title">SHA256</div>
+              <div class="hash-value" data-hash="mac.sha256">Awaiting release asset...</div>
+              <div class="hash-title" style="margin-top:10px;">MD5</div>
+              <div class="hash-value" data-hash="mac.md5">Awaiting release asset...</div>
+            </div>
+          </article>
+        </div>
+      </section>
+
+      <section id="integrity">
+        <div class="section-title">Integrity and Verification</div>
+        <p class="section-lead">Verify every download with hashes and detached signatures.</p>
+        <div class="grid">
+          <div class="card">
+            <h4>GPG Signatures</h4>
+            <p>Detached signatures are published for every binary.</p>
+            <div class="hash-block" style="margin-top:12px;">
+              <div class="hash-title">Verify</div>
+              <div class="hash-value">gpg --verify basefwx-linux.sig basefwx-linux</div>
+            </div>
+          </div>
+          <div class="card">
+            <h4>SHA256 + MD5</h4>
+            <p>Hashes are published in the release assets and mirrored here.</p>
+            <div class="hash-block" style="margin-top:12px;">
+              <div class="hash-title">Check</div>
+              <div class="hash-value">sha256sum -c basefwx-linux.sha256</div>
+            </div>
+          </div>
+          <div class="card">
+            <h4>Reproducible release trail</h4>
+            <p>Artifacts are built, signed, and verified automatically on release.</p>
+            <div class="hash-block" style="margin-top:12px;">
+              <div class="hash-title">Pipeline</div>
+              <div class="hash-value">build → sign → verify → publish</div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="virustotal">
+        <div class="section-title">VirusTotal Results</div>
+        <p class="section-lead">Latest scans for each executable, linked to the official VirusTotal page.</p>
+        <div class="link-row" style="margin-bottom:12px;">
+          <a href="https://www.virustotal.com" target="_blank" rel="noopener">VirusTotal official site</a>
+        </div>
+        <div style="margin-bottom:16px;" id="vt-summary" class="status-pill ok">Loading VirusTotal results...</div>
+        <div class="link-row" style="margin-bottom:16px;">
+          <a id="vt-results-text" href="../results/virustotal-latest.txt" target="_blank" rel="noopener">Download results.txt</a>
+          <a id="vt-results-json" href="../results/virustotal-latest.json" target="_blank" rel="noopener">Raw JSON</a>
+        </div>
+        <div style="overflow-x:auto;">
+          <table class="vt-table" id="vt-table">
+            <thead>
+              <tr>
+                <th>File</th>
+                <th>Malicious</th>
+                <th>Suspicious</th>
+                <th>Undetected</th>
+                <th>Report</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td colspan="5" class="mono">Waiting for results...</td>
+              </tr>
+            </tbody>
+          </table>
         </div>
       </section>
 
@@ -266,7 +557,7 @@ python -m basefwx cryptin aes-light file.bin.fwx -p "pass"</code>
         <div class="section-title">Documentation</div>
         <div class="grid">
           <a class="card" href="CLI.md">
-            <h4>CLI & Usage</h4>
+            <h4>CLI and Usage</h4>
             <p>Commands, flags, and master-key workflows.</p>
           </a>
           <a class="card" href="SECURITY_MODEL.md">
@@ -275,34 +566,16 @@ python -m basefwx cryptin aes-light file.bin.fwx -p "pass"</code>
           </a>
           <a class="card" href="TESTING.md">
             <h4>Testing</h4>
-            <p>How to run the suite, fast modes, and fixtures.</p>
+            <p>Fast modes, fixtures, and CI parity.</p>
           </a>
           <a class="card" href="RELEASE.md">
-            <h4>Release & Signing</h4>
-            <p>GPG key setup, signatures, and hashes.</p>
+            <h4>Release and Signing</h4>
+            <p>GPG key setup, hashes, and verification steps.</p>
           </a>
           <a class="card" href="CONTRIBUTING.md">
             <h4>Contributing</h4>
             <p>How to propose changes and report issues.</p>
           </a>
-        </div>
-      </section>
-
-      <section id="releases">
-        <div class="section-title">Release Artifacts</div>
-        <div class="grid">
-          <div class="card">
-            <h4>Linux</h4>
-            <p>basefwx-linux + .sha256/.md5 + .sig</p>
-          </div>
-          <div class="card">
-            <h4>Windows</h4>
-            <p>basefwx-windows.exe + .sha256/.md5 + .sig</p>
-          </div>
-          <div class="card">
-            <h4>macOS</h4>
-            <p>basefwx-mac + .sha256/.md5 + .sig</p>
-          </div>
         </div>
       </section>
 
@@ -325,8 +598,147 @@ python -m basefwx cryptin aes-light file.bin.fwx -p "pass"</code>
       </section>
 
       <footer>
-        FixCraft BASEFWX Documentation
+        FixCraft BaseFWX Documentation and Release Portal
       </footer>
     </div>
+
+    <script>
+      const repo = "F1xGOD/basefwx";
+      const releaseApi = `https://api.github.com/repos/${repo}/releases/latest`;
+      const assetMap = {
+        linux: {
+          bin: "basefwx-linux",
+          sha256: "basefwx-linux.sha256",
+          md5: "basefwx-linux.md5",
+          sig: "basefwx-linux.sig"
+        },
+        windows: {
+          bin: "basefwx-windows.exe",
+          sha256: "basefwx-windows.exe.sha256",
+          md5: "basefwx-windows.exe.md5",
+          sig: "basefwx-windows.exe.sig"
+        },
+        mac: {
+          bin: "basefwx-mac",
+          sha256: "basefwx-mac.sha256",
+          md5: "basefwx-mac.md5",
+          sig: "basefwx-mac.sig"
+        }
+      };
+
+      const setText = (id, value) => {
+        const el = document.getElementById(id);
+        if (el) {
+          el.textContent = value;
+        }
+      };
+
+      const setLink = (selector, url) => {
+        const el = document.querySelector(selector);
+        if (!el) return;
+        if (url) {
+          el.href = url;
+          el.setAttribute("target", "_blank");
+          el.setAttribute("rel", "noopener");
+          el.classList.remove("disabled");
+        } else {
+          el.href = "#";
+        }
+      };
+
+      const parseHash = (content) => {
+        const parts = content.trim().split(/\s+/);
+        return parts.length ? parts[0] : "";
+      };
+
+      const fillHash = async (selector, url) => {
+        const el = document.querySelector(`[data-hash="${selector}"]`);
+        if (!el) return;
+        if (!url) {
+          el.textContent = "Hash not available";
+          return;
+        }
+        try {
+          const text = await fetch(url).then((resp) => resp.text());
+          el.textContent = parseHash(text);
+        } catch (err) {
+          el.textContent = "Unable to load hash";
+        }
+      };
+
+      const loadRelease = async () => {
+        try {
+          const response = await fetch(releaseApi);
+          if (!response.ok) {
+            throw new Error("release fetch failed");
+          }
+          const data = await response.json();
+          const assets = data.assets || [];
+          const assetLookup = new Map(assets.map((asset) => [asset.name, asset]));
+
+          setText("release-version", data.name || data.tag_name || "Latest release");
+          setText("release-date", data.published_at ? new Date(data.published_at).toLocaleDateString() : "Release date pending");
+          setText("release-assets", `${assets.length} assets`);
+          setLink("#release-link", data.html_url);
+          setLink("#download-cta", data.html_url);
+
+          Object.entries(assetMap).forEach(([key, values]) => {
+            const binAsset = assetLookup.get(values.bin);
+            const sigAsset = assetLookup.get(values.sig);
+            setLink(`[data-download="${key}"]`, binAsset ? binAsset.browser_download_url : null);
+            setLink(`[data-asset="${key}.sig"]`, sigAsset ? sigAsset.browser_download_url : null);
+            fillHash(`${key}.sha256`, assetLookup.get(values.sha256)?.browser_download_url || "");
+            fillHash(`${key}.md5`, assetLookup.get(values.md5)?.browser_download_url || "");
+          });
+        } catch (err) {
+          setText("release-version", "Release data unavailable");
+          setText("release-date", "Check GitHub for details");
+          setText("release-assets", "-");
+        }
+      };
+
+      const loadVirusTotal = async () => {
+        const summary = document.getElementById("vt-summary");
+        const tableBody = document.querySelector("#vt-table tbody");
+        try {
+          const resultsUrl = new URL("../results/virustotal-latest.json", window.location.href).toString();
+          const resultsTxt = new URL("../results/virustotal-latest.txt", window.location.href).toString();
+          setLink("#vt-results-text", resultsTxt);
+          setLink("#vt-results-json", resultsUrl);
+          const response = await fetch(resultsUrl);
+          if (!response.ok) {
+            throw new Error("vt results not found");
+          }
+          const data = await response.json();
+          const files = data.files || [];
+
+          summary.textContent = `Report generated ${new Date(data.generated_at).toLocaleString()} for ${data.release_tag || "latest"}`;
+          summary.className = "status-pill ok";
+
+          tableBody.innerHTML = "";
+          files.forEach((file) => {
+            const row = document.createElement("tr");
+            const link = file.item_url || (file.sha256 ? `https://www.virustotal.com/gui/file/${file.sha256}` : "");
+            const stats = file.stats || {};
+
+            row.innerHTML = `
+              <td class="mono">${file.name || ""}</td>
+              <td>${stats.malicious ?? 0}</td>
+              <td>${stats.suspicious ?? 0}</td>
+              <td>${stats.undetected ?? 0}</td>
+              <td><a href="${link}" target="_blank" rel="noopener">View report</a></td>
+            `;
+            tableBody.appendChild(row);
+          });
+        } catch (err) {
+          summary.textContent = "VirusTotal results not available yet.";
+          summary.className = "status-pill warn";
+          tableBody.innerHTML = "<tr><td colspan=\"5\" class=\"mono\">No results found.</td></tr>";
+        }
+      };
+
+      loadRelease();
+      loadVirusTotal();
+    </script>
   </body>
 </html>

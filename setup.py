@@ -9,7 +9,7 @@ def read_readme() -> str:
 
 setup(
     name="basefwx",
-    version="3.5.2",
+    version="3.5.3",
     packages=find_packages(),
     install_requires=[
         "cryptography>=41.0.0",

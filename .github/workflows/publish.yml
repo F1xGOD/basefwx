@@ -34,7 +34,7 @@ jobs:
   build-cli-linux:
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: read
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -58,51 +58,28 @@ jobs:
           strip dist/basefwx-linux
           upx dist/basefwx-linux
 
-      - name: Generate hashes
-        run: |
-          cd dist
-          sha256sum basefwx-linux > basefwx-linux.sha256
-          md5sum basefwx-linux > basefwx-linux.md5
-
-      - name: Import GPG key
-        env:
-          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
-        run: |
-          keyfile="$(mktemp)"
-          printf '%s' "$GPG_PRIVATE_KEY" > "$keyfile"
-          gpg --batch --import "$keyfile"
-          rm -f "$keyfile"
-
-      - name: Sign binary
-        env:
-          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
-        run: |
-          gpg --batch --yes --pinentry-mode loopback --passphrase "$GPG_PASSPHRASE" \
-            --detach-sign -o dist/basefwx-linux.sig dist/basefwx-linux
-
-      - name: Verify signature + hashes
-        run: |
-          gpg --batch --verify dist/basefwx-linux.sig dist/basefwx-linux
-          cd dist
-          sha256sum -c basefwx-linux.sha256
-          md5sum -c basefwx-linux.md5
-
-      - name: Upload release asset
-        uses: softprops/action-gh-release@v2
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
         with:
-          files: |
-            dist/basefwx-linux
-            dist/basefwx-linux.sha256
-            dist/basefwx-linux.md5
-            dist/basefwx-linux.sig
+          name: basefwx-linux
+          path: dist/basefwx-linux
+          if-no-files-found: error
 
   build-cli-windows:
     runs-on: windows-latest
     permissions:
-      contents: write
+      contents: read
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Cache vcpkg binaries
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}\\vcpkg_binary_cache
+          key: ${{ runner.os }}-vcpkg-${{ hashFiles('cpp/vcpkg.json', 'cpp/vcpkg-configuration.json') }}
+          restore-keys: |
+            ${{ runner.os }}-vcpkg-
 
       - name: Setup vcpkg
         uses: lukka/run-vcpkg@v11
@@ -111,46 +88,15 @@ jobs:
           runVcpkgInstall: true
           vcpkgJsonGlob: "cpp/vcpkg.json"
           vcpkgConfigurationJsonGlob: "cpp/vcpkg-configuration.json"
-
-      - name: Install UPX (optional)
-        shell: pwsh
-        run: |
-          choco install upx -y --no-progress
-        continue-on-error: true
-      - name: Install GnuPG
-        shell: pwsh
-        run: |
-          if (Get-Command gpg -ErrorAction SilentlyContinue) {
-            gpg --version | Select-Object -First 1
-            exit 0
-          }
-          choco install gnupg -y --no-progress --limit-output --execution-timeout 1200
-          if (-not (Get-Command gpg -ErrorAction SilentlyContinue)) {
-            Write-Host "Chocolatey install incomplete; trying winget fallback"
-            winget install -e --id GnuPG.GnuPG --accept-source-agreements --accept-package-agreements
-          }
-          if (-not (Get-Command gpg -ErrorAction SilentlyContinue)) {
-            $candidates = @(
-              "$env:ProgramFiles\\GnuPG\\bin\\gpg.exe",
-              "$env:ProgramFiles(x86)\\GnuPG\\bin\\gpg.exe"
-            )
-            foreach ($candidate in $candidates) {
-              if (Test-Path $candidate) {
-                $env:Path = (Split-Path $candidate) + ";" + $env:Path
-                break
-              }
-            }
-          }
-          if (-not (Get-Command gpg -ErrorAction SilentlyContinue)) {
-            throw "gpg not available after install"
-          }
+          doNotUpdateVcpkg: true
+          binaryCachePath: ${{ github.workspace }}\\vcpkg_binary_cache
 
       - name: Configure
         run: |
           cmake -S cpp -B cpp/build -DCMAKE_TOOLCHAIN_FILE="${{ github.workspace }}\\vcpkg\\scripts\\buildsystems\\vcpkg.cmake" -DVCPKG_TARGET_TRIPLET=x64-windows -DBASEFWX_REQUIRE_ARGON2=OFF -DBASEFWX_REQUIRE_OQS=OFF
 
       - name: Build
-        run: cmake --build cpp/build --config Release
+        run: cmake --build cpp/build --config Release --parallel
 
       - name: Prepare binary
         shell: pwsh
@@ -162,59 +108,18 @@ jobs:
           Copy-Item $bin dist/basefwx-windows.exe
           $strip = Get-Command llvm-strip -ErrorAction SilentlyContinue
           if ($strip) { & $strip.Path dist\\basefwx-windows.exe }
-          $upx = Get-Command upx -ErrorAction SilentlyContinue
-          if ($upx) { & $upx.Path dist\\basefwx-windows.exe }
 
-      - name: Generate hashes
-        shell: pwsh
-        run: |
-          $sha = Get-FileHash dist\\basefwx-windows.exe -Algorithm SHA256
-          "$($sha.Hash)  basefwx-windows.exe" | Set-Content dist\\basefwx-windows.exe.sha256
-          $md5 = Get-FileHash dist\\basefwx-windows.exe -Algorithm MD5
-          "$($md5.Hash)  basefwx-windows.exe" | Set-Content dist\\basefwx-windows.exe.md5
-
-      - name: Import GPG key
-        shell: pwsh
-        env:
-          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
-        run: |
-          $keyFile = Join-Path $env:RUNNER_TEMP "basefwx-gpg.key"
-          Set-Content -Path $keyFile -Value $env:GPG_PRIVATE_KEY -NoNewline -Encoding ascii
-          gpg --batch --import $keyFile
-          Remove-Item $keyFile -Force
-
-      - name: Sign binary
-        shell: pwsh
-        env:
-          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
-        run: |
-          gpg --batch --yes --pinentry-mode loopback --passphrase "$env:GPG_PASSPHRASE" `
-            --detach-sign -o dist\\basefwx-windows.exe.sig dist\\basefwx-windows.exe
-
-      - name: Verify signature + hashes
-        shell: pwsh
-        run: |
-          gpg --batch --verify dist\\basefwx-windows.exe.sig dist\\basefwx-windows.exe
-          $shaFile = (Get-Content dist\\basefwx-windows.exe.sha256 -Raw).Trim()
-          $shaCalc = (Get-FileHash dist\\basefwx-windows.exe -Algorithm SHA256).Hash + "  basefwx-windows.exe"
-          if ($shaFile -ne $shaCalc) { throw "SHA256 mismatch" }
-          $md5File = (Get-Content dist\\basefwx-windows.exe.md5 -Raw).Trim()
-          $md5Calc = (Get-FileHash dist\\basefwx-windows.exe -Algorithm MD5).Hash + "  basefwx-windows.exe"
-          if ($md5File -ne $md5Calc) { throw "MD5 mismatch" }
-
-      - name: Upload release asset
-        uses: softprops/action-gh-release@v2
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
         with:
-          files: |
-            dist/basefwx-windows.exe
-            dist/basefwx-windows.exe.sha256
-            dist/basefwx-windows.exe.md5
-            dist/basefwx-windows.exe.sig
+          name: basefwx-windows
+          path: dist/basefwx-windows.exe
+          if-no-files-found: error
 
   build-cli-macos:
     runs-on: macos-latest
     permissions:
-      contents: write
+      contents: read
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -222,7 +127,7 @@ jobs:
       - name: Install system deps
         run: |
           brew update
-          brew install openssl@3 gnupg
+          brew install openssl@3
 
       - name: Configure
         run: |
@@ -237,11 +142,46 @@ jobs:
           cp cpp/build/basefwx_cpp dist/basefwx-mac
           strip -x dist/basefwx-mac
 
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: basefwx-mac
+          path: dist/basefwx-mac
+          if-no-files-found: error
+
+  sign-release:
+    runs-on: ubuntu-latest
+    needs: [light-tests, build-cli-linux, build-cli-windows, build-cli-macos]
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: Collect binaries
+        run: |
+          mkdir -p dist_out
+          mv dist/basefwx-linux/basefwx-linux dist_out/basefwx-linux
+          mv dist/basefwx-windows/basefwx-windows.exe dist_out/basefwx-windows.exe
+          mv dist/basefwx-mac/basefwx-mac dist_out/basefwx-mac
+          chmod +x dist_out/basefwx-linux dist_out/basefwx-mac
+
       - name: Generate hashes
         run: |
-          cd dist
-          shasum -a 256 basefwx-mac > basefwx-mac.sha256
-          md5 -r basefwx-mac > basefwx-mac.md5
+          cd dist_out
+          sha256sum basefwx-linux > basefwx-linux.sha256
+          md5sum basefwx-linux > basefwx-linux.md5
+          sha256sum basefwx-windows.exe > basefwx-windows.exe.sha256
+          md5sum basefwx-windows.exe > basefwx-windows.exe.md5
+          sha256sum basefwx-mac > basefwx-mac.sha256
+          md5sum basefwx-mac > basefwx-mac.md5
 
       - name: Import GPG key
         env:
@@ -252,37 +192,191 @@ jobs:
           gpg --batch --import "$keyfile"
           rm -f "$keyfile"
 
-      - name: Sign binary
+      - name: Sign binaries
         env:
           GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
         run: |
           gpg --batch --yes --pinentry-mode loopback --passphrase "$GPG_PASSPHRASE" \
-            --detach-sign -o dist/basefwx-mac.sig dist/basefwx-mac
+            --detach-sign -o dist_out/basefwx-linux.sig dist_out/basefwx-linux
+          gpg --batch --yes --pinentry-mode loopback --passphrase "$GPG_PASSPHRASE" \
+            --detach-sign -o dist_out/basefwx-windows.exe.sig dist_out/basefwx-windows.exe
+          gpg --batch --yes --pinentry-mode loopback --passphrase "$GPG_PASSPHRASE" \
+            --detach-sign -o dist_out/basefwx-mac.sig dist_out/basefwx-mac
 
-      - name: Verify signature + hashes
+      - name: Verify signatures + hashes
         run: |
-          gpg --batch --verify dist/basefwx-mac.sig dist/basefwx-mac
-          cd dist
-          shasum -a 256 -c basefwx-mac.sha256
-          md5_calc=$(md5 -r basefwx-mac)
-          md5_file=$(cat basefwx-mac.md5)
-          if [ "$md5_calc" != "$md5_file" ]; then
-            echo "MD5 mismatch"
-            exit 1
-          fi
+          gpg --batch --verify dist_out/basefwx-linux.sig dist_out/basefwx-linux
+          gpg --batch --verify dist_out/basefwx-windows.exe.sig dist_out/basefwx-windows.exe
+          gpg --batch --verify dist_out/basefwx-mac.sig dist_out/basefwx-mac
+          cd dist_out
+          sha256sum -c basefwx-linux.sha256
+          sha256sum -c basefwx-windows.exe.sha256
+          sha256sum -c basefwx-mac.sha256
+          md5sum -c basefwx-linux.md5
+          md5sum -c basefwx-windows.exe.md5
+          md5sum -c basefwx-mac.md5
 
-      - name: Upload release asset
+      - name: Upload release assets
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            dist/basefwx-mac
-            dist/basefwx-mac.sha256
-            dist/basefwx-mac.md5
-            dist/basefwx-mac.sig
+            dist_out/basefwx-linux
+            dist_out/basefwx-linux.sha256
+            dist_out/basefwx-linux.md5
+            dist_out/basefwx-linux.sig
+            dist_out/basefwx-windows.exe
+            dist_out/basefwx-windows.exe.sha256
+            dist_out/basefwx-windows.exe.md5
+            dist_out/basefwx-windows.exe.sig
+            dist_out/basefwx-mac
+            dist_out/basefwx-mac.sha256
+            dist_out/basefwx-mac.md5
+            dist_out/basefwx-mac.sig
+
+      - name: VirusTotal scan
+        env:
+          VIRUSTOTAL_API_KEY: ${{ secrets.VIRUSTOTAL_API_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${VIRUSTOTAL_API_KEY:-}" ]; then
+            echo "VIRUSTOTAL_API_KEY is not set"
+            exit 1
+          fi
+
+          tag="${GITHUB_REF_NAME}"
+          repo="${GITHUB_REPOSITORY}"
+          generated_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          json=$(jq -n --arg generated_at "$generated_at" --arg release_tag "$tag" --arg repo "$repo" \
+            '{generated_at:$generated_at, release_tag:$release_tag, repo:$repo, files:[]}')
+
+          for file in dist_out/basefwx-linux dist_out/basefwx-windows.exe dist_out/basefwx-mac; do
+            name="$(basename "$file")"
+            echo "Submitting $name to VirusTotal..."
+            submit=$(curl -sS --request POST \
+              --url https://www.virustotal.com/api/v3/files \
+              --header "accept: application/json" \
+              --header "x-apikey: ${VIRUSTOTAL_API_KEY}" \
+              --form file="@$file")
+            analysis_id=$(echo "$submit" | jq -r '.data.id // empty')
+            if [ -z "$analysis_id" ]; then
+              echo "VirusTotal upload failed for $name: $submit"
+              exit 1
+            fi
+
+            analysis=""
+            status="queued"
+            for _ in $(seq 1 40); do
+              analysis=$(curl -sS --request GET \
+                --url "https://www.virustotal.com/api/v3/analyses/${analysis_id}" \
+                --header "accept: application/json" \
+                --header "x-apikey: ${VIRUSTOTAL_API_KEY}")
+              status=$(echo "$analysis" | jq -r '.data.attributes.status // empty')
+              if [ "$status" = "completed" ]; then
+                break
+              fi
+              sleep 15
+            done
+
+            stats=$(echo "$analysis" | jq '.data.attributes.stats // {}')
+            analysis_url=$(echo "$analysis" | jq -r '.data.links.self // empty')
+            item_url=$(echo "$analysis" | jq -r '.data.links.item // empty')
+            sha256=$(echo "$analysis" | jq -r '.meta.file_info.sha256 // empty')
+            md5=$(echo "$analysis" | jq -r '.meta.file_info.md5 // empty')
+            sha1=$(echo "$analysis" | jq -r '.meta.file_info.sha1 // empty')
+
+            json=$(jq \
+              --arg name "$name" \
+              --arg analysis_id "$analysis_id" \
+              --arg analysis_url "$analysis_url" \
+              --arg item_url "$item_url" \
+              --arg sha256 "$sha256" \
+              --arg md5 "$md5" \
+              --arg sha1 "$sha1" \
+              --arg status "$status" \
+              --argjson stats "$stats" \
+              '.files += [{
+                name: $name,
+                analysis_id: $analysis_id,
+                analysis_url: $analysis_url,
+                item_url: $item_url,
+                sha256: $sha256,
+                md5: $md5,
+                sha1: $sha1,
+                status: $status,
+                stats: $stats
+              }]' <<< "$json")
+          done
+
+          echo "$json" > dist_out/virustotal-results.json
+          python - <<'PY'
+import json
+from datetime import datetime, timezone
+
+with open("dist_out/virustotal-results.json", "r", encoding="utf-8") as handle:
+    data = json.load(handle)
+
+lines = []
+lines.append("BaseFWX VirusTotal Results")
+lines.append(f"Release: {data.get('release_tag', 'unknown')}")
+lines.append(f"Generated: {data.get('generated_at', datetime.now(timezone.utc).isoformat())}")
+lines.append(f"Repository: {data.get('repo', '')}")
+lines.append("")
+
+for entry in data.get("files", []):
+    lines.append(f"File: {entry.get('name', '')}")
+    lines.append(f"  Status: {entry.get('status', '')}")
+    lines.append(f"  VirusTotal analysis: {entry.get('analysis_url', '')}")
+    lines.append(f"  VirusTotal file: {entry.get('item_url', '')}")
+    stats = entry.get("stats", {})
+    lines.append(
+        "  Stats: "
+        f"malicious={stats.get('malicious', 0)}, "
+        f"suspicious={stats.get('suspicious', 0)}, "
+        f"undetected={stats.get('undetected', 0)}, "
+        f"harmless={stats.get('harmless', 0)}, "
+        f"timeout={stats.get('timeout', 0)}, "
+        f"failure={stats.get('failure', 0)}, "
+        f"type-unsupported={stats.get('type-unsupported', 0)}"
+    )
+    lines.append(f"  SHA256: {entry.get('sha256', '')}")
+    lines.append(f"  SHA1: {entry.get('sha1', '')}")
+    lines.append(f"  MD5: {entry.get('md5', '')}")
+    lines.append("")
+
+with open("dist_out/virustotal-results.txt", "w", encoding="utf-8") as handle:
+    handle.write("\n".join(lines))
+PY
+          cp dist_out/virustotal-results.txt dist_out/results.txt
+
+      - name: Upload VirusTotal results
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist_out/virustotal-results.json
+            dist_out/virustotal-results.txt
+            dist_out/results.txt
+
+      - name: Store VirusTotal results in repo
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          mkdir -p results
+          cp dist_out/virustotal-results.json "results/virustotal-${tag}.json"
+          cp dist_out/virustotal-results.txt "results/virustotal-${tag}.txt"
+          cp dist_out/virustotal-results.json results/virustotal-latest.json
+          cp dist_out/virustotal-results.txt results/virustotal-latest.txt
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add results/
+          if git diff --cached --quiet; then
+            echo "No results changes"
+            exit 0
+          fi
+          git commit -m "chore: add VirusTotal results for ${tag}"
+          git push
 
   publish-pypi:
     runs-on: ubuntu-latest
-    needs: [light-tests, build-cli-linux, build-cli-windows, build-cli-macos]
+    needs: [sign-release]
     permissions:
       contents: read
     steps:

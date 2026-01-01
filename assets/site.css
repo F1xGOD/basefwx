@@ -443,7 +443,21 @@ section {
 }
 
 .vt-table tbody tr {
-  background: transparent;
+  position: relative;
+}
+
+.vt-table tbody tr::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: var(--panel);
+  border-radius: 12px;
+  z-index: 0;
+}
+
+.vt-table tbody td {
+  position: relative;
+  z-index: 1;
 }
 
 .vt-table .mono {
@@ -488,10 +502,6 @@ section {
 
 .vt-check.hash {
   color: var(--burnt);
-}
-
-.vt-table tbody td {
-  background: var(--panel);
 }
 
 .vt-btn {

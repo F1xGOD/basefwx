@@ -2,6 +2,7 @@ const repo = "F1xGOD/basefwx";
 const releaseApi = `https://api.github.com/repos/${repo}/releases/latest`;
 let latestReleaseTag = "";
 const vtHashes = new Map();
+const vtFlags = new Map();
 const VT_OK_ICON = `
   <svg class="vt-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 -960 960 960" aria-hidden="true">
     <path d="M382-240 154-468l57-57 171 171 367-367 57 57-424 424Z" />
@@ -99,6 +100,26 @@ const applyVtHashes = () => {
   });
 };
 
+const applyDownloadFlags = () => {
+  Object.entries(assetMap).forEach(([key, values]) => {
+    const flags = vtFlags.get(values.bin);
+    if (flags?.hashIssue) {
+      const download = document.querySelector(`[data-download="${key}"]`);
+      const sig = document.querySelector(`[data-asset="${key}.sig"]`);
+      if (download) {
+        download.href = "#";
+        download.classList.add("disabled");
+        download.setAttribute("title", "Download disabled due to hash mismatch");
+      }
+      if (sig) {
+        sig.href = "#";
+        sig.classList.add("disabled");
+        sig.setAttribute("title", "Signature disabled due to hash mismatch");
+      }
+    }
+  });
+};
+
 const getResultsBases = (tag) => {
   const mainBase = `https://raw.githubusercontent.com/${repo}/refs/heads/main/results`;
   const tagBase = tag ? `https://raw.githubusercontent.com/${repo}/refs/heads/results/${tag}/results` : "";
@@ -181,6 +202,7 @@ const loadVirusTotal = async () => {
 
     tableBody.innerHTML = "";
     vtHashes.clear();
+    vtFlags.clear();
     const toGuiLink = (file) => {
       if (file.sha256) {
         return `https://www.virustotal.com/gui/file/${file.sha256}`;
@@ -226,6 +248,7 @@ const loadVirusTotal = async () => {
         sha256: file.sha256 || "",
         md5: file.md5 || ""
       });
+      vtFlags.set(file.name || "", { hashIssue });
 
       row.innerHTML = `
         <td class="mono">
@@ -240,6 +263,7 @@ const loadVirusTotal = async () => {
       tableBody.appendChild(row);
     });
     applyVtHashes();
+    applyDownloadFlags();
   } catch (err) {
     summary.textContent = "VirusTotal results not available yet.";
     summary.className = "status-pill warn";

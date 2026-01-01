@@ -39,7 +39,7 @@ std::string ResolvePassword(const std::string& input) {
     }
     std::filesystem::path candidate(input);
     if (input.rfind("~/", 0) == 0 || input.rfind("~\\", 0) == 0) {
-        std::string home = basefwx::env::Get("HOME");
+        std::string home = basefwx::env::HomeDir();
         if (!home.empty()) {
             candidate = std::filesystem::path(home) / input.substr(2);
         }

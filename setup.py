@@ -26,4 +26,6 @@ setup(
     description="With BaseFWX you can encode securely!",
     long_description=read_readme(),
     long_description_content_type="text/markdown",
+    license="GPL-3.0-or-later",
+    license_files=["LICENCE"],
 )

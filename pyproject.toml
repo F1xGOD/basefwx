@@ -1,3 +1,7 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "basefwx"
 version = "3.5.2"
@@ -6,6 +10,7 @@ authors = [
 ]
 description = "Take your security to the next level!"
 readme = "README.md"
+license = { file = "LICENCE" }
 requires-python = ">=3.10"
 classifiers = [
     "Programming Language :: Python :: 3",

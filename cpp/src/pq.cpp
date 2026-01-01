@@ -95,7 +95,7 @@ bool ContainsCandidate(const std::vector<Bytes>& candidates, const Bytes& value)
 
 std::filesystem::path ExpandUser(const std::string& path) {
     if (path.rfind("~/", 0) == 0 || path.rfind("~\\", 0) == 0) {
-        std::string home = basefwx::env::Get("HOME");
+        std::string home = basefwx::env::HomeDir();
         if (!home.empty()) {
             return std::filesystem::path(home) / path.substr(2);
         }
@@ -155,7 +155,7 @@ std::optional<Bytes> LoadMasterPublicKey() {
 
 Bytes LoadMasterPrivateKey() {
     std::vector<std::filesystem::path> candidates;
-    std::string home = basefwx::env::Get("HOME");
+    std::string home = basefwx::env::HomeDir();
     if (!home.empty()) {
         candidates.emplace_back(std::filesystem::path(home) / "master_pq.sk");
     }

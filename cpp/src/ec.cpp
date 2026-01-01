@@ -22,7 +22,7 @@ using basefwx::constants::kMasterEcMagic;
 
 std::filesystem::path ExpandUser(const std::string& path) {
     if (path.rfind("~/", 0) == 0 || path.rfind("~\\", 0) == 0) {
-        std::string home = basefwx::env::Get("HOME");
+        std::string home = basefwx::env::HomeDir();
         if (!home.empty()) {
             return std::filesystem::path(home) / path.substr(2);
         }

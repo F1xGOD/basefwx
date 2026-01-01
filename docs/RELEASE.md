@@ -1,3 +1,8 @@
+---
+layout: doc
+title: Release
+---
+
 # Release & Signing
 
 This project attaches native CLI binaries to GitHub releases and signs them with GPG.

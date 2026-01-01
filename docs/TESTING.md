@@ -1,3 +1,8 @@
+---
+layout: doc
+title: Testing
+---
+
 # Testing
 
 ## Quick Run

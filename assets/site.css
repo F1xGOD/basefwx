@@ -75,33 +75,44 @@ a:visited { color: inherit; }
   box-shadow: 0 14px 35px rgba(125, 60, 255, 0.35);
   position: relative;
   overflow: hidden;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.brand-icon {
+  position: absolute;
+  inset: 0;
+  background-image: url("basefwx-plain.svg");
   background-position: center;
   background-repeat: no-repeat;
-  background-size: 70%;
+  background-size: 78%;
+  opacity: 1;
+  transition: opacity 0.2s ease;
 }
 
 .brand-cutout {
   position: absolute;
-  inset: 6px;
+  inset: 2px;
   background: var(--bg);
   -webkit-mask-image: url("basefwx-white.svg");
   -webkit-mask-repeat: no-repeat;
   -webkit-mask-position: center;
-  -webkit-mask-size: contain;
+  -webkit-mask-size: 94%;
   mask-image: url("basefwx-white.svg");
   mask-repeat: no-repeat;
   mask-position: center;
-  mask-size: contain;
+  mask-size: 94%;
+  opacity: 0;
+  transition: opacity 0.2s ease;
 }
 
-@supports not ((mask-image: url("basefwx-white.svg")) or (-webkit-mask-image: url("basefwx-white.svg"))) {
-  .brand-cutout {
-    display: none;
-  }
+.mask-ready .brand-icon {
+  opacity: 0;
+}
 
-  .brand-mark {
-    background-image: url("basefwx-plain.svg");
-  }
+.mask-ready .brand-cutout {
+  opacity: 1;
 }
 
 .brand-name {
@@ -396,18 +407,18 @@ section {
 
 .vt-table {
   width: 100%;
-  border-collapse: collapse;
+  border-collapse: separate;
+  border-spacing: 0 10px;
   font-size: 13px;
-  background: var(--panel);
-  border-radius: 16px;
-  overflow: hidden;
+  background: transparent;
 }
 
 .vt-table th,
 .vt-table td {
-  padding: 12px 14px;
-  border-bottom: 1px solid var(--border);
+  padding: 14px 16px;
+  border-bottom: none;
   text-align: left;
+  vertical-align: top;
 }
 
 .vt-table th {
@@ -415,6 +426,31 @@ section {
   text-transform: uppercase;
   letter-spacing: 1.2px;
   color: var(--muted);
+  background: var(--panel);
+}
+
+.vt-table thead th:first-child {
+  border-top-left-radius: 12px;
+  border-bottom-left-radius: 12px;
+}
+
+.vt-table thead th:last-child {
+  border-top-right-radius: 12px;
+  border-bottom-right-radius: 12px;
+}
+
+.vt-table tbody tr {
+  background: var(--panel);
+}
+
+.vt-table tbody td:first-child {
+  border-top-left-radius: 12px;
+  border-bottom-left-radius: 12px;
+}
+
+.vt-table tbody td:last-child {
+  border-top-right-radius: 12px;
+  border-bottom-right-radius: 12px;
 }
 
 .mono {

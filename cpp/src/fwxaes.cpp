@@ -5,6 +5,8 @@
 #include "basefwx/constants.hpp"
 #include "basefwx/crypto.hpp"
 #include "basefwx/env.hpp"
+#include "basefwx/format.hpp"
+#include "basefwx/keywrap.hpp"
 
 #include <chrono>
 #include <filesystem>
@@ -18,7 +20,8 @@ namespace {
 
 const std::uint8_t kMagic[4] = {'F', 'W', 'X', '1'};
 const std::uint8_t kAlgo = 0x01;
-const std::uint8_t kKdf = 0x01;
+const std::uint8_t kKdfPbkdf2 = 0x01;
+const std::uint8_t kKdfWrap = 0x02;
 const std::uint8_t kAadBytes[] = {'f', 'w', 'x', 'A', 'E', 'S'};
 const std::uint8_t kPackMagic[] = {'F', 'W', 'X', 'P', 'K', '1'};
 constexpr std::size_t kPackHeaderLen = sizeof(kPackMagic) + 1 + 8;
@@ -176,28 +179,74 @@ Bytes EncryptRaw(const Bytes& plaintext, const std::string& password, const Opti
     Options effective = options;
     effective.pbkdf2_iters = ResolveTestIters(options.pbkdf2_iters);
     effective.pbkdf2_iters = HardenPbkdf2Iterations(resolved, effective.pbkdf2_iters);
-    Bytes salt = basefwx::crypto::RandomBytes(effective.salt_len);
-    Bytes iv = basefwx::crypto::RandomBytes(effective.iv_len);
-    Bytes key = basefwx::crypto::Pbkdf2HmacSha256(resolved, salt, effective.pbkdf2_iters, 32);
-    Bytes aad(kAadBytes, kAadBytes + sizeof(kAadBytes));
-    Bytes ct = basefwx::crypto::AesGcmEncryptWithIv(key, iv, plaintext, aad);
+    if (!effective.use_master && resolved.empty()) {
+        throw std::runtime_error("Password required when master key usage is disabled");
+    }
+    bool use_wrap = false;
+    basefwx::keywrap::MaskKeyResult mask_key;
+    Bytes key_header;
+    if (effective.use_master) {
+        basefwx::pb512::KdfOptions kdf;
+        mask_key = basefwx::keywrap::PrepareMaskKey(
+            resolved,
+            true,
+            basefwx::constants::kFwxAesMaskInfo,
+            false,
+            std::string_view(reinterpret_cast<const char*>(kAadBytes), sizeof(kAadBytes)),
+            kdf
+        );
+        use_wrap = mask_key.used_master || resolved.empty();
+        if (use_wrap) {
+            std::vector<basefwx::format::Bytes> parts = {mask_key.user_blob, mask_key.master_blob};
+            key_header = basefwx::format::PackLengthPrefixed(parts);
+        }
+    }
 
+    Bytes iv = basefwx::crypto::RandomBytes(effective.iv_len);
+    Bytes aad(kAadBytes, kAadBytes + sizeof(kAadBytes));
+    Bytes key;
+    if (use_wrap) {
+        key = basefwx::crypto::HkdfSha256(basefwx::constants::kFwxAesKeyInfo, mask_key.mask_key, 32);
+    } else {
+        Bytes salt = basefwx::crypto::RandomBytes(effective.salt_len);
+        key = basefwx::crypto::Pbkdf2HmacSha256(resolved, salt, effective.pbkdf2_iters, 32);
+        Bytes ct = basefwx::crypto::AesGcmEncryptWithIv(key, iv, plaintext, aad);
+
+        Bytes blob;
+        blob.reserve(16 + salt.size() + iv.size() + ct.size());
+        blob.insert(blob.end(), kMagic, kMagic + 4);
+        blob.push_back(kAlgo);
+        blob.push_back(kKdfPbkdf2);
+        blob.push_back(effective.salt_len);
+        blob.push_back(effective.iv_len);
+        PutU32Be(blob, effective.pbkdf2_iters);
+        PutU32Be(blob, static_cast<std::uint32_t>(ct.size()));
+        blob.insert(blob.end(), salt.begin(), salt.end());
+        blob.insert(blob.end(), iv.begin(), iv.end());
+        blob.insert(blob.end(), ct.begin(), ct.end());
+        return blob;
+    }
+
+    Bytes ct = basefwx::crypto::AesGcmEncryptWithIv(key, iv, plaintext, aad);
+    if (key_header.size() > std::numeric_limits<std::uint32_t>::max()) {
+        throw std::runtime_error("fwxAES key header too large");
+    }
     Bytes blob;
-    blob.reserve(16 + salt.size() + iv.size() + ct.size());
+    blob.reserve(16 + key_header.size() + iv.size() + ct.size());
     blob.insert(blob.end(), kMagic, kMagic + 4);
     blob.push_back(kAlgo);
-    blob.push_back(kKdf);
-    blob.push_back(effective.salt_len);
+    blob.push_back(kKdfWrap);
+    blob.push_back(0);
     blob.push_back(effective.iv_len);
-    PutU32Be(blob, effective.pbkdf2_iters);
+    PutU32Be(blob, static_cast<std::uint32_t>(key_header.size()));
     PutU32Be(blob, static_cast<std::uint32_t>(ct.size()));
-    blob.insert(blob.end(), salt.begin(), salt.end());
+    blob.insert(blob.end(), key_header.begin(), key_header.end());
     blob.insert(blob.end(), iv.begin(), iv.end());
     blob.insert(blob.end(), ct.begin(), ct.end());
     return blob;
 }
 
-Bytes DecryptRaw(const Bytes& blob, const std::string& password) {
+Bytes DecryptRaw(const Bytes& blob, const std::string& password, bool use_master) {
     std::string resolved = basefwx::ResolvePassword(password);
     const std::size_t header_len = 16;
     if (blob.size() < header_len) {
@@ -210,15 +259,46 @@ Bytes DecryptRaw(const Bytes& blob, const std::string& password) {
     std::uint8_t kdf = blob[5];
     std::uint8_t salt_len = blob[6];
     std::uint8_t iv_len = blob[7];
-    if (algo != kAlgo || kdf != kKdf) {
+    if (algo != kAlgo || (kdf != kKdfPbkdf2 && kdf != kKdfWrap)) {
         throw std::runtime_error("fwxAES unsupported algo/kdf");
     }
     std::uint32_t iters = GetU32Be(&blob[8]);
     std::uint32_t ct_len = GetU32Be(&blob[12]);
 
     std::size_t offset = header_len;
+    if (kdf == kKdfWrap) {
+        std::size_t header_len_wrap = static_cast<std::size_t>(iters);
+        if (blob.size() < offset + header_len_wrap + iv_len + ct_len) {
+            throw std::runtime_error("fwxAES blob truncated");
+        }
+        Bytes header(blob.begin() + static_cast<std::ptrdiff_t>(offset),
+                     blob.begin() + static_cast<std::ptrdiff_t>(offset + header_len_wrap));
+        offset += header_len_wrap;
+        Bytes iv(blob.begin() + static_cast<std::ptrdiff_t>(offset),
+                 blob.begin() + static_cast<std::ptrdiff_t>(offset + iv_len));
+        offset += iv_len;
+        Bytes ct(blob.begin() + static_cast<std::ptrdiff_t>(offset),
+                 blob.begin() + static_cast<std::ptrdiff_t>(offset + ct_len));
+        auto parts = basefwx::format::UnpackLengthPrefixed(header, 2);
+        basefwx::pb512::KdfOptions kdf_opts;
+        Bytes mask_key = basefwx::keywrap::RecoverMaskKey(
+            parts[0],
+            parts[1],
+            resolved,
+            use_master,
+            basefwx::constants::kFwxAesMaskInfo,
+            std::string_view(reinterpret_cast<const char*>(kAadBytes), sizeof(kAadBytes)),
+            kdf_opts
+        );
+        Bytes key = basefwx::crypto::HkdfSha256(basefwx::constants::kFwxAesKeyInfo, mask_key, 32);
+        Bytes aad(kAadBytes, kAadBytes + sizeof(kAadBytes));
+        return basefwx::crypto::AesGcmDecryptWithIv(key, iv, ct, aad);
+    }
     if (blob.size() < offset + salt_len + iv_len + ct_len) {
         throw std::runtime_error("fwxAES blob truncated");
+    }
+    if (resolved.empty()) {
+        throw std::runtime_error("fwxAES password required for PBKDF2 payload");
     }
     Bytes salt(blob.begin() + offset, blob.begin() + offset + salt_len);
     offset += salt_len;
@@ -356,7 +436,8 @@ void EncryptFile(const std::string& path_in,
 
 void DecryptFile(const std::string& path_in,
                  const std::string& path_out,
-                 const std::string& password) {
+                 const std::string& password,
+                 bool use_master) {
     Bytes data = basefwx::ReadFile(path_in);
     Bytes blob;
     if (data.size() >= 4 && std::equal(std::begin(kMagic), std::end(kMagic), data.begin())) {
@@ -365,7 +446,7 @@ void DecryptFile(const std::string& path_in,
         std::string text(data.begin(), data.end());
         blob = NormalizeUnwrap(text);
     }
-    Bytes plaintext = DecryptRaw(blob, password);
+    Bytes plaintext = DecryptRaw(blob, password, use_master);
     basefwx::archive::PackMode pack_mode = basefwx::archive::PackMode::None;
     Bytes payload;
     if (TryUnwrapPackHeader(plaintext, pack_mode, payload)) {

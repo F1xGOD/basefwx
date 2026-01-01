@@ -4,6 +4,8 @@
 #include "basefwx/constants.hpp"
 #include "basefwx/crypto.hpp"
 #include "basefwx/env.hpp"
+#include "basefwx/format.hpp"
+#include "basefwx/keywrap.hpp"
 #include "basefwx/pb512.hpp"
 
 #define STB_IMAGE_IMPLEMENTATION
@@ -151,6 +153,69 @@ Bytes DeriveMaterial(const std::string& password) {
     std::uint32_t iters = ResolveImageKdfIterations();
     iters = HardenImageIterations(password, iters);
     return basefwx::crypto::Pbkdf2HmacSha256(password, salt, iters, 64);
+}
+
+Bytes DeriveMaterialFromMask(const Bytes& mask_key) {
+    return basefwx::crypto::HkdfSha256(basefwx::constants::kImageCipherStreamInfo, mask_key, 64);
+}
+
+Bytes BaseKeyFromMask(const Bytes& mask_key) {
+    return basefwx::crypto::HkdfSha256(basefwx::constants::kImageCipherStreamInfo, mask_key, 32);
+}
+
+Bytes ArchiveKeyFromMask(const Bytes& mask_key) {
+    return basefwx::crypto::HkdfSha256(basefwx::constants::kImageCipherArchiveInfo, mask_key, 32);
+}
+
+Bytes BuildJmgHeader(const Bytes& user_blob, const Bytes& master_blob) {
+    std::vector<basefwx::format::Bytes> parts = {user_blob, master_blob};
+    Bytes payload = basefwx::format::PackLengthPrefixed(parts);
+    Bytes header;
+    header.reserve(basefwx::constants::kJmgKeyMagic.size() + 1 + 4 + payload.size());
+    header.insert(header.end(),
+                  basefwx::constants::kJmgKeyMagic.begin(),
+                  basefwx::constants::kJmgKeyMagic.end());
+    header.push_back(basefwx::constants::kJmgKeyVersion);
+    std::uint32_t len = static_cast<std::uint32_t>(payload.size());
+    header.push_back(static_cast<std::uint8_t>((len >> 24) & 0xFF));
+    header.push_back(static_cast<std::uint8_t>((len >> 16) & 0xFF));
+    header.push_back(static_cast<std::uint8_t>((len >> 8) & 0xFF));
+    header.push_back(static_cast<std::uint8_t>(len & 0xFF));
+    header.insert(header.end(), payload.begin(), payload.end());
+    return header;
+}
+
+bool ParseJmgHeader(const Bytes& blob,
+                    std::size_t& header_len,
+                    Bytes& user_blob,
+                    Bytes& master_blob) {
+    const std::size_t header_min = basefwx::constants::kJmgKeyMagic.size() + 1 + 4;
+    if (blob.size() < header_min) {
+        return false;
+    }
+    if (std::memcmp(blob.data(),
+                    basefwx::constants::kJmgKeyMagic.data(),
+                    basefwx::constants::kJmgKeyMagic.size()) != 0) {
+        return false;
+    }
+    std::uint8_t version = blob[basefwx::constants::kJmgKeyMagic.size()];
+    if (version != basefwx::constants::kJmgKeyVersion) {
+        throw std::runtime_error("Unsupported JMG key header version");
+    }
+    std::uint32_t payload_len = (static_cast<std::uint32_t>(blob[basefwx::constants::kJmgKeyMagic.size() + 1]) << 24)
+                                | (static_cast<std::uint32_t>(blob[basefwx::constants::kJmgKeyMagic.size() + 2]) << 16)
+                                | (static_cast<std::uint32_t>(blob[basefwx::constants::kJmgKeyMagic.size() + 3]) << 8)
+                                | static_cast<std::uint32_t>(blob[basefwx::constants::kJmgKeyMagic.size() + 4]);
+    header_len = header_min + payload_len;
+    if (blob.size() < header_len) {
+        throw std::runtime_error("Truncated JMG key header");
+    }
+    Bytes payload(blob.begin() + static_cast<std::ptrdiff_t>(header_min),
+                  blob.begin() + static_cast<std::ptrdiff_t>(header_len));
+    auto parts = basefwx::format::UnpackLengthPrefixed(payload, 2);
+    user_blob = parts[0];
+    master_blob = parts[1];
+    return true;
 }
 
 std::uint64_t ReadU64Be(const std::uint8_t* data) {
@@ -327,14 +392,19 @@ void AppendTrailer(const std::filesystem::path& path, const Bytes& blob) {
 void AppendTrailerStream(const std::filesystem::path& output_path,
                          const std::filesystem::path& original_path,
                          const std::string& password,
-                         const std::function<void(double)>& progress_cb = {}) {
+                         const std::function<void(double)>& progress_cb = {},
+                         const Bytes& archive_key_override = Bytes{},
+                         const Bytes& key_header = Bytes{}) {
     auto magic = basefwx::constants::kImageCipherTrailerMagic;
     std::error_code ec;
     auto size = std::filesystem::file_size(original_path, ec);
     if (ec) {
         throw std::runtime_error("Failed to stat input for trailer");
     }
-    std::uint64_t blob_len = basefwx::constants::kAeadNonceLen + size + basefwx::constants::kAeadTagLen;
+    std::uint64_t blob_len = static_cast<std::uint64_t>(key_header.size())
+                             + basefwx::constants::kAeadNonceLen
+                             + size
+                             + basefwx::constants::kAeadTagLen;
     if (blob_len > std::numeric_limits<std::uint32_t>::max()) {
         throw std::runtime_error("Trailer too large");
     }
@@ -345,8 +415,11 @@ void AppendTrailerStream(const std::filesystem::path& output_path,
     len_bytes[2] = static_cast<std::uint8_t>((len >> 8) & 0xFF);
     len_bytes[3] = static_cast<std::uint8_t>(len & 0xFF);
 
-    Bytes material = DeriveMaterial(password);
-    Bytes archive_key = basefwx::crypto::HkdfSha256(basefwx::constants::kImageCipherArchiveInfo, material, 32);
+    Bytes archive_key = archive_key_override;
+    if (archive_key.empty()) {
+        Bytes material = DeriveMaterial(password);
+        archive_key = basefwx::crypto::HkdfSha256(basefwx::constants::kImageCipherArchiveInfo, material, 32);
+    }
     Bytes aad(basefwx::constants::kImageCipherArchiveInfo.begin(),
               basefwx::constants::kImageCipherArchiveInfo.end());
     Bytes nonce = basefwx::crypto::RandomBytes(basefwx::constants::kAeadNonceLen);
@@ -359,6 +432,10 @@ void AppendTrailerStream(const std::filesystem::path& output_path,
     out.write(magic.data(), static_cast<std::streamsize>(magic.size()));
     out.write(reinterpret_cast<const char*>(len_bytes.data()),
               static_cast<std::streamsize>(len_bytes.size()));
+    if (!key_header.empty()) {
+        out.write(reinterpret_cast<const char*>(key_header.data()),
+                  static_cast<std::streamsize>(key_header.size()));
+    }
     out.write(reinterpret_cast<const char*>(nonce.data()), static_cast<std::streamsize>(nonce.size()));
 
     EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();
@@ -440,127 +517,204 @@ bool TryDecryptTrailerStream(const std::filesystem::path& input_path,
     if (!input) {
         return false;
     }
-    input.seekg(static_cast<std::streamoff>(size - footer_len), std::ios::beg);
-    std::vector<std::uint8_t> footer(footer_len);
-    input.read(reinterpret_cast<char*>(footer.data()), static_cast<std::streamsize>(footer.size()));
-    if (input.gcount() != static_cast<std::streamsize>(footer.size())) {
-        return false;
-    }
-    if (std::memcmp(footer.data(), magic.data(), magic.size()) != 0) {
-        return false;
-    }
-    std::uint32_t blob_len = (static_cast<std::uint32_t>(footer[magic.size()]) << 24)
-                             | (static_cast<std::uint32_t>(footer[magic.size() + 1]) << 16)
-                             | (static_cast<std::uint32_t>(footer[magic.size() + 2]) << 8)
-                             | static_cast<std::uint32_t>(footer[magic.size() + 3]);
-    if (blob_len == 0) {
-        return false;
-    }
-    std::uint64_t trailer_start = size - footer_len - blob_len - footer_len;
-    if (static_cast<std::int64_t>(trailer_start) < 0) {
-        return false;
-    }
-    input.seekg(static_cast<std::streamoff>(trailer_start), std::ios::beg);
-    std::vector<std::uint8_t> header(footer_len);
-    input.read(reinterpret_cast<char*>(header.data()), static_cast<std::streamsize>(header.size()));
-    if (input.gcount() != static_cast<std::streamsize>(header.size())) {
-        return false;
-    }
-    if (std::memcmp(header.data(), magic.data(), magic.size()) != 0) {
-        return false;
-    }
-    std::uint32_t header_len = (static_cast<std::uint32_t>(header[magic.size()]) << 24)
-                               | (static_cast<std::uint32_t>(header[magic.size() + 1]) << 16)
-                               | (static_cast<std::uint32_t>(header[magic.size() + 2]) << 8)
-                               | static_cast<std::uint32_t>(header[magic.size() + 3]);
-    if (header_len != blob_len) {
-        return false;
-    }
-    std::uint64_t blob_start = trailer_start + footer_len;
-    input.seekg(static_cast<std::streamoff>(blob_start), std::ios::beg);
-
-    Bytes material = DeriveMaterial(password);
-    Bytes archive_key = basefwx::crypto::HkdfSha256(basefwx::constants::kImageCipherArchiveInfo, material, 32);
-    Bytes aad(basefwx::constants::kImageCipherArchiveInfo.begin(),
-              basefwx::constants::kImageCipherArchiveInfo.end());
-
-    Bytes nonce(basefwx::constants::kAeadNonceLen);
-    input.read(reinterpret_cast<char*>(nonce.data()), static_cast<std::streamsize>(nonce.size()));
-    if (input.gcount() != static_cast<std::streamsize>(nonce.size())) {
-        return false;
-    }
-    std::uint64_t cipher_len = blob_len - basefwx::constants::kAeadNonceLen - basefwx::constants::kAeadTagLen;
-
-    EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();
-    if (!ctx) {
-        return false;
-    }
-    std::vector<std::uint8_t> buffer(1024 * 1024);
-    std::vector<std::uint8_t> outbuf(buffer.size() + 16);
-    int out_len = 0;
-    std::ofstream output(output_path, std::ios::binary);
-    if (!output) {
-        EVP_CIPHER_CTX_free(ctx);
-        return false;
-    }
-
+    bool header_seen = false;
     try {
-        Ensure(EVP_DecryptInit_ex(ctx, EVP_aes_256_gcm(), nullptr, nullptr, nullptr) == 1,
-               "AES-GCM init failed");
-        Ensure(EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_IVLEN,
-                                   static_cast<int>(nonce.size()), nullptr) == 1,
-               "AES-GCM ivlen failed");
-        Ensure(EVP_DecryptInit_ex(ctx, nullptr, nullptr, archive_key.data(), nonce.data()) == 1,
-               "AES-GCM key init failed");
-        if (!aad.empty()) {
-            Ensure(EVP_DecryptUpdate(ctx, nullptr, &out_len,
-                                     aad.data(), static_cast<int>(aad.size())) == 1,
-                   "AES-GCM aad failed");
+        input.seekg(static_cast<std::streamoff>(size - footer_len), std::ios::beg);
+        std::vector<std::uint8_t> footer(footer_len);
+        input.read(reinterpret_cast<char*>(footer.data()), static_cast<std::streamsize>(footer.size()));
+        if (input.gcount() != static_cast<std::streamsize>(footer.size())) {
+            return false;
         }
-        std::uint64_t remaining = cipher_len;
-        std::uint64_t processed = 0;
-        while (remaining > 0) {
-            std::size_t take = static_cast<std::size_t>(std::min<std::uint64_t>(buffer.size(), remaining));
-            input.read(reinterpret_cast<char*>(buffer.data()), static_cast<std::streamsize>(take));
-            std::streamsize got = input.gcount();
-            if (got <= 0) {
-                EVP_CIPHER_CTX_free(ctx);
+        if (std::memcmp(footer.data(), magic.data(), magic.size()) != 0) {
+            return false;
+        }
+        std::uint32_t blob_len = (static_cast<std::uint32_t>(footer[magic.size()]) << 24)
+                                 | (static_cast<std::uint32_t>(footer[magic.size() + 1]) << 16)
+                                 | (static_cast<std::uint32_t>(footer[magic.size() + 2]) << 8)
+                                 | static_cast<std::uint32_t>(footer[magic.size() + 3]);
+        if (blob_len == 0) {
+            return false;
+        }
+        std::uint64_t trailer_start = size - footer_len - blob_len - footer_len;
+        if (static_cast<std::int64_t>(trailer_start) < 0) {
+            return false;
+        }
+        input.seekg(static_cast<std::streamoff>(trailer_start), std::ios::beg);
+        std::vector<std::uint8_t> header(footer_len);
+        input.read(reinterpret_cast<char*>(header.data()), static_cast<std::streamsize>(header.size()));
+        if (input.gcount() != static_cast<std::streamsize>(header.size())) {
+            return false;
+        }
+        if (std::memcmp(header.data(), magic.data(), magic.size()) != 0) {
+            return false;
+        }
+        std::uint32_t header_len = (static_cast<std::uint32_t>(header[magic.size()]) << 24)
+                                   | (static_cast<std::uint32_t>(header[magic.size() + 1]) << 16)
+                                   | (static_cast<std::uint32_t>(header[magic.size() + 2]) << 8)
+                                   | static_cast<std::uint32_t>(header[magic.size() + 3]);
+        if (header_len != blob_len) {
+            return false;
+        }
+        std::uint64_t blob_start = trailer_start + footer_len;
+        input.seekg(static_cast<std::streamoff>(blob_start), std::ios::beg);
+
+        Bytes archive_key;
+        Bytes nonce(basefwx::constants::kAeadNonceLen);
+        std::uint64_t cipher_len = 0;
+
+        Bytes prefix(basefwx::constants::kJmgKeyMagic.size());
+        input.read(reinterpret_cast<char*>(prefix.data()), static_cast<std::streamsize>(prefix.size()));
+        if (input.gcount() != static_cast<std::streamsize>(prefix.size())) {
+            return false;
+        }
+        if (std::memcmp(prefix.data(),
+                        basefwx::constants::kJmgKeyMagic.data(),
+                        basefwx::constants::kJmgKeyMagic.size()) == 0) {
+            header_seen = true;
+            std::array<std::uint8_t, 5> meta{};
+            input.read(reinterpret_cast<char*>(meta.data()), static_cast<std::streamsize>(meta.size()));
+            if (input.gcount() != static_cast<std::streamsize>(meta.size())) {
+                throw std::runtime_error("Truncated JMG key header");
+            }
+            std::uint32_t payload_len = (static_cast<std::uint32_t>(meta[1]) << 24)
+                                        | (static_cast<std::uint32_t>(meta[2]) << 16)
+                                        | (static_cast<std::uint32_t>(meta[3]) << 8)
+                                        | static_cast<std::uint32_t>(meta[4]);
+            if (payload_len > blob_len) {
+                throw std::runtime_error("Invalid JMG key header length");
+            }
+            Bytes header_bytes;
+            header_bytes.insert(header_bytes.end(), prefix.begin(), prefix.end());
+            header_bytes.insert(header_bytes.end(), meta.begin(), meta.end());
+            Bytes payload(payload_len);
+            if (payload_len > 0) {
+                input.read(reinterpret_cast<char*>(payload.data()), static_cast<std::streamsize>(payload.size()));
+                if (input.gcount() != static_cast<std::streamsize>(payload.size())) {
+                    throw std::runtime_error("Truncated JMG key header");
+                }
+                header_bytes.insert(header_bytes.end(), payload.begin(), payload.end());
+            }
+            std::size_t parsed_len = 0;
+            Bytes user_blob;
+            Bytes master_blob;
+            if (!ParseJmgHeader(header_bytes, parsed_len, user_blob, master_blob)) {
+                throw std::runtime_error("Invalid JMG key header");
+            }
+            basefwx::pb512::KdfOptions kdf;
+            Bytes mask_key = basefwx::keywrap::RecoverMaskKey(
+                user_blob,
+                master_blob,
+                password,
+                true,
+                basefwx::constants::kJmgMaskInfo,
+                basefwx::constants::kMaskAadJmg,
+                kdf
+            );
+            archive_key = ArchiveKeyFromMask(mask_key);
+            input.read(reinterpret_cast<char*>(nonce.data()),
+                       static_cast<std::streamsize>(nonce.size()));
+            if (input.gcount() != static_cast<std::streamsize>(nonce.size())) {
+                throw std::runtime_error("Truncated JMG trailer nonce");
+            }
+            if (blob_len < parsed_len + basefwx::constants::kAeadNonceLen + basefwx::constants::kAeadTagLen) {
+                throw std::runtime_error("Invalid JMG trailer length");
+            }
+            cipher_len = blob_len - parsed_len - basefwx::constants::kAeadNonceLen - basefwx::constants::kAeadTagLen;
+        } else {
+            Bytes material = DeriveMaterial(password);
+            archive_key = basefwx::crypto::HkdfSha256(basefwx::constants::kImageCipherArchiveInfo, material, 32);
+            std::memcpy(nonce.data(), prefix.data(), prefix.size());
+            std::size_t remaining = nonce.size() - prefix.size();
+            input.read(reinterpret_cast<char*>(nonce.data() + prefix.size()),
+                       static_cast<std::streamsize>(remaining));
+            if (input.gcount() != static_cast<std::streamsize>(remaining)) {
                 return false;
             }
-            Ensure(EVP_DecryptUpdate(ctx, outbuf.data(), &out_len,
-                                     buffer.data(), static_cast<int>(got)) == 1,
-                   "AES-GCM update failed");
-            if (out_len > 0) {
-                output.write(reinterpret_cast<const char*>(outbuf.data()), out_len);
+            if (blob_len < basefwx::constants::kAeadNonceLen + basefwx::constants::kAeadTagLen) {
+                return false;
             }
-            remaining -= static_cast<std::uint64_t>(got);
-            processed += static_cast<std::uint64_t>(got);
-            if (progress_cb && cipher_len > 0) {
-                double frac = static_cast<double>(processed) / static_cast<double>(cipher_len);
-                if (frac > 1.0) {
-                    frac = 1.0;
-                }
-                progress_cb(frac);
-            }
+            cipher_len = blob_len - basefwx::constants::kAeadNonceLen - basefwx::constants::kAeadTagLen;
         }
-        std::array<std::uint8_t, basefwx::constants::kAeadTagLen> tag{};
-        input.read(reinterpret_cast<char*>(tag.data()), static_cast<std::streamsize>(tag.size()));
-        if (input.gcount() != static_cast<std::streamsize>(tag.size())) {
+
+        Bytes aad(basefwx::constants::kImageCipherArchiveInfo.begin(),
+                  basefwx::constants::kImageCipherArchiveInfo.end());
+
+        EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();
+        if (!ctx) {
+            return false;
+        }
+        std::vector<std::uint8_t> buffer(1024 * 1024);
+        std::vector<std::uint8_t> outbuf(buffer.size() + 16);
+        int out_len = 0;
+        std::ofstream output(output_path, std::ios::binary);
+        if (!output) {
             EVP_CIPHER_CTX_free(ctx);
             return false;
         }
-        Ensure(EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_TAG,
-                                   static_cast<int>(tag.size()), tag.data()) == 1,
-               "AES-GCM tag failed");
-        Ensure(EVP_DecryptFinal_ex(ctx, outbuf.data(), &out_len) == 1,
-               "AES-GCM auth failed");
-    } catch (...) {
+
+        try {
+            Ensure(EVP_DecryptInit_ex(ctx, EVP_aes_256_gcm(), nullptr, nullptr, nullptr) == 1,
+                   "AES-GCM init failed");
+            Ensure(EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_IVLEN,
+                                       static_cast<int>(nonce.size()), nullptr) == 1,
+                   "AES-GCM ivlen failed");
+            Ensure(EVP_DecryptInit_ex(ctx, nullptr, nullptr, archive_key.data(), nonce.data()) == 1,
+                   "AES-GCM key init failed");
+            if (!aad.empty()) {
+                Ensure(EVP_DecryptUpdate(ctx, nullptr, &out_len,
+                                         aad.data(), static_cast<int>(aad.size())) == 1,
+                       "AES-GCM aad failed");
+            }
+            std::uint64_t remaining = cipher_len;
+            std::uint64_t processed = 0;
+            while (remaining > 0) {
+                std::size_t take = static_cast<std::size_t>(std::min<std::uint64_t>(buffer.size(), remaining));
+                input.read(reinterpret_cast<char*>(buffer.data()), static_cast<std::streamsize>(take));
+                std::streamsize got = input.gcount();
+                if (got <= 0) {
+                    EVP_CIPHER_CTX_free(ctx);
+                    return false;
+                }
+                Ensure(EVP_DecryptUpdate(ctx, outbuf.data(), &out_len,
+                                         buffer.data(), static_cast<int>(got)) == 1,
+                       "AES-GCM update failed");
+                if (out_len > 0) {
+                    output.write(reinterpret_cast<const char*>(outbuf.data()), out_len);
+                }
+                remaining -= static_cast<std::uint64_t>(got);
+                processed += static_cast<std::uint64_t>(got);
+                if (progress_cb && cipher_len > 0) {
+                    double frac = static_cast<double>(processed) / static_cast<double>(cipher_len);
+                    if (frac > 1.0) {
+                        frac = 1.0;
+                    }
+                    progress_cb(frac);
+                }
+            }
+            std::array<std::uint8_t, basefwx::constants::kAeadTagLen> tag{};
+            input.read(reinterpret_cast<char*>(tag.data()), static_cast<std::streamsize>(tag.size()));
+            if (input.gcount() != static_cast<std::streamsize>(tag.size())) {
+                EVP_CIPHER_CTX_free(ctx);
+                return false;
+            }
+            Ensure(EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_TAG,
+                                       static_cast<int>(tag.size()), tag.data()) == 1,
+                   "AES-GCM tag failed");
+            Ensure(EVP_DecryptFinal_ex(ctx, outbuf.data(), &out_len) == 1,
+                   "AES-GCM auth failed");
+        } catch (...) {
+            EVP_CIPHER_CTX_free(ctx);
+            throw;
+        }
+
         EVP_CIPHER_CTX_free(ctx);
+        return true;
+    } catch (...) {
+        if (header_seen) {
+            throw;
+        }
         return false;
     }
-
-    EVP_CIPHER_CTX_free(ctx);
-    return true;
 }
 
 bool ExtractTrailer(const Bytes& data, Bytes& payload, Bytes& trailer) {
@@ -611,8 +765,13 @@ void BuildMaskAndShuffle(const std::string& password,
                          std::vector<std::uint8_t>& mask,
                          std::vector<std::uint8_t>& rotations,
                          std::vector<std::size_t>& perm,
-                         Bytes& material) {
-    material = DeriveMaterial(password);
+                         Bytes& material,
+                         const Bytes* material_override = nullptr) {
+    if (material_override) {
+        material = *material_override;
+    } else {
+        material = DeriveMaterial(password);
+    }
     Bytes key(material.begin(), material.begin() + 32);
     Bytes nonce(material.begin() + 32, material.begin() + 48);
     std::array<std::uint8_t, 16> seed_bytes{};
@@ -719,8 +878,8 @@ std::string EncryptImageInv(const std::string& path,
                             const std::string& output,
                             bool include_trailer) {
     std::string resolved = basefwx::ResolvePassword(password);
-    if (resolved.empty()) {
-        throw std::runtime_error("Password is required for image encryption");
+    if (!include_trailer && resolved.empty()) {
+        throw std::runtime_error("Password is required for image encryption without trailer");
     }
     std::filesystem::path input_path = NormalizePath(path);
     if (!std::filesystem::exists(input_path)) {
@@ -735,8 +894,27 @@ std::string EncryptImageInv(const std::string& path,
     std::vector<std::uint8_t> rotations;
     std::vector<std::size_t> perm;
     Bytes material;
+    Bytes material_override;
+    Bytes archive_key;
+    Bytes trailer_header;
 
-    BuildMaskAndShuffle(resolved, num_pixels, image.channels, mask, rotations, perm, material);
+    if (include_trailer) {
+        basefwx::pb512::KdfOptions kdf;
+        auto mask_key = basefwx::keywrap::PrepareMaskKey(
+            resolved,
+            true,
+            basefwx::constants::kJmgMaskInfo,
+            false,
+            basefwx::constants::kMaskAadJmg,
+            kdf
+        );
+        material_override = DeriveMaterialFromMask(mask_key.mask_key);
+        archive_key = ArchiveKeyFromMask(mask_key.mask_key);
+        trailer_header = BuildJmgHeader(mask_key.user_blob, mask_key.master_blob);
+    }
+
+    BuildMaskAndShuffle(resolved, num_pixels, image.channels, mask, rotations, perm, material,
+                        include_trailer ? &material_override : nullptr);
 
     ApplyMask(image.pixels, mask);
     ApplyRotation(image.pixels, num_pixels, image.channels, rotations, false);
@@ -754,12 +932,12 @@ std::string EncryptImageInv(const std::string& path,
     WriteImage(output_path, image, fmt);
 
     if (include_trailer) {
-        Bytes archive_key = basefwx::crypto::HkdfSha256(basefwx::constants::kImageCipherArchiveInfo,
-                                                       material, 32);
         Bytes aad(basefwx::constants::kImageCipherArchiveInfo.begin(),
                   basefwx::constants::kImageCipherArchiveInfo.end());
         Bytes archive_blob = basefwx::crypto::AeadEncrypt(archive_key, original_bytes, aad);
-        AppendTrailer(output_path, archive_blob);
+        Bytes trailer = trailer_header;
+        trailer.insert(trailer.end(), archive_blob.begin(), archive_blob.end());
+        AppendTrailer(output_path, trailer);
     }
 
     return output_path.string();
@@ -769,9 +947,6 @@ std::string DecryptImageInv(const std::string& path,
                             const std::string& password,
                             const std::string& output) {
     std::string resolved = basefwx::ResolvePassword(password);
-    if (resolved.empty()) {
-        throw std::runtime_error("Password is required for image decryption");
-    }
     std::filesystem::path input_path = NormalizePath(path);
     if (!std::filesystem::exists(input_path)) {
         throw std::runtime_error("Input file not found: " + input_path.string());
@@ -782,19 +957,53 @@ std::string DecryptImageInv(const std::string& path,
     Bytes trailer;
     bool has_trailer = ExtractTrailer(file_bytes, payload, trailer);
 
-    Bytes material = DeriveMaterial(resolved);
-    Bytes archive_key = basefwx::crypto::HkdfSha256(basefwx::constants::kImageCipherArchiveInfo,
-                                                   material, 32);
-    Bytes aad(basefwx::constants::kImageCipherArchiveInfo.begin(),
-              basefwx::constants::kImageCipherArchiveInfo.end());
-
     std::filesystem::path output_path = output.empty() ? input_path : NormalizePath(output);
     if (has_trailer && !trailer.empty()) {
+        bool header_seen = false;
         try {
-            Bytes original_bytes = basefwx::crypto::AeadDecrypt(archive_key, trailer, aad);
+            std::size_t header_len = 0;
+            Bytes user_blob;
+            Bytes master_blob;
+            std::size_t magic_len = basefwx::constants::kJmgKeyMagic.size();
+            if (trailer.size() >= magic_len
+                && std::memcmp(trailer.data(), basefwx::constants::kJmgKeyMagic.data(), magic_len) == 0) {
+                header_seen = true;
+            }
+            bool header_parsed = ParseJmgHeader(trailer, header_len, user_blob, master_blob);
+            if (header_seen && !header_parsed) {
+                throw std::runtime_error("Invalid JMG key header");
+            }
+            header_seen = header_seen || header_parsed;
+            Bytes archive_key;
+            if (header_seen) {
+                basefwx::pb512::KdfOptions kdf;
+                Bytes mask_key = basefwx::keywrap::RecoverMaskKey(
+                    user_blob,
+                    master_blob,
+                    resolved,
+                    true,
+                    basefwx::constants::kJmgMaskInfo,
+                    basefwx::constants::kMaskAadJmg,
+                    kdf
+                );
+                archive_key = ArchiveKeyFromMask(mask_key);
+            } else {
+                Bytes material = DeriveMaterial(resolved);
+                archive_key = basefwx::crypto::HkdfSha256(basefwx::constants::kImageCipherArchiveInfo,
+                                                          material, 32);
+            }
+            Bytes aad(basefwx::constants::kImageCipherArchiveInfo.begin(),
+                      basefwx::constants::kImageCipherArchiveInfo.end());
+            Bytes archive_blob = header_seen
+                ? Bytes(trailer.begin() + static_cast<std::ptrdiff_t>(header_len), trailer.end())
+                : trailer;
+            Bytes original_bytes = basefwx::crypto::AeadDecrypt(archive_key, archive_blob, aad);
             WriteFileBytes(output_path, original_bytes);
             return output_path.string();
         } catch (const std::exception&) {
+            if (header_seen) {
+                throw;
+            }
         }
     }
 
@@ -1089,6 +1298,13 @@ struct BitrateTargets {
     std::optional<std::uint64_t> audio;
 };
 
+enum class HwAccel {
+    None,
+    Nvenc,
+    Qsv,
+    Vaapi
+};
+
 BitrateTargets EstimateBitrates(const std::filesystem::path& path,
                                 const VideoInfo& video,
                                 const AudioInfo& audio) {
@@ -1137,6 +1353,50 @@ BitrateTargets EstimateBitrates(const std::filesystem::path& path,
         targets.audio = audio_bps;
     }
     return targets;
+}
+
+HwAccel SelectHwAccel() {
+    static std::optional<HwAccel> cached;
+    if (cached.has_value()) {
+        return cached.value();
+    }
+    std::string raw = basefwx::env::Get("BASEFWX_HWACCEL");
+    std::string mode = ToLower(raw);
+    if (mode.empty()) {
+        mode = "auto";
+    }
+    if (mode == "0" || mode == "off" || mode == "false" || mode == "no") {
+        cached = HwAccel::None;
+        return cached.value();
+    }
+    std::string encoders;
+    try {
+        encoders = RunCommandCapture({"ffmpeg", "-hide_banner", "-encoders"});
+    } catch (const std::exception&) {
+        cached = HwAccel::None;
+        return cached.value();
+    }
+    bool has_nvenc = encoders.find("h264_nvenc") != std::string::npos;
+    bool has_qsv = encoders.find("h264_qsv") != std::string::npos;
+    bool has_vaapi = encoders.find("h264_vaapi") != std::string::npos;
+    HwAccel selected = HwAccel::None;
+    if (mode == "cuda" || mode == "nvenc" || mode == "nvidia") {
+        selected = has_nvenc ? HwAccel::Nvenc : HwAccel::None;
+    } else if (mode == "qsv" || mode == "intel") {
+        selected = has_qsv ? HwAccel::Qsv : HwAccel::None;
+    } else if (mode == "vaapi") {
+        selected = has_vaapi ? HwAccel::Vaapi : HwAccel::None;
+    } else {
+        if (has_nvenc) {
+            selected = HwAccel::Nvenc;
+        } else if (has_qsv) {
+            selected = HwAccel::Qsv;
+        } else if (has_vaapi) {
+            selected = HwAccel::Vaapi;
+        }
+    }
+    cached = selected;
+    return cached.value();
 }
 
 std::filesystem::path CreateTempDir(const std::string& prefix) {
@@ -1811,7 +2071,8 @@ bool IsImageExt(const std::filesystem::path& path) {
 }
 
 std::vector<std::string> VideoCodecArgs(const std::filesystem::path& output_path,
-                                        std::optional<std::uint64_t> target_bps) {
+                                        std::optional<std::uint64_t> target_bps,
+                                        HwAccel accel) {
     std::string ext = ToLower(output_path.extension().string());
     if (ext == ".webm") {
         if (target_bps.has_value()) {
@@ -1822,6 +2083,39 @@ std::vector<std::string> VideoCodecArgs(const std::filesystem::path& output_path
     }
     if (target_bps.has_value()) {
         std::uint64_t kbps = std::max<std::uint64_t>(100, target_bps.value() / 1000);
+        if (accel == HwAccel::Nvenc) {
+            return {
+                "-c:v", "h264_nvenc",
+                "-preset", "p4",
+                "-b:v", std::to_string(kbps) + "k",
+                "-maxrate", std::to_string(kbps) + "k",
+                "-bufsize", std::to_string(kbps * 2) + "k",
+                "-pix_fmt", "yuv420p"
+            };
+        }
+        if (accel == HwAccel::Qsv) {
+            return {
+                "-c:v", "h264_qsv",
+                "-b:v", std::to_string(kbps) + "k",
+                "-maxrate", std::to_string(kbps) + "k",
+                "-bufsize", std::to_string(kbps * 2) + "k",
+                "-pix_fmt", "yuv420p"
+            };
+        }
+        if (accel == HwAccel::Vaapi) {
+            std::string device = basefwx::env::Get("BASEFWX_VAAPI_DEVICE");
+            if (device.empty()) {
+                device = "/dev/dri/renderD128";
+            }
+            return {
+                "-vaapi_device", device,
+                "-vf", "format=nv12,hwupload",
+                "-c:v", "h264_vaapi",
+                "-b:v", std::to_string(kbps) + "k",
+                "-maxrate", std::to_string(kbps) + "k",
+                "-bufsize", std::to_string(kbps * 2) + "k"
+            };
+        }
         return {
             "-c:v", "libx264",
             "-preset", "veryfast",
@@ -1830,6 +2124,19 @@ std::vector<std::string> VideoCodecArgs(const std::filesystem::path& output_path
             "-bufsize", std::to_string(kbps * 2) + "k",
             "-pix_fmt", "yuv420p"
         };
+    }
+    if (accel == HwAccel::Nvenc) {
+        return {"-c:v", "h264_nvenc", "-preset", "p4", "-cq", "23", "-pix_fmt", "yuv420p"};
+    }
+    if (accel == HwAccel::Qsv) {
+        return {"-c:v", "h264_qsv", "-global_quality", "23", "-pix_fmt", "yuv420p"};
+    }
+    if (accel == HwAccel::Vaapi) {
+        std::string device = basefwx::env::Get("BASEFWX_VAAPI_DEVICE");
+        if (device.empty()) {
+            device = "/dev/dri/renderD128";
+        }
+        return {"-vaapi_device", device, "-vf", "format=nv12,hwupload", "-c:v", "h264_vaapi", "-qp", "23"};
     }
     return {"-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-pix_fmt", "yuv420p"};
 }
@@ -1875,9 +2182,6 @@ std::string EncryptMedia(const std::string& path,
                          bool keep_meta,
                          bool keep_input) {
     std::string resolved = basefwx::ResolvePassword(password);
-    if (resolved.empty()) {
-        throw std::runtime_error("Password is required for media encryption");
-    }
     std::filesystem::path input_path = NormalizePath(path);
     if (!std::filesystem::exists(input_path)) {
         throw std::runtime_error("Input file not found: " + input_path.string());
@@ -1952,7 +2256,18 @@ std::string EncryptMedia(const std::string& path,
             });
         }
 
-        Bytes base_key = BaseKeyFromPassword(resolved);
+        basefwx::pb512::KdfOptions kdf;
+        auto mask_key = basefwx::keywrap::PrepareMaskKey(
+            resolved,
+            true,
+            basefwx::constants::kJmgMaskInfo,
+            false,
+            basefwx::constants::kMaskAadJmg,
+            kdf
+        );
+        Bytes base_key = BaseKeyFromMask(mask_key.mask_key);
+        Bytes archive_key = ArchiveKeyFromMask(mask_key.mask_key);
+        Bytes trailer_header = BuildJmgHeader(mask_key.user_blob, mask_key.master_blob);
         if (video.valid) {
             auto video_cb = [&](double frac) {
                 progress.Update(0.25 + 0.45 * frac, "jmg-video", input_path);
@@ -1966,11 +2281,12 @@ std::string EncryptMedia(const std::string& path,
             ScrambleAudioRaw(raw_audio, raw_audio_out, audio, base_key, audio_cb);
         }
 
-        std::vector<std::string> cmd = {
+        HwAccel accel = SelectHwAccel();
+        std::vector<std::string> cmd_base = {
             "ffmpeg", "-y"
         };
         if (video.valid) {
-            cmd.insert(cmd.end(), {
+            cmd_base.insert(cmd_base.end(), {
                 "-f", "rawvideo",
                 "-pix_fmt", "rgb24",
                 "-s", std::to_string(video.width) + "x" + std::to_string(video.height),
@@ -1979,7 +2295,7 @@ std::string EncryptMedia(const std::string& path,
             });
         }
         if (audio.valid) {
-            cmd.insert(cmd.end(), {
+            cmd_base.insert(cmd_base.end(), {
                 "-f", "s16le",
                 "-ar", std::to_string(audio.sample_rate),
                 "-ac", std::to_string(audio.channels),
@@ -1990,30 +2306,57 @@ std::string EncryptMedia(const std::string& path,
         if (keep_meta) {
             auto tags = ProbeMetadata(input_path);
             for (const auto& meta : EncryptMetadataArgs(tags, resolved)) {
-                cmd.push_back("-metadata");
-                cmd.push_back(meta);
+                cmd_base.push_back("-metadata");
+                cmd_base.push_back(meta);
             }
         } else {
-            cmd.push_back("-map_metadata");
-            cmd.push_back("-1");
+            cmd_base.push_back("-map_metadata");
+            cmd_base.push_back("-1");
         }
+
+        std::vector<std::string> cmd = cmd_base;
+        std::vector<std::string> cmd_fallback;
+        bool use_fallback = false;
         if (video.valid) {
-            auto v_args = VideoCodecArgs(temp_output, targets.video);
+            auto v_args = VideoCodecArgs(temp_output, targets.video, accel);
             cmd.insert(cmd.end(), v_args.begin(), v_args.end());
+            if (accel != HwAccel::None) {
+                auto v_args_sw = VideoCodecArgs(temp_output, targets.video, HwAccel::None);
+                if (v_args != v_args_sw) {
+                    cmd_fallback = cmd_base;
+                    cmd_fallback.insert(cmd_fallback.end(), v_args_sw.begin(), v_args_sw.end());
+                    use_fallback = true;
+                }
+            }
         }
         if (audio.valid) {
             auto a_args = AudioCodecArgs(temp_output, targets.audio);
             cmd.insert(cmd.end(), a_args.begin(), a_args.end());
+            if (use_fallback) {
+                cmd_fallback.insert(cmd_fallback.end(), a_args.begin(), a_args.end());
+            }
         }
         auto c_args = ContainerArgs(temp_output);
         cmd.insert(cmd.end(), c_args.begin(), c_args.end());
         cmd.push_back(temp_output.string());
+        if (use_fallback) {
+            cmd_fallback.insert(cmd_fallback.end(), c_args.begin(), c_args.end());
+            cmd_fallback.push_back(temp_output.string());
+        }
         progress.Update(0.95, "encode", input_path);
-        RunCommand(cmd);
+        if (use_fallback) {
+            try {
+                RunCommand(cmd);
+            } catch (const std::exception&) {
+                RunCommand(cmd_fallback);
+            }
+        } else {
+            RunCommand(cmd);
+        }
         auto archive_cb = [&](double frac) {
             progress.Update(0.95 + 0.04 * frac, "archive", input_path);
         };
-        AppendTrailerStream(temp_output, input_path, resolved, archive_cb);
+        AppendTrailerStream(temp_output, input_path, resolved, archive_cb, archive_key, trailer_header);
         progress.Update(1.0, "done", input_path);
     } catch (...) {
         std::error_code ec;
@@ -2038,9 +2381,6 @@ std::string DecryptMedia(const std::string& path,
                          const std::string& password,
                          const std::string& output) {
     std::string resolved = basefwx::ResolvePassword(password);
-    if (resolved.empty()) {
-        throw std::runtime_error("Password is required for media decryption");
-    }
     std::filesystem::path input_path = NormalizePath(path);
     if (!std::filesystem::exists(input_path)) {
         throw std::runtime_error("Input file not found: " + input_path.string());
@@ -2077,19 +2417,58 @@ std::string DecryptMedia(const std::string& path,
         Bytes trailer;
         bool has_trailer = ExtractTrailer(file_bytes, payload, trailer);
         if (has_trailer && !trailer.empty()) {
-            Bytes material = DeriveMaterial(resolved);
-            Bytes archive_key = basefwx::crypto::HkdfSha256(basefwx::constants::kImageCipherArchiveInfo, material, 32);
-            Bytes aad(basefwx::constants::kImageCipherArchiveInfo.begin(),
-                      basefwx::constants::kImageCipherArchiveInfo.end());
-            Bytes original_bytes = basefwx::crypto::AeadDecrypt(archive_key, trailer, aad);
-            WriteFileBytes(temp_output, original_bytes);
-            progress.Update(1.0, "done", input_path);
-            if (!output_path.empty() && !std::filesystem::equivalent(output_path, temp_output, ec)) {
-                std::filesystem::rename(temp_output, output_path);
-                temp_output = output_path;
+            bool header_seen = false;
+            try {
+                std::size_t header_len = 0;
+                Bytes user_blob;
+                Bytes master_blob;
+                std::size_t magic_len = basefwx::constants::kJmgKeyMagic.size();
+                if (trailer.size() >= magic_len
+                    && std::memcmp(trailer.data(), basefwx::constants::kJmgKeyMagic.data(), magic_len) == 0) {
+                    header_seen = true;
+                }
+                bool header_parsed = ParseJmgHeader(trailer, header_len, user_blob, master_blob);
+                if (header_seen && !header_parsed) {
+                    throw std::runtime_error("Invalid JMG key header");
+                }
+                header_seen = header_seen || header_parsed;
+                Bytes archive_key;
+                if (header_seen) {
+                    basefwx::pb512::KdfOptions kdf;
+                    Bytes mask_key = basefwx::keywrap::RecoverMaskKey(
+                        user_blob,
+                        master_blob,
+                        resolved,
+                        true,
+                        basefwx::constants::kJmgMaskInfo,
+                        basefwx::constants::kMaskAadJmg,
+                        kdf
+                    );
+                    archive_key = ArchiveKeyFromMask(mask_key);
+                } else {
+                    Bytes material = DeriveMaterial(resolved);
+                    archive_key = basefwx::crypto::HkdfSha256(basefwx::constants::kImageCipherArchiveInfo,
+                                                              material, 32);
+                }
+                Bytes aad(basefwx::constants::kImageCipherArchiveInfo.begin(),
+                          basefwx::constants::kImageCipherArchiveInfo.end());
+                Bytes archive_blob = header_seen
+                    ? Bytes(trailer.begin() + static_cast<std::ptrdiff_t>(header_len), trailer.end())
+                    : trailer;
+                Bytes original_bytes = basefwx::crypto::AeadDecrypt(archive_key, archive_blob, aad);
+                WriteFileBytes(temp_output, original_bytes);
+                progress.Update(1.0, "done", input_path);
+                if (!output_path.empty() && !std::filesystem::equivalent(output_path, temp_output, ec)) {
+                    std::filesystem::rename(temp_output, output_path);
+                    temp_output = output_path;
+                }
+                progress.Finish();
+                return temp_output.string();
+            } catch (const std::exception&) {
+                if (header_seen) {
+                    throw;
+                }
             }
-            progress.Finish();
-            return temp_output.string();
         }
     }
 
@@ -2115,7 +2494,7 @@ std::string DecryptMedia(const std::string& path,
             std::filesystem::path fallback_out = output.empty()
                 ? input_path.parent_path() / input_path.stem()
                 : output_path;
-            basefwx::fwxaes::DecryptFile(input_path.string(), fallback_out.string(), resolved);
+            basefwx::fwxaes::DecryptFile(input_path.string(), fallback_out.string(), resolved, true);
             return fallback_out.string();
         }
         throw std::runtime_error("Unsupported media format");
@@ -2165,11 +2544,12 @@ std::string DecryptMedia(const std::string& path,
             UnscrambleAudioRaw(raw_audio, raw_audio_out, audio, base_key, audio_cb);
         }
 
-        std::vector<std::string> cmd = {
+        HwAccel accel = SelectHwAccel();
+        std::vector<std::string> cmd_base = {
             "ffmpeg", "-y"
         };
         if (video.valid) {
-            cmd.insert(cmd.end(), {
+            cmd_base.insert(cmd_base.end(), {
                 "-f", "rawvideo",
                 "-pix_fmt", "rgb24",
                 "-s", std::to_string(video.width) + "x" + std::to_string(video.height),
@@ -2178,7 +2558,7 @@ std::string DecryptMedia(const std::string& path,
             });
         }
         if (audio.valid) {
-            cmd.insert(cmd.end(), {
+            cmd_base.insert(cmd_base.end(), {
                 "-f", "s16le",
                 "-ar", std::to_string(audio.sample_rate),
                 "-ac", std::to_string(audio.channels),
@@ -2190,26 +2570,53 @@ std::string DecryptMedia(const std::string& path,
         auto decoded = DecryptMetadataArgs(tags, resolved);
         if (!decoded.empty()) {
             for (const auto& meta : decoded) {
-                cmd.push_back("-metadata");
-                cmd.push_back(meta);
+                cmd_base.push_back("-metadata");
+                cmd_base.push_back(meta);
             }
         } else {
-            cmd.push_back("-map_metadata");
-            cmd.push_back("-1");
+            cmd_base.push_back("-map_metadata");
+            cmd_base.push_back("-1");
         }
+
+        std::vector<std::string> cmd = cmd_base;
+        std::vector<std::string> cmd_fallback;
+        bool use_fallback = false;
         if (video.valid) {
-            auto v_args = VideoCodecArgs(temp_output, targets.video);
+            auto v_args = VideoCodecArgs(temp_output, targets.video, accel);
             cmd.insert(cmd.end(), v_args.begin(), v_args.end());
+            if (accel != HwAccel::None) {
+                auto v_args_sw = VideoCodecArgs(temp_output, targets.video, HwAccel::None);
+                if (v_args != v_args_sw) {
+                    cmd_fallback = cmd_base;
+                    cmd_fallback.insert(cmd_fallback.end(), v_args_sw.begin(), v_args_sw.end());
+                    use_fallback = true;
+                }
+            }
         }
         if (audio.valid) {
             auto a_args = AudioCodecArgs(temp_output, targets.audio);
             cmd.insert(cmd.end(), a_args.begin(), a_args.end());
+            if (use_fallback) {
+                cmd_fallback.insert(cmd_fallback.end(), a_args.begin(), a_args.end());
+            }
         }
         auto c_args = ContainerArgs(temp_output);
         cmd.insert(cmd.end(), c_args.begin(), c_args.end());
         cmd.push_back(temp_output.string());
+        if (use_fallback) {
+            cmd_fallback.insert(cmd_fallback.end(), c_args.begin(), c_args.end());
+            cmd_fallback.push_back(temp_output.string());
+        }
         progress.Update(0.95, "encode", input_path);
-        RunCommand(cmd);
+        if (use_fallback) {
+            try {
+                RunCommand(cmd);
+            } catch (const std::exception&) {
+                RunCommand(cmd_fallback);
+            }
+        } else {
+            RunCommand(cmd);
+        }
         progress.Update(1.0, "done", input_path);
     } catch (...) {
         std::filesystem::remove_all(temp_dir, ec);

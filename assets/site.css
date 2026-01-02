@@ -453,6 +453,8 @@ section {
 .vt-table tbody td {
   background: var(--panel);
   font-weight: 500;
+  padding-top: 0;
+  padding-bottom: 0;
 }
 
 .vt-table tbody td.mono {
@@ -535,6 +537,10 @@ section {
 
 .vt-table tbody td:first-child {
   text-align: left;
+}
+
+.vt-table tbody tr {
+  height: 56px;
 }
 
 .mono {

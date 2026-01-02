@@ -26,6 +26,14 @@ std::string ResolvePassword(const std::string& input);
 
 std::string B256Encode(const std::string& input);
 std::string B256Decode(const std::string& input);
+std::string B64Encode(const std::string& input);
+std::string B64Decode(const std::string& input);
+std::string Hash512(const std::string& input);
+std::string Uhash513(const std::string& input);
+std::string Bi512Encode(const std::string& input);
+std::string A512Encode(const std::string& input);
+std::string A512Decode(const std::string& input);
+std::string B1024Encode(const std::string& input);
 
 struct KdfOptions {
     std::string label = "auto";

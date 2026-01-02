@@ -76,7 +76,7 @@ class basefwx:
     PACK_TAR_XZ = "x"
     PACK_SUFFIX_GZ = ".tgz"
     PACK_SUFFIX_XZ = ".txz"
-    ENGINE_VERSION = "3.5.3"
+    ENGINE_VERSION = "3.6.1"
     MASTER_PQ_ALG = "ml-kem-768"
     MASTER_PQ_PUBLIC = b"eJwBoARf+/rkrYxhXn0CNFqTkzQUrIYloydzGrqpIuWXi+qnLO/XRnspzQBDwwTKLW3Ku6Zwii1AfriFM5t8PtugqMNFt/5HoHxIZLGkytTWKP3IKoP7EH2HFu14b5bagh+KIFTWoW12qZqLRNjJLBHZmzxasEIsN7AnsOiokMHxt4XwoLk5fscIhXSANBZpHUVEO+NkBhg5UnvzWkzAqPm6rEvCfE+CHxgFg1SjBJeFfVMyzpKpsUi6iCGXSl6nZuTkr10btfi8RHCEfxDrfhcJk0bsKMWEI6wVY23KQXXlmcJ4VydGZ/ZbjWhVbX6bo0DKqG5IlwpTDPJIwlumRpxbBog8JG10p8PTaRJEAKfiVo7jiD1Aki7hYqmyyBn2Q0RFy03Bm/Rpy1zlK3DahaaoMj1mJrJ5ff2FYYVsBQbrywcDUcdHUkIpUqwrrRyqdEIHq1T6AiKHmf2KHTXQnLuZpJ3Ih59bkH1GC2UzbEIWzFSImvQDkswCBW9cF0tFYCNnReiReb57XAjaW3smdOg1o9oyk2IbyptJtNe1teHoPsMJkBGin/ugUeFmEOa0f8lTEmK4u1/GxHrQxD65kxm2IHT4NPM8Z5oqQ9z0WthUE5MouNrZLK8EltZQzAcZJ/g7CesRi40qFecyD14hDPBcr6cEV6yqOXXrcDRQVCUhuYRyUNqrFe4JPks2kZlxXjABHMD1PHVzfJpsAtsTDJa2EdpoAkKRvfg2QOK6CpYix6zIyB1yGwdCG8L2QS9DQefDQntXDlwSIieqRrwmiWcba4mSgwfxsoH2SIbQPZKbtEA4XNGqen1CcldAw1w2mnO3otspreJEBZJjVSihGcoyVjWap9dWc0pLffeDC5mUyOTzWUQ3XBAxX817G9rIbFyMQ+4AdeP2zL/nk9s2wYuZT2MEbwTHW/6UJQXbRf+svg9Kq//ryl/YRiaxdK2xRkP7oaBBVbyyXxYUJEhXOD7cUar8HsGZlXmiDSxzCBZSJG+4ooAgOKfEx6liOvqHBQKrsG4ylg3JQqmKBUdXcf6cMImRqS4MFM23vQkSPqIckxGgkrJGDKLGg8DKsuOqUvkzexAWviAIJQZsJsqjUl2stBgnltsyysE2cdI5Poh7KgOFV27bfi4iCpFSXc46Aa2jjN0WFYAgfhcRXgvIanJ3L8/sPrR7QKvpTtPFSfdcBipqp8vRdYImF5HceU1TU+QwtOcmCKDmaDTBGtJLZDXYJ3/2VQAEr8Mhk1WxGQsWUikZBi9pHTTbh93gvl9gLaGlxlRCjwzSqcJVXF80UiVMA06hfDnzi9MFpIGZL0czax+1zwdLFsnnHLGLzm/YpgrUBIk0gTgMVhqiu0+JyagxwrXCsDmGbhj8PzJGUeR8xhoxzOtTMgtaFwekbEAss+JGzuZJeakDxhMJEvvbKabIFDeQLsImO4eaAslqXyNoSg7AtnDlHfzTTFvwk2/UppeXNmcEC9n1UyfyWNW6qAZRJe5zQkijzLfkGKWsR/ksjmUQwMHwOOWVQ8qqUapYxsmbZkosPBXRDNBhY6PNjfciD2hRoIqrd/pnkJ6cZd1FQyxge6FA3PMpHw=="
     MASTER_EC_MAGIC = b"EC1"
@@ -97,6 +97,7 @@ class basefwx:
     B512_AEAD_INFO = b'basefwx.b512file.v1'
     B512_FILE_MASK_INFO = b'basefwx.b512file.mask.v1'
     ENABLE_OBFUSCATION = os.getenv("BASEFWX_OBFUSCATE", "1") == "1"
+    ENABLE_CODEC_OBFUSCATION = os.getenv("BASEFWX_OBFUSCATE_CODECS", "1") == "1"
     OBF_INFO_MASK = b'basefwx.obf.mask.v1'
     OBF_INFO_PERM = b'basefwx.obf.perm.v1'
     STREAM_THRESHOLD = 250 * 1024
@@ -2273,6 +2274,228 @@ class basefwx:
         return aesgcm.decrypt(iv, ct, basefwx.FWXAES_AAD)
 
     @staticmethod
+    def _is_seekable(handle) -> bool:
+        try:
+            return bool(handle.seekable())
+        except Exception:
+            return False
+
+    @staticmethod
+    def fwxAES_encrypt_stream(
+        source,
+        dest,
+        password: "basefwx.typing.Union[str, bytes, bytearray, memoryview]",
+        *,
+        use_master: bool = True,
+        chunk_size: int | None = None
+    ) -> int:
+        password = basefwx._resolve_password(password, use_master=use_master)
+        pw = basefwx._coerce_password_bytes(password)
+        chunk = basefwx.STREAM_CHUNK_SIZE if chunk_size is None else max(1, int(chunk_size))
+
+        def _encrypt_to(handle) -> int:
+            use_wrap = False
+            key_header = b""
+            mask_key = b""
+            if use_master:
+                try:
+                    mask_key, user_blob, master_blob, use_master_effective = basefwx._prepare_mask_key(
+                        password,
+                        use_master,
+                        mask_info=basefwx.FWXAES_MASK_INFO,
+                        require_password=False,
+                        aad=basefwx.FWXAES_AAD
+                    )
+                    use_wrap = use_master_effective or not pw
+                    if use_wrap:
+                        key_header = basefwx._pack_length_prefixed(user_blob, master_blob)
+                except Exception:
+                    if not pw:
+                        raise
+                    use_wrap = False
+            iv = basefwx.os.urandom(basefwx.FWXAES_IV_LEN)
+            header = bytearray()
+            header += basefwx.FWXAES_MAGIC
+            ct_len = 0
+            if use_wrap:
+                header_len = len(key_header)
+                if header_len > 0xFFFFFFFF:
+                    raise ValueError("fwxAES key header too large")
+                key = basefwx._hkdf_sha256(mask_key, info=basefwx.FWXAES_KEY_INFO, length=basefwx.FWXAES_KEY_LEN)
+                header += bytes([
+                    basefwx.FWXAES_ALGO,
+                    basefwx.FWXAES_KDF_WRAP,
+                    0,
+                    basefwx.FWXAES_IV_LEN
+                ])
+                header += basefwx.struct.pack(">I", header_len)
+                header += basefwx.struct.pack(">I", 0)
+                handle.write(header)
+                handle.write(key_header)
+                handle.write(iv)
+            else:
+                if not pw and not use_master:
+                    raise ValueError("Password required when master key usage is disabled")
+                salt = basefwx.os.urandom(basefwx.FWXAES_SALT_LEN)
+                iters = basefwx._fwxaes_iterations(pw)
+                key = basefwx._kdf_pbkdf2_raw(pw, salt, iters)
+                header += bytes([
+                    basefwx.FWXAES_ALGO,
+                    basefwx.FWXAES_KDF_PBKDF2,
+                    basefwx.FWXAES_SALT_LEN,
+                    basefwx.FWXAES_IV_LEN
+                ])
+                header += basefwx.struct.pack(">I", iters)
+                header += basefwx.struct.pack(">I", 0)
+                handle.write(header)
+                handle.write(salt)
+                handle.write(iv)
+
+            encryptor = basefwx.Cipher(
+                basefwx.algorithms.AES(key),
+                basefwx.modes.GCM(iv)
+            ).encryptor()
+            encryptor.authenticate_additional_data(basefwx.FWXAES_AAD)
+            while True:
+                buf = source.read(chunk)
+                if not buf:
+                    break
+                ct = encryptor.update(buf)
+                if ct:
+                    handle.write(ct)
+                    ct_len += len(ct)
+            tail = encryptor.finalize()
+            if tail:
+                handle.write(tail)
+                ct_len += len(tail)
+            handle.write(encryptor.tag)
+            ct_len += len(encryptor.tag)
+            handle.flush()
+            handle.seek(12)
+            handle.write(basefwx.struct.pack(">I", ct_len))
+            handle.seek(0, basefwx.os.SEEK_END)
+            return ct_len
+
+        if basefwx._is_seekable(dest):
+            return _encrypt_to(dest)
+
+        tmp = basefwx.tempfile.NamedTemporaryFile("w+b", delete=False)
+        try:
+            ct_len = _encrypt_to(tmp)
+            tmp.seek(0)
+            basefwx.shutil.copyfileobj(tmp, dest)
+            return ct_len
+        finally:
+            tmp.close()
+            try:
+                basefwx.os.remove(tmp.name)
+            except FileNotFoundError:
+                pass
+
+    @staticmethod
+    def fwxAES_decrypt_stream(
+        source,
+        dest,
+        password: "basefwx.typing.Union[str, bytes, bytearray, memoryview]",
+        *,
+        use_master: bool = True,
+        chunk_size: int | None = None
+    ) -> int:
+        password = basefwx._resolve_password(password, use_master=use_master)
+        chunk = basefwx.STREAM_CHUNK_SIZE if chunk_size is None else max(1, int(chunk_size))
+
+        def _decrypt_from(handle) -> int:
+            header = handle.read(16)
+            if len(header) < 16:
+                raise ValueError("fwxAES blob too short")
+            if header[:4] != basefwx.FWXAES_MAGIC:
+                raise ValueError("fwxAES bad magic")
+            algo, kdf, salt_len, iv_len = header[4], header[5], header[6], header[7]
+            if algo != basefwx.FWXAES_ALGO or kdf not in (basefwx.FWXAES_KDF_PBKDF2, basefwx.FWXAES_KDF_WRAP):
+                raise ValueError("fwxAES unsupported algo/kdf")
+            iters = basefwx.struct.unpack(">I", header[8:12])[0]
+            ct_len = basefwx.struct.unpack(">I", header[12:16])[0]
+            if ct_len < basefwx.AEAD_TAG_LEN:
+                raise ValueError("fwxAES ciphertext too short")
+            if kdf == basefwx.FWXAES_KDF_WRAP:
+                header_len = iters
+                key_header = handle.read(header_len)
+                if len(key_header) != header_len:
+                    raise ValueError("fwxAES blob truncated")
+                iv = handle.read(iv_len)
+                if len(iv) != iv_len:
+                    raise ValueError("fwxAES blob truncated")
+                user_blob, master_blob = basefwx._unpack_length_prefixed(key_header, 2)
+                mask_key = basefwx._recover_mask_key_from_blob(
+                    user_blob,
+                    master_blob,
+                    password,
+                    use_master,
+                    mask_info=basefwx.FWXAES_MASK_INFO,
+                    aad=basefwx.FWXAES_AAD
+                )
+                key = basefwx._hkdf_sha256(mask_key, info=basefwx.FWXAES_KEY_INFO, length=basefwx.FWXAES_KEY_LEN)
+            else:
+                salt = handle.read(salt_len)
+                if len(salt) != salt_len:
+                    raise ValueError("fwxAES blob truncated")
+                iv = handle.read(iv_len)
+                if len(iv) != iv_len:
+                    raise ValueError("fwxAES blob truncated")
+                pw = basefwx._coerce_password_bytes(password)
+                if not pw:
+                    raise ValueError("fwxAES password required for PBKDF2 payload")
+                key = basefwx._kdf_pbkdf2_raw(pw, salt, iters)
+
+            ct_start = handle.tell()
+            tag_pos = ct_start + ct_len - basefwx.AEAD_TAG_LEN
+            handle.seek(tag_pos)
+            tag = handle.read(basefwx.AEAD_TAG_LEN)
+            if len(tag) != basefwx.AEAD_TAG_LEN:
+                raise ValueError("fwxAES blob truncated")
+            decryptor = basefwx.Cipher(
+                basefwx.algorithms.AES(key),
+                basefwx.modes.GCM(iv, tag)
+            ).decryptor()
+            decryptor.authenticate_additional_data(basefwx.FWXAES_AAD)
+            handle.seek(ct_start)
+            remaining = ct_len - basefwx.AEAD_TAG_LEN
+            written = 0
+            while remaining > 0:
+                buf = handle.read(min(chunk, remaining))
+                if not buf:
+                    raise ValueError("fwxAES blob truncated")
+                remaining -= len(buf)
+                plain = decryptor.update(buf)
+                if plain:
+                    dest.write(plain)
+                    written += len(plain)
+            try:
+                tail = decryptor.finalize()
+            except Exception as exc:
+                raise ValueError("AES-GCM auth failed") from exc
+            if tail:
+                dest.write(tail)
+                written += len(tail)
+            return written
+
+        if basefwx._is_seekable(source):
+            return _decrypt_from(source)
+
+        tmp = basefwx.tempfile.NamedTemporaryFile("w+b", delete=False)
+        try:
+            basefwx.shutil.copyfileobj(source, tmp)
+            tmp.flush()
+            tmp.seek(0)
+            return _decrypt_from(tmp)
+        finally:
+            tmp.close()
+            try:
+                basefwx.os.remove(tmp.name)
+            except FileNotFoundError:
+                pass
+
+    @staticmethod
     def _bytes_to_bits(data: bytes) -> str:
         return "".join(f"{b:08b}" for b in data)
 
@@ -2438,14 +2661,42 @@ class basefwx:
         return basefwx.hashlib.sha256(string.encode('utf-8')).hexdigest()
 
     @staticmethod
-    def uhash513(string: str):
+    def _looks_like_base64(text: str) -> bool:
+        try:
+            basefwx.base64.b64decode(text, validate=True)
+            return True
+        except Exception:
+            return False
 
+    @staticmethod
+    def _maybe_obfuscate_codecs(text: str) -> str:
+        if not basefwx.ENABLE_CODEC_OBFUSCATION:
+            return text
+        return basefwx.code(text)
+
+    @staticmethod
+    def _maybe_deobfuscate_codecs(text: str) -> str:
+        if basefwx._looks_like_base64(text):
+            return text
+        try:
+            return basefwx.decode(text)
+        except Exception:
+            return text
+
+    @staticmethod
+    def uhash513(string: str):
         sti = string
-        return basefwx.hashlib.sha256(basefwx.b512encode(basefwx.hashlib.sha512(
-            basefwx.hashlib.sha1(
-                basefwx.hashlib.sha256(sti.encode('utf-8')).hexdigest().encode('utf-8')).hexdigest().encode(
-                "utf-8")).hexdigest(), basefwx.hashlib.sha512(sti.encode('utf-8')).hexdigest()).encode(
-            'utf-8')).hexdigest()
+        if basefwx.os.getenv("BASEFWX_UHASH_LEGACY") == "1":
+            return basefwx.hashlib.sha256(basefwx.b512encode(basefwx.hashlib.sha512(
+                basefwx.hashlib.sha1(
+                    basefwx.hashlib.sha256(sti.encode('utf-8')).hexdigest().encode('utf-8')).hexdigest().encode(
+                    "utf-8")).hexdigest(), basefwx.hashlib.sha512(sti.encode('utf-8')).hexdigest()).encode(
+                'utf-8')).hexdigest()
+        h1 = basefwx.hashlib.sha256(sti.encode('utf-8')).hexdigest()
+        h2 = basefwx.hashlib.sha1(h1.encode('utf-8')).hexdigest()
+        h3 = basefwx.hashlib.sha512(h2.encode('utf-8')).hexdigest()
+        h4 = basefwx.hashlib.sha512(sti.encode('utf-8')).hexdigest()
+        return basefwx.hashlib.sha256((h3 + h4).encode('utf-8')).hexdigest()
 
     # REVERSIBLE CODE ENCODE - SECURITY: ❙❙
     @staticmethod
@@ -2466,6 +2717,7 @@ class basefwx:
         payload = b'\x02' + len(plain_bytes).to_bytes(4, 'big') + masked
         blob = basefwx._pack_length_prefixed(user_blob, master_blob, payload)
         result = basefwx.base64.b64encode(blob).decode('utf-8')
+        result = basefwx._maybe_obfuscate_codecs(result)
         basefwx._del('mask_key')
         basefwx._del('plain_bytes')
         basefwx._del('masked')
@@ -2477,6 +2729,7 @@ class basefwx:
         if not key and not use_master:
             raise ValueError("Password required when PQ master key wrapping is disabled")
         try:
+            digs = basefwx._maybe_deobfuscate_codecs(digs)
             raw = basefwx.base64.b64decode(digs)
         except Exception as exc:
             if basefwx.os.getenv("BASEFWX_ALLOW_LEGACY_CODECS") == "1":
@@ -2628,6 +2881,7 @@ class basefwx:
         payload = b'\x02' + len(plain_bytes).to_bytes(4, 'big') + masked
         blob = basefwx._pack_length_prefixed(user_blob, master_blob, payload)
         result = basefwx.base64.b64encode(blob).decode('utf-8')
+        result = basefwx._maybe_obfuscate_codecs(result)
         basefwx._del('mask_key')
         basefwx._del('plain_bytes')
         basefwx._del('masked')
@@ -2639,6 +2893,7 @@ class basefwx:
         if not key and not use_master:
             raise ValueError("Password required when PQ master key wrapping is disabled")
         try:
+            enc = basefwx._maybe_deobfuscate_codecs(enc)
             raw = basefwx.base64.b64decode(enc)
         except Exception as exc:
             if basefwx.os.getenv("BASEFWX_ALLOW_LEGACY_CODECS") == "1":
@@ -6747,6 +7002,86 @@ class basefwx:
         padding_count = encoded.count("=")
         return encoded.rstrip("=") + str(padding_count)
 
+    @staticmethod
+    def _strip_leading_zeros(number: str) -> str:
+        if not number:
+            return "0"
+        idx = 0
+        while idx < len(number) and number[idx] == "0":
+            idx += 1
+        return number[idx:] or "0"
+
+    @staticmethod
+    def _compare_magnitude(a: str, b: str) -> int:
+        aa = basefwx._strip_leading_zeros(a)
+        bb = basefwx._strip_leading_zeros(b)
+        if len(aa) != len(bb):
+            return -1 if len(aa) < len(bb) else 1
+        if aa == bb:
+            return 0
+        return -1 if aa < bb else 1
+
+    @staticmethod
+    def _add_magnitude(a: str, b: str) -> str:
+        ia = len(a) - 1
+        ib = len(b) - 1
+        carry = 0
+        out = []
+        while ia >= 0 or ib >= 0 or carry:
+            da = int(a[ia]) if ia >= 0 else 0
+            db = int(b[ib]) if ib >= 0 else 0
+            total = da + db + carry
+            out.append(str(total % 10))
+            carry = total // 10
+            ia -= 1
+            ib -= 1
+        return basefwx._strip_leading_zeros("".join(reversed(out)))
+
+    @staticmethod
+    def _subtract_magnitude(a: str, b: str) -> str:
+        ia = len(a) - 1
+        ib = len(b) - 1
+        borrow = 0
+        out = []
+        while ia >= 0:
+            da = int(a[ia]) - borrow
+            db = int(b[ib]) if ib >= 0 else 0
+            if da < db:
+                da += 10
+                borrow = 1
+            else:
+                borrow = 0
+            out.append(str(da - db))
+            ia -= 1
+            ib -= 1
+        return basefwx._strip_leading_zeros("".join(reversed(out)))
+
+    @staticmethod
+    def _add_signed(a: str, b: str) -> str:
+        def parse_signed(value: str) -> tuple[bool, str]:
+            if not value:
+                return False, "0"
+            negative = value[0] == "-"
+            digits = value[1:] if negative else value
+            digits = basefwx._strip_leading_zeros(digits)
+            if digits == "0":
+                negative = False
+            return negative, digits
+
+        neg_a, da = parse_signed(a)
+        neg_b, db = parse_signed(b)
+        if neg_a == neg_b:
+            total = basefwx._add_magnitude(da, db)
+            return ("-" + total) if neg_a and total != "0" else total
+        cmp = basefwx._compare_magnitude(da, db)
+        if cmp == 0:
+            return "0"
+        if cmp > 0:
+            diff = basefwx._subtract_magnitude(da, db)
+            return ("-" + diff) if neg_a else diff
+        diff = basefwx._subtract_magnitude(db, da)
+        return ("-" + diff) if neg_b else diff
+
     @classmethod
     def decode(cls, sttr: str) -> str:
         if not sttr:
@@ -6773,6 +7108,177 @@ class basefwx:
             return "FAIL!"
 
     @staticmethod
+    def b512file_encode_bytes(
+        data: bytes,
+        ext: str,
+        code: str,
+        strip_metadata: bool = False,
+        use_master: bool = True,
+        *,
+        enable_aead: "basefwx.typing.Optional[bool]" = None
+    ) -> bytes:
+        if not isinstance(data, (bytes, bytearray, memoryview)):
+            raise TypeError("b512file_encode_bytes expects bytes")
+        pubkey_bytes, master_available = basefwx._resolve_master_usage(
+            use_master and not strip_metadata,
+            None,
+            create_if_missing=True
+        )
+        use_master_effective = (use_master and not strip_metadata) and master_available
+        password = basefwx._resolve_password(code, use_master=use_master_effective)
+        b64_payload = basefwx.base64.b64encode(bytes(data)).decode('utf-8')
+        ext_token = basefwx.b512encode(ext or "", password, use_master=use_master_effective)
+        data_token = basefwx.b512encode(b64_payload, password, use_master=use_master_effective)
+        kdf_used = (basefwx.USER_KDF or "argon2id").lower()
+        use_aead = basefwx.ENABLE_B512_AEAD if enable_aead is None else bool(enable_aead)
+        metadata_blob = basefwx._build_metadata(
+            "FWX512R",
+            strip_metadata,
+            use_master_effective,
+            aead="AESGCM" if use_aead else "NONE",
+            kdf=kdf_used
+        )
+        body = f"{ext_token}{basefwx.FWX_DELIM}{data_token}"
+        payload = f"{metadata_blob}{basefwx.META_DELIM}{body}" if metadata_blob else body
+        payload_bytes = payload.encode('utf-8')
+        if not use_aead:
+            return payload_bytes
+        mask_key, user_blob, master_blob, _ = basefwx._prepare_mask_key(
+            password,
+            use_master_effective,
+            mask_info=basefwx.B512_FILE_MASK_INFO,
+            require_password=not use_master_effective,
+            aad=b'b512file'
+        )
+        aead_key = basefwx._hkdf_sha256(mask_key, info=basefwx.B512_AEAD_INFO)
+        ct_blob = basefwx._aead_encrypt(aead_key, payload_bytes, basefwx.B512_AEAD_INFO)
+        return basefwx._pack_length_prefixed(user_blob, master_blob, ct_blob)
+
+    @staticmethod
+    def b512file_decode_bytes(
+        blob: bytes,
+        code: str,
+        strip_metadata: bool = False,
+        use_master: bool = True
+    ) -> "basefwx.typing.Tuple[bytes, str]":
+        if not isinstance(blob, (bytes, bytearray, memoryview)):
+            raise TypeError("b512file_decode_bytes expects bytes")
+        use_master_effective = use_master and not strip_metadata
+        password = basefwx._resolve_password(code, use_master=use_master_effective)
+        raw_bytes = bytes(blob)
+        binary_mode = False
+        user_blob: bytes = b""
+        master_blob: bytes = b""
+        ct_blob: bytes = b""
+        if basefwx.ENABLE_B512_AEAD:
+            try:
+                user_blob, master_blob, ct_blob = basefwx._unpack_length_prefixed(raw_bytes, 3)
+                binary_mode = True
+            except ValueError:
+                binary_mode = False
+        if binary_mode:
+            mask_key = basefwx._recover_mask_key_from_blob(
+                user_blob,
+                master_blob,
+                password,
+                use_master_effective,
+                mask_info=basefwx.B512_FILE_MASK_INFO,
+                aad=b'b512file'
+            )
+            aead_key = basefwx._hkdf_sha256(mask_key, info=basefwx.B512_AEAD_INFO)
+            payload_bytes = basefwx._aead_decrypt(aead_key, ct_blob, basefwx.B512_AEAD_INFO)
+            content = payload_bytes.decode('utf-8')
+        else:
+            content = raw_bytes.decode('utf-8')
+        metadata_blob, content_core = basefwx._split_metadata(content)
+        meta = basefwx._decode_metadata(metadata_blob)
+        master_hint = meta.get("ENC-MASTER") if meta else None
+        if master_hint == "no":
+            use_master_effective = False
+        header, payload = basefwx._split_with_delims(
+            content_core,
+            (basefwx.FWX_DELIM, basefwx.LEGACY_FWX_DELIM),
+            "FWX container"
+        )
+        ext = basefwx.b512decode(header, password, use_master=use_master_effective)
+        data_b64 = basefwx.b512decode(payload, password, use_master=use_master_effective)
+        decoded = basefwx.base64.b64decode(data_b64)
+        return decoded, ext
+
+    @staticmethod
+    def pb512file_encode_bytes(
+        data: bytes,
+        ext: str,
+        code: str,
+        strip_metadata: bool = False,
+        use_master: bool = True
+    ) -> bytes:
+        if not isinstance(data, (bytes, bytearray, memoryview)):
+            raise TypeError("pb512file_encode_bytes expects bytes")
+        use_master_effective = use_master and not strip_metadata
+        password = basefwx._resolve_password(code, use_master=use_master_effective)
+        b64_payload = basefwx.base64.b64encode(bytes(data)).decode('utf-8')
+        ext_token = basefwx.pb512encode(ext or "", password, use_master=use_master_effective)
+        data_token = basefwx.pb512encode(b64_payload, password, use_master=use_master_effective)
+        kdf_used = (basefwx.USER_KDF or "argon2id").lower()
+        heavy_iters = basefwx.HEAVY_PBKDF2_ITERATIONS
+        heavy_argon_time = basefwx.HEAVY_ARGON2_TIME_COST if basefwx.hash_secret_raw is not None else None
+        heavy_argon_mem = basefwx.HEAVY_ARGON2_MEMORY_COST if basefwx.hash_secret_raw is not None else None
+        heavy_argon_par = basefwx.HEAVY_ARGON2_PARALLELISM if basefwx.hash_secret_raw is not None else None
+        metadata_blob = basefwx._build_metadata(
+            "AES-HEAVY",
+            strip_metadata,
+            use_master_effective,
+            kdf=kdf_used,
+            obfuscation=True,
+            kdf_iters=heavy_iters,
+            argon2_time_cost=heavy_argon_time,
+            argon2_memory_cost=heavy_argon_mem,
+            argon2_parallelism=heavy_argon_par
+        )
+        body = f"{ext_token}{basefwx.FWX_HEAVY_DELIM}{data_token}"
+        plaintext = f"{metadata_blob}{basefwx.META_DELIM}{body}" if metadata_blob else body
+        ciphertext = basefwx.encryptAES(
+            plaintext,
+            password,
+            use_master=use_master_effective,
+            metadata_blob=metadata_blob,
+            kdf=kdf_used,
+            obfuscate=True,
+            kdf_iterations=heavy_iters,
+            argon2_time_cost=heavy_argon_time,
+            argon2_memory_cost=heavy_argon_mem,
+            argon2_parallelism=heavy_argon_par
+        )
+        return ciphertext
+
+    @staticmethod
+    def pb512file_decode_bytes(
+        blob: bytes,
+        code: str,
+        strip_metadata: bool = False,
+        use_master: bool = True
+    ) -> "basefwx.typing.Tuple[bytes, str]":
+        if not isinstance(blob, (bytes, bytearray, memoryview)):
+            raise TypeError("pb512file_decode_bytes expects bytes")
+        use_master_effective = use_master and not strip_metadata
+        password = basefwx._resolve_password(code, use_master=use_master_effective)
+        plaintext = basefwx.decryptAES(bytes(blob), password, use_master=use_master_effective)
+        metadata_blob, payload = basefwx._split_metadata(plaintext)
+        meta = basefwx._decode_metadata(metadata_blob)
+        if meta.get("ENC-MASTER") == "no":
+            use_master_effective = False
+        ext_token, data_token = basefwx._split_with_delims(
+            payload,
+            (basefwx.FWX_HEAVY_DELIM, basefwx.LEGACY_FWX_HEAVY_DELIM),
+            "FWX heavy"
+        )
+        ext = basefwx.pb512decode(ext_token, password, use_master=use_master_effective)
+        data_b64 = basefwx.pb512decode(data_token, password, use_master=use_master_effective)
+        decoded = basefwx.base64.b64decode(data_b64)
+        return decoded, ext
+
+    @staticmethod
     def bi512encode(string: str):
 
         code = string[0] + string[len(string) - 1]
@@ -6786,9 +7292,14 @@ class basefwx:
             return str(end)
 
         def mainenc(string):
-            return str(basefwx.hashlib.sha256((basefwx.fwx256bin(
-                str((str(int(mdcode((string))) - int(mdcode(code))).replace("-", "0")))).replace("=", "4G5tRA")).encode(
-                'utf-8')).hexdigest()).replace("-", "0")
+            left = mdcode(string)
+            right = mdcode(code)
+            if basefwx._compare_magnitude(left, right) >= 0:
+                diff = basefwx._subtract_magnitude(left, right)
+            else:
+                diff = "0" + basefwx._subtract_magnitude(right, left)
+            packed = basefwx.fwx256bin(diff).replace("=", "4G5tRA")
+            return str(basefwx.hashlib.sha256(packed.encode('utf-8')).hexdigest()).replace("-", "0")
 
         return mainenc(string)
 
@@ -6803,11 +7314,19 @@ class basefwx:
                 end += str(len(str(int(bb, 2)))) + str(int(bb, 2))
             return str(end)
 
-        code = (str(len(mdcode((string))) * len(mdcode((string)))))
+        md_val = mdcode(string)
+        md_len = len(md_val)
+        code = str(md_len * md_len)
 
         def mainenc(string):
-            return str(len(str(len(mdcode(string))))) + str(len(mdcode(string))) + basefwx.fwx256bin(
-                str((str(int(mdcode((string))) - int(mdcode(code))).replace("-", "0")))).replace("=", "4G5tRA")
+            left = mdcode(string)
+            right = mdcode(code)
+            if basefwx._compare_magnitude(left, right) >= 0:
+                diff = basefwx._subtract_magnitude(left, right)
+            else:
+                diff = "0" + basefwx._subtract_magnitude(right, left)
+            prefix = str(len(str(len(left)))) + str(len(left))
+            return prefix + basefwx.fwx256bin(diff).replace("=", "4G5tRA")
 
         return mainenc(string)
 
@@ -6843,66 +7362,34 @@ class basefwx:
             return str(end)
 
         def maindc(string):
-            result = ""
             try:
+                if not string or not string[0].isdigit():
+                    return "AN ERROR OCCURED!"
                 leoa = int(string[0])
-                string2 = string[leoa + 1:len(string)]
-                cdo = int(string[1:leoa + 1]) * int(string[1:leoa + 1])
-                code = (str(cdo))
-                string3 = basefwx.fwx256unbin(string2.replace("4G5tRA", "="))
-                if string3[0] == "0":
+                if leoa <= 0 or len(string) < leoa + 1:
+                    return "AN ERROR OCCURED!"
+                length_str = string[1:leoa + 1]
+                md_len = int(length_str)
+                code = str(md_len * md_len)
+                payload = string[leoa + 1:]
+                string3 = basefwx.fwx256unbin(payload.replace("4G5tRA", "="))
+                if string3 and string3[0] == "0":
                     string3 = "-" + string3[1:len(string3)]
-                result = mcode(str(int(string3) + int(mdcode(code))))
-            except:
-                result = "AN ERROR OCCURED!"
-            return result
+                total = basefwx._add_signed(string3, mdcode(code))
+                if total.startswith("-"):
+                    return "AN ERROR OCCURED!"
+                return mcode(total)
+            except Exception:
+                return "AN ERROR OCCURED!"
 
         return maindc(string)
 
     # UNDCODABLE IRREVERSIBLE CODELESS ENCODE - SECURITY: ❙❙❙❙
     @staticmethod
     def b1024encode(string: str):
-
-        def fwx1024uBIN(string: str):
-            def fwx512iiBIN(string: str):
-                code = string[0] + string[len(string) - 1]
-
-                def mdcode(string: str):
-                    st = str(string)
-                    binaryvals = map(bin, bytearray(st.encode('ascii')))
-                    end = ""
-                    for bb in binaryvals:
-                        end += str(len(str(int(bb, 2)))) + str(int(bb, 2))
-                    return str(end)
-
-                def mainenc(string):
-                    return str(basefwx.hashlib.sha256((basefwx.fwx256bin(
-                        str((str(int(mdcode((string))) - int(mdcode(code))).replace("-", "0")))).replace("=",
-                                                                                                         "4G5tRA")).encode(
-                        'utf-8')).hexdigest()).replace("-", "0")
-
-                return mainenc(string)
-
-            def fwx512ciBIN(string: str):
-                def mdcode(string: str):
-                    st = str(string)
-                    binaryvals = map(bin, bytearray(st.encode('ascii')))
-                    end = ""
-                    for bb in binaryvals:
-                        end += str(len(str(int(bb, 2)))) + str(int(bb, 2))
-                    return str(end)
-
-                code = (str(len(mdcode((string))) * len(mdcode((string)))))
-
-                def mainenc(string):
-                    return str(len(str(len(mdcode(string))))) + str(len(mdcode(string))) + basefwx.fwx256bin(
-                        str((str(int(mdcode((string))) - int(mdcode(code))).replace("-", "0")))).replace("=", "4G5tRA")
-
-                return mainenc(string)
-
-            return fwx512iiBIN(fwx512ciBIN(string))
-
-        return fwx1024uBIN(string)
+        if not string:
+            raise ValueError("b1024encode expects non-empty input")
+        return basefwx.bi512encode(basefwx.a512encode(string))
 
     # CODELESS ENCODE - SECURITY: ❙
     @staticmethod

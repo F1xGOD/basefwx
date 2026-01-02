@@ -450,22 +450,8 @@ section {
   border-bottom-right-radius: 12px;
 }
 
-.vt-table tbody tr {
-  position: relative;
-}
-
-.vt-table tbody tr::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  background: var(--panel);
-  border-radius: 12px;
-  z-index: 0;
-}
-
 .vt-table tbody td {
-  position: relative;
-  z-index: 1;
+  background: var(--panel);
   font-weight: 500;
 }
 

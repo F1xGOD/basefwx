@@ -141,7 +141,7 @@ fi
 if [[ ! "$COOLDOWN_SECONDS" =~ ^[0-9]+$ ]]; then
     COOLDOWN_SECONDS=1
 fi
-INTRA_LANG_COOLDOWN="${INTRA_LANG_COOLDOWN:-1}"
+INTRA_LANG_COOLDOWN="${INTRA_LANG_COOLDOWN:-0}"
 
 LANG_COOLDOWN_SECONDS="${LANG_COOLDOWN_SECONDS:-3}"
 if [[ ! "$LANG_COOLDOWN_SECONDS" =~ ^[0-9]+$ ]]; then
@@ -219,7 +219,13 @@ time_cmd() {
     announce_step "$key"
     log "CMD[$key]: $*"
     start_ns=$(date +%s%N)
-    if [[ -n "$TIME_BIN" ]]; then
+    local cmd_type=""
+    if declare -F "$1" >/dev/null 2>&1; then
+        cmd_type="function"
+    else
+        cmd_type="$(type -t "$1" || true)"
+    fi
+    if [[ -n "$TIME_BIN" && "$cmd_type" == "file" ]]; then
         time_file="$TMP_DIR/time_${key}.txt"
         rm -f "$time_file"
         run_with_heartbeat "$key" "$TIME_BIN" -p -o "$time_file" "$@"
@@ -293,6 +299,9 @@ time_cmd_no_fail() {
 announce_step() {
     local label="$1"
     STEP_INDEX=$((STEP_INDEX + 1))
+    if (( STEP_TOTAL > 0 && STEP_INDEX > STEP_TOTAL )); then
+        STEP_TOTAL=$STEP_INDEX
+    fi
     if (( STEP_TOTAL > 0 )); then
         printf "%s%s [%d/%d]%s %s\n" "${CYAN}" "$EMOJI_STEP" "$STEP_INDEX" "$STEP_TOTAL" "$RESET" "$label"
     else
@@ -441,6 +450,11 @@ calc_total_steps() {
     if [[ "$RUN_PYPY_TESTS" == "1" && "$PYPY_AVAILABLE" == "1" ]]; then
         local pypy_base=$((1 + nopass_count + pass_count + hash_count))
         STEP_TOTAL=$((STEP_TOTAL + pypy_base))
+        STEP_TOTAL=$((STEP_TOTAL + b512_count + pb512_count))
+        STEP_TOTAL=$((STEP_TOTAL + 2))
+        if (( jmg_count > 0 )); then
+            STEP_TOTAL=$((STEP_TOTAL + jmg_count))
+        fi
     fi
     if [[ "$RUN_CPP_TESTS" == "1" && "$CPP_AVAILABLE" == "1" ]]; then
         local cpp_base=$((1 + nopass_count + pass_count + hash_count))
@@ -979,6 +993,16 @@ py_b512file_roundtrip() {
     "$PYTHON_BIN" -m basefwx cryptin b512 "$enc" -p "$PW" --no-master
 }
 
+pypy_b512file_roundtrip() {
+    local input="$1"
+    local enc
+    enc="$(with_suffix "$input" ".fwx")"
+    log "STEP: pypy -m basefwx cryptin b512 $input"
+    "$PYPY_BIN" -m basefwx cryptin b512 "$input" -p "$PW" --no-master || return $?
+    log "STEP: pypy -m basefwx cryptin b512 $enc"
+    "$PYPY_BIN" -m basefwx cryptin b512 "$enc" -p "$PW" --no-master
+}
+
 py_b512file_wrong() {
     local input="$1"
     local enc
@@ -1022,11 +1046,25 @@ py_b512file_bytes_roundtrip() {
     "$PYTHON_BIN" "$PY_HELPER" b512file-bytes-roundtrip "$input" "$out" "$PW"
 }
 
+pypy_b512file_bytes_roundtrip() {
+    local input="$1"
+    local out="$2"
+    log "STEP: pypy b512file-bytes $input"
+    "$PYPY_BIN" "$PY_HELPER" b512file-bytes-roundtrip "$input" "$out" "$PW"
+}
+
 py_pb512file_bytes_roundtrip() {
     local input="$1"
     local out="$2"
     log "STEP: python pb512file-bytes $input"
     "$PYTHON_BIN" "$PY_HELPER" pb512file-bytes-roundtrip "$input" "$out" "$PW"
+}
+
+pypy_pb512file_bytes_roundtrip() {
+    local input="$1"
+    local out="$2"
+    log "STEP: pypy pb512file-bytes $input"
+    "$PYPY_BIN" "$PY_HELPER" pb512file-bytes-roundtrip "$input" "$out" "$PW"
 }
 
 cpp_b512file_bytes_roundtrip() {
@@ -1097,6 +1135,16 @@ py_pb512file_roundtrip() {
     "$PYTHON_BIN" -m basefwx cryptin pb512 "$input" -p "$PW" --no-master || return $?
     log "STEP: python -m basefwx cryptin pb512 $enc"
     "$PYTHON_BIN" -m basefwx cryptin pb512 "$enc" -p "$PW" --no-master
+}
+
+pypy_pb512file_roundtrip() {
+    local input="$1"
+    local enc
+    enc="$(with_suffix "$input" ".fwx")"
+    log "STEP: pypy -m basefwx cryptin pb512 $input"
+    "$PYPY_BIN" -m basefwx cryptin pb512 "$input" -p "$PW" --no-master || return $?
+    log "STEP: pypy -m basefwx cryptin pb512 $enc"
+    "$PYPY_BIN" -m basefwx cryptin pb512 "$enc" -p "$PW" --no-master
 }
 
 cpp_pb512file_roundtrip() {
@@ -1476,7 +1524,7 @@ ffmpeg = shutil.which("ffmpeg")
 if ffmpeg:
     duration = "1.0"
     fps = "24"
-    v_size = "128x72" if mode in ("fast", "quickest") else "160x90"
+    v_size = "128x72"
     mp4_path = root / "jmg_sample.mp4"
     m4a_path = root / "jmg_sample.m4a"
     try:
@@ -1490,12 +1538,12 @@ if ffmpeg:
                 "-pix_fmt", "yuv420p",
                 "-c:v", "libx264",
                 "-preset", "ultrafast",
-                "-crf", "35",
-                "-b:v", "150k",
-                "-maxrate", "150k",
-                "-bufsize", "300k",
+                "-crf", "38",
+                "-b:v", "90k",
+                "-maxrate", "90k",
+                "-bufsize", "180k",
                 "-c:a", "aac",
-                "-b:a", "32k",
+                "-b:a", "24k",
                 "-movflags", "+faststart",
                 str(mp4_path),
             ],
@@ -1570,6 +1618,7 @@ fi
 cat >"$PY_HELPER" <<'PY'
 import sys
 import time
+import tempfile
 from pathlib import Path
 import basefwx as basefwx_mod
 from basefwx.main import basefwx
@@ -1805,28 +1854,54 @@ def cmd_bench_b512file(args: list[str]) -> int:
     if len(args) < 2:
         return 2
     inp, pw = args[:2]
-    data = Path(inp).read_bytes()
-    ext = Path(inp).suffix
     warmup = _warmup_env()
-    def run() -> int:
-        blob = basefwx_mod.b512file_encode_bytes(data, ext, pw, use_master=False)
-        decoded, _ext = basefwx_mod.b512file_decode_bytes(blob, pw, use_master=False)
-        return len(decoded)
-    _bench(warmup, run)
+    source = Path(inp)
+    with tempfile.TemporaryDirectory(prefix="basefwx-bench-") as tmpdir:
+        tmp = Path(tmpdir)
+        enc_path = tmp / "bench.fwx"
+        def run() -> int:
+            basefwx._b512_encode_path(
+                source,
+                pw,
+                use_master=False,
+                output_path=enc_path,
+                keep_input=True,
+            )
+            decoded_path, _size = basefwx._b512_decode_path(
+                enc_path,
+                pw,
+                strip_metadata=False,
+                use_master=False,
+            )
+            return decoded_path.stat().st_size
+        _bench(warmup, run)
     return 0
 
 def cmd_bench_pb512file(args: list[str]) -> int:
     if len(args) < 2:
         return 2
     inp, pw = args[:2]
-    data = Path(inp).read_bytes()
-    ext = Path(inp).suffix
     warmup = _warmup_env()
-    def run() -> int:
-        blob = basefwx_mod.pb512file_encode_bytes(data, ext, pw, use_master=False)
-        decoded, _ext = basefwx_mod.pb512file_decode_bytes(blob, pw, use_master=False)
-        return len(decoded)
-    _bench(warmup, run)
+    source = Path(inp)
+    with tempfile.TemporaryDirectory(prefix="basefwx-bench-") as tmpdir:
+        tmp = Path(tmpdir)
+        enc_path = tmp / "bench.fwx"
+        def run() -> int:
+            basefwx._aes_heavy_encode_path(
+                source,
+                pw,
+                use_master=False,
+                output_path=enc_path,
+                keep_input=True,
+            )
+            decoded_path, _size = basefwx._aes_heavy_decode_path(
+                enc_path,
+                pw,
+                strip_metadata=False,
+                use_master=False,
+            )
+            return decoded_path.stat().st_size
+        _bench(warmup, run)
     return 0
 
 def main() -> int:
@@ -2019,6 +2094,13 @@ if [[ "$RUN_PY_TESTS" == "1" ]]; then
     add_verify "$ORIG_DIR/$FWXAES_FILE" "$b512_py_bytes_dec"
 fi
 
+if [[ "$RUN_PYPY_TESTS" == "1" && "$PYPY_AVAILABLE" == "1" ]]; then
+    b512_pypy_bytes_input="$(copy_input "b512file_pypy_bytes" "$FWXAES_FILE")"
+    b512_pypy_bytes_dec="$WORK_DIR/b512file_pypy_bytes/decoded_${FWXAES_FILE}"
+    time_cmd "b512file_pypy_bytes" pypy_b512file_bytes_roundtrip "$b512_pypy_bytes_input" "$b512_pypy_bytes_dec"
+    add_verify "$ORIG_DIR/$FWXAES_FILE" "$b512_pypy_bytes_dec"
+fi
+
 if [[ "$RUN_CPP_TESTS" == "1" ]]; then
     b512_cpp_bytes_input="$(copy_input "b512file_cpp_bytes" "$FWXAES_FILE")"
     b512_cpp_bytes_dec="$WORK_DIR/b512file_cpp_bytes/decoded_${FWXAES_FILE}"
@@ -2049,6 +2131,13 @@ if [[ "$RUN_PY_TESTS" == "1" ]]; then
     pb512_py_bytes_dec="$WORK_DIR/pb512file_py_bytes/decoded_${FWXAES_FILE}"
     time_cmd "pb512file_py_bytes" py_pb512file_bytes_roundtrip "$pb512_py_bytes_input" "$pb512_py_bytes_dec"
     add_verify "$ORIG_DIR/$FWXAES_FILE" "$pb512_py_bytes_dec"
+fi
+
+if [[ "$RUN_PYPY_TESTS" == "1" && "$PYPY_AVAILABLE" == "1" ]]; then
+    pb512_pypy_bytes_input="$(copy_input "pb512file_pypy_bytes" "$FWXAES_FILE")"
+    pb512_pypy_bytes_dec="$WORK_DIR/pb512file_pypy_bytes/decoded_${FWXAES_FILE}"
+    time_cmd "pb512file_pypy_bytes" pypy_pb512file_bytes_roundtrip "$pb512_pypy_bytes_input" "$pb512_pypy_bytes_dec"
+    add_verify "$ORIG_DIR/$FWXAES_FILE" "$pb512_pypy_bytes_dec"
 fi
 
 if [[ "$RUN_CPP_TESTS" == "1" ]]; then
@@ -2210,6 +2299,9 @@ done
 if [[ "$RUN_PY_TESTS" == "1" ]]; then
     B512FILE_PY_TOTAL=0
 fi
+if [[ "$RUN_PYPY_TESTS" == "1" && "$PYPY_AVAILABLE" == "1" ]]; then
+    B512FILE_PYPY_TOTAL=0
+fi
 if [[ "$RUN_CPP_TESTS" == "1" ]]; then
     B512FILE_CPP_TOTAL=0
 fi
@@ -2225,6 +2317,14 @@ for file_name in "${B512FILE_CASES[@]}"; do
         time_cmd "$key" py_b512file_roundtrip "$b512file_py_input"
         B512FILE_PY_TOTAL=$((B512FILE_PY_TOTAL + ${TIMES[$key]:-0}))
         add_verify "$ORIG_DIR/$file_name" "$b512file_py_input"
+    fi
+
+    if [[ "$RUN_PYPY_TESTS" == "1" && "$PYPY_AVAILABLE" == "1" ]]; then
+        b512file_pypy_input="$(copy_input "b512file_pypy_correct_${tag}" "$file_name")"
+        key="b512file_pypy_correct_${tag}"
+        time_cmd "$key" pypy_b512file_roundtrip "$b512file_pypy_input"
+        B512FILE_PYPY_TOTAL=$((B512FILE_PYPY_TOTAL + ${TIMES[$key]:-0}))
+        add_verify "$ORIG_DIR/$file_name" "$b512file_pypy_input"
     fi
 
     if [[ "$RUN_CPP_TESTS" == "1" ]]; then
@@ -2284,6 +2384,9 @@ done
 if [[ "$RUN_PY_TESTS" == "1" ]]; then
     PB512FILE_PY_TOTAL=0
 fi
+if [[ "$RUN_PYPY_TESTS" == "1" && "$PYPY_AVAILABLE" == "1" ]]; then
+    PB512FILE_PYPY_TOTAL=0
+fi
 if [[ "$RUN_CPP_TESTS" == "1" ]]; then
     PB512FILE_CPP_TOTAL=0
 fi
@@ -2299,6 +2402,14 @@ for file_name in "${PB512FILE_CASES[@]}"; do
         time_cmd "$key" py_pb512file_roundtrip "$pb512file_py_input"
         PB512FILE_PY_TOTAL=$((PB512FILE_PY_TOTAL + ${TIMES[$key]:-0}))
         add_verify "$ORIG_DIR/$file_name" "$pb512file_py_input"
+    fi
+
+    if [[ "$RUN_PYPY_TESTS" == "1" && "$PYPY_AVAILABLE" == "1" ]]; then
+        pb512file_pypy_input="$(copy_input "pb512file_pypy_correct_${tag}" "$file_name")"
+        key="pb512file_pypy_correct_${tag}"
+        time_cmd "$key" pypy_pb512file_roundtrip "$pb512file_pypy_input"
+        PB512FILE_PYPY_TOTAL=$((PB512FILE_PYPY_TOTAL + ${TIMES[$key]:-0}))
+        add_verify "$ORIG_DIR/$file_name" "$pb512file_pypy_input"
     fi
 
     if [[ "$RUN_CPP_TESTS" == "1" ]]; then
@@ -2635,12 +2746,15 @@ if [[ -z "${BENCH_WARMUP_LIGHT:-}" || -z "${BENCH_WARMUP_HEAVY:-}" ]]; then
     if [[ "$TEST_MODE" == "quickest" ]]; then
         BENCH_WARMUP_LIGHT="${BENCH_WARMUP_LIGHT:-3}"
         BENCH_WARMUP_HEAVY="${BENCH_WARMUP_HEAVY:-5}"
+        BENCH_WARMUP_FILE="${BENCH_WARMUP_FILE:-0}"
     elif [[ "$TEST_MODE" == "fast" ]]; then
         BENCH_WARMUP_LIGHT="${BENCH_WARMUP_LIGHT:-5}"
         BENCH_WARMUP_HEAVY="${BENCH_WARMUP_HEAVY:-10}"
+        BENCH_WARMUP_FILE="${BENCH_WARMUP_FILE:-1}"
     else
         BENCH_WARMUP_LIGHT="${BENCH_WARMUP_LIGHT:-10}"
         BENCH_WARMUP_HEAVY="${BENCH_WARMUP_HEAVY:-20}"
+        BENCH_WARMUP_FILE="${BENCH_WARMUP_FILE:-1}"
     fi
 fi
 
@@ -2694,6 +2808,10 @@ for idx in "${!BENCH_LANGS[@]}"; do
                 time_cmd_bench "${method}_pypy_correct" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_LIGHT" \
                     "$PYPY_BIN" "$PY_HELPER" bench-hash "$method" "$BENCH_TEXT"
             done
+            time_cmd_bench "b512file_pypy_total" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_FILE" \
+                "$PYPY_BIN" "$PY_HELPER" bench-b512file "$BENCH_BYTES_FILE" "$PW"
+            time_cmd_bench "pb512file_pypy_total" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_FILE" \
+                "$PYPY_BIN" "$PY_HELPER" bench-pb512file "$BENCH_BYTES_FILE" "$PW"
             ;;
         cpp)
             time_cmd_bench "fwxaes_cpp_correct" "$CPP_BIN" bench-fwxaes "$BENCH_BYTES_FILE" "$PW" --no-master
@@ -2721,9 +2839,9 @@ for idx in "${!BENCH_LANGS[@]}"; do
                 time_cmd_bench "${method}_java_correct" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_LIGHT" \
                     "$JAVA_BIN" "${JAVA_BENCH_FLAGS_ARR[@]}" -jar "$JAVA_JAR" bench-hash "$method" "$BENCH_TEXT"
             done
-            time_cmd_bench "b512file_java_total" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_HEAVY" \
+            time_cmd_bench "b512file_java_total" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_FILE" \
                 "$JAVA_BIN" "${JAVA_BENCH_FLAGS_ARR[@]}" -jar "$JAVA_JAR" bench-b512file "$BENCH_BYTES_FILE" "$PW" --no-master
-            time_cmd_bench "pb512file_java_total" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_HEAVY" \
+            time_cmd_bench "pb512file_java_total" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_FILE" \
                 "$JAVA_BIN" "${JAVA_BENCH_FLAGS_ARR[@]}" -jar "$JAVA_JAR" bench-pb512file "$BENCH_BYTES_FILE" "$PW" --no-master
             ;;
     esac
@@ -2748,22 +2866,27 @@ format_delta() {
         printf "n/a"
         return
     fi
-    local pct abs_pct is_equal is_faster
-    pct=$(awk -v base="$base_ns" -v other="$other_ns" 'BEGIN { printf "%.6f", (other-base)/base*100 }')
-    abs_pct=$(awk -v p="$pct" 'BEGIN { v=p; if (v<0) v=-v; printf "%.6f", v }')
-    is_equal=$(awk -v a="$abs_pct" 'BEGIN { print (a < 0.01) ? 1 : 0 }')
-    is_faster=$(awk -v p="$pct" 'BEGIN { print (p < 0) ? 1 : 0 }')
-    if (( is_equal == 1 )); then
+    local abs_diff
+    abs_diff=$(awk -v base="$base_ns" -v other="$other_ns" 'BEGIN { v=other-base; if (v<0) v=-v; printf "%.0f", v }')
+    if (( abs_diff < 1000000 )); then
         printf "%s🔵 0.00%%%s" "$BLUE" "$RESET"
         return
     fi
+    local base_for_pct="$base_ns"
+    if (( base_for_pct < 10000000 )); then
+        base_for_pct=10000000
+    fi
+    local pct abs_pct is_faster
+    pct=$(awk -v base="$base_for_pct" -v other="$other_ns" 'BEGIN { printf "%.6f", (other-base)/base*100 }')
+    abs_pct=$(awk -v p="$pct" 'BEGIN { v=p; if (v<0) v=-v; printf "%.6f", v }')
+    is_faster=$(awk -v p="$pct" 'BEGIN { print (p < 0) ? 1 : 0 }')
     if (( is_faster == 1 )); then
         local gain
-        gain=$(awk -v base="$base_ns" -v other="$other_ns" 'BEGIN { printf "%.2f", (base-other)/base*100 }')
+        gain=$(awk -v base="$base_for_pct" -v other="$other_ns" 'BEGIN { v=(base-other)/base*100; if (v<0) v=-v; if (v>999.99) v=999.99; printf "%.2f", v }')
         printf "%s%s +%s%%%s" "$GREEN" "$EMOJI_FAST" "$gain" "$RESET"
     else
         local loss
-        loss=$(awk -v base="$base_ns" -v other="$other_ns" 'BEGIN { printf "%.2f", (other-base)/base*100 }')
+        loss=$(awk -v base="$base_for_pct" -v other="$other_ns" 'BEGIN { v=(other-base)/base*100; if (v<0) v=-v; if (v>999.99) v=999.99; printf "%.2f", v }')
         printf "%s%s -%s%%%s" "$RED" "$EMOJI_SLOW" "$loss" "$RESET"
     fi
 }
@@ -2901,6 +3024,118 @@ compare_speed_block() {
     printf "\n"
 }
 
+overall_sum_for_lang() {
+    local lang="$1"
+    local sum=0
+    local count=0
+    local entry label py_key pypy_key cpp_key java_key
+    for entry in "${OVERALL_METHODS[@]}"; do
+        IFS='|' read -r label py_key pypy_key cpp_key java_key <<<"$entry"
+        local base_key=""
+        case "$BASELINE_LANG" in
+            py) base_key="$py_key" ;;
+            pypy) base_key="$pypy_key" ;;
+            cpp) base_key="$cpp_key" ;;
+            java) base_key="$java_key" ;;
+        esac
+        local lang_key=""
+        case "$lang" in
+            py) lang_key="$py_key" ;;
+            pypy) lang_key="$pypy_key" ;;
+            cpp) lang_key="$cpp_key" ;;
+            java) lang_key="$java_key" ;;
+        esac
+        local base_val="${TIMES[$base_key]:-}"
+        local lang_val="${TIMES[$lang_key]:-}"
+        if [[ -n "$base_val" && "$base_val" -gt 0 && -n "$lang_val" && "$lang_val" -gt 0 ]]; then
+            sum=$((sum + lang_val))
+            count=$((count + 1))
+        fi
+    done
+    printf "%s|%s" "$sum" "$count"
+}
+
+overall_summary() {
+    OVERALL_METHODS=(
+        "fwxAES|fwxaes_py_correct|fwxaes_pypy_correct|fwxaes_cpp_correct|fwxaes_java_correct"
+        "b256|b256_py_correct|b256_pypy_correct|b256_cpp_correct|b256_java_correct"
+        "b512|b512_py_correct|b512_pypy_correct|b512_cpp_correct|b512_java_correct"
+        "pb512|pb512_py_correct|pb512_pypy_correct|pb512_cpp_correct|pb512_java_correct"
+        "b64|b64_py_correct|b64_pypy_correct|b64_cpp_correct|b64_java_correct"
+        "a512|a512_py_correct|a512_pypy_correct|a512_cpp_correct|a512_java_correct"
+        "hash512|hash512_py_correct|hash512_pypy_correct|hash512_cpp_correct|hash512_java_correct"
+        "uhash513|uhash513_py_correct|uhash513_pypy_correct|uhash513_cpp_correct|uhash513_java_correct"
+        "bi512|bi512_py_correct|bi512_pypy_correct|bi512_cpp_correct|bi512_java_correct"
+        "b1024|b1024_py_correct|b1024_pypy_correct|b1024_cpp_correct|b1024_java_correct"
+        "b512file|b512file_py_total|b512file_pypy_total|b512file_cpp_total|b512file_java_total"
+        "pb512file|pb512file_py_total|pb512file_pypy_total|pb512file_cpp_total|pb512file_java_total"
+    )
+    local base_sum base_count
+    IFS='|' read -r base_sum base_count <<<"$(overall_sum_for_lang "$BASELINE_LANG")"
+    if [[ -z "$base_sum" || "$base_sum" -le 0 || "$base_count" -le 0 ]]; then
+        return
+    fi
+    printf "OVERALL:\n"
+    local py_sum py_count pypy_sum pypy_count cpp_sum cpp_count java_sum java_count
+    IFS='|' read -r py_sum py_count <<<"$(overall_sum_for_lang py)"
+    if [[ "$RUN_PY_TESTS" == "1" && "$py_count" -gt 0 ]]; then
+        local py_delta=""
+        if [[ "$BASELINE_LANG" != "py" ]]; then
+            py_delta="$(format_delta "$base_sum" "$py_sum")"
+        fi
+        local py_tag="${PY_VERSION_TAG} (${py_count}/${base_count})"
+        if [[ "$BASELINE_LANG" == "py" ]]; then
+            py_tag="${PY_VERSION_TAG} (baseline, ${py_count}/${base_count})"
+        fi
+        print_lang_line "🐍 Python" "$(format_ns "$py_sum")" "$py_delta" "$py_tag"
+    fi
+    if [[ "$RUN_PYPY_TESTS" == "1" && "$PYPY_AVAILABLE" == "1" ]]; then
+        IFS='|' read -r pypy_sum pypy_count <<<"$(overall_sum_for_lang pypy)"
+        if [[ "$pypy_count" -gt 0 ]]; then
+            local pypy_delta=""
+            if [[ "$BASELINE_LANG" != "pypy" ]]; then
+                pypy_delta="$(format_delta "$base_sum" "$pypy_sum")"
+            fi
+            local pypy_tag="${PYPY_VERSION_TAG} (${pypy_count}/${base_count})"
+            if [[ "$BASELINE_LANG" == "pypy" ]]; then
+                pypy_tag="${PYPY_VERSION_TAG} (baseline, ${pypy_count}/${base_count})"
+            fi
+            print_lang_line "🥭 PyPy" "$(format_ns "$pypy_sum")" "$pypy_delta" "$pypy_tag"
+        fi
+    fi
+    if [[ "$RUN_CPP_TESTS" == "1" && "$CPP_AVAILABLE" == "1" ]]; then
+        IFS='|' read -r cpp_sum cpp_count <<<"$(overall_sum_for_lang cpp)"
+        if [[ "$cpp_count" -gt 0 ]]; then
+            printf "%s\n" "-----------------------------"
+            local cpp_delta=""
+            if [[ "$BASELINE_LANG" != "cpp" ]]; then
+                cpp_delta="$(format_delta "$base_sum" "$cpp_sum")"
+            fi
+            local cpp_tag="${CPP_VERSION_TAG} (${cpp_count}/${base_count})"
+            if [[ "$BASELINE_LANG" == "cpp" ]]; then
+                cpp_tag="${CPP_VERSION_TAG} (baseline, ${cpp_count}/${base_count})"
+            fi
+            print_lang_line "⚙️ C++" "$(format_ns "$cpp_sum")" "$cpp_delta" "$cpp_tag"
+        fi
+    fi
+    if [[ "$RUN_JAVA_TESTS" == "1" && "$JAVA_AVAILABLE" == "1" ]]; then
+        IFS='|' read -r java_sum java_count <<<"$(overall_sum_for_lang java)"
+        if [[ "$java_count" -gt 0 ]]; then
+            printf "%s\n" "----------------------------"
+            local java_delta=""
+            if [[ "$BASELINE_LANG" != "java" ]]; then
+                java_delta="$(format_delta "$base_sum" "$java_sum")"
+            fi
+            local java_tag="${JAVA_VERSION_TAG} (${java_count}/${base_count})"
+            if [[ "$BASELINE_LANG" == "java" ]]; then
+                java_tag="${JAVA_VERSION_TAG} (baseline, ${java_count}/${base_count})"
+            fi
+            print_lang_line "☕ Java" "$(format_ns "$java_sum")" "$java_delta" "$java_tag"
+        fi
+    fi
+    printf "\n"
+}
+
 printf "\nTiming summary (native):\n"
 compare_speed_block "fwxAES" "fwxaes_py_correct" "fwxaes_pypy_correct" "fwxaes_cpp_correct" "fwxaes_java_correct"
 compare_speed_block "b256" "b256_py_correct" "b256_pypy_correct" "b256_cpp_correct" "b256_java_correct"
@@ -2916,6 +3151,10 @@ if [[ "$RUN_PY_TESTS" == "1" && -z "${TIMES[b512file_py_total]-}" ]]; then
     TIMES["b512file_py_total"]=$B512FILE_PY_TOTAL
     TIMES["pb512file_py_total"]=$PB512FILE_PY_TOTAL
 fi
+if [[ "$RUN_PYPY_TESTS" == "1" && "$PYPY_AVAILABLE" == "1" && -z "${TIMES[b512file_pypy_total]-}" ]]; then
+    TIMES["b512file_pypy_total"]=$B512FILE_PYPY_TOTAL
+    TIMES["pb512file_pypy_total"]=$PB512FILE_PYPY_TOTAL
+fi
 if [[ "$RUN_CPP_TESTS" == "1" && -z "${TIMES[b512file_cpp_total]-}" ]]; then
     TIMES["b512file_cpp_total"]=$B512FILE_CPP_TOTAL
     TIMES["pb512file_cpp_total"]=$PB512FILE_CPP_TOTAL
@@ -2924,8 +3163,10 @@ if [[ "$RUN_JAVA_TESTS" == "1" && -z "${TIMES[b512file_java_total]-}" ]]; then
     TIMES["b512file_java_total"]=$B512FILE_JAVA_TOTAL
     TIMES["pb512file_java_total"]=$PB512FILE_JAVA_TOTAL
 fi
-compare_speed_block "b512file" "b512file_py_total" "" "b512file_cpp_total" "b512file_java_total"
-compare_speed_block "pb512file" "pb512file_py_total" "" "pb512file_cpp_total" "pb512file_java_total"
+compare_speed_block "b512file" "b512file_py_total" "b512file_pypy_total" "b512file_cpp_total" "b512file_java_total"
+compare_speed_block "pb512file" "pb512file_py_total" "pb512file_pypy_total" "pb512file_cpp_total" "pb512file_java_total"
+
+overall_summary
 
 if (( ${#FAILURES[@]} > 0 )); then
     printf "\n%sFAILURES%s (%d):\n" "$RED$EMOJI_FAIL " "$RESET" "${#FAILURES[@]}"

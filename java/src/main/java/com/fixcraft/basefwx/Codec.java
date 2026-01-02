@@ -1,9 +1,7 @@
 package com.fixcraft.basefwx;
 
 import java.nio.charset.StandardCharsets;
-import java.util.ArrayList;
-import java.util.Comparator;
-import java.util.List;
+import java.util.Arrays;
 
 public final class Codec {
     private Codec() {}
@@ -28,6 +26,8 @@ public final class Codec {
 
     private static final char[] BASE32HEX_ALPHABET = "0123456789ABCDEFGHIJKLMNOPQRSTUV".toCharArray();
     private static final int[] BASE32HEX_DECODE = buildBase32Decode();
+    private static final String[] CHAR_TO_TOKEN = buildCharToToken();
+    private static final TrieNode TOKEN_TRIE = buildTokenTrie();
 
     private static int[] buildBase32Decode() {
         int[] table = new int[256];
@@ -49,15 +49,10 @@ public final class Codec {
         StringBuilder out = new StringBuilder(input.length() * 4);
         for (int i = 0; i < input.length(); i++) {
             char ch = input.charAt(i);
-            boolean mapped = false;
-            for (int j = 0; j < CODE_CHARS.length; j++) {
-                if (CODE_CHARS[j] == ch) {
-                    out.append(CODE_TOKENS[j]);
-                    mapped = true;
-                    break;
-                }
-            }
-            if (!mapped) {
+            String token = ch < CHAR_TO_TOKEN.length ? CHAR_TO_TOKEN[ch] : null;
+            if (token != null) {
+                out.append(token);
+            } else {
                 out.append(ch);
             }
         }
@@ -68,30 +63,52 @@ public final class Codec {
         if (input == null || input.isEmpty()) {
             return input == null ? "" : input;
         }
-        List<TokenEntry> tokens = new ArrayList<>();
-        for (int i = 0; i < CODE_CHARS.length; i++) {
-            tokens.add(new TokenEntry(CODE_TOKENS[i], CODE_CHARS[i]));
-        }
-        tokens.sort(Comparator.comparingInt((TokenEntry t) -> t.token.length()).reversed());
-
         StringBuilder out = new StringBuilder(input.length());
         int idx = 0;
-        while (idx < input.length()) {
-            boolean matched = false;
-            for (TokenEntry entry : tokens) {
-                if (entry.token.isEmpty()) {
-                    continue;
-                }
-                if (idx + entry.token.length() <= input.length()
-                    && input.startsWith(entry.token, idx)) {
-                    out.append(entry.ch);
-                    idx += entry.token.length();
-                    matched = true;
+        TrieNode root = TOKEN_TRIE;
+        int len = input.length();
+        while (idx < len) {
+            char ch = input.charAt(idx);
+            if (ch >= root.next.length) {
+                out.append(ch);
+                idx++;
+                continue;
+            }
+            TrieNode node = root.next[ch];
+            if (node == null) {
+                out.append(ch);
+                idx++;
+                continue;
+            }
+            int scan = idx + 1;
+            TrieNode current = node;
+            char matchChar = 0;
+            int matchLen = 0;
+            if (current.terminal) {
+                matchChar = current.value;
+                matchLen = 1;
+            }
+            while (scan < len) {
+                char next = input.charAt(scan);
+                if (next >= current.next.length) {
                     break;
                 }
+                TrieNode nextNode = current.next[next];
+                if (nextNode == null) {
+                    break;
+                }
+                current = nextNode;
+                scan++;
+                if (current.terminal) {
+                    matchChar = current.value;
+                    matchLen = scan - idx;
+                }
             }
-            if (!matched) {
-                out.append(input.charAt(idx));
+            if (matchLen > 0) {
+                out.append(matchChar);
+                idx += matchLen;
+            } else {
+                out.append(ch);
                 idx++;
             }
         }
@@ -127,7 +144,9 @@ public final class Codec {
 
     public static byte[] base32HexDecode(String input) {
         boolean ok = true;
-        List<Byte> out = new ArrayList<>();
+        int maxLen = (input.length() * 5) / 8 + 8;
+        byte[] out = new byte[maxLen];
+        int outPos = 0;
         int buffer = 0;
         int bitsLeft = 0;
         for (int i = 0; i < input.length(); i++) {
@@ -147,30 +166,30 @@ public final class Codec {
             bitsLeft += 5;
             if (bitsLeft >= 8) {
                 byte b = (byte) ((buffer >> (bitsLeft - 8)) & 0xFF);
-                out.add(b);
+                out[outPos++] = b;
                 bitsLeft -= 8;
             }
         }
         if (!ok) {
             throw new IllegalArgumentException("Invalid base32 payload");
         }
-        byte[] result = new byte[out.size()];
-        for (int i = 0; i < out.size(); i++) {
-            result[i] = out.get(i);
-        }
-        return result;
+        return Arrays.copyOf(out, outPos);
     }
 
     public static String b256Encode(String input) {
         String coded = code(input);
         byte[] raw = coded.getBytes(StandardCharsets.UTF_8);
         String encoded = base32HexEncode(raw);
-        long paddingCount = encoded.chars().filter(ch -> ch == '=').count();
-        encoded = encoded.replace("=", "");
+        int end = encoded.length();
+        int paddingCount = 0;
+        while (end > 0 && encoded.charAt(end - 1) == '=') {
+            paddingCount++;
+            end--;
+        }
         if (paddingCount > 9) {
             throw new IllegalArgumentException("Base32 padding count exceeded single digit");
         }
-        return encoded + paddingCount;
+        return encoded.substring(0, end) + paddingCount;
     }
 
     public static String b256Decode(String input) {
@@ -196,13 +215,44 @@ public final class Codec {
         return out.toString();
     }
 
-    private static final class TokenEntry {
-        private final String token;
-        private final char ch;
-
-        private TokenEntry(String token, char ch) {
-            this.token = token;
-            this.ch = ch;
+    private static String[] buildCharToToken() {
+        String[] map = new String[128];
+        for (int i = 0; i < CODE_CHARS.length; i++) {
+            char ch = CODE_CHARS[i];
+            if (ch < map.length) {
+                map[ch] = CODE_TOKENS[i];
+            }
         }
+        return map;
+    }
+
+    private static TrieNode buildTokenTrie() {
+        TrieNode root = new TrieNode();
+        for (int i = 0; i < CODE_TOKENS.length; i++) {
+            String token = CODE_TOKENS[i];
+            TrieNode node = root;
+            for (int j = 0; j < token.length(); j++) {
+                char ch = token.charAt(j);
+                if (ch >= node.next.length) {
+                    node = null;
+                    break;
+                }
+                if (node.next[ch] == null) {
+                    node.next[ch] = new TrieNode();
+                }
+                node = node.next[ch];
+            }
+            if (node != null) {
+                node.terminal = true;
+                node.value = CODE_CHARS[i];
+            }
+        }
+        return root;
+    }
+
+    private static final class TrieNode {
+        private final TrieNode[] next = new TrieNode[128];
+        private boolean terminal = false;
+        private char value;
     }
 }

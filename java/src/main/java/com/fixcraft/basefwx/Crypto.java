@@ -1,14 +1,20 @@
 package com.fixcraft.basefwx;
 
+import java.nio.charset.StandardCharsets;
 import java.security.GeneralSecurityException;
 import java.security.SecureRandom;
+import java.util.Arrays;
 import javax.crypto.Cipher;
 import javax.crypto.Mac;
+import javax.crypto.SecretKeyFactory;
 import javax.crypto.spec.GCMParameterSpec;
+import javax.crypto.spec.PBEKeySpec;
 import javax.crypto.spec.SecretKeySpec;
 
 public final class Crypto {
     private static final SecureRandom RNG = new SecureRandom();
+    private static final byte[] HKDF_ZERO_SALT = new byte[32];
+    private static final boolean PBKDF2_JCE_COMPAT = detectPbkdf2Compat();
 
     private Crypto() {}
 
@@ -21,9 +27,16 @@ public final class Crypto {
     }
 
     public static byte[] hkdfSha256(byte[] keyMaterial, byte[] info, int length) {
-        byte[] salt = new byte[32];
-        byte[] prk = hmacSha256(salt, keyMaterial);
+        byte[] prk = hmacSha256(HKDF_ZERO_SALT, keyMaterial);
         return hkdfExpand(prk, info == null ? new byte[0] : info, length);
+    }
+
+    public static byte[] hkdfSha256Stream(byte[] keyMaterial, byte[] info, int length) {
+        if (length <= Constants.HKDF_MAX_LEN) {
+            return hkdfSha256(keyMaterial, info, length);
+        }
+        byte[] prk = hmacSha256(HKDF_ZERO_SALT, keyMaterial);
+        return hkdfExpandUnlimited(prk, info == null ? new byte[0] : info, length);
     }
 
     private static byte[] hkdfExpand(byte[] prk, byte[] info, int length) {
@@ -33,19 +46,56 @@ public final class Crypto {
             throw new IllegalArgumentException("HKDF length too large");
         }
         byte[] out = new byte[length];
-        byte[] t = new byte[0];
+        byte[] t = new byte[hashLen];
+        int tLen = 0;
         int offset = 0;
+        Mac mac = initHmac(prk);
         for (int i = 1; i <= n; i++) {
-            Mac mac = initHmac(prk);
-            mac.update(t);
+            if (tLen > 0) {
+                mac.update(t, 0, tLen);
+            }
             if (info.length > 0) {
                 mac.update(info);
             }
             mac.update((byte) i);
+            try {
+                mac.doFinal(t, 0);
+                tLen = t.length;
+            } catch (GeneralSecurityException exc) {
+                throw new IllegalStateException("HKDF expand failed", exc);
+            }
+            int toCopy = Math.min(tLen, length - offset);
+            System.arraycopy(t, 0, out, offset, toCopy);
+            offset += toCopy;
+        }
+        return out;
+    }
+
+    private static byte[] hkdfExpandUnlimited(byte[] prk, byte[] info, int length) {
+        int hashLen = 32;
+        byte[] out = new byte[length];
+        byte[] t = new byte[0];
+        int offset = 0;
+        int counter = 1;
+        Mac mac = initHmac(prk);
+        byte[] counterBytes = new byte[4];
+        while (offset < length) {
+            if (t.length > 0) {
+                mac.update(t);
+            }
+            if (info.length > 0) {
+                mac.update(info);
+            }
+            counterBytes[0] = (byte) (counter >>> 24);
+            counterBytes[1] = (byte) (counter >>> 16);
+            counterBytes[2] = (byte) (counter >>> 8);
+            counterBytes[3] = (byte) counter;
+            mac.update(counterBytes);
             t = mac.doFinal();
             int toCopy = Math.min(hashLen, length - offset);
             System.arraycopy(t, 0, out, offset, toCopy);
             offset += toCopy;
+            counter++;
         }
         return out;
     }
@@ -67,6 +117,53 @@ public final class Crypto {
     }
 
     public static byte[] pbkdf2HmacSha256(byte[] password, byte[] salt, int iterations, int length) {
+        if (PBKDF2_JCE_COMPAT) {
+            byte[] fast = pbkdf2HmacSha256Native(password, salt, iterations, length);
+            if (fast != null) {
+                return fast;
+            }
+        }
+        return pbkdf2HmacSha256Slow(password, salt, iterations, length);
+    }
+
+    private static byte[] pbkdf2HmacSha256Native(byte[] password, byte[] salt, int iterations, int length) {
+        if (password == null) {
+            return null;
+        }
+        String pwStr = new String(password, StandardCharsets.UTF_8);
+        byte[] roundTrip = pwStr.getBytes(StandardCharsets.UTF_8);
+        if (!Arrays.equals(roundTrip, password)) {
+            return null;
+        }
+        char[] chars = pwStr.toCharArray();
+        try {
+            PBEKeySpec spec = new PBEKeySpec(chars, salt, iterations, length * 8);
+            SecretKeyFactory factory = SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256");
+            byte[] out = factory.generateSecret(spec).getEncoded();
+            spec.clearPassword();
+            return out;
+        } catch (GeneralSecurityException exc) {
+            return null;
+        } finally {
+            Arrays.fill(chars, '\0');
+        }
+    }
+
+    private static boolean detectPbkdf2Compat() {
+        byte[] pw = "password".getBytes(StandardCharsets.UTF_8);
+        byte[] salt = "salt".getBytes(StandardCharsets.UTF_8);
+        int iterations = 2;
+        int length = 32;
+        try {
+            byte[] slow = pbkdf2HmacSha256Slow(pw, salt, iterations, length);
+            byte[] fast = pbkdf2HmacSha256Native(pw, salt, iterations, length);
+            return fast != null && Arrays.equals(fast, slow);
+        } catch (RuntimeException exc) {
+            return false;
+        }
+    }
+
+    private static byte[] pbkdf2HmacSha256Slow(byte[] password, byte[] salt, int iterations, int length) {
         int hashLen = 32;
         int blocks = (length + hashLen - 1) / hashLen;
         byte[] output = new byte[length];
@@ -88,15 +185,23 @@ public final class Crypto {
         blockSalt[blockSalt.length - 1] = (byte) (blockIndex & 0xFF);
 
         Mac mac = initHmac(password);
-        byte[] u = mac.doFinal(blockSalt);
-        byte[] t = u.clone();
-        for (int i = 1; i < iterations; i++) {
-            u = mac.doFinal(u);
-            for (int j = 0; j < t.length; j++) {
-                t[j] ^= u[j];
+        byte[] u = new byte[32];
+        byte[] t = new byte[32];
+        try {
+            mac.update(blockSalt);
+            mac.doFinal(u, 0);
+            System.arraycopy(u, 0, t, 0, u.length);
+            for (int i = 1; i < iterations; i++) {
+                mac.update(u);
+                mac.doFinal(u, 0);
+                for (int j = 0; j < t.length; j++) {
+                    t[j] ^= u[j];
+                }
             }
+            return t;
+        } catch (GeneralSecurityException exc) {
+            throw new IllegalStateException("PBKDF2 failed", exc);
         }
-        return t;
     }
 
     public static byte[] aesGcmEncrypt(byte[] key, byte[] plaintext, byte[] aad) {

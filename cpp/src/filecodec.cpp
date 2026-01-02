@@ -1685,6 +1685,215 @@ std::string B512DecodeFile(const std::string& path,
     return B512DecodeFileSimple(input, password, options, kdf);
 }
 
+std::vector<std::uint8_t> B512EncodeBytes(const std::vector<std::uint8_t>& data,
+                                          const std::string& extension,
+                                          const std::string& password,
+                                          const FileOptions& options,
+                                          const basefwx::pb512::KdfOptions& kdf) {
+    std::string resolved = basefwx::ResolvePassword(password);
+    std::string b64_payload = basefwx::base64::Encode(data);
+    std::string ext = extension;
+
+    std::optional<Bytes> pq_pub;
+    std::optional<Bytes> ec_pub;
+    if (options.use_master) {
+        pq_pub = basefwx::pq::LoadMasterPublicKey();
+        if (!pq_pub.has_value()) {
+            ec_pub = TryLoadEcPublic(true);
+        }
+    }
+    bool use_master_effective = options.use_master && !options.strip_metadata
+        && (pq_pub.has_value() || ec_pub.has_value());
+    basefwx::pb512::KdfOptions kdf_opts = kdf;
+    std::string kdf_label = ResolveKdfLabel(kdf_opts);
+
+    std::string ext_token = basefwx::pb512::B512Encode(ext, resolved, use_master_effective, kdf_opts);
+    std::string data_token = basefwx::pb512::B512Encode(b64_payload, resolved, use_master_effective, kdf_opts);
+
+    bool use_aead = EnableAead(options);
+    std::string metadata_blob = basefwx::metadata::Build(
+        "FWX512R",
+        options.strip_metadata,
+        use_master_effective,
+        use_aead ? "AESGCM" : "NONE",
+        kdf_label,
+        {},
+        std::nullopt,
+        std::nullopt,
+        std::nullopt,
+        std::nullopt,
+        std::nullopt,
+        std::string()
+    );
+
+    std::string body = ext_token + std::string(constants::kFwxDelim) + data_token;
+    std::string payload = metadata_blob.empty()
+        ? body
+        : metadata_blob + std::string(constants::kMetaDelim) + body;
+    Bytes payload_bytes = ToBytes(payload);
+
+    if (!use_aead) {
+        return payload_bytes;
+    }
+    auto mask = basefwx::keywrap::PrepareMaskKey(
+        resolved,
+        use_master_effective,
+        constants::kB512FileMaskInfo,
+        !use_master_effective,
+        constants::kMaskAadB512File,
+        kdf_opts
+    );
+    Bytes aead_key = basefwx::crypto::HkdfSha256(constants::kB512AeadInfo, mask.mask_key, 32);
+    Bytes ct = basefwx::crypto::AeadEncrypt(
+        aead_key, payload_bytes,
+        Bytes(constants::kB512AeadInfo.begin(), constants::kB512AeadInfo.end()));
+    std::vector<basefwx::format::Bytes> parts = {mask.user_blob, mask.master_blob, ct};
+    return basefwx::format::PackLengthPrefixed(parts);
+}
+
+DecodedBytes B512DecodeBytes(const std::vector<std::uint8_t>& blob,
+                             const std::string& password,
+                             const FileOptions& options,
+                             const basefwx::pb512::KdfOptions& kdf) {
+    std::string resolved = basefwx::ResolvePassword(password);
+    bool use_master_effective = options.use_master && !options.strip_metadata;
+    std::string content;
+    bool binary_mode = false;
+    std::vector<basefwx::format::Bytes> parts;
+    try {
+        parts = basefwx::format::UnpackLengthPrefixed(blob, 3);
+        binary_mode = true;
+    } catch (const std::exception&) {
+        binary_mode = false;
+    }
+    if (binary_mode) {
+        Bytes mask_key = basefwx::keywrap::RecoverMaskKey(
+            parts[0], parts[1], resolved, use_master_effective,
+            constants::kB512FileMaskInfo, constants::kMaskAadB512File, kdf);
+        Bytes aead_key = basefwx::crypto::HkdfSha256(constants::kB512AeadInfo, mask_key, 32);
+        Bytes payload = basefwx::crypto::AeadDecrypt(
+            aead_key, parts[2],
+            Bytes(constants::kB512AeadInfo.begin(), constants::kB512AeadInfo.end()));
+        content = ToString(payload);
+    } else {
+        content = ToString(blob);
+    }
+
+    auto [metadata_blob, body] = SplitMetadata(content);
+    auto meta = basefwx::metadata::Decode(metadata_blob);
+    std::string master_hint = basefwx::metadata::GetValue(meta, "ENC-MASTER");
+    if (master_hint == "no") {
+        use_master_effective = false;
+    }
+
+    auto [header, payload] = SplitWithDelims(body, "FWX container");
+    std::string ext = basefwx::pb512::B512Decode(header, resolved, use_master_effective, kdf);
+    std::string data_b64 = basefwx::pb512::B512Decode(payload, resolved, use_master_effective, kdf);
+    bool ok = false;
+    Bytes decoded = basefwx::base64::Decode(data_b64, &ok);
+    if (!ok) {
+        throw std::runtime_error("Failed to decode base64 payload");
+    }
+    return DecodedBytes{decoded, ext};
+}
+
+std::vector<std::uint8_t> Pb512EncodeBytes(const std::vector<std::uint8_t>& data,
+                                           const std::string& extension,
+                                           const std::string& password,
+                                           const FileOptions& options,
+                                           const basefwx::pb512::KdfOptions& kdf) {
+    std::string resolved = basefwx::ResolvePassword(password);
+    std::string b64_payload = basefwx::base64::Encode(data);
+    std::string ext = extension;
+
+    std::optional<Bytes> pq_pub;
+    std::optional<Bytes> ec_pub;
+    if (options.use_master) {
+        pq_pub = basefwx::pq::LoadMasterPublicKey();
+        if (!pq_pub.has_value()) {
+            ec_pub = TryLoadEcPublic(true);
+        }
+    }
+    bool use_master_effective = options.use_master && !options.strip_metadata
+        && (pq_pub.has_value() || ec_pub.has_value());
+    basefwx::pb512::KdfOptions kdf_opts = kdf;
+    std::string kdf_label = ResolveKdfLabel(kdf_opts);
+    bool obf_enabled = EnableObfuscation(options);
+
+    std::string ext_token = basefwx::pb512::Pb512Encode(ext, resolved, use_master_effective, kdf_opts);
+    std::string data_token = basefwx::pb512::Pb512Encode(b64_payload, resolved, use_master_effective, kdf_opts);
+
+    std::optional<std::uint32_t> argon_time;
+    std::optional<std::uint32_t> argon_mem;
+    std::optional<std::uint32_t> argon_par;
+#if defined(BASEFWX_HAS_ARGON2) && BASEFWX_HAS_ARGON2
+    argon_time = basefwx::constants::kHeavyArgon2TimeCost;
+    argon_mem = basefwx::constants::kHeavyArgon2MemoryCost;
+    argon_par = basefwx::constants::DefaultHeavyArgon2Parallelism();
+#endif
+
+    std::string metadata_blob = basefwx::metadata::Build(
+        "AES-HEAVY",
+        options.strip_metadata,
+        use_master_effective,
+        "AESGCM",
+        kdf_label,
+        "",
+        obf_enabled,
+        basefwx::constants::HeavyPbkdf2Iterations(),
+        argon_time,
+        argon_mem,
+        argon_par,
+        std::string()
+    );
+
+    std::string body = ext_token + std::string(constants::kFwxHeavyDelim) + data_token;
+    std::string plaintext = metadata_blob.empty()
+        ? body
+        : metadata_blob + std::string(constants::kMetaDelim) + body;
+
+    Bytes blob = EncryptAesPayload(
+        plaintext,
+        resolved,
+        use_master_effective,
+        metadata_blob,
+        kdf_opts,
+        basefwx::constants::HeavyPbkdf2Iterations(),
+        argon_time,
+        argon_mem,
+        argon_par,
+        obf_enabled
+    );
+    return blob;
+}
+
+DecodedBytes Pb512DecodeBytes(const std::vector<std::uint8_t>& blob,
+                              const std::string& password,
+                              const FileOptions& options,
+                              const basefwx::pb512::KdfOptions& kdf) {
+    std::string resolved = basefwx::ResolvePassword(password);
+    bool use_master_effective = options.use_master && !options.strip_metadata;
+    bool obf_enabled = EnableObfuscation(options);
+    std::string metadata_blob;
+    std::string plaintext = DecryptAesPayload(blob, resolved, use_master_effective, kdf, obf_enabled, &metadata_blob);
+
+    auto [meta_blob, payload] = SplitMetadata(plaintext);
+    auto meta = basefwx::metadata::Decode(meta_blob);
+    if (basefwx::metadata::GetValue(meta, "ENC-MASTER") == "no") {
+        use_master_effective = false;
+    }
+    auto split = SplitWithHeavyDelims(payload, "FWX heavy");
+    std::string ext = basefwx::pb512::Pb512Decode(split.first, resolved, use_master_effective, kdf);
+    std::string data_b64 = basefwx::pb512::Pb512Decode(split.second, resolved, use_master_effective, kdf);
+
+    bool ok = false;
+    Bytes decoded = basefwx::base64::Decode(data_b64, &ok);
+    if (!ok) {
+        throw std::runtime_error("Failed to decode base64 payload");
+    }
+    return DecodedBytes{decoded, ext};
+}
+
 std::string Pb512EncodeFile(const std::string& path,
                             const std::string& password,
                             const FileOptions& options,
@@ -1783,5 +1992,6 @@ std::string Pb512DecodeFile(const std::string& path,
     }
     return target.string();
 }
+
 
 }  // namespace basefwx::filecodec

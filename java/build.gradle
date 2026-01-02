@@ -1,0 +1,32 @@
+plugins {
+    id 'java-library'
+    id 'application'
+}
+
+group = 'com.fixcraft'
+version = '3.6.1'
+
+java {
+    sourceCompatibility = JavaVersion.VERSION_1_8
+    targetCompatibility = JavaVersion.VERSION_1_8
+}
+
+repositories {
+    mavenCentral()
+}
+
+application {
+    mainClass = 'com.fixcraft.basefwx.cli.BaseFwxCli'
+}
+
+tasks.withType(JavaCompile) {
+    options.encoding = 'UTF-8'
+}
+
+jar {
+    archiveBaseName.set('basefwx-java')
+    archiveVersion.set('')
+    manifest {
+        attributes('Main-Class': application.mainClass)
+    }
+}

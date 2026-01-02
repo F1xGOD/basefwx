@@ -82,5 +82,17 @@ def fwxAES_encrypt_raw(plaintext: bytes, password: str | bytes, use_master: bool
     return basefwx.fwxAES_encrypt_raw(plaintext, password, use_master=use_master)
 def fwxAES_decrypt_raw(blob: bytes, password: str | bytes, use_master: bool = True):
     return basefwx.fwxAES_decrypt_raw(blob, password, use_master=use_master)
+def fwxAES_encrypt_stream(source, dest, password: str | bytes, use_master: bool = True, chunk_size: int | None = None):
+    return basefwx.fwxAES_encrypt_stream(source, dest, password, use_master=use_master, chunk_size=chunk_size)
+def fwxAES_decrypt_stream(source, dest, password: str | bytes, use_master: bool = True, chunk_size: int | None = None):
+    return basefwx.fwxAES_decrypt_stream(source, dest, password, use_master=use_master, chunk_size=chunk_size)
 def normalize_wrap(blob: bytes, cover_phrase: str = "low taper fade"): return basefwx.normalize_wrap(blob, cover_phrase)
 def normalize_unwrap(text: str): return basefwx.normalize_unwrap(text)
+def b512file_encode_bytes(data: bytes, ext: str, code: str, strip_metadata: bool = False, use_master: bool = True, enable_aead: bool | None = None):
+    return basefwx.b512file_encode_bytes(data, ext, code, strip_metadata=strip_metadata, use_master=use_master, enable_aead=enable_aead)
+def b512file_decode_bytes(blob: bytes, code: str, strip_metadata: bool = False, use_master: bool = True):
+    return basefwx.b512file_decode_bytes(blob, code, strip_metadata=strip_metadata, use_master=use_master)
+def pb512file_encode_bytes(data: bytes, ext: str, code: str, strip_metadata: bool = False, use_master: bool = True):
+    return basefwx.pb512file_encode_bytes(data, ext, code, strip_metadata=strip_metadata, use_master=use_master)
+def pb512file_decode_bytes(blob: bytes, code: str, strip_metadata: bool = False, use_master: bool = True):
+    return basefwx.pb512file_decode_bytes(blob, code, strip_metadata=strip_metadata, use_master=use_master)

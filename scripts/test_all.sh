@@ -10,7 +10,23 @@ VENV_DIR="${VENV_DIR:-$ROOT/.venv}"
 VENV_PY="$VENV_DIR/bin/python"
 PIP_BIN="$VENV_DIR/bin/pip"
 PYTHON_BIN="${PYTHON_BIN:-}"
+RUN_PY_TESTS="${RUN_PY_TESTS:-1}"
 CPP_BIN="$ROOT/cpp/build/basefwx_cpp"
+RUN_CPP_TESTS="${RUN_CPP_TESTS:-1}"
+JAVA_DIR="$ROOT/java"
+JAVA_BUILD_DIR="$JAVA_DIR/build"
+JAVA_JAR="$JAVA_BUILD_DIR/libs/basefwx-java.jar"
+JAVA_BIN="${JAVA_BIN:-}"
+JAVAC_BIN="${JAVAC_BIN:-}"
+JAR_BIN="${JAR_BIN:-}"
+RUN_JAVA_TESTS="${RUN_JAVA_TESTS:-1}"
+PYPY_BIN="${PYPY_BIN:-}"
+RUN_PYPY_TESTS="${RUN_PYPY_TESTS:-1}"
+PY_VERSION_TAG=""
+PYPY_VERSION_TAG=""
+CPP_VERSION_TAG=""
+JAVA_VERSION_TAG=""
+TIME_BIN="${TIME_BIN:-}"
 
 LOG="$ROOT/diagnose.log"
 TMP_DIR="$ROOT/.tmp_basefwx_tests"
@@ -33,8 +49,15 @@ TEST_MODE="${TEST_MODE:-default}"
 SKIP_WRONG=0
 SKIP_CROSS=0
 TEST_KDF_ITERS=""
+BASELINE_LANG="${BASELINE_LANG:-py}"
+EXPECT_BASELINE=0
 
 for arg in "$@"; do
+    if (( EXPECT_BASELINE == 1 )); then
+        BASELINE_LANG="$arg"
+        EXPECT_BASELINE=0
+        continue
+    fi
     case "$arg" in
         --huge)
             ENABLE_HUGE=1
@@ -55,16 +78,53 @@ for arg in "$@"; do
             SKIP_CROSS=1
             TEST_KDF_ITERS="${TEST_KDF_ITERS:-1000}"
             ;;
+        --baseline)
+            EXPECT_BASELINE=1
+            ;;
+        --baseline=*)
+            BASELINE_LANG="${arg#*=}"
+            ;;
     esac
 done
 if [[ "$TEST_MODE" != "default" ]]; then
     ENABLE_HUGE=0
+fi
+if (( EXPECT_BASELINE == 1 )); then
+    BASELINE_LANG="py"
+fi
+BASELINE_LANG="$(printf "%s" "$BASELINE_LANG" | tr '[:upper:]' '[:lower:]')"
+case "$BASELINE_LANG" in
+    py|python)
+        BASELINE_LANG="py"
+        ;;
+    pypy)
+        BASELINE_LANG="pypy"
+        ;;
+    cpp|c++)
+        BASELINE_LANG="cpp"
+        ;;
+    java|jvm)
+        BASELINE_LANG="java"
+        ;;
+    *)
+        BASELINE_LANG="py"
+        ;;
+esac
+
+RUN_PY_TESTS_ORIG="$RUN_PY_TESTS"
+RUN_PYPY_TESTS_ORIG="$RUN_PYPY_TESTS"
+RUN_CPP_TESTS_ORIG="$RUN_CPP_TESTS"
+RUN_JAVA_TESTS_ORIG="$RUN_JAVA_TESTS"
+
+if [[ -z "$TIME_BIN" && -x /usr/bin/time ]]; then
+    TIME_BIN="/usr/bin/time"
 fi
 
 export PYTHONPATH="$ROOT${PYTHONPATH:+:$PYTHONPATH}"
 export BASEFWX_USER_KDF="pbkdf2"
 export BASEFWX_B512_AEAD="1"
 export BASEFWX_OBFUSCATE="1"
+export BASEFWX_OBFUSCATE_CODECS="1"
 if [[ -n "$TEST_KDF_ITERS" ]]; then
     export BASEFWX_TEST_KDF_ITERS="$TEST_KDF_ITERS"
 fi
@@ -82,15 +142,26 @@ if [[ ! "$COOLDOWN_SECONDS" =~ ^[0-9]+$ ]]; then
     COOLDOWN_SECONDS=1
 fi
 
+LANG_COOLDOWN_SECONDS="${LANG_COOLDOWN_SECONDS:-3}"
+if [[ ! "$LANG_COOLDOWN_SECONDS" =~ ^[0-9]+$ ]]; then
+    LANG_COOLDOWN_SECONDS=3
+fi
+
 FFMPEG_AVAILABLE=0
 if command -v ffmpeg >/dev/null 2>&1 && command -v ffprobe >/dev/null 2>&1; then
     FFMPEG_AVAILABLE=1
 fi
 export FFMPEG_AVAILABLE COOLDOWN_SECONDS
 
+TEXT_NOPASS_METHODS=("b64" "b256" "a512")
+TEXT_PASS_METHODS=("b512" "pb512")
+HASH_METHODS=("hash512" "uhash513" "bi512" "b1024")
+
 declare -A TIMES
 FAILURES=()
 CPP_AVAILABLE=1
+JAVA_AVAILABLE=1
+PYPY_AVAILABLE=1
 PBKDF2_ITERS=""
 STEP_INDEX=0
 STEP_TOTAL=0
@@ -129,7 +200,7 @@ EMOJI_PROGRESS="⏳"
 EMOJI_OK="✅"
 EMOJI_FAIL="❌"
 EMOJI_FAST="⚡"
-EMOJI_SLOW="🐢"
+EMOJI_SLOW="🐌"
 EMOJI_WARN="⚠️"
 
 log() {
@@ -143,16 +214,60 @@ phase() {
 time_cmd() {
     local key="$1"
     shift
-    local start_ns end_ns dur_ns rc
+    local start_ns end_ns dur_ns rc real_s time_file
     announce_step "$key"
     log "CMD[$key]: $*"
     start_ns=$(date +%s%N)
-    run_with_heartbeat "$key" "$@"
-    rc=$?
-    end_ns=$(date +%s%N)
-    dur_ns=$((end_ns - start_ns))
+    if [[ -n "$TIME_BIN" ]]; then
+        time_file="$TMP_DIR/time_${key}.txt"
+        rm -f "$time_file"
+        run_with_heartbeat "$key" "$TIME_BIN" -p -o "$time_file" "$@"
+        rc=$?
+        end_ns=$(date +%s%N)
+        if [[ -f "$time_file" ]]; then
+            real_s="$(awk '$1=="real"{print $2}' "$time_file")"
+        fi
+        if [[ -n "$real_s" ]]; then
+            dur_ns="$(awk -v t="$real_s" 'BEGIN { printf "%.0f", t * 1000000000 }')"
+        else
+            dur_ns=$((end_ns - start_ns))
+        fi
+    else
+        run_with_heartbeat "$key" "$@"
+        rc=$?
+        end_ns=$(date +%s%N)
+        dur_ns=$((end_ns - start_ns))
+    fi
     TIMES["$key"]=$dur_ns
     log "TIME[$key]: ${dur_ns}ns rc=${rc}"
+    if (( rc != 0 )); then
+        FAILURES+=("$key (rc=$rc)")
+    fi
+    return $rc
+}
+
+time_cmd_bench() {
+    local key="$1"
+    shift
+    local output rc bench_ns
+    announce_step "$key"
+    log "CMD[$key]: $*"
+    output="$("$@" 2>>"$LOG")"
+    rc=$?
+    if [[ -n "$output" ]]; then
+        log "$output"
+    fi
+    bench_ns="$(printf "%s" "$output" | awk -F= '/BENCH_NS=/{print $2; exit}')"
+    if [[ -z "$bench_ns" ]]; then
+        log "TIME[$key]: missing BENCH_NS rc=${rc}"
+        if (( rc == 0 )); then
+            rc=1
+        fi
+        FAILURES+=("$key (bench missing)")
+        return $rc
+    fi
+    TIMES["$key"]=$bench_ns
+    log "TIME[$key]: ${bench_ns}ns rc=${rc}"
     if (( rc != 0 )); then
         FAILURES+=("$key (rc=$rc)")
     fi
@@ -218,6 +333,16 @@ cooldown() {
     sleep "$COOLDOWN_SECONDS"
 }
 
+lang_cooldown() {
+    local reason="$1"
+    if (( LANG_COOLDOWN_SECONDS <= 0 )); then
+        return 0
+    fi
+    printf "  %s cooldown %ss%s\n" "$EMOJI_PROGRESS" "$LANG_COOLDOWN_SECONDS" "$RESET"
+    log "LANG_COOLDOWN[$reason]: ${LANG_COOLDOWN_SECONDS}s"
+    sleep "$LANG_COOLDOWN_SECONDS"
+}
+
 ensure_venv() {
     if [[ "$USE_VENV" != "1" ]]; then
         PYTHON_BIN="${PYTHON_BIN:-python3}"
@@ -235,6 +360,24 @@ add_verify() {
     printf "%s|%s\n" "$1" "$2" >>"$VERIFY_LIST"
 }
 
+compare_outputs() {
+    local label="$1"
+    local first="$2"
+    local second="$3"
+    if [[ ! -f "$first" || ! -f "$second" ]]; then
+        log "VERIFY FAIL: missing output for $label ($first, $second)"
+        FAILURES+=("verify_mismatch ($label)")
+        return
+    fi
+    local hash_a hash_b
+    hash_a="$(hash_file "$first")"
+    hash_b="$(hash_file "$second")"
+    if [[ "$hash_a" != "$hash_b" ]]; then
+        log "VERIFY FAIL: $label (${hash_a} != ${hash_b})"
+        FAILURES+=("verify_mismatch ($label)")
+    fi
+}
+
 case_tag() {
     local name="$1"
     name="${name##*/}"
@@ -246,37 +389,65 @@ calc_total_steps() {
     local b512_count="${#B512FILE_CASES[@]}"
     local pb512_count="${#PB512FILE_CASES[@]}"
     local jmg_count="${#JMG_CASES[@]}"
+    local nopass_count="${#TEXT_NOPASS_METHODS[@]}"
+    local pass_count="${#TEXT_PASS_METHODS[@]}"
+    local hash_count="${#HASH_METHODS[@]}"
+    local reversible_count=$((nopass_count + pass_count))
     STEP_TOTAL=0
-    local py_base=4
-    local py_wrong=0
     local file_unit=2
     if [[ "$SKIP_WRONG" == "1" ]]; then
         file_unit=1
-    else
-        py_wrong=3
     fi
-    STEP_TOTAL=$((STEP_TOTAL + py_base + py_wrong))
-    STEP_TOTAL=$((STEP_TOTAL + file_unit * b512_count + file_unit * pb512_count))
-    if (( jmg_count > 0 )); then
-        STEP_TOTAL=$((STEP_TOTAL + jmg_count))
-    fi
-    if (( CPP_AVAILABLE == 1 )); then
-        local cpp_base=4
-        local cpp_wrong=0
+    if [[ "$RUN_PY_TESTS" == "1" ]]; then
+        local py_base=$((1 + nopass_count + pass_count + hash_count))
+        local py_wrong=0
         if [[ "$SKIP_WRONG" != "1" ]]; then
-            cpp_wrong=3
+            py_wrong=$((1 + pass_count))
         fi
-        STEP_TOTAL=$((STEP_TOTAL + cpp_base + cpp_wrong))
+        STEP_TOTAL=$((STEP_TOTAL + py_base + py_wrong))
         STEP_TOTAL=$((STEP_TOTAL + file_unit * b512_count + file_unit * pb512_count))
+        STEP_TOTAL=$((STEP_TOTAL + 3))
         if (( jmg_count > 0 )); then
             STEP_TOTAL=$((STEP_TOTAL + jmg_count))
         fi
-        if [[ "$SKIP_CROSS" != "1" ]]; then
-            STEP_TOTAL=$((STEP_TOTAL + 8))
+    fi
+    if [[ "$RUN_PYPY_TESTS" == "1" && "$PYPY_AVAILABLE" == "1" ]]; then
+        local pypy_base=$((1 + nopass_count + pass_count + hash_count))
+        STEP_TOTAL=$((STEP_TOTAL + pypy_base))
+    fi
+    if [[ "$RUN_CPP_TESTS" == "1" && "$CPP_AVAILABLE" == "1" ]]; then
+        local cpp_base=$((1 + nopass_count + pass_count + hash_count))
+        local cpp_wrong=0
+        if [[ "$SKIP_WRONG" != "1" ]]; then
+            cpp_wrong=$((1 + pass_count))
+        fi
+        STEP_TOTAL=$((STEP_TOTAL + cpp_base + cpp_wrong))
+        STEP_TOTAL=$((STEP_TOTAL + file_unit * b512_count + file_unit * pb512_count))
+        STEP_TOTAL=$((STEP_TOTAL + 3))
+        if (( jmg_count > 0 )); then
+            STEP_TOTAL=$((STEP_TOTAL + jmg_count))
+        fi
+    fi
+    if [[ "$RUN_JAVA_TESTS" == "1" && "$JAVA_AVAILABLE" == "1" ]]; then
+        local java_base=$((1 + nopass_count + pass_count + hash_count))
+        local java_wrong=0
+        if [[ "$SKIP_WRONG" != "1" ]]; then
+            java_wrong=$((1 + pass_count))
+        fi
+        STEP_TOTAL=$((STEP_TOTAL + java_base + java_wrong))
+        STEP_TOTAL=$((STEP_TOTAL + file_unit * b512_count + file_unit * pb512_count))
+        STEP_TOTAL=$((STEP_TOTAL + 3))
+    fi
+    if [[ "$SKIP_CROSS" != "1" ]]; then
+        if [[ "$RUN_PY_TESTS" == "1" && "$RUN_CPP_TESTS" == "1" && "$CPP_AVAILABLE" == "1" ]]; then
+            STEP_TOTAL=$((STEP_TOTAL + 2 * reversible_count + 2))
             STEP_TOTAL=$((STEP_TOTAL + 2 * b512_count + 2 * pb512_count))
             if (( jmg_count > 0 )); then
                 STEP_TOTAL=$((STEP_TOTAL + 2 * jmg_count))
             fi
+        fi
+        if [[ "$RUN_PY_TESTS" == "1" && "$RUN_JAVA_TESTS" == "1" && "$JAVA_AVAILABLE" == "1" ]]; then
+            STEP_TOTAL=$((STEP_TOTAL + 2 * reversible_count + 2))
         fi
     fi
 }
@@ -300,6 +471,7 @@ hash_file() {
     "$PYTHON_BIN" - "$path" <<'PY'
 import hashlib
 import sys
+import time
 
 path = sys.argv[1]
 md5 = hashlib.md5()
@@ -362,18 +534,141 @@ ensure_cpp() {
     return 1
 }
 
+ensure_java() {
+    if [[ ! -d "$JAVA_DIR" ]]; then
+        JAVA_AVAILABLE=0
+        FAILURES+=("java_build (java module missing)")
+        return 1
+    fi
+    JAVA_BIN="${JAVA_BIN:-$(command -v java || true)}"
+    JAVAC_BIN="${JAVAC_BIN:-$(command -v javac || true)}"
+    JAR_BIN="${JAR_BIN:-$(command -v jar || true)}"
+    if [[ -z "$JAVA_BIN" || -z "$JAVAC_BIN" || -z "$JAR_BIN" ]]; then
+        JAVA_AVAILABLE=0
+        FAILURES+=("java_build (java tools missing)")
+        return 1
+    fi
+    local sources
+    sources=()
+    while IFS= read -r -d '' file; do
+        sources+=("$file")
+    done < <(find "$JAVA_DIR/src/main/java" -type f -name "*.java" -print0)
+    if (( ${#sources[@]} == 0 )); then
+        JAVA_AVAILABLE=0
+        FAILURES+=("java_build (no sources)")
+        return 1
+    fi
+    local needs_build=0
+    if [[ ! -f "$JAVA_JAR" ]]; then
+        needs_build=1
+    else
+        for src in "${sources[@]}"; do
+            if [[ "$src" -nt "$JAVA_JAR" ]]; then
+                needs_build=1
+                break
+            fi
+        done
+    fi
+    if (( needs_build == 1 )); then
+        mkdir -p "$JAVA_BUILD_DIR/classes" "$JAVA_BUILD_DIR/libs"
+        if ! time_cmd_no_fail "java_build" "$JAVAC_BIN" -source 8 -target 8 -d "$JAVA_BUILD_DIR/classes" "${sources[@]}"; then
+            JAVA_AVAILABLE=0
+            FAILURES+=("java_build (compile failed)")
+            return 1
+        fi
+        if ! time_cmd_no_fail "java_jar" "$JAR_BIN" cfe "$JAVA_JAR" com.fixcraft.basefwx.cli.BaseFwxCli -C "$JAVA_BUILD_DIR/classes" .; then
+            JAVA_AVAILABLE=0
+            FAILURES+=("java_build (jar failed)")
+            return 1
+        fi
+    fi
+    if [[ ! -f "$JAVA_JAR" ]]; then
+        JAVA_AVAILABLE=0
+        FAILURES+=("java_build (jar missing)")
+        return 1
+    fi
+    local java_line
+    java_line="$("$JAVA_BIN" -version 2>&1 | head -n 1)"
+    JAVA_VERSION_TAG="$(printf "%s" "$java_line" | sed -E 's/.*version \"([^\"]+)\".*/java\1/')"
+    if [[ -z "$JAVA_VERSION_TAG" || "$JAVA_VERSION_TAG" == "$java_line" ]]; then
+        JAVA_VERSION_TAG="java"
+    fi
+    return 0
+}
+
+ensure_pypy() {
+    if [[ -z "$PYPY_BIN" ]]; then
+        PYPY_BIN="$(command -v pypy3 || true)"
+    fi
+    if [[ -z "$PYPY_BIN" ]]; then
+        PYPY_BIN="$(command -v pypy || true)"
+    fi
+    if [[ -z "$PYPY_BIN" ]]; then
+        for candidate in "$HOME"/pypy/*/bin/pypy3 "$HOME"/pypy/*/bin/pypy; do
+            if [[ -x "$candidate" ]]; then
+                PYPY_BIN="$candidate"
+                break
+            fi
+        done
+    fi
+    if [[ -z "$PYPY_BIN" ]]; then
+        PYPY_AVAILABLE=0
+        log "PyPy: unavailable"
+        return 1
+    fi
+    local pypy_check
+    pypy_check="$("$PYPY_BIN" - <<'PY' 2>&1
+import basefwx
+from basefwx.main import basefwx
+print(basefwx.ENGINE_VERSION)
+PY
+)"
+    local pypy_rc=$?
+    if (( pypy_rc != 0 )); then
+        PYPY_AVAILABLE=0
+        log "PyPy: unavailable (import failed)"
+        log "$pypy_check"
+        return 1
+    fi
+    log "PyPy engine: $pypy_check"
+    PYPY_VERSION_TAG="$("$PYPY_BIN" - <<'PY' 2>/dev/null
+import sys
+info = getattr(sys, "pypy_version_info", None)
+if info:
+    print(f"pypy{info.major}.{info.minor}.{info.micro}")
+else:
+    print("pypy")
+PY
+)"
+    if [[ -z "$PYPY_VERSION_TAG" ]]; then
+        PYPY_VERSION_TAG="pypy"
+    fi
+    log "PyPy: $("$PYPY_BIN" -V 2>&1 | head -n 1)"
+    return 0
+}
+
 cpp_fwxAES_roundtrip() {
     local input="$1"
     local enc="$2"
     local dec="$3"
     log "STEP: $CPP_BIN fwxaes-enc $input"
-    "$CPP_BIN" fwxaes-enc "$input" -p "$PW" --out "$enc"
+    "$CPP_BIN" fwxaes-enc "$input" -p "$PW" --no-master --out "$enc"
     local rc=$?
     if (( rc != 0 )); then
         return $rc
     fi
     log "STEP: $CPP_BIN fwxaes-dec $enc"
-    "$CPP_BIN" fwxaes-dec "$enc" -p "$PW" --out "$dec"
+    "$CPP_BIN" fwxaes-dec "$enc" -p "$PW" --no-master --out "$dec"
+}
+
+cpp_fwxAES_stream_roundtrip() {
+    local input="$1"
+    local enc="$2"
+    local dec="$3"
+    log "STEP: $CPP_BIN fwxaes-stream-enc $input"
+    "$CPP_BIN" fwxaes-stream-enc "$input" -p "$PW" --no-master --out "$enc" || return $?
+    log "STEP: $CPP_BIN fwxaes-stream-dec $enc"
+    "$CPP_BIN" fwxaes-stream-dec "$enc" -p "$PW" --no-master --out "$dec"
 }
 
 cpp_fwxAES_wrong() {
@@ -400,13 +695,13 @@ cpp_text_roundtrip() {
     local enc_file="${out_path}.enc"
     local text
     text="$(cat "$text_path")"
-    if [[ "$method" == "b256" ]]; then
-        log "STEP: $CPP_BIN b256-enc"
-        "$CPP_BIN" b256-enc "$text" >"$enc_file" || return $?
+    if [[ "$method" == "b256" || "$method" == "b64" || "$method" == "a512" ]]; then
+        log "STEP: $CPP_BIN ${method}-enc"
+        "$CPP_BIN" "${method}-enc" "$text" >"$enc_file" || return $?
         local enc
         enc="$(cat "$enc_file")"
-        log "STEP: $CPP_BIN b256-dec"
-        "$CPP_BIN" b256-dec "$enc" >"$out_path" || return $?
+        log "STEP: $CPP_BIN ${method}-dec"
+        "$CPP_BIN" "${method}-dec" "$enc" >"$out_path" || return $?
         strip_newline "$out_path"
         return 0
     fi
@@ -426,9 +721,9 @@ cpp_text_encode() {
     local pw="$4"
     local text
     text="$(cat "$text_path")"
-    if [[ "$method" == "b256" ]]; then
-        log "STEP: $CPP_BIN b256-enc"
-        "$CPP_BIN" b256-enc "$text" >"$enc_file" || return $?
+    if [[ "$method" == "b256" || "$method" == "b64" || "$method" == "a512" ]]; then
+        log "STEP: $CPP_BIN ${method}-enc"
+        "$CPP_BIN" "${method}-enc" "$text" >"$enc_file" || return $?
         strip_newline "$enc_file"
         return $?
     fi
@@ -444,9 +739,9 @@ cpp_text_decode() {
     local pw="$4"
     local enc
     enc="$(cat "$enc_file")"
-    if [[ "$method" == "b256" ]]; then
-        log "STEP: $CPP_BIN b256-dec"
-        "$CPP_BIN" b256-dec "$enc" >"$out_path" || return $?
+    if [[ "$method" == "b256" || "$method" == "b64" || "$method" == "a512" ]]; then
+        log "STEP: $CPP_BIN ${method}-dec"
+        "$CPP_BIN" "${method}-dec" "$enc" >"$out_path" || return $?
         strip_newline "$out_path"
         return 0
     fi
@@ -474,6 +769,177 @@ cpp_text_wrong() {
         return 1
     fi
     return 0
+}
+
+cpp_text_hash() {
+    local method="$1"
+    local text_path="$2"
+    local out_path="$3"
+    local text
+    text="$(cat "$text_path")"
+    local cmd="$method"
+    if [[ "$method" == "bi512" ]]; then
+        cmd="bi512-enc"
+    elif [[ "$method" == "b1024" ]]; then
+        cmd="b1024-enc"
+    fi
+    log "STEP: $CPP_BIN $cmd"
+    "$CPP_BIN" "$cmd" "$text" >"$out_path" || return $?
+    strip_newline "$out_path"
+}
+
+java_fwxAES_roundtrip() {
+    local input="$1"
+    local enc="$2"
+    local dec="$3"
+    log "STEP: $JAVA_BIN -jar $JAVA_JAR fwxaes-enc $input"
+    "$JAVA_BIN" -jar "$JAVA_JAR" fwxaes-enc "$input" "$enc" "$PW" --no-master || return $?
+    log "STEP: $JAVA_BIN -jar $JAVA_JAR fwxaes-dec $enc"
+    "$JAVA_BIN" -jar "$JAVA_JAR" fwxaes-dec "$enc" "$dec" "$PW" --no-master
+}
+
+java_fwxAES_stream_roundtrip() {
+    local input="$1"
+    local enc="$2"
+    local dec="$3"
+    log "STEP: $JAVA_BIN -jar $JAVA_JAR fwxaes-stream-enc $input"
+    "$JAVA_BIN" -jar "$JAVA_JAR" fwxaes-stream-enc "$input" "$enc" "$PW" --no-master || return $?
+    log "STEP: $JAVA_BIN -jar $JAVA_JAR fwxaes-stream-dec $enc"
+    "$JAVA_BIN" -jar "$JAVA_JAR" fwxaes-stream-dec "$enc" "$dec" "$PW" --no-master
+}
+
+java_fwxAES_enc() {
+    local input="$1"
+    local enc="$2"
+    log "STEP: $JAVA_BIN -jar $JAVA_JAR fwxaes-enc $input"
+    "$JAVA_BIN" -jar "$JAVA_JAR" fwxaes-enc "$input" "$enc" "$PW" --no-master
+}
+
+java_fwxAES_dec() {
+    local input="$1"
+    local dec="$2"
+    log "STEP: $JAVA_BIN -jar $JAVA_JAR fwxaes-dec $input"
+    "$JAVA_BIN" -jar "$JAVA_JAR" fwxaes-dec "$input" "$dec" "$PW" --no-master
+}
+
+java_fwxAES_wrong() {
+    local input="$1"
+    local enc="$2"
+    local dec="$3"
+    log "STEP: $JAVA_BIN -jar $JAVA_JAR fwxaes-enc $input"
+    "$JAVA_BIN" -jar "$JAVA_JAR" fwxaes-enc "$input" "$enc" "$PW" --no-master || return $?
+    log "STEP: $JAVA_BIN -jar $JAVA_JAR fwxaes-dec $enc (wrong pw)"
+    "$JAVA_BIN" -jar "$JAVA_JAR" fwxaes-dec "$enc" "$dec" "$BAD_PW" --no-master >/dev/null 2>&1
+    local rc=$?
+    if (( rc == 0 )); then
+        log "Unexpected success for fwxaes wrong password (java)"
+        return 1
+    fi
+    return 0
+}
+
+java_text_roundtrip() {
+    local method="$1"
+    local text_path="$2"
+    local out_path="$3"
+    local pw="$4"
+    local enc_file="${out_path}.enc"
+    local text
+    text="$(cat "$text_path")"
+    if [[ "$method" == "b256" || "$method" == "b64" || "$method" == "a512" ]]; then
+        log "STEP: $JAVA_BIN -jar $JAVA_JAR ${method}-enc"
+        "$JAVA_BIN" -jar "$JAVA_JAR" "${method}-enc" "$text" >"$enc_file" || return $?
+        local enc
+        enc="$(cat "$enc_file")"
+        log "STEP: $JAVA_BIN -jar $JAVA_JAR ${method}-dec"
+        "$JAVA_BIN" -jar "$JAVA_JAR" "${method}-dec" "$enc" >"$out_path" || return $?
+        strip_newline "$out_path"
+        return 0
+    fi
+    log "STEP: $JAVA_BIN -jar $JAVA_JAR ${method}-enc"
+    "$JAVA_BIN" -jar "$JAVA_JAR" "${method}-enc" "$text" "$pw" --no-master >"$enc_file" || return $?
+    local enc
+    enc="$(cat "$enc_file")"
+    log "STEP: $JAVA_BIN -jar $JAVA_JAR ${method}-dec"
+    "$JAVA_BIN" -jar "$JAVA_JAR" "${method}-dec" "$enc" "$pw" --no-master >"$out_path" || return $?
+    strip_newline "$out_path"
+}
+
+java_text_encode() {
+    local method="$1"
+    local text_path="$2"
+    local enc_file="$3"
+    local pw="$4"
+    local text
+    text="$(cat "$text_path")"
+    if [[ "$method" == "b256" || "$method" == "b64" || "$method" == "a512" ]]; then
+        log "STEP: $JAVA_BIN -jar $JAVA_JAR ${method}-enc"
+        "$JAVA_BIN" -jar "$JAVA_JAR" "${method}-enc" "$text" >"$enc_file" || return $?
+        strip_newline "$enc_file"
+        return $?
+    fi
+    log "STEP: $JAVA_BIN -jar $JAVA_JAR ${method}-enc"
+    "$JAVA_BIN" -jar "$JAVA_JAR" "${method}-enc" "$text" "$pw" --no-master >"$enc_file" || return $?
+    strip_newline "$enc_file"
+}
+
+java_text_decode() {
+    local method="$1"
+    local enc_file="$2"
+    local out_path="$3"
+    local pw="$4"
+    local enc
+    enc="$(cat "$enc_file")"
+    if [[ "$method" == "b256" || "$method" == "b64" || "$method" == "a512" ]]; then
+        log "STEP: $JAVA_BIN -jar $JAVA_JAR ${method}-dec"
+        "$JAVA_BIN" -jar "$JAVA_JAR" "${method}-dec" "$enc" >"$out_path" || return $?
+        strip_newline "$out_path"
+        return 0
+    fi
+    log "STEP: $JAVA_BIN -jar $JAVA_JAR ${method}-dec"
+    "$JAVA_BIN" -jar "$JAVA_JAR" "${method}-dec" "$enc" "$pw" --no-master >"$out_path" || return $?
+    strip_newline "$out_path"
+}
+
+java_text_wrong() {
+    local method="$1"
+    local text_path="$2"
+    local pw="$3"
+    local enc_file="$4"
+    local text
+    text="$(cat "$text_path")"
+    if [[ "$method" == "b256" ]]; then
+        return 0
+    fi
+    log "STEP: $JAVA_BIN -jar $JAVA_JAR ${method}-enc"
+    "$JAVA_BIN" -jar "$JAVA_JAR" "${method}-enc" "$text" "$pw" --no-master >"$enc_file" || return $?
+    local enc
+    enc="$(cat "$enc_file")"
+    log "STEP: $JAVA_BIN -jar $JAVA_JAR ${method}-dec (wrong pw)"
+    "$JAVA_BIN" -jar "$JAVA_JAR" "${method}-dec" "$enc" "$BAD_PW" --no-master >/dev/null 2>&1
+    local rc=$?
+    if (( rc == 0 )); then
+        log "Unexpected success for ${method} wrong password (java)"
+        return 1
+    fi
+    return 0
+}
+
+java_text_hash() {
+    local method="$1"
+    local text_path="$2"
+    local out_path="$3"
+    local text
+    text="$(cat "$text_path")"
+    local cmd="$method"
+    if [[ "$method" == "bi512" ]]; then
+        cmd="bi512-enc"
+    elif [[ "$method" == "b1024" ]]; then
+        cmd="b1024-enc"
+    fi
+    log "STEP: $JAVA_BIN -jar $JAVA_JAR $cmd"
+    "$JAVA_BIN" -jar "$JAVA_JAR" "$cmd" "$text" >"$out_path" || return $?
+    strip_newline "$out_path"
 }
 
 py_b512file_roundtrip() {
@@ -512,6 +978,58 @@ cpp_b512file_roundtrip() {
     "$CPP_BIN" b512file-dec "$enc" -p "$PW" --no-master --kdf pbkdf2 --pbkdf2-iters "$PBKDF2_ITERS"
 }
 
+java_b512file_roundtrip() {
+    local input="$1"
+    local enc
+    enc="$(with_suffix "$input" ".fwx")"
+    log "STEP: $JAVA_BIN -jar $JAVA_JAR b512file-enc $input"
+    "$JAVA_BIN" -jar "$JAVA_JAR" b512file-enc "$input" "$enc" "$PW" --no-master || return $?
+    log "STEP: $JAVA_BIN -jar $JAVA_JAR b512file-dec $enc"
+    "$JAVA_BIN" -jar "$JAVA_JAR" b512file-dec "$enc" "$input" "$PW" --no-master
+}
+
+py_b512file_bytes_roundtrip() {
+    local input="$1"
+    local out="$2"
+    log "STEP: python b512file-bytes $input"
+    "$PYTHON_BIN" "$PY_HELPER" b512file-bytes-roundtrip "$input" "$out" "$PW"
+}
+
+py_pb512file_bytes_roundtrip() {
+    local input="$1"
+    local out="$2"
+    log "STEP: python pb512file-bytes $input"
+    "$PYTHON_BIN" "$PY_HELPER" pb512file-bytes-roundtrip "$input" "$out" "$PW"
+}
+
+cpp_b512file_bytes_roundtrip() {
+    local input="$1"
+    local out="$2"
+    log "STEP: $CPP_BIN b512file-bytes-rt $input"
+    "$CPP_BIN" b512file-bytes-rt "$input" "$out" -p "$PW" --no-master --kdf pbkdf2 --pbkdf2-iters "$PBKDF2_ITERS"
+}
+
+cpp_pb512file_bytes_roundtrip() {
+    local input="$1"
+    local out="$2"
+    log "STEP: $CPP_BIN pb512file-bytes-rt $input"
+    "$CPP_BIN" pb512file-bytes-rt "$input" "$out" -p "$PW" --no-master --kdf pbkdf2 --pbkdf2-iters "$PBKDF2_ITERS"
+}
+
+java_b512file_bytes_roundtrip() {
+    local input="$1"
+    local out="$2"
+    log "STEP: $JAVA_BIN -jar $JAVA_JAR b512file-bytes-rt $input"
+    "$JAVA_BIN" -jar "$JAVA_JAR" b512file-bytes-rt "$input" "$out" "$PW" --no-master
+}
+
+java_pb512file_bytes_roundtrip() {
+    local input="$1"
+    local out="$2"
+    log "STEP: $JAVA_BIN -jar $JAVA_JAR pb512file-bytes-rt $input"
+    "$JAVA_BIN" -jar "$JAVA_JAR" pb512file-bytes-rt "$input" "$out" "$PW" --no-master
+}
+
 cpp_b512file_wrong() {
     local input="$1"
     local enc
@@ -528,6 +1046,22 @@ cpp_b512file_wrong() {
     return 0
 }
 
+java_b512file_wrong() {
+    local input="$1"
+    local enc
+    enc="$(with_suffix "$input" ".fwx")"
+    log "STEP: $JAVA_BIN -jar $JAVA_JAR b512file-enc $input"
+    "$JAVA_BIN" -jar "$JAVA_JAR" b512file-enc "$input" "$enc" "$PW" --no-master || return $?
+    log "STEP: $JAVA_BIN -jar $JAVA_JAR b512file-dec $enc (wrong pw)"
+    "$JAVA_BIN" -jar "$JAVA_JAR" b512file-dec "$enc" "$input" "$BAD_PW" --no-master >/dev/null 2>&1
+    local rc=$?
+    if (( rc == 0 )); then
+        log "Unexpected success for b512file wrong password (java)"
+        return 1
+    fi
+    return 0
+}
+
 py_pb512file_roundtrip() {
     local input="$1"
     local enc
@@ -536,6 +1070,26 @@ py_pb512file_roundtrip() {
     "$PYTHON_BIN" -m basefwx cryptin pb512 "$input" -p "$PW" --no-master || return $?
     log "STEP: python -m basefwx cryptin pb512 $enc"
     "$PYTHON_BIN" -m basefwx cryptin pb512 "$enc" -p "$PW" --no-master
+}
+
+cpp_pb512file_roundtrip() {
+    local input="$1"
+    local enc
+    enc="$(with_suffix "$input" ".fwx")"
+    log "STEP: $CPP_BIN pb512file-enc $input"
+    "$CPP_BIN" pb512file-enc "$input" -p "$PW" --no-master --kdf pbkdf2 --pbkdf2-iters "$PBKDF2_ITERS" || return $?
+    log "STEP: $CPP_BIN pb512file-dec $enc"
+    "$CPP_BIN" pb512file-dec "$enc" -p "$PW" --no-master --kdf pbkdf2 --pbkdf2-iters "$PBKDF2_ITERS"
+}
+
+java_pb512file_roundtrip() {
+    local input="$1"
+    local enc
+    enc="$(with_suffix "$input" ".fwx")"
+    log "STEP: $JAVA_BIN -jar $JAVA_JAR pb512file-enc $input"
+    "$JAVA_BIN" -jar "$JAVA_JAR" pb512file-enc "$input" "$enc" "$PW" --no-master || return $?
+    log "STEP: $JAVA_BIN -jar $JAVA_JAR pb512file-dec $enc"
+    "$JAVA_BIN" -jar "$JAVA_JAR" pb512file-dec "$enc" "$input" "$PW" --no-master
 }
 
 py_pb512file_wrong() {
@@ -554,16 +1108,6 @@ py_pb512file_wrong() {
     return 0
 }
 
-cpp_pb512file_roundtrip() {
-    local input="$1"
-    local enc
-    enc="$(with_suffix "$input" ".fwx")"
-    log "STEP: $CPP_BIN pb512file-enc $input"
-    "$CPP_BIN" pb512file-enc "$input" -p "$PW" --no-master --kdf pbkdf2 --pbkdf2-iters "$PBKDF2_ITERS" || return $?
-    log "STEP: $CPP_BIN pb512file-dec $enc"
-    "$CPP_BIN" pb512file-dec "$enc" -p "$PW" --no-master --kdf pbkdf2 --pbkdf2-iters "$PBKDF2_ITERS"
-}
-
 cpp_pb512file_wrong() {
     local input="$1"
     local enc
@@ -575,6 +1119,22 @@ cpp_pb512file_wrong() {
     local rc=$?
     if (( rc == 0 )); then
         log "Unexpected success for pb512file wrong password"
+        return 1
+    fi
+    return 0
+}
+
+java_pb512file_wrong() {
+    local input="$1"
+    local enc
+    enc="$(with_suffix "$input" ".fwx")"
+    log "STEP: $JAVA_BIN -jar $JAVA_JAR pb512file-enc $input"
+    "$JAVA_BIN" -jar "$JAVA_JAR" pb512file-enc "$input" "$enc" "$PW" --no-master || return $?
+    log "STEP: $JAVA_BIN -jar $JAVA_JAR pb512file-dec $enc (wrong pw)"
+    "$JAVA_BIN" -jar "$JAVA_JAR" pb512file-dec "$enc" "$input" "$BAD_PW" --no-master >/dev/null 2>&1
+    local rc=$?
+    if (( rc == 0 )); then
+        log "Unexpected success for pb512file wrong password (java)"
         return 1
     fi
     return 0
@@ -633,7 +1193,7 @@ fwxaes_py_enc_cpp_dec() {
     log "STEP: python fwxaes-enc $input"
     "$PYTHON_BIN" "$PY_HELPER" fwxaes-enc "$input" "$enc" "$PW" || return $?
     log "STEP: $CPP_BIN fwxaes-dec $enc"
-    "$CPP_BIN" fwxaes-dec "$enc" -p "$PW" --out "$dec"
+    "$CPP_BIN" fwxaes-dec "$enc" -p "$PW" --no-master --out "$dec"
 }
 
 fwxaes_cpp_enc_py_dec() {
@@ -641,7 +1201,25 @@ fwxaes_cpp_enc_py_dec() {
     local enc="$2"
     local dec="$3"
     log "STEP: $CPP_BIN fwxaes-enc $input"
-    "$CPP_BIN" fwxaes-enc "$input" -p "$PW" --out "$enc" || return $?
+    "$CPP_BIN" fwxaes-enc "$input" -p "$PW" --no-master --out "$enc" || return $?
+    log "STEP: python fwxaes-dec $enc"
+    "$PYTHON_BIN" "$PY_HELPER" fwxaes-dec "$enc" "$dec" "$PW"
+}
+
+fwxaes_py_enc_java_dec() {
+    local input="$1"
+    local enc="$2"
+    local dec="$3"
+    log "STEP: python fwxaes-enc $input"
+    "$PYTHON_BIN" "$PY_HELPER" fwxaes-enc "$input" "$enc" "$PW" || return $?
+    java_fwxAES_dec "$enc" "$dec"
+}
+
+fwxaes_java_enc_py_dec() {
+    local input="$1"
+    local enc="$2"
+    local dec="$3"
+    java_fwxAES_enc "$input" "$enc" || return $?
     log "STEP: python fwxaes-dec $enc"
     "$PYTHON_BIN" "$PY_HELPER" fwxaes-dec "$enc" "$dec" "$PW"
 }
@@ -662,6 +1240,26 @@ text_cpp_enc_py_dec() {
     local enc_file="$3"
     local out_path="$4"
     cpp_text_encode "$method" "$text_path" "$enc_file" "$PW" || return $?
+    log "STEP: python text-decode $method"
+    "$PYTHON_BIN" "$PY_HELPER" text-decode "$method" "$enc_file" "$out_path" "$PW"
+}
+
+text_py_enc_java_dec() {
+    local method="$1"
+    local text_path="$2"
+    local enc_file="$3"
+    local out_path="$4"
+    log "STEP: python text-encode $method"
+    "$PYTHON_BIN" "$PY_HELPER" text-encode "$method" "$text_path" "$enc_file" "$PW" || return $?
+    java_text_decode "$method" "$enc_file" "$out_path" "$PW"
+}
+
+text_java_enc_py_dec() {
+    local method="$1"
+    local text_path="$2"
+    local enc_file="$3"
+    local out_path="$4"
+    java_text_encode "$method" "$text_path" "$enc_file" "$PW" || return $?
     log "STEP: python text-decode $method"
     "$PYTHON_BIN" "$PY_HELPER" text-decode "$method" "$enc_file" "$out_path" "$PW"
 }
@@ -728,6 +1326,15 @@ ensure_venv
 
 log "Python: $("$PYTHON_BIN" --version 2>&1)"
 log "C++ binary: $CPP_BIN"
+if [[ -z "$JAVA_BIN" ]]; then
+    JAVA_BIN="$(command -v java || true)"
+fi
+if [[ -n "$JAVA_BIN" ]]; then
+    log "Java: $("$JAVA_BIN" -version 2>&1 | head -n 1)"
+    log "Java jar: $JAVA_JAR"
+else
+    log "Java: unavailable"
+fi
 log "FFMPEG_AVAILABLE: $FFMPEG_AVAILABLE"
 PBKDF2_ITERS="$("$PYTHON_BIN" - <<'PY' 2>>"$LOG"
 from basefwx.main import basefwx
@@ -739,6 +1346,26 @@ if [[ -z "$PBKDF2_ITERS" || ! "$PBKDF2_ITERS" =~ ^[0-9]+$ ]]; then
     log "PBKDF2_ITERS fallback: ${PBKDF2_ITERS}"
 fi
 log "PBKDF2_ITERS: ${PBKDF2_ITERS}"
+ENGINE_VERSION="$("$PYTHON_BIN" - <<'PY' 2>>"$LOG"
+from basefwx.main import basefwx
+print(basefwx.ENGINE_VERSION)
+PY
+)"
+if [[ -z "$ENGINE_VERSION" ]]; then
+    ENGINE_VERSION="unknown"
+fi
+PY_VERSION_TAG="$("$PYTHON_BIN" - <<'PY' 2>>"$LOG"
+import sys
+print(f"py{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}")
+PY
+)"
+if [[ -z "$PY_VERSION_TAG" ]]; then
+    PY_VERSION_TAG="py"
+fi
+CPP_VERSION_TAG="$ENGINE_VERSION"
+if [[ -n "$CPP_VERSION_TAG" && "$CPP_VERSION_TAG" != "unknown" && "$CPP_VERSION_TAG" != v* ]]; then
+    CPP_VERSION_TAG="v${CPP_VERSION_TAG}"
+fi
 
 cat >"$TEXT_ORIG" <<'TXT'
 The quick brown fox jumps over the lazy dog 0123456789 ABCDEFGHIJKLMNOPQRSTUVWXYZ abcdefghijklmnopqrstuvwxyz.
@@ -868,6 +1495,8 @@ fi
 
 cat >"$PY_HELPER" <<'PY'
 import sys
+from pathlib import Path
+import basefwx as basefwx_mod
 from basefwx.main import basefwx
 
 def read_text(path: str) -> str:
@@ -879,8 +1508,12 @@ def write_text(path: str, text: str) -> None:
         handle.write(text)
 
 def text_encode(method: str, text: str, pw: str) -> str:
+    if method == "b64":
+        return basefwx.b64encode(text)
     if method == "b256":
         return basefwx.b256encode(text)
+    if method == "a512":
+        return basefwx.a512encode(text)
     if method == "b512":
         return basefwx.b512encode(text, pw, use_master=False)
     if method == "pb512":
@@ -888,38 +1521,71 @@ def text_encode(method: str, text: str, pw: str) -> str:
     raise ValueError(f"Unsupported method {method}")
 
 def text_decode(method: str, enc: str, pw: str) -> str:
+    if method == "b64":
+        return basefwx.b64decode(enc)
     if method == "b256":
         return basefwx.b256decode(enc)
+    if method == "a512":
+        return basefwx.a512decode(enc)
     if method == "b512":
         return basefwx.b512decode(enc, pw, use_master=False)
     if method == "pb512":
         return basefwx.pb512decode(enc, pw, use_master=False)
     raise ValueError(f"Unsupported method {method}")
 
+def text_hash(method: str, text: str) -> str:
+    if method == "hash512":
+        return basefwx.hash512(text)
+    if method == "uhash513":
+        return basefwx.uhash513(text)
+    if method == "bi512":
+        return basefwx.bi512encode(text)
+    if method == "b1024":
+        return basefwx.b1024encode(text)
+    raise ValueError(f"Unsupported hash method {method}")
+
+def _fwxaes_call(path: str, pw: str, output: str) -> None:
+    basefwx_mod.fwxAES(
+        path,
+        pw,
+        output=output,
+        use_master=False,
+        light=False,
+        legacy=False,
+    )
+
 def cmd_fwxaes_roundtrip(args: list[str]) -> int:
     inp, enc, dec, pw = args
-    basefwx.fwxAES_file(inp, pw, output=enc)
-    basefwx.fwxAES_file(enc, pw, output=dec)
+    _fwxaes_call(inp, pw, enc)
+    _fwxaes_call(enc, pw, dec)
     return 0
 
 def cmd_fwxaes_enc(args: list[str]) -> int:
     inp, enc, pw = args
-    basefwx.fwxAES_file(inp, pw, output=enc)
+    _fwxaes_call(inp, pw, enc)
     return 0
 
 def cmd_fwxaes_dec(args: list[str]) -> int:
     inp, dec, pw = args
-    basefwx.fwxAES_file(inp, pw, output=dec)
+    _fwxaes_call(inp, pw, dec)
     return 0
 
 def cmd_fwxaes_wrong(args: list[str]) -> int:
     inp, enc, dec, pw, bad_pw = args
-    basefwx.fwxAES_file(inp, pw, output=enc, use_master=False)
+    _fwxaes_call(inp, pw, enc)
     try:
-        basefwx.fwxAES_file(enc, bad_pw, output=dec, use_master=False)
+        _fwxaes_call(enc, bad_pw, dec)
     except Exception:
         return 0
     return 1
+
+def cmd_fwxaes_stream_roundtrip(args: list[str]) -> int:
+    inp, enc, dec, pw = args
+    with open(inp, "rb") as src, open(enc, "wb") as dst:
+        basefwx_mod.fwxAES_encrypt_stream(src, dst, pw, use_master=False)
+    with open(enc, "rb") as src, open(dec, "wb") as dst:
+        basefwx_mod.fwxAES_decrypt_stream(src, dst, pw, use_master=False)
+    return 0
 
 def cmd_text_roundtrip(args: list[str]) -> int:
     method, text_path, out_path, pw = args
@@ -962,6 +1628,13 @@ def cmd_text_wrong(args: list[str]) -> int:
         return 0
     return 1
 
+def cmd_text_hash(args: list[str]) -> int:
+    method, text_path, out_path = args
+    text = read_text(text_path)
+    digest = text_hash(method, text)
+    write_text(out_path, digest)
+    return 0
+
 def cmd_jmg_roundtrip(args: list[str]) -> int:
     inp, enc, dec, pw = args
     basefwx.MediaCipher.encrypt_media(inp, pw, output=enc)
@@ -978,6 +1651,109 @@ def cmd_jmg_dec(args: list[str]) -> int:
     basefwx.MediaCipher.decrypt_media(inp, pw, output=dec)
     return 0
 
+def cmd_b512file_bytes_roundtrip(args: list[str]) -> int:
+    inp, out_path, pw = args
+    data = Path(inp).read_bytes()
+    ext = Path(inp).suffix
+    blob = basefwx_mod.b512file_encode_bytes(data, ext, pw, use_master=False)
+    decoded, _ext = basefwx_mod.b512file_decode_bytes(blob, pw, use_master=False)
+    Path(out_path).write_bytes(decoded)
+    return 0
+
+def cmd_pb512file_bytes_roundtrip(args: list[str]) -> int:
+    inp, out_path, pw = args
+    data = Path(inp).read_bytes()
+    ext = Path(inp).suffix
+    blob = basefwx_mod.pb512file_encode_bytes(data, ext, pw, use_master=False)
+    decoded, _ext = basefwx_mod.pb512file_decode_bytes(blob, pw, use_master=False)
+    Path(out_path).write_bytes(decoded)
+    return 0
+
+def _bench(warmup: int, fn) -> None:
+    if warmup < 0:
+        warmup = 0
+    for _ in range(warmup):
+        fn()
+    start = time.perf_counter_ns()
+    fn()
+    end = time.perf_counter_ns()
+    print(f"BENCH_NS={end - start}")
+
+def _warmup_env(default: int = 0) -> int:
+    value = basefwx.os.getenv("BASEFWX_BENCH_WARMUP")
+    if not value:
+        return default
+    try:
+        return int(value)
+    except ValueError:
+        return default
+
+def cmd_bench_text(args: list[str]) -> int:
+    if len(args) < 3:
+        return 2
+    method, text_path, pw = args[:3]
+    text = read_text(text_path)
+    warmup = _warmup_env()
+    def run() -> int:
+        enc = text_encode(method, text, pw)
+        dec = text_decode(method, enc, pw)
+        return len(dec)
+    _bench(warmup, run)
+    return 0
+
+def cmd_bench_hash(args: list[str]) -> int:
+    if len(args) < 2:
+        return 2
+    method, text_path = args[:2]
+    text = read_text(text_path)
+    warmup = _warmup_env()
+    def run() -> int:
+        digest = text_hash(method, text)
+        return len(digest)
+    _bench(warmup, run)
+    return 0
+
+def cmd_bench_fwxaes(args: list[str]) -> int:
+    if len(args) < 2:
+        return 2
+    inp, pw = args[:2]
+    data = Path(inp).read_bytes()
+    warmup = _warmup_env()
+    def run() -> int:
+        blob = basefwx.fwxAES_encrypt_raw(data, pw, use_master=False)
+        plain = basefwx.fwxAES_decrypt_raw(blob, pw, use_master=False)
+        return len(plain)
+    _bench(warmup, run)
+    return 0
+
+def cmd_bench_b512file(args: list[str]) -> int:
+    if len(args) < 2:
+        return 2
+    inp, pw = args[:2]
+    data = Path(inp).read_bytes()
+    ext = Path(inp).suffix
+    warmup = _warmup_env()
+    def run() -> int:
+        blob = basefwx_mod.b512file_encode_bytes(data, ext, pw, use_master=False)
+        decoded, _ext = basefwx_mod.b512file_decode_bytes(blob, pw, use_master=False)
+        return len(decoded)
+    _bench(warmup, run)
+    return 0
+
+def cmd_bench_pb512file(args: list[str]) -> int:
+    if len(args) < 2:
+        return 2
+    inp, pw = args[:2]
+    data = Path(inp).read_bytes()
+    ext = Path(inp).suffix
+    warmup = _warmup_env()
+    def run() -> int:
+        blob = basefwx_mod.pb512file_encode_bytes(data, ext, pw, use_master=False)
+        decoded, _ext = basefwx_mod.pb512file_decode_bytes(blob, pw, use_master=False)
+        return len(decoded)
+    _bench(warmup, run)
+    return 0
+
 def main() -> int:
     if len(sys.argv) < 2:
         return 2
@@ -991,6 +1767,8 @@ def main() -> int:
         return cmd_fwxaes_dec(args)
     if cmd == "fwxaes-wrong":
         return cmd_fwxaes_wrong(args)
+    if cmd == "fwxaes-stream-roundtrip":
+        return cmd_fwxaes_stream_roundtrip(args)
     if cmd == "text-roundtrip":
         return cmd_text_roundtrip(args)
     if cmd == "text-encode":
@@ -1001,20 +1779,545 @@ def main() -> int:
         return cmd_text_decode_fail(args)
     if cmd == "text-wrong":
         return cmd_text_wrong(args)
+    if cmd == "text-hash":
+        return cmd_text_hash(args)
     if cmd == "jmg-roundtrip":
         return cmd_jmg_roundtrip(args)
     if cmd == "jmg-enc":
         return cmd_jmg_enc(args)
     if cmd == "jmg-dec":
         return cmd_jmg_dec(args)
+    if cmd == "b512file-bytes-roundtrip":
+        return cmd_b512file_bytes_roundtrip(args)
+    if cmd == "pb512file-bytes-roundtrip":
+        return cmd_pb512file_bytes_roundtrip(args)
+    if cmd == "bench-text":
+        return cmd_bench_text(args)
+    if cmd == "bench-hash":
+        return cmd_bench_hash(args)
+    if cmd == "bench-fwxaes":
+        return cmd_bench_fwxaes(args)
+    if cmd == "bench-b512file":
+        return cmd_bench_b512file(args)
+    if cmd == "bench-pb512file":
+        return cmd_bench_pb512file(args)
     return 2
 
 if __name__ == "__main__":
     raise SystemExit(main())
 PY
 
-phase "PHASE2: run native Python/C++ tests"
-ensure_cpp || log "C++ binary unavailable; C++ tests will be marked failed"
+run_native_tests_block() {
+    local label="${PHASE2_LABEL:-Python/C++/Java}"
+    phase "PHASE2: run native ${label} tests"
+
+    # keep STEP_INDEX/STEP_TOTAL managed by caller
+
+# fwxAES correct
+if [[ "$RUN_PY_TESTS" == "1" ]]; then
+    fwxaes_py_input="$(copy_input "fwxaes_py_correct" "$FWXAES_FILE")"
+    fwxaes_py_enc="$(with_suffix "$fwxaes_py_input" ".fwx")"
+    fwxaes_py_dec="$WORK_DIR/fwxaes_py_correct/decoded_${FWXAES_FILE}"
+    time_cmd "fwxaes_py_correct" "$PYTHON_BIN" "$PY_HELPER" fwxaes-roundtrip "$fwxaes_py_input" "$fwxaes_py_enc" "$fwxaes_py_dec" "$PW"
+    add_verify "$ORIG_DIR/$FWXAES_FILE" "$fwxaes_py_dec"
+fi
+
+if [[ "$RUN_PYPY_TESTS" == "1" && "$PYPY_AVAILABLE" == "1" ]]; then
+    fwxaes_pypy_input="$(copy_input "fwxaes_pypy_correct" "$FWXAES_FILE")"
+    fwxaes_pypy_enc="$(with_suffix "$fwxaes_pypy_input" ".fwx")"
+    fwxaes_pypy_dec="$WORK_DIR/fwxaes_pypy_correct/decoded_${FWXAES_FILE}"
+    time_cmd "fwxaes_pypy_correct" "$PYPY_BIN" "$PY_HELPER" fwxaes-roundtrip "$fwxaes_pypy_input" "$fwxaes_pypy_enc" "$fwxaes_pypy_dec" "$PW"
+    add_verify "$ORIG_DIR/$FWXAES_FILE" "$fwxaes_pypy_dec"
+fi
+
+if [[ "$RUN_CPP_TESTS" == "1" ]]; then
+    fwxaes_cpp_input="$(copy_input "fwxaes_cpp_correct" "$FWXAES_FILE")"
+    fwxaes_cpp_enc="$(with_suffix "$fwxaes_cpp_input" ".fwx")"
+    fwxaes_cpp_dec="$WORK_DIR/fwxaes_cpp_correct/decoded_${FWXAES_FILE}"
+    if (( CPP_AVAILABLE == 1 )); then
+        cooldown "fwxaes_py_to_cpp_correct"
+        time_cmd "fwxaes_cpp_correct" cpp_fwxAES_roundtrip "$fwxaes_cpp_input" "$fwxaes_cpp_enc" "$fwxaes_cpp_dec"
+        add_verify "$ORIG_DIR/$FWXAES_FILE" "$fwxaes_cpp_dec"
+    else
+        FAILURES+=("fwxaes_cpp_correct (cpp unavailable)")
+    fi
+fi
+
+if [[ "$RUN_JAVA_TESTS" == "1" ]]; then
+    fwxaes_java_input="$(copy_input "fwxaes_java_correct" "$FWXAES_FILE")"
+    fwxaes_java_enc="$(with_suffix "$fwxaes_java_input" ".fwx")"
+    fwxaes_java_dec="$WORK_DIR/fwxaes_java_correct/decoded_${FWXAES_FILE}"
+    if (( JAVA_AVAILABLE == 1 )); then
+        cooldown "fwxaes_cpp_to_java_correct"
+        time_cmd "fwxaes_java_correct" java_fwxAES_roundtrip "$fwxaes_java_input" "$fwxaes_java_enc" "$fwxaes_java_dec"
+        add_verify "$ORIG_DIR/$FWXAES_FILE" "$fwxaes_java_dec"
+    else
+        FAILURES+=("fwxaes_java_correct (java unavailable)")
+    fi
+fi
+
+# fwxAES wrong password
+if [[ "$SKIP_WRONG" != "1" ]]; then
+    if [[ "$RUN_PY_TESTS" == "1" ]]; then
+        fwxaes_py_wrong_input="$(copy_input "fwxaes_py_wrong" "$FWXAES_FILE")"
+        fwxaes_py_wrong_enc="$(with_suffix "$fwxaes_py_wrong_input" ".fwx")"
+        fwxaes_py_wrong_dec="$WORK_DIR/fwxaes_py_wrong/decoded_${FWXAES_FILE}"
+        time_cmd "fwxaes_py_wrong" "$PYTHON_BIN" "$PY_HELPER" fwxaes-wrong "$fwxaes_py_wrong_input" "$fwxaes_py_wrong_enc" "$fwxaes_py_wrong_dec" "$PW" "$BAD_PW"
+    fi
+
+    if [[ "$RUN_CPP_TESTS" == "1" ]]; then
+        fwxaes_cpp_wrong_input="$(copy_input "fwxaes_cpp_wrong" "$FWXAES_FILE")"
+        fwxaes_cpp_wrong_enc="$(with_suffix "$fwxaes_cpp_wrong_input" ".fwx")"
+        fwxaes_cpp_wrong_dec="$WORK_DIR/fwxaes_cpp_wrong/decoded_${FWXAES_FILE}"
+        if (( CPP_AVAILABLE == 1 )); then
+            cooldown "fwxaes_py_to_cpp_wrong"
+            time_cmd "fwxaes_cpp_wrong" cpp_fwxAES_wrong "$fwxaes_cpp_wrong_input" "$fwxaes_cpp_wrong_enc" "$fwxaes_cpp_wrong_dec"
+        else
+            FAILURES+=("fwxaes_cpp_wrong (cpp unavailable)")
+        fi
+    fi
+
+    if [[ "$RUN_JAVA_TESTS" == "1" ]]; then
+        fwxaes_java_wrong_input="$(copy_input "fwxaes_java_wrong" "$FWXAES_FILE")"
+        fwxaes_java_wrong_enc="$(with_suffix "$fwxaes_java_wrong_input" ".fwx")"
+        fwxaes_java_wrong_dec="$WORK_DIR/fwxaes_java_wrong/decoded_${FWXAES_FILE}"
+        if (( JAVA_AVAILABLE == 1 )); then
+            cooldown "fwxaes_cpp_to_java_wrong"
+            time_cmd "fwxaes_java_wrong" java_fwxAES_wrong "$fwxaes_java_wrong_input" "$fwxaes_java_wrong_enc" "$fwxaes_java_wrong_dec"
+        else
+            FAILURES+=("fwxaes_java_wrong (java unavailable)")
+        fi
+    fi
+fi
+
+# fwxAES stream roundtrip (API)
+if [[ "$RUN_PY_TESTS" == "1" ]]; then
+    fwxaes_py_stream_input="$(copy_input "fwxaes_py_stream" "$FWXAES_FILE")"
+    fwxaes_py_stream_enc="$(with_suffix "$fwxaes_py_stream_input" ".fwx")"
+    fwxaes_py_stream_dec="$WORK_DIR/fwxaes_py_stream/decoded_${FWXAES_FILE}"
+    time_cmd "fwxaes_py_stream" "$PYTHON_BIN" "$PY_HELPER" fwxaes-stream-roundtrip \
+        "$fwxaes_py_stream_input" "$fwxaes_py_stream_enc" "$fwxaes_py_stream_dec" "$PW"
+    add_verify "$ORIG_DIR/$FWXAES_FILE" "$fwxaes_py_stream_dec"
+fi
+
+if [[ "$RUN_CPP_TESTS" == "1" ]]; then
+    fwxaes_cpp_stream_input="$(copy_input "fwxaes_cpp_stream" "$FWXAES_FILE")"
+    fwxaes_cpp_stream_enc="$(with_suffix "$fwxaes_cpp_stream_input" ".fwx")"
+    fwxaes_cpp_stream_dec="$WORK_DIR/fwxaes_cpp_stream/decoded_${FWXAES_FILE}"
+    if (( CPP_AVAILABLE == 1 )); then
+        cooldown "fwxaes_py_to_cpp_stream"
+        time_cmd "fwxaes_cpp_stream" cpp_fwxAES_stream_roundtrip \
+            "$fwxaes_cpp_stream_input" "$fwxaes_cpp_stream_enc" "$fwxaes_cpp_stream_dec"
+        add_verify "$ORIG_DIR/$FWXAES_FILE" "$fwxaes_cpp_stream_dec"
+    else
+        FAILURES+=("fwxaes_cpp_stream (cpp unavailable)")
+    fi
+fi
+
+if [[ "$RUN_JAVA_TESTS" == "1" ]]; then
+    fwxaes_java_stream_input="$(copy_input "fwxaes_java_stream" "$FWXAES_FILE")"
+    fwxaes_java_stream_enc="$(with_suffix "$fwxaes_java_stream_input" ".fwx")"
+    fwxaes_java_stream_dec="$WORK_DIR/fwxaes_java_stream/decoded_${FWXAES_FILE}"
+    if (( JAVA_AVAILABLE == 1 )); then
+        cooldown "fwxaes_cpp_to_java_stream"
+        time_cmd "fwxaes_java_stream" java_fwxAES_stream_roundtrip \
+            "$fwxaes_java_stream_input" "$fwxaes_java_stream_enc" "$fwxaes_java_stream_dec"
+        add_verify "$ORIG_DIR/$FWXAES_FILE" "$fwxaes_java_stream_dec"
+    else
+        FAILURES+=("fwxaes_java_stream (java unavailable)")
+    fi
+fi
+
+# b512file bytes roundtrip (API)
+if [[ "$RUN_PY_TESTS" == "1" ]]; then
+    b512_py_bytes_input="$(copy_input "b512file_py_bytes" "$FWXAES_FILE")"
+    b512_py_bytes_dec="$WORK_DIR/b512file_py_bytes/decoded_${FWXAES_FILE}"
+    time_cmd "b512file_py_bytes" py_b512file_bytes_roundtrip "$b512_py_bytes_input" "$b512_py_bytes_dec"
+    add_verify "$ORIG_DIR/$FWXAES_FILE" "$b512_py_bytes_dec"
+fi
+
+if [[ "$RUN_CPP_TESTS" == "1" ]]; then
+    b512_cpp_bytes_input="$(copy_input "b512file_cpp_bytes" "$FWXAES_FILE")"
+    b512_cpp_bytes_dec="$WORK_DIR/b512file_cpp_bytes/decoded_${FWXAES_FILE}"
+    if (( CPP_AVAILABLE == 1 )); then
+        cooldown "b512file_py_to_cpp_bytes"
+        time_cmd "b512file_cpp_bytes" cpp_b512file_bytes_roundtrip "$b512_cpp_bytes_input" "$b512_cpp_bytes_dec"
+        add_verify "$ORIG_DIR/$FWXAES_FILE" "$b512_cpp_bytes_dec"
+    else
+        FAILURES+=("b512file_cpp_bytes (cpp unavailable)")
+    fi
+fi
+
+if [[ "$RUN_JAVA_TESTS" == "1" ]]; then
+    b512_java_bytes_input="$(copy_input "b512file_java_bytes" "$FWXAES_FILE")"
+    b512_java_bytes_dec="$WORK_DIR/b512file_java_bytes/decoded_${FWXAES_FILE}"
+    if (( JAVA_AVAILABLE == 1 )); then
+        cooldown "b512file_cpp_to_java_bytes"
+        time_cmd "b512file_java_bytes" java_b512file_bytes_roundtrip "$b512_java_bytes_input" "$b512_java_bytes_dec"
+        add_verify "$ORIG_DIR/$FWXAES_FILE" "$b512_java_bytes_dec"
+    else
+        FAILURES+=("b512file_java_bytes (java unavailable)")
+    fi
+fi
+
+# pb512file bytes roundtrip (API)
+if [[ "$RUN_PY_TESTS" == "1" ]]; then
+    pb512_py_bytes_input="$(copy_input "pb512file_py_bytes" "$FWXAES_FILE")"
+    pb512_py_bytes_dec="$WORK_DIR/pb512file_py_bytes/decoded_${FWXAES_FILE}"
+    time_cmd "pb512file_py_bytes" py_pb512file_bytes_roundtrip "$pb512_py_bytes_input" "$pb512_py_bytes_dec"
+    add_verify "$ORIG_DIR/$FWXAES_FILE" "$pb512_py_bytes_dec"
+fi
+
+if [[ "$RUN_CPP_TESTS" == "1" ]]; then
+    pb512_cpp_bytes_input="$(copy_input "pb512file_cpp_bytes" "$FWXAES_FILE")"
+    pb512_cpp_bytes_dec="$WORK_DIR/pb512file_cpp_bytes/decoded_${FWXAES_FILE}"
+    if (( CPP_AVAILABLE == 1 )); then
+        cooldown "pb512file_py_to_cpp_bytes"
+        time_cmd "pb512file_cpp_bytes" cpp_pb512file_bytes_roundtrip "$pb512_cpp_bytes_input" "$pb512_cpp_bytes_dec"
+        add_verify "$ORIG_DIR/$FWXAES_FILE" "$pb512_cpp_bytes_dec"
+    else
+        FAILURES+=("pb512file_cpp_bytes (cpp unavailable)")
+    fi
+fi
+if [[ "$RUN_JAVA_TESTS" == "1" ]]; then
+    pb512_java_bytes_input="$(copy_input "pb512file_java_bytes" "$FWXAES_FILE")"
+    pb512_java_bytes_dec="$WORK_DIR/pb512file_java_bytes/decoded_${FWXAES_FILE}"
+    if (( JAVA_AVAILABLE == 1 )); then
+        cooldown "pb512file_cpp_to_java_bytes"
+        time_cmd "pb512file_java_bytes" java_pb512file_bytes_roundtrip "$pb512_java_bytes_input" "$pb512_java_bytes_dec"
+        add_verify "$ORIG_DIR/$FWXAES_FILE" "$pb512_java_bytes_dec"
+    else
+        FAILURES+=("pb512file_java_bytes (java unavailable)")
+    fi
+fi
+
+# reversible no-password methods
+for method in "${TEXT_NOPASS_METHODS[@]}"; do
+    if [[ "$RUN_PY_TESTS" == "1" ]]; then
+        py_out="$OUT_DIR/${method}_py.txt"
+        time_cmd "${method}_py_correct" "$PYTHON_BIN" "$PY_HELPER" text-roundtrip "$method" "$TEXT_ORIG" "$py_out" "$PW"
+        add_verify "$TEXT_ORIG" "$py_out"
+    fi
+    if [[ "$RUN_PYPY_TESTS" == "1" && "$PYPY_AVAILABLE" == "1" ]]; then
+        pypy_out="$OUT_DIR/${method}_pypy.txt"
+        time_cmd "${method}_pypy_correct" "$PYPY_BIN" "$PY_HELPER" text-roundtrip "$method" "$TEXT_ORIG" "$pypy_out" "$PW"
+        add_verify "$TEXT_ORIG" "$pypy_out"
+    fi
+
+    if [[ "$RUN_CPP_TESTS" == "1" ]]; then
+        cpp_out="$OUT_DIR/${method}_cpp.txt"
+        if (( CPP_AVAILABLE == 1 )); then
+            cooldown "${method}_py_to_cpp_correct"
+            time_cmd "${method}_cpp_correct" cpp_text_roundtrip "$method" "$TEXT_ORIG" "$cpp_out" "$PW"
+            add_verify "$TEXT_ORIG" "$cpp_out"
+        else
+            FAILURES+=("${method}_cpp_correct (cpp unavailable)")
+        fi
+    fi
+
+    if [[ "$RUN_JAVA_TESTS" == "1" ]]; then
+        java_out="$OUT_DIR/${method}_java.txt"
+        if (( JAVA_AVAILABLE == 1 )); then
+            cooldown "${method}_cpp_to_java_correct"
+            time_cmd "${method}_java_correct" java_text_roundtrip "$method" "$TEXT_ORIG" "$java_out" "$PW"
+            add_verify "$TEXT_ORIG" "$java_out"
+        else
+            FAILURES+=("${method}_java_correct (java unavailable)")
+        fi
+    fi
+done
+
+# reversible password methods
+for method in "${TEXT_PASS_METHODS[@]}"; do
+    if [[ "$RUN_PY_TESTS" == "1" ]]; then
+        py_out="$OUT_DIR/${method}_py.txt"
+        time_cmd "${method}_py_correct" "$PYTHON_BIN" "$PY_HELPER" text-roundtrip "$method" "$TEXT_ORIG" "$py_out" "$PW"
+        add_verify "$TEXT_ORIG" "$py_out"
+    fi
+    if [[ "$RUN_PYPY_TESTS" == "1" && "$PYPY_AVAILABLE" == "1" ]]; then
+        pypy_out="$OUT_DIR/${method}_pypy.txt"
+        time_cmd "${method}_pypy_correct" "$PYPY_BIN" "$PY_HELPER" text-roundtrip "$method" "$TEXT_ORIG" "$pypy_out" "$PW"
+        add_verify "$TEXT_ORIG" "$pypy_out"
+    fi
+
+    if [[ "$RUN_CPP_TESTS" == "1" ]]; then
+        cpp_out="$OUT_DIR/${method}_cpp.txt"
+        if (( CPP_AVAILABLE == 1 )); then
+            cooldown "${method}_py_to_cpp_correct"
+            time_cmd "${method}_cpp_correct" cpp_text_roundtrip "$method" "$TEXT_ORIG" "$cpp_out" "$PW"
+            add_verify "$TEXT_ORIG" "$cpp_out"
+        else
+            FAILURES+=("${method}_cpp_correct (cpp unavailable)")
+        fi
+    fi
+
+    if [[ "$RUN_JAVA_TESTS" == "1" ]]; then
+        java_out="$OUT_DIR/${method}_java.txt"
+        if (( JAVA_AVAILABLE == 1 )); then
+            cooldown "${method}_cpp_to_java_correct"
+            time_cmd "${method}_java_correct" java_text_roundtrip "$method" "$TEXT_ORIG" "$java_out" "$PW"
+            add_verify "$TEXT_ORIG" "$java_out"
+        else
+            FAILURES+=("${method}_java_correct (java unavailable)")
+        fi
+    fi
+
+    if [[ "$SKIP_WRONG" != "1" ]]; then
+        if [[ "$RUN_PY_TESTS" == "1" ]]; then
+            time_cmd "${method}_py_wrong" "$PYTHON_BIN" "$PY_HELPER" text-wrong "$method" "$TEXT_ORIG" "$PW" "$BAD_PW"
+        fi
+        if [[ "$RUN_CPP_TESTS" == "1" ]]; then
+            if (( CPP_AVAILABLE == 1 )); then
+                cooldown "${method}_py_to_cpp_wrong"
+                time_cmd "${method}_cpp_wrong" cpp_text_wrong "$method" "$TEXT_ORIG" "$PW" "$OUT_DIR/${method}_cpp_wrong.enc"
+            else
+                FAILURES+=("${method}_cpp_wrong (cpp unavailable)")
+            fi
+        fi
+        if [[ "$RUN_JAVA_TESTS" == "1" ]]; then
+            if (( JAVA_AVAILABLE == 1 )); then
+                cooldown "${method}_cpp_to_java_wrong"
+                time_cmd "${method}_java_wrong" java_text_wrong "$method" "$TEXT_ORIG" "$PW" "$OUT_DIR/${method}_java_wrong.enc"
+            else
+                FAILURES+=("${method}_java_wrong (java unavailable)")
+            fi
+        fi
+    fi
+done
+
+# hash-only methods
+for method in "${HASH_METHODS[@]}"; do
+    py_out="$OUT_DIR/${method}_py.txt"
+    if [[ "$RUN_PY_TESTS" == "1" ]]; then
+        time_cmd "${method}_py_correct" "$PYTHON_BIN" "$PY_HELPER" text-hash "$method" "$TEXT_ORIG" "$py_out"
+    fi
+    if [[ "$RUN_PYPY_TESTS" == "1" && "$PYPY_AVAILABLE" == "1" ]]; then
+        pypy_out="$OUT_DIR/${method}_pypy.txt"
+        time_cmd "${method}_pypy_correct" "$PYPY_BIN" "$PY_HELPER" text-hash "$method" "$TEXT_ORIG" "$pypy_out"
+        if [[ -f "$py_out" ]]; then
+            compare_outputs "${method}_py_pypy" "$py_out" "$pypy_out"
+        fi
+    fi
+    if [[ "$RUN_CPP_TESTS" == "1" ]]; then
+        cpp_out="$OUT_DIR/${method}_cpp.txt"
+        if (( CPP_AVAILABLE == 1 )); then
+            cooldown "${method}_py_to_cpp_correct"
+            time_cmd "${method}_cpp_correct" cpp_text_hash "$method" "$TEXT_ORIG" "$cpp_out"
+            if [[ -f "$py_out" ]]; then
+                compare_outputs "${method}_py_cpp" "$py_out" "$cpp_out"
+            fi
+        else
+            FAILURES+=("${method}_cpp_correct (cpp unavailable)")
+        fi
+    fi
+    if [[ "$RUN_JAVA_TESTS" == "1" ]]; then
+        java_out="$OUT_DIR/${method}_java.txt"
+        if (( JAVA_AVAILABLE == 1 )); then
+            cooldown "${method}_cpp_to_java_correct"
+            time_cmd "${method}_java_correct" java_text_hash "$method" "$TEXT_ORIG" "$java_out"
+            if [[ -f "$py_out" ]]; then
+                compare_outputs "${method}_py_java" "$py_out" "$java_out"
+            fi
+        else
+            FAILURES+=("${method}_java_correct (java unavailable)")
+        fi
+    fi
+done
+
+if [[ "$RUN_PY_TESTS" == "1" ]]; then
+    B512FILE_PY_TOTAL=0
+fi
+if [[ "$RUN_CPP_TESTS" == "1" ]]; then
+    B512FILE_CPP_TOTAL=0
+fi
+if [[ "$RUN_JAVA_TESTS" == "1" ]]; then
+    B512FILE_JAVA_TOTAL=0
+fi
+for file_name in "${B512FILE_CASES[@]}"; do
+    tag="$(case_tag "$file_name")"
+    # b512file correct
+    if [[ "$RUN_PY_TESTS" == "1" ]]; then
+        b512file_py_input="$(copy_input "b512file_py_correct_${tag}" "$file_name")"
+        key="b512file_py_correct_${tag}"
+        time_cmd "$key" py_b512file_roundtrip "$b512file_py_input"
+        B512FILE_PY_TOTAL=$((B512FILE_PY_TOTAL + ${TIMES[$key]:-0}))
+        add_verify "$ORIG_DIR/$file_name" "$b512file_py_input"
+    fi
+
+    if [[ "$RUN_CPP_TESTS" == "1" ]]; then
+        b512file_cpp_input="$(copy_input "b512file_cpp_correct_${tag}" "$file_name")"
+        if (( CPP_AVAILABLE == 1 )); then
+            cooldown "b512file_py_to_cpp_correct_${tag}"
+            key="b512file_cpp_correct_${tag}"
+            time_cmd "$key" cpp_b512file_roundtrip "$b512file_cpp_input"
+            B512FILE_CPP_TOTAL=$((B512FILE_CPP_TOTAL + ${TIMES[$key]:-0}))
+            add_verify "$ORIG_DIR/$file_name" "$b512file_cpp_input"
+        else
+            FAILURES+=("b512file_cpp_correct_${tag} (cpp unavailable)")
+        fi
+    fi
+
+    if [[ "$RUN_JAVA_TESTS" == "1" ]]; then
+        b512file_java_input="$(copy_input "b512file_java_correct_${tag}" "$file_name")"
+        if (( JAVA_AVAILABLE == 1 )); then
+            cooldown "b512file_cpp_to_java_correct_${tag}"
+            key="b512file_java_correct_${tag}"
+            time_cmd "$key" java_b512file_roundtrip "$b512file_java_input"
+            B512FILE_JAVA_TOTAL=$((B512FILE_JAVA_TOTAL + ${TIMES[$key]:-0}))
+            add_verify "$ORIG_DIR/$file_name" "$b512file_java_input"
+        else
+            FAILURES+=("b512file_java_correct_${tag} (java unavailable)")
+        fi
+    fi
+
+    if [[ "$SKIP_WRONG" != "1" ]]; then
+        # b512file wrong password
+        if [[ "$RUN_PY_TESTS" == "1" ]]; then
+            b512file_py_wrong_input="$(copy_input "b512file_py_wrong_${tag}" "$file_name")"
+            time_cmd "b512file_py_wrong_${tag}" py_b512file_wrong "$b512file_py_wrong_input"
+        fi
+
+        if [[ "$RUN_CPP_TESTS" == "1" ]]; then
+            b512file_cpp_wrong_input="$(copy_input "b512file_cpp_wrong_${tag}" "$file_name")"
+            if (( CPP_AVAILABLE == 1 )); then
+                cooldown "b512file_py_to_cpp_wrong_${tag}"
+                time_cmd "b512file_cpp_wrong_${tag}" cpp_b512file_wrong "$b512file_cpp_wrong_input"
+            else
+                FAILURES+=("b512file_cpp_wrong_${tag} (cpp unavailable)")
+            fi
+        fi
+        if [[ "$RUN_JAVA_TESTS" == "1" ]]; then
+            b512file_java_wrong_input="$(copy_input "b512file_java_wrong_${tag}" "$file_name")"
+            if (( JAVA_AVAILABLE == 1 )); then
+                cooldown "b512file_cpp_to_java_wrong_${tag}"
+                time_cmd "b512file_java_wrong_${tag}" java_b512file_wrong "$b512file_java_wrong_input"
+            else
+                FAILURES+=("b512file_java_wrong_${tag} (java unavailable)")
+            fi
+        fi
+    fi
+done
+
+if [[ "$RUN_PY_TESTS" == "1" ]]; then
+    PB512FILE_PY_TOTAL=0
+fi
+if [[ "$RUN_CPP_TESTS" == "1" ]]; then
+    PB512FILE_CPP_TOTAL=0
+fi
+if [[ "$RUN_JAVA_TESTS" == "1" ]]; then
+    PB512FILE_JAVA_TOTAL=0
+fi
+for file_name in "${PB512FILE_CASES[@]}"; do
+    tag="$(case_tag "$file_name")"
+    # pb512file correct
+    if [[ "$RUN_PY_TESTS" == "1" ]]; then
+        pb512file_py_input="$(copy_input "pb512file_py_correct_${tag}" "$file_name")"
+        key="pb512file_py_correct_${tag}"
+        time_cmd "$key" py_pb512file_roundtrip "$pb512file_py_input"
+        PB512FILE_PY_TOTAL=$((PB512FILE_PY_TOTAL + ${TIMES[$key]:-0}))
+        add_verify "$ORIG_DIR/$file_name" "$pb512file_py_input"
+    fi
+
+    if [[ "$RUN_CPP_TESTS" == "1" ]]; then
+        pb512file_cpp_input="$(copy_input "pb512file_cpp_correct_${tag}" "$file_name")"
+        if (( CPP_AVAILABLE == 1 )); then
+            cooldown "pb512file_py_to_cpp_correct_${tag}"
+            key="pb512file_cpp_correct_${tag}"
+            time_cmd "$key" cpp_pb512file_roundtrip "$pb512file_cpp_input"
+            PB512FILE_CPP_TOTAL=$((PB512FILE_CPP_TOTAL + ${TIMES[$key]:-0}))
+            add_verify "$ORIG_DIR/$file_name" "$pb512file_cpp_input"
+        else
+            FAILURES+=("pb512file_cpp_correct_${tag} (cpp unavailable)")
+        fi
+    fi
+
+    if [[ "$RUN_JAVA_TESTS" == "1" ]]; then
+        pb512file_java_input="$(copy_input "pb512file_java_correct_${tag}" "$file_name")"
+        if (( JAVA_AVAILABLE == 1 )); then
+            cooldown "pb512file_cpp_to_java_correct_${tag}"
+            key="pb512file_java_correct_${tag}"
+            time_cmd "$key" java_pb512file_roundtrip "$pb512file_java_input"
+            PB512FILE_JAVA_TOTAL=$((PB512FILE_JAVA_TOTAL + ${TIMES[$key]:-0}))
+            add_verify "$ORIG_DIR/$file_name" "$pb512file_java_input"
+        else
+            FAILURES+=("pb512file_java_correct_${tag} (java unavailable)")
+        fi
+    fi
+
+    if [[ "$SKIP_WRONG" != "1" ]]; then
+        # pb512file wrong password
+        if [[ "$RUN_PY_TESTS" == "1" ]]; then
+            pb512file_py_wrong_input="$(copy_input "pb512file_py_wrong_${tag}" "$file_name")"
+            time_cmd "pb512file_py_wrong_${tag}" py_pb512file_wrong "$pb512file_py_wrong_input"
+        fi
+
+        if [[ "$RUN_CPP_TESTS" == "1" ]]; then
+            pb512file_cpp_wrong_input="$(copy_input "pb512file_cpp_wrong_${tag}" "$file_name")"
+            if (( CPP_AVAILABLE == 1 )); then
+                cooldown "pb512file_py_to_cpp_wrong_${tag}"
+                time_cmd "pb512file_cpp_wrong_${tag}" cpp_pb512file_wrong "$pb512file_cpp_wrong_input"
+            else
+                FAILURES+=("pb512file_cpp_wrong_${tag} (cpp unavailable)")
+            fi
+        fi
+        if [[ "$RUN_JAVA_TESTS" == "1" ]]; then
+            pb512file_java_wrong_input="$(copy_input "pb512file_java_wrong_${tag}" "$file_name")"
+            if (( JAVA_AVAILABLE == 1 )); then
+                cooldown "pb512file_cpp_to_java_wrong_${tag}"
+                time_cmd "pb512file_java_wrong_${tag}" java_pb512file_wrong "$pb512file_java_wrong_input"
+            else
+                FAILURES+=("pb512file_java_wrong_${tag} (java unavailable)")
+            fi
+        fi
+    fi
+done
+
+if (( ${#JMG_CASES[@]} > 0 )) && { [[ "$RUN_PY_TESTS" == "1" ]] || [[ "$RUN_CPP_TESTS" == "1" && "$CPP_AVAILABLE" == "1" ]]; }; then
+    phase "PHASE2.1: jMG media tests (${PHASE2_LABEL:-native})"
+    for file_name in "${JMG_CASES[@]}"; do
+        tag="$(case_tag "$file_name")"
+        if [[ "$RUN_PY_TESTS" == "1" ]]; then
+            jmg_py_input="$(copy_input "jmg_py_${tag}" "$file_name")"
+            jmg_py_enc="$WORK_DIR/jmg_py_${tag}/enc_${file_name}"
+            jmg_py_dec="$WORK_DIR/jmg_py_${tag}/dec_${file_name}"
+            time_cmd "jmg_py_${tag}" py_jmg_roundtrip "$jmg_py_input" "$jmg_py_enc" "$jmg_py_dec"
+            add_verify "$ORIG_DIR/$file_name" "$jmg_py_dec"
+        fi
+
+        if [[ "$RUN_CPP_TESTS" == "1" ]]; then
+            jmg_cpp_input="$(copy_input "jmg_cpp_${tag}" "$file_name")"
+            jmg_cpp_enc="$WORK_DIR/jmg_cpp_${tag}/enc_${file_name}"
+            jmg_cpp_dec="$WORK_DIR/jmg_cpp_${tag}/dec_${file_name}"
+            if (( CPP_AVAILABLE == 1 )); then
+                cooldown "jmg_py_to_cpp_${tag}"
+                time_cmd "jmg_cpp_${tag}" cpp_jmg_roundtrip "$jmg_cpp_input" "$jmg_cpp_enc" "$jmg_cpp_dec"
+                add_verify "$ORIG_DIR/$file_name" "$jmg_cpp_dec"
+            else
+                FAILURES+=("jmg_cpp_${tag} (cpp unavailable)")
+            fi
+        fi
+    done
+else
+    phase "PHASE2.1: jMG media tests (${PHASE2_LABEL:-native}, skipped)"
+fi
+}
+
+phase "PHASE2: prepare native runtimes"
+if [[ "$RUN_CPP_TESTS_ORIG" == "1" ]]; then
+    ensure_cpp || log "C++ binary unavailable; C++ tests will be marked failed"
+else
+    CPP_AVAILABLE=0
+fi
+if [[ "$RUN_JAVA_TESTS_ORIG" == "1" ]]; then
+    ensure_java || log "Java CLI unavailable; Java tests will be marked failed"
+else
+    JAVA_AVAILABLE=0
+fi
+if [[ "$RUN_PYPY_TESTS_ORIG" == "1" ]]; then
+    ensure_pypy || log "PyPy unavailable; PyPy tests will be skipped"
+else
+    PYPY_AVAILABLE=0
+fi
 
 FWXAES_FILE="tiny.txt"
 if [[ "$TEST_MODE" == "fast" || "$TEST_MODE" == "quickest" ]]; then
@@ -1034,207 +2337,58 @@ for file_name in "jmg_sample.png" "jmg_sample.mp4" "jmg_sample.m4a"; do
         JMG_CASES+=("$file_name")
     fi
 done
+
 STEP_INDEX=0
 calc_total_steps
 
-# fwxAES correct
-fwxaes_py_input="$(copy_input "fwxaes_py_correct" "$FWXAES_FILE")"
-fwxaes_py_enc="$(with_suffix "$fwxaes_py_input" ".fwx")"
-fwxaes_py_dec="$WORK_DIR/fwxaes_py_correct/decoded_${FWXAES_FILE}"
-time_cmd "fwxaes_py_correct" "$PYTHON_BIN" "$PY_HELPER" fwxaes-roundtrip "$fwxaes_py_input" "$fwxaes_py_enc" "$fwxaes_py_dec" "$PW"
-add_verify "$ORIG_DIR/$FWXAES_FILE" "$fwxaes_py_dec"
-
-fwxaes_cpp_input="$(copy_input "fwxaes_cpp_correct" "$FWXAES_FILE")"
-fwxaes_cpp_enc="$(with_suffix "$fwxaes_cpp_input" ".fwx")"
-fwxaes_cpp_dec="$WORK_DIR/fwxaes_cpp_correct/decoded_${FWXAES_FILE}"
-if (( CPP_AVAILABLE == 1 )); then
-    cooldown "fwxaes_py_to_cpp_correct"
-    time_cmd "fwxaes_cpp_correct" cpp_fwxAES_roundtrip "$fwxaes_cpp_input" "$fwxaes_cpp_enc" "$fwxaes_cpp_dec"
-    add_verify "$ORIG_DIR/$FWXAES_FILE" "$fwxaes_cpp_dec"
-else
-    FAILURES+=("fwxaes_cpp_correct (cpp unavailable)")
+LANG_PHASES=()
+if [[ "$RUN_PY_TESTS_ORIG" == "1" ]]; then
+    LANG_PHASES+=("py")
+fi
+if [[ "$RUN_PYPY_TESTS_ORIG" == "1" ]]; then
+    LANG_PHASES+=("pypy")
+fi
+if [[ "$RUN_CPP_TESTS_ORIG" == "1" ]]; then
+    LANG_PHASES+=("cpp")
+fi
+if [[ "$RUN_JAVA_TESTS_ORIG" == "1" ]]; then
+    LANG_PHASES+=("java")
 fi
 
-# fwxAES wrong password
-if [[ "$SKIP_WRONG" != "1" ]]; then
-    fwxaes_py_wrong_input="$(copy_input "fwxaes_py_wrong" "$FWXAES_FILE")"
-    fwxaes_py_wrong_enc="$(with_suffix "$fwxaes_py_wrong_input" ".fwx")"
-    fwxaes_py_wrong_dec="$WORK_DIR/fwxaes_py_wrong/decoded_${FWXAES_FILE}"
-    time_cmd "fwxaes_py_wrong" "$PYTHON_BIN" "$PY_HELPER" fwxaes-wrong "$fwxaes_py_wrong_input" "$fwxaes_py_wrong_enc" "$fwxaes_py_wrong_dec" "$PW" "$BAD_PW"
-
-    fwxaes_cpp_wrong_input="$(copy_input "fwxaes_cpp_wrong" "$FWXAES_FILE")"
-    fwxaes_cpp_wrong_enc="$(with_suffix "$fwxaes_cpp_wrong_input" ".fwx")"
-    fwxaes_cpp_wrong_dec="$WORK_DIR/fwxaes_cpp_wrong/decoded_${FWXAES_FILE}"
-    if (( CPP_AVAILABLE == 1 )); then
-        cooldown "fwxaes_py_to_cpp_wrong"
-        time_cmd "fwxaes_cpp_wrong" cpp_fwxAES_wrong "$fwxaes_cpp_wrong_input" "$fwxaes_cpp_wrong_enc" "$fwxaes_cpp_wrong_dec"
-    else
-        FAILURES+=("fwxaes_cpp_wrong (cpp unavailable)")
-    fi
-fi
-
-# b256 correct
-b256_py_out="$OUT_DIR/b256_py.txt"
-time_cmd "b256_py_correct" "$PYTHON_BIN" "$PY_HELPER" text-roundtrip b256 "$TEXT_ORIG" "$b256_py_out" "$PW"
-add_verify "$TEXT_ORIG" "$b256_py_out"
-
-b256_cpp_out="$OUT_DIR/b256_cpp.txt"
-if (( CPP_AVAILABLE == 1 )); then
-    cooldown "b256_py_to_cpp_correct"
-    time_cmd "b256_cpp_correct" cpp_text_roundtrip b256 "$TEXT_ORIG" "$b256_cpp_out" "$PW"
-    add_verify "$TEXT_ORIG" "$b256_cpp_out"
-else
-    FAILURES+=("b256_cpp_correct (cpp unavailable)")
-fi
-
-# b512 correct
-b512_py_out="$OUT_DIR/b512_py.txt"
-time_cmd "b512_py_correct" "$PYTHON_BIN" "$PY_HELPER" text-roundtrip b512 "$TEXT_ORIG" "$b512_py_out" "$PW"
-add_verify "$TEXT_ORIG" "$b512_py_out"
-
-b512_cpp_out="$OUT_DIR/b512_cpp.txt"
-if (( CPP_AVAILABLE == 1 )); then
-    cooldown "b512_py_to_cpp_correct"
-    time_cmd "b512_cpp_correct" cpp_text_roundtrip b512 "$TEXT_ORIG" "$b512_cpp_out" "$PW"
-    add_verify "$TEXT_ORIG" "$b512_cpp_out"
-else
-    FAILURES+=("b512_cpp_correct (cpp unavailable)")
-fi
-
-# b512 wrong password
-if [[ "$SKIP_WRONG" != "1" ]]; then
-    time_cmd "b512_py_wrong" "$PYTHON_BIN" "$PY_HELPER" text-wrong b512 "$TEXT_ORIG" "$PW" "$BAD_PW"
-    if (( CPP_AVAILABLE == 1 )); then
-        cooldown "b512_py_to_cpp_wrong"
-        time_cmd "b512_cpp_wrong" cpp_text_wrong b512 "$TEXT_ORIG" "$PW" "$OUT_DIR/b512_cpp_wrong.enc"
-    else
-        FAILURES+=("b512_cpp_wrong (cpp unavailable)")
-    fi
-fi
-
-# pb512 correct
-pb512_py_out="$OUT_DIR/pb512_py.txt"
-time_cmd "pb512_py_correct" "$PYTHON_BIN" "$PY_HELPER" text-roundtrip pb512 "$TEXT_ORIG" "$pb512_py_out" "$PW"
-add_verify "$TEXT_ORIG" "$pb512_py_out"
-
-pb512_cpp_out="$OUT_DIR/pb512_cpp.txt"
-if (( CPP_AVAILABLE == 1 )); then
-    cooldown "pb512_py_to_cpp_correct"
-    time_cmd "pb512_cpp_correct" cpp_text_roundtrip pb512 "$TEXT_ORIG" "$pb512_cpp_out" "$PW"
-    add_verify "$TEXT_ORIG" "$pb512_cpp_out"
-else
-    FAILURES+=("pb512_cpp_correct (cpp unavailable)")
-fi
-
-# pb512 wrong password
-if [[ "$SKIP_WRONG" != "1" ]]; then
-    time_cmd "pb512_py_wrong" "$PYTHON_BIN" "$PY_HELPER" text-wrong pb512 "$TEXT_ORIG" "$PW" "$BAD_PW"
-    if (( CPP_AVAILABLE == 1 )); then
-        cooldown "pb512_py_to_cpp_wrong"
-        time_cmd "pb512_cpp_wrong" cpp_text_wrong pb512 "$TEXT_ORIG" "$PW" "$OUT_DIR/pb512_cpp_wrong.enc"
-    else
-        FAILURES+=("pb512_cpp_wrong (cpp unavailable)")
-    fi
-fi
-
-B512FILE_PY_TOTAL=0
-B512FILE_CPP_TOTAL=0
-for file_name in "${B512FILE_CASES[@]}"; do
-    tag="$(case_tag "$file_name")"
-    # b512file correct
-    b512file_py_input="$(copy_input "b512file_py_correct_${tag}" "$file_name")"
-    key="b512file_py_correct_${tag}"
-    time_cmd "$key" py_b512file_roundtrip "$b512file_py_input"
-    B512FILE_PY_TOTAL=$((B512FILE_PY_TOTAL + ${TIMES[$key]:-0}))
-    add_verify "$ORIG_DIR/$file_name" "$b512file_py_input"
-
-    b512file_cpp_input="$(copy_input "b512file_cpp_correct_${tag}" "$file_name")"
-    if (( CPP_AVAILABLE == 1 )); then
-        cooldown "b512file_py_to_cpp_correct_${tag}"
-        key="b512file_cpp_correct_${tag}"
-        time_cmd "$key" cpp_b512file_roundtrip "$b512file_cpp_input"
-        B512FILE_CPP_TOTAL=$((B512FILE_CPP_TOTAL + ${TIMES[$key]:-0}))
-        add_verify "$ORIG_DIR/$file_name" "$b512file_cpp_input"
-    else
-        FAILURES+=("b512file_cpp_correct_${tag} (cpp unavailable)")
-    fi
-
-    if [[ "$SKIP_WRONG" != "1" ]]; then
-        # b512file wrong password
-        b512file_py_wrong_input="$(copy_input "b512file_py_wrong_${tag}" "$file_name")"
-        time_cmd "b512file_py_wrong_${tag}" py_b512file_wrong "$b512file_py_wrong_input"
-
-        b512file_cpp_wrong_input="$(copy_input "b512file_cpp_wrong_${tag}" "$file_name")"
-        if (( CPP_AVAILABLE == 1 )); then
-            cooldown "b512file_py_to_cpp_wrong_${tag}"
-            time_cmd "b512file_cpp_wrong_${tag}" cpp_b512file_wrong "$b512file_cpp_wrong_input"
-        else
-            FAILURES+=("b512file_cpp_wrong_${tag} (cpp unavailable)")
-        fi
+for idx in "${!LANG_PHASES[@]}"; do
+    lang="${LANG_PHASES[$idx]}"
+    RUN_PY_TESTS=0
+    RUN_PYPY_TESTS=0
+    RUN_CPP_TESTS=0
+    RUN_JAVA_TESTS=0
+    case "$lang" in
+        py)
+            PHASE2_LABEL="Python"
+            RUN_PY_TESTS=1
+            ;;
+        pypy)
+            PHASE2_LABEL="PyPy"
+            RUN_PYPY_TESTS=1
+            ;;
+        cpp)
+            PHASE2_LABEL="C++"
+            RUN_CPP_TESTS=1
+            ;;
+        java)
+            PHASE2_LABEL="Java"
+            RUN_JAVA_TESTS=1
+            ;;
+    esac
+    run_native_tests_block
+    if (( idx < ${#LANG_PHASES[@]} - 1 )); then
+        lang_cooldown "${PHASE2_LABEL}"
     fi
 done
 
-PB512FILE_PY_TOTAL=0
-PB512FILE_CPP_TOTAL=0
-for file_name in "${PB512FILE_CASES[@]}"; do
-    tag="$(case_tag "$file_name")"
-    # pb512file correct
-    pb512file_py_input="$(copy_input "pb512file_py_correct_${tag}" "$file_name")"
-    key="pb512file_py_correct_${tag}"
-    time_cmd "$key" py_pb512file_roundtrip "$pb512file_py_input"
-    PB512FILE_PY_TOTAL=$((PB512FILE_PY_TOTAL + ${TIMES[$key]:-0}))
-    add_verify "$ORIG_DIR/$file_name" "$pb512file_py_input"
-
-    pb512file_cpp_input="$(copy_input "pb512file_cpp_correct_${tag}" "$file_name")"
-    if (( CPP_AVAILABLE == 1 )); then
-        cooldown "pb512file_py_to_cpp_correct_${tag}"
-        key="pb512file_cpp_correct_${tag}"
-        time_cmd "$key" cpp_pb512file_roundtrip "$pb512file_cpp_input"
-        PB512FILE_CPP_TOTAL=$((PB512FILE_CPP_TOTAL + ${TIMES[$key]:-0}))
-        add_verify "$ORIG_DIR/$file_name" "$pb512file_cpp_input"
-    else
-        FAILURES+=("pb512file_cpp_correct_${tag} (cpp unavailable)")
-    fi
-
-    if [[ "$SKIP_WRONG" != "1" ]]; then
-        # pb512file wrong password
-        pb512file_py_wrong_input="$(copy_input "pb512file_py_wrong_${tag}" "$file_name")"
-        time_cmd "pb512file_py_wrong_${tag}" py_pb512file_wrong "$pb512file_py_wrong_input"
-
-        pb512file_cpp_wrong_input="$(copy_input "pb512file_cpp_wrong_${tag}" "$file_name")"
-        if (( CPP_AVAILABLE == 1 )); then
-            cooldown "pb512file_py_to_cpp_wrong_${tag}"
-            time_cmd "pb512file_cpp_wrong_${tag}" cpp_pb512file_wrong "$pb512file_cpp_wrong_input"
-        else
-            FAILURES+=("pb512file_cpp_wrong_${tag} (cpp unavailable)")
-        fi
-    fi
-done
-
-if (( ${#JMG_CASES[@]} > 0 )); then
-    phase "PHASE2.1: jMG media tests"
-    for file_name in "${JMG_CASES[@]}"; do
-        tag="$(case_tag "$file_name")"
-        jmg_py_input="$(copy_input "jmg_py_${tag}" "$file_name")"
-        jmg_py_enc="$WORK_DIR/jmg_py_${tag}/enc_${file_name}"
-        jmg_py_dec="$WORK_DIR/jmg_py_${tag}/dec_${file_name}"
-        time_cmd "jmg_py_${tag}" py_jmg_roundtrip "$jmg_py_input" "$jmg_py_enc" "$jmg_py_dec"
-        add_verify "$ORIG_DIR/$file_name" "$jmg_py_dec"
-
-        jmg_cpp_input="$(copy_input "jmg_cpp_${tag}" "$file_name")"
-        jmg_cpp_enc="$WORK_DIR/jmg_cpp_${tag}/enc_${file_name}"
-        jmg_cpp_dec="$WORK_DIR/jmg_cpp_${tag}/dec_${file_name}"
-        if (( CPP_AVAILABLE == 1 )); then
-            cooldown "jmg_py_to_cpp_${tag}"
-            time_cmd "jmg_cpp_${tag}" cpp_jmg_roundtrip "$jmg_cpp_input" "$jmg_cpp_enc" "$jmg_cpp_dec"
-            add_verify "$ORIG_DIR/$file_name" "$jmg_cpp_dec"
-        else
-            FAILURES+=("jmg_cpp_${tag} (cpp unavailable)")
-        fi
-    done
-else
-    phase "PHASE2.1: jMG media tests (skipped)"
-fi
+RUN_PY_TESTS="$RUN_PY_TESTS_ORIG"
+RUN_PYPY_TESTS="$RUN_PYPY_TESTS_ORIG"
+RUN_CPP_TESTS="$RUN_CPP_TESTS_ORIG"
+RUN_JAVA_TESTS="$RUN_JAVA_TESTS_ORIG"
 
 if [[ "$SKIP_CROSS" == "1" ]]; then
     phase "PHASE2.2: cross-compat tests (skipped)"
@@ -1243,132 +2397,61 @@ else
 fi
 
 if [[ "$SKIP_CROSS" != "1" ]]; then
-    # fwxAES cross-compat
-    fwxaes_pycc_input="$(copy_input "fwxaes_pycc" "$FWXAES_FILE")"
-    fwxaes_pycc_enc="$(with_suffix "$fwxaes_pycc_input" ".fwx")"
-    fwxaes_pycc_dec="$WORK_DIR/fwxaes_pycc/decoded_${FWXAES_FILE}"
-    if (( CPP_AVAILABLE == 1 )); then
+    if [[ "$RUN_PY_TESTS" == "1" && "$RUN_CPP_TESTS" == "1" && "$CPP_AVAILABLE" == "1" ]]; then
+        # fwxAES cross-compat (Python <-> C++)
+        fwxaes_pycc_input="$(copy_input "fwxaes_pycc" "$FWXAES_FILE")"
+        fwxaes_pycc_enc="$(with_suffix "$fwxaes_pycc_input" ".fwx")"
+        fwxaes_pycc_dec="$WORK_DIR/fwxaes_pycc/decoded_${FWXAES_FILE}"
         time_cmd "fwxaes_py_enc_cpp_dec" fwxaes_py_enc_cpp_dec "$fwxaes_pycc_input" "$fwxaes_pycc_enc" "$fwxaes_pycc_dec"
         add_verify "$ORIG_DIR/$FWXAES_FILE" "$fwxaes_pycc_dec"
-    else
-        FAILURES+=("fwxaes_py_enc_cpp_dec (cpp unavailable)")
-    fi
 
-    fwxaes_cpyp_input="$(copy_input "fwxaes_cpyp" "$FWXAES_FILE")"
-    fwxaes_cpyp_enc="$(with_suffix "$fwxaes_cpyp_input" ".fwx")"
-    fwxaes_cpyp_dec="$WORK_DIR/fwxaes_cpyp/decoded_${FWXAES_FILE}"
-    if (( CPP_AVAILABLE == 1 )); then
+        fwxaes_cpyp_input="$(copy_input "fwxaes_cpyp" "$FWXAES_FILE")"
+        fwxaes_cpyp_enc="$(with_suffix "$fwxaes_cpyp_input" ".fwx")"
+        fwxaes_cpyp_dec="$WORK_DIR/fwxaes_cpyp/decoded_${FWXAES_FILE}"
         time_cmd "fwxaes_cpp_enc_py_dec" fwxaes_cpp_enc_py_dec "$fwxaes_cpyp_input" "$fwxaes_cpyp_enc" "$fwxaes_cpyp_dec"
         add_verify "$ORIG_DIR/$FWXAES_FILE" "$fwxaes_cpyp_dec"
-    else
-        FAILURES+=("fwxaes_cpp_enc_py_dec (cpp unavailable)")
-    fi
 
-    # b256 cross-compat
-    b256_py_enc="$OUT_DIR/b256_py_enc.txt"
-    b256_pycc_out="$OUT_DIR/b256_pycc.txt"
-    if (( CPP_AVAILABLE == 1 )); then
-        time_cmd "b256_py_enc_cpp_dec" text_py_enc_cpp_dec b256 "$TEXT_ORIG" "$b256_py_enc" "$b256_pycc_out"
-        add_verify "$TEXT_ORIG" "$b256_pycc_out"
-    else
-        FAILURES+=("b256_py_enc_cpp_dec (cpp unavailable)")
-    fi
+        for method in "${TEXT_NOPASS_METHODS[@]}" "${TEXT_PASS_METHODS[@]}"; do
+            py_enc="$OUT_DIR/${method}_py_enc.txt"
+            pycc_out="$OUT_DIR/${method}_pycc.txt"
+            time_cmd "${method}_py_enc_cpp_dec" text_py_enc_cpp_dec "$method" "$TEXT_ORIG" "$py_enc" "$pycc_out"
+            add_verify "$TEXT_ORIG" "$pycc_out"
 
-    b256_cpp_enc="$OUT_DIR/b256_cpp_enc.txt"
-    b256_cpyp_out="$OUT_DIR/b256_cpyp.txt"
-    if (( CPP_AVAILABLE == 1 )); then
-        time_cmd "b256_cpp_enc_py_dec" text_cpp_enc_py_dec b256 "$TEXT_ORIG" "$b256_cpp_enc" "$b256_cpyp_out"
-        add_verify "$TEXT_ORIG" "$b256_cpyp_out"
-    else
-        FAILURES+=("b256_cpp_enc_py_dec (cpp unavailable)")
-    fi
+            cpp_enc="$OUT_DIR/${method}_cpp_enc.txt"
+            cpyp_out="$OUT_DIR/${method}_cpyp.txt"
+            time_cmd "${method}_cpp_enc_py_dec" text_cpp_enc_py_dec "$method" "$TEXT_ORIG" "$cpp_enc" "$cpyp_out"
+            add_verify "$TEXT_ORIG" "$cpyp_out"
+        done
 
-    # b512 cross-compat
-    b512_py_enc="$OUT_DIR/b512_py_enc.txt"
-    b512_pycc_out="$OUT_DIR/b512_pycc.txt"
-    if (( CPP_AVAILABLE == 1 )); then
-        time_cmd "b512_py_enc_cpp_dec" text_py_enc_cpp_dec b512 "$TEXT_ORIG" "$b512_py_enc" "$b512_pycc_out"
-        add_verify "$TEXT_ORIG" "$b512_pycc_out"
-    else
-        FAILURES+=("b512_py_enc_cpp_dec (cpp unavailable)")
-    fi
-
-    b512_cpp_enc="$OUT_DIR/b512_cpp_enc.txt"
-    b512_cpyp_out="$OUT_DIR/b512_cpyp.txt"
-    if (( CPP_AVAILABLE == 1 )); then
-        time_cmd "b512_cpp_enc_py_dec" text_cpp_enc_py_dec b512 "$TEXT_ORIG" "$b512_cpp_enc" "$b512_cpyp_out"
-        add_verify "$TEXT_ORIG" "$b512_cpyp_out"
-    else
-        FAILURES+=("b512_cpp_enc_py_dec (cpp unavailable)")
-    fi
-
-    # pb512 cross-compat
-    pb512_py_enc="$OUT_DIR/pb512_py_enc.txt"
-    pb512_pycc_out="$OUT_DIR/pb512_pycc.txt"
-    if (( CPP_AVAILABLE == 1 )); then
-        time_cmd "pb512_py_enc_cpp_dec" text_py_enc_cpp_dec pb512 "$TEXT_ORIG" "$pb512_py_enc" "$pb512_pycc_out"
-        add_verify "$TEXT_ORIG" "$pb512_pycc_out"
-    else
-        FAILURES+=("pb512_py_enc_cpp_dec (cpp unavailable)")
-    fi
-
-    pb512_cpp_enc="$OUT_DIR/pb512_cpp_enc.txt"
-    pb512_cpyp_out="$OUT_DIR/pb512_cpyp.txt"
-    if (( CPP_AVAILABLE == 1 )); then
-        time_cmd "pb512_cpp_enc_py_dec" text_cpp_enc_py_dec pb512 "$TEXT_ORIG" "$pb512_cpp_enc" "$pb512_cpyp_out"
-        add_verify "$TEXT_ORIG" "$pb512_cpyp_out"
-    else
-        FAILURES+=("pb512_cpp_enc_py_dec (cpp unavailable)")
-    fi
-
-    # b512file cross-compat
-    for file_name in "${B512FILE_CASES[@]}"; do
-        tag="$(case_tag "$file_name")"
-        b512file_pycc_input="$(copy_input "b512file_pycc_${tag}" "$file_name")"
-        b512file_pycc_enc="$(with_suffix "$b512file_pycc_input" ".fwx")"
-        if (( CPP_AVAILABLE == 1 )); then
+        for file_name in "${B512FILE_CASES[@]}"; do
+            tag="$(case_tag "$file_name")"
+            b512file_pycc_input="$(copy_input "b512file_pycc_${tag}" "$file_name")"
+            b512file_pycc_enc="$(with_suffix "$b512file_pycc_input" ".fwx")"
             time_cmd "b512file_py_enc_cpp_dec_${tag}" b512file_py_enc_cpp_dec "$b512file_pycc_input" "$b512file_pycc_enc"
             add_verify "$ORIG_DIR/$file_name" "$b512file_pycc_input"
-        else
-            FAILURES+=("b512file_py_enc_cpp_dec_${tag} (cpp unavailable)")
-        fi
 
-        b512file_cpyp_input="$(copy_input "b512file_cpyp_${tag}" "$file_name")"
-        b512file_cpyp_enc="$(with_suffix "$b512file_cpyp_input" ".fwx")"
-        if (( CPP_AVAILABLE == 1 )); then
+            b512file_cpyp_input="$(copy_input "b512file_cpyp_${tag}" "$file_name")"
+            b512file_cpyp_enc="$(with_suffix "$b512file_cpyp_input" ".fwx")"
             time_cmd "b512file_cpp_enc_py_dec_${tag}" b512file_cpp_enc_py_dec "$b512file_cpyp_input" "$b512file_cpyp_enc"
             add_verify "$ORIG_DIR/$file_name" "$b512file_cpyp_input"
-        else
-            FAILURES+=("b512file_cpp_enc_py_dec_${tag} (cpp unavailable)")
-        fi
-    done
+        done
 
-    # pb512file cross-compat
-    for file_name in "${PB512FILE_CASES[@]}"; do
-        tag="$(case_tag "$file_name")"
-        pb512file_pycc_input="$(copy_input "pb512file_pycc_${tag}" "$file_name")"
-        pb512file_pycc_enc="$(with_suffix "$pb512file_pycc_input" ".fwx")"
-        if (( CPP_AVAILABLE == 1 )); then
+        for file_name in "${PB512FILE_CASES[@]}"; do
+            tag="$(case_tag "$file_name")"
+            pb512file_pycc_input="$(copy_input "pb512file_pycc_${tag}" "$file_name")"
+            pb512file_pycc_enc="$(with_suffix "$pb512file_pycc_input" ".fwx")"
             time_cmd "pb512file_py_enc_cpp_dec_${tag}" pb512file_py_enc_cpp_dec "$pb512file_pycc_input" "$pb512file_pycc_enc"
             add_verify "$ORIG_DIR/$file_name" "$pb512file_pycc_input"
-        else
-            FAILURES+=("pb512file_py_enc_cpp_dec_${tag} (cpp unavailable)")
-        fi
 
-        pb512file_cpyp_input="$(copy_input "pb512file_cpyp_${tag}" "$file_name")"
-        pb512file_cpyp_enc="$(with_suffix "$pb512file_cpyp_input" ".fwx")"
-        if (( CPP_AVAILABLE == 1 )); then
+            pb512file_cpyp_input="$(copy_input "pb512file_cpyp_${tag}" "$file_name")"
+            pb512file_cpyp_enc="$(with_suffix "$pb512file_cpyp_input" ".fwx")"
             time_cmd "pb512file_cpp_enc_py_dec_${tag}" pb512file_cpp_enc_py_dec "$pb512file_cpyp_input" "$pb512file_cpyp_enc"
             add_verify "$ORIG_DIR/$file_name" "$pb512file_cpyp_input"
-        else
-            FAILURES+=("pb512file_cpp_enc_py_dec_${tag} (cpp unavailable)")
-        fi
-    done
+        done
 
-    if (( ${#JMG_CASES[@]} > 0 )); then
-        for file_name in "${JMG_CASES[@]}"; do
-            tag="$(case_tag "$file_name")"
-            if (( CPP_AVAILABLE == 1 )); then
+        if (( ${#JMG_CASES[@]} > 0 )); then
+            for file_name in "${JMG_CASES[@]}"; do
+                tag="$(case_tag "$file_name")"
                 jmg_pycc_input="$(copy_input "jmg_pycc_${tag}" "$file_name")"
                 jmg_pycc_enc="$WORK_DIR/jmg_pycc_${tag}/enc_${file_name}"
                 jmg_pycc_dec="$WORK_DIR/jmg_pycc_${tag}/dec_${file_name}"
@@ -1380,9 +2463,34 @@ if [[ "$SKIP_CROSS" != "1" ]]; then
                 jmg_cpyp_dec="$WORK_DIR/jmg_cpyp_${tag}/dec_${file_name}"
                 time_cmd "jmg_cpp_enc_py_dec_${tag}" jmg_cpp_enc_py_dec "$jmg_cpyp_input" "$jmg_cpyp_enc" "$jmg_cpyp_dec"
                 add_verify "$ORIG_DIR/$file_name" "$jmg_cpyp_dec"
-            else
-                FAILURES+=("jmg_cross_${tag} (cpp unavailable)")
-            fi
+            done
+        fi
+    fi
+
+    if [[ "$RUN_PY_TESTS" == "1" && "$RUN_JAVA_TESTS" == "1" && "$JAVA_AVAILABLE" == "1" ]]; then
+        # fwxAES cross-compat (Python <-> Java)
+        fwxaes_pyj_input="$(copy_input "fwxaes_pyj" "$FWXAES_FILE")"
+        fwxaes_pyj_enc="$(with_suffix "$fwxaes_pyj_input" ".fwx")"
+        fwxaes_pyj_dec="$WORK_DIR/fwxaes_pyj/decoded_${FWXAES_FILE}"
+        time_cmd "fwxaes_py_enc_java_dec" fwxaes_py_enc_java_dec "$fwxaes_pyj_input" "$fwxaes_pyj_enc" "$fwxaes_pyj_dec"
+        add_verify "$ORIG_DIR/$FWXAES_FILE" "$fwxaes_pyj_dec"
+
+        fwxaes_jp_input="$(copy_input "fwxaes_jp" "$FWXAES_FILE")"
+        fwxaes_jp_enc="$(with_suffix "$fwxaes_jp_input" ".fwx")"
+        fwxaes_jp_dec="$WORK_DIR/fwxaes_jp/decoded_${FWXAES_FILE}"
+        time_cmd "fwxaes_java_enc_py_dec" fwxaes_java_enc_py_dec "$fwxaes_jp_input" "$fwxaes_jp_enc" "$fwxaes_jp_dec"
+        add_verify "$ORIG_DIR/$FWXAES_FILE" "$fwxaes_jp_dec"
+
+        for method in "${TEXT_NOPASS_METHODS[@]}" "${TEXT_PASS_METHODS[@]}"; do
+            py_enc="$OUT_DIR/${method}_py_enc_java.txt"
+            pyj_out="$OUT_DIR/${method}_pyj.txt"
+            time_cmd "${method}_py_enc_java_dec" text_py_enc_java_dec "$method" "$TEXT_ORIG" "$py_enc" "$pyj_out"
+            add_verify "$TEXT_ORIG" "$pyj_out"
+
+            java_enc="$OUT_DIR/${method}_java_enc.txt"
+            jp_out="$OUT_DIR/${method}_javapy.txt"
+            time_cmd "${method}_java_enc_py_dec" text_java_enc_py_dec "$method" "$TEXT_ORIG" "$java_enc" "$jp_out"
+            add_verify "$TEXT_ORIG" "$jp_out"
         done
     fi
 fi
@@ -1402,7 +2510,121 @@ if [[ -f "$VERIFY_LIST" ]]; then
     done <"$VERIFY_LIST"
 fi
 
-phase "PHASE4: cleanup and summary"
+phase "PHASE4: benchmark timings"
+STEP_INDEX=0
+STEP_TOTAL=0
+BENCH_TEXT="$TEXT_ORIG"
+BENCH_BYTES_FILE=""
+if [[ "$TEST_MODE" == "default" && -f "$ORIG_DIR/large_36m.bin" ]]; then
+    BENCH_BYTES_FILE="$ORIG_DIR/large_36m.bin"
+elif [[ -f "$ORIG_DIR/sample_payload.bin" ]]; then
+    BENCH_BYTES_FILE="$ORIG_DIR/sample_payload.bin"
+else
+    BENCH_BYTES_FILE="$ORIG_DIR/$FWXAES_FILE"
+fi
+
+if [[ -z "${BENCH_WARMUP_LIGHT:-}" || -z "${BENCH_WARMUP_HEAVY:-}" ]]; then
+    if [[ "$TEST_MODE" == "quickest" ]]; then
+        BENCH_WARMUP_LIGHT="${BENCH_WARMUP_LIGHT:-3}"
+        BENCH_WARMUP_HEAVY="${BENCH_WARMUP_HEAVY:-5}"
+    elif [[ "$TEST_MODE" == "fast" ]]; then
+        BENCH_WARMUP_LIGHT="${BENCH_WARMUP_LIGHT:-5}"
+        BENCH_WARMUP_HEAVY="${BENCH_WARMUP_HEAVY:-10}"
+    else
+        BENCH_WARMUP_LIGHT="${BENCH_WARMUP_LIGHT:-10}"
+        BENCH_WARMUP_HEAVY="${BENCH_WARMUP_HEAVY:-20}"
+    fi
+fi
+
+JAVA_BENCH_FLAGS="${JAVA_BENCH_FLAGS:--Xms2g -Xmx2g -XX:+AlwaysPreTouch -XX:+TieredCompilation -XX:CompileThreshold=100 -XX:TieredStopAtLevel=4 -XX:+UnlockExperimentalVMOptions -XX:+UseZGC}"
+read -r -a JAVA_BENCH_FLAGS_ARR <<<"$JAVA_BENCH_FLAGS"
+
+BENCH_TEXT_METHODS=("b256" "b512" "pb512" "b64" "a512")
+BENCH_HASH_METHODS=("hash512" "uhash513" "bi512" "b1024")
+
+BENCH_LANGS=()
+if [[ "$RUN_PY_TESTS" == "1" ]]; then
+    BENCH_LANGS+=("py")
+fi
+if [[ "$RUN_PYPY_TESTS" == "1" && "$PYPY_AVAILABLE" == "1" ]]; then
+    BENCH_LANGS+=("pypy")
+fi
+if [[ "$RUN_CPP_TESTS" == "1" && "$CPP_AVAILABLE" == "1" ]]; then
+    BENCH_LANGS+=("cpp")
+fi
+if [[ "$RUN_JAVA_TESTS" == "1" && "$JAVA_AVAILABLE" == "1" ]]; then
+    BENCH_LANGS+=("java")
+fi
+
+for idx in "${!BENCH_LANGS[@]}"; do
+    lang="${BENCH_LANGS[$idx]}"
+    case "$lang" in
+        py)
+            time_cmd_bench "fwxaes_py_correct" env BASEFWX_BENCH_WARMUP=0 \
+                "$PYTHON_BIN" "$PY_HELPER" bench-fwxaes "$BENCH_BYTES_FILE" "$PW"
+            for method in "${BENCH_TEXT_METHODS[@]}"; do
+                time_cmd_bench "${method}_py_correct" env BASEFWX_BENCH_WARMUP=0 \
+                    "$PYTHON_BIN" "$PY_HELPER" bench-text "$method" "$BENCH_TEXT" "$PW"
+            done
+            for method in "${BENCH_HASH_METHODS[@]}"; do
+                time_cmd_bench "${method}_py_correct" env BASEFWX_BENCH_WARMUP=0 \
+                    "$PYTHON_BIN" "$PY_HELPER" bench-hash "$method" "$BENCH_TEXT"
+            done
+            time_cmd_bench "b512file_py_total" env BASEFWX_BENCH_WARMUP=0 \
+                "$PYTHON_BIN" "$PY_HELPER" bench-b512file "$BENCH_BYTES_FILE" "$PW"
+            time_cmd_bench "pb512file_py_total" env BASEFWX_BENCH_WARMUP=0 \
+                "$PYTHON_BIN" "$PY_HELPER" bench-pb512file "$BENCH_BYTES_FILE" "$PW"
+            ;;
+        pypy)
+            time_cmd_bench "fwxaes_pypy_correct" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_HEAVY" \
+                "$PYPY_BIN" "$PY_HELPER" bench-fwxaes "$BENCH_BYTES_FILE" "$PW"
+            for method in "${BENCH_TEXT_METHODS[@]}"; do
+                time_cmd_bench "${method}_pypy_correct" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_LIGHT" \
+                    "$PYPY_BIN" "$PY_HELPER" bench-text "$method" "$BENCH_TEXT" "$PW"
+            done
+            for method in "${BENCH_HASH_METHODS[@]}"; do
+                time_cmd_bench "${method}_pypy_correct" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_LIGHT" \
+                    "$PYPY_BIN" "$PY_HELPER" bench-hash "$method" "$BENCH_TEXT"
+            done
+            ;;
+        cpp)
+            time_cmd_bench "fwxaes_cpp_correct" "$CPP_BIN" bench-fwxaes "$BENCH_BYTES_FILE" "$PW" --no-master
+            for method in "${BENCH_TEXT_METHODS[@]}"; do
+                if [[ "$method" == "b512" || "$method" == "pb512" ]]; then
+                    time_cmd_bench "${method}_cpp_correct" "$CPP_BIN" bench-text "$method" "$BENCH_TEXT" -p "$PW" --no-master
+                else
+                    time_cmd_bench "${method}_cpp_correct" "$CPP_BIN" bench-text "$method" "$BENCH_TEXT"
+                fi
+            done
+            for method in "${BENCH_HASH_METHODS[@]}"; do
+                time_cmd_bench "${method}_cpp_correct" "$CPP_BIN" bench-hash "$method" "$BENCH_TEXT"
+            done
+            time_cmd_bench "b512file_cpp_total" "$CPP_BIN" bench-b512file "$BENCH_BYTES_FILE" "$PW" --no-master
+            time_cmd_bench "pb512file_cpp_total" "$CPP_BIN" bench-pb512file "$BENCH_BYTES_FILE" "$PW" --no-master
+            ;;
+        java)
+            time_cmd_bench "fwxaes_java_correct" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_HEAVY" \
+                "$JAVA_BIN" "${JAVA_BENCH_FLAGS_ARR[@]}" -jar "$JAVA_JAR" bench-fwxaes "$BENCH_BYTES_FILE" "$PW" --no-master
+            for method in "${BENCH_TEXT_METHODS[@]}"; do
+                time_cmd_bench "${method}_java_correct" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_LIGHT" \
+                    "$JAVA_BIN" "${JAVA_BENCH_FLAGS_ARR[@]}" -jar "$JAVA_JAR" bench-text "$method" "$BENCH_TEXT" "$PW" --no-master
+            done
+            for method in "${BENCH_HASH_METHODS[@]}"; do
+                time_cmd_bench "${method}_java_correct" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_LIGHT" \
+                    "$JAVA_BIN" "${JAVA_BENCH_FLAGS_ARR[@]}" -jar "$JAVA_JAR" bench-hash "$method" "$BENCH_TEXT"
+            done
+            time_cmd_bench "b512file_java_total" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_HEAVY" \
+                "$JAVA_BIN" "${JAVA_BENCH_FLAGS_ARR[@]}" -jar "$JAVA_JAR" bench-b512file "$BENCH_BYTES_FILE" "$PW" --no-master
+            time_cmd_bench "pb512file_java_total" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_HEAVY" \
+                "$JAVA_BIN" "${JAVA_BENCH_FLAGS_ARR[@]}" -jar "$JAVA_JAR" bench-pb512file "$BENCH_BYTES_FILE" "$PW" --no-master
+            ;;
+    esac
+    if (( idx < ${#BENCH_LANGS[@]} - 1 )); then
+        lang_cooldown "benchmark ${lang}"
+    fi
+done
+
+phase "PHASE5: cleanup and summary"
 if [[ "${BASEFWX_KEEP_TMP:-0}" != "1" ]]; then
     rm -rf "$TMP_DIR"
 fi
@@ -1411,55 +2633,191 @@ format_ns() {
     awk -v ns="$1" 'BEGIN { printf "%.3f", ns / 1000000000 }'
 }
 
-compare_speed() {
+format_delta() {
+    local base_ns="$1"
+    local other_ns="$2"
+    if [[ -z "$base_ns" || -z "$other_ns" || "$base_ns" -le 0 ]]; then
+        printf "n/a"
+        return
+    fi
+    local pct abs_pct is_equal is_faster
+    pct=$(awk -v base="$base_ns" -v other="$other_ns" 'BEGIN { printf "%.6f", (other-base)/base*100 }')
+    abs_pct=$(awk -v p="$pct" 'BEGIN { v=p; if (v<0) v=-v; printf "%.6f", v }')
+    is_equal=$(awk -v a="$abs_pct" 'BEGIN { print (a < 0.01) ? 1 : 0 }')
+    is_faster=$(awk -v p="$pct" 'BEGIN { print (p < 0) ? 1 : 0 }')
+    if (( is_equal == 1 )); then
+        printf "%s🔵 0.00%%%s" "$BLUE" "$RESET"
+        return
+    fi
+    if (( is_faster == 1 )); then
+        local gain
+        gain=$(awk -v base="$base_ns" -v other="$other_ns" 'BEGIN { printf "%.2f", (base-other)/base*100 }')
+        printf "%s%s +%s%%%s" "$GREEN" "$EMOJI_FAST" "$gain" "$RESET"
+    else
+        local loss
+        loss=$(awk -v base="$base_ns" -v other="$other_ns" 'BEGIN { printf "%.2f", (other-base)/base*100 }')
+        printf "%s%s -%s%%%s" "$RED" "$EMOJI_SLOW" "$loss" "$RESET"
+    fi
+}
+
+print_lang_line() {
+    local tag="$1"
+    local time_s="$2"
+    local delta="$3"
+    local version="$4"
+    if [[ -z "$time_s" ]]; then
+        printf "%s n/a %s\n" "$tag" "$version"
+        return
+    fi
+    if [[ -n "$delta" ]]; then
+        printf "%s %ss %s %s\n" "$tag" "$time_s" "$delta" "$version"
+    else
+        printf "%s %ss %s\n" "$tag" "$time_s" "$version"
+    fi
+}
+
+compare_speed_block() {
     local label="$1"
     local py_key="$2"
-    local cpp_key="$3"
+    local pypy_key="$3"
+    local cpp_key="$4"
+    local java_key="$5"
     local py_ns="${TIMES[$py_key]:-}"
-    local cpp_ns="${TIMES[$cpp_key]:-}"
-    if [[ -z "$py_ns" || -z "$cpp_ns" ]]; then
+    local pypy_ns=""
+    local cpp_ns=""
+    local java_ns=""
+    if [[ -n "$pypy_key" ]]; then
+        pypy_ns="${TIMES[$pypy_key]:-}"
+    fi
+    if [[ -n "$cpp_key" ]]; then
+        cpp_ns="${TIMES[$cpp_key]:-}"
+    fi
+    if [[ -n "$java_key" ]]; then
+        java_ns="${TIMES[$java_key]:-}"
+    fi
+    if [[ -z "$py_ns" && -z "$pypy_ns" && -z "$cpp_ns" && -z "$java_ns" ]]; then
         printf "%s: %s missing timing data%s\n" "$label" "$YELLOW$EMOJI_WARN" "$RESET"
         return
     fi
-    local py_s cpp_s
-    py_s=$(format_ns "$py_ns")
-    cpp_s=$(format_ns "$cpp_ns")
-    local diff_ns=$((py_ns - cpp_ns))
-    if (( diff_ns < 0 )); then
-        diff_ns=$((0 - diff_ns))
+    local base_key=""
+    local base_label="$BASELINE_LANG"
+    case "$BASELINE_LANG" in
+        py)
+            base_key="$py_key"
+            ;;
+        pypy)
+            base_key="$pypy_key"
+            ;;
+        cpp)
+            base_key="$cpp_key"
+            ;;
+        java)
+            base_key="$java_key"
+            ;;
+    esac
+    local base_ns=""
+    if [[ -n "$base_key" ]]; then
+        base_ns="${TIMES[$base_key]:-}"
     fi
-    local diff_s
-    diff_s=$(format_ns "$diff_ns")
-    local pct_raw pct_abs pct_equal display_equal
-    pct_raw=$(awk -v py="$py_ns" -v cpp="$cpp_ns" 'BEGIN { if (py <= 0) { printf "0.0"; } else { val=(py-cpp)/py*100; if (val<0) val=-val; printf "%.6f", val; } }')
-    pct_abs=$(awk -v v="$pct_raw" 'BEGIN { printf "%.2f", v; }')
-    pct_equal=$(awk -v v="$pct_raw" 'BEGIN { if (v < 0.01) print 1; else print 0; }')
-    display_equal=0
-    if [[ "$py_s" == "$cpp_s" || "$diff_s" == "0.000" ]]; then
-        display_equal=1
+    if [[ -z "$base_ns" || "$base_ns" -le 0 ]]; then
+        if [[ -n "$py_ns" ]]; then
+            base_ns="$py_ns"
+            base_label="py"
+        elif [[ -n "$pypy_ns" ]]; then
+            base_ns="$pypy_ns"
+            base_label="pypy"
+        elif [[ -n "$cpp_ns" ]]; then
+            base_ns="$cpp_ns"
+            base_label="cpp"
+        else
+            base_ns="$java_ns"
+            base_label="java"
+        fi
     fi
-    local verdict=""
-    if (( pct_equal == 1 || display_equal == 1 )); then
-        verdict="${CYAN}☕ equal${RESET}"
-    elif (( py_ns >= cpp_ns )); then
-        verdict="${GREEN}${EMOJI_FAST} C++ +${pct_abs}% faster${RESET}"
+    local py_s="" pypy_s="" cpp_s="" java_s=""
+    if [[ -n "$py_ns" ]]; then
+        py_s=$(format_ns "$py_ns")
+    fi
+    if [[ -n "$pypy_ns" ]]; then
+        pypy_s=$(format_ns "$pypy_ns")
+    fi
+    if [[ -n "$cpp_ns" ]]; then
+        cpp_s=$(format_ns "$cpp_ns")
+    fi
+    if [[ -n "$java_ns" ]]; then
+        java_s=$(format_ns "$java_ns")
+    fi
+    printf "%s:\n" "$label"
+    local py_tag="${PY_VERSION_TAG:-py}"
+    local pypy_tag="${PYPY_VERSION_TAG:-pypy}"
+    local cpp_tag="${CPP_VERSION_TAG:-cpp}"
+    local java_tag="${JAVA_VERSION_TAG:-java}"
+    local py_delta=""
+    if [[ "$base_label" == "py" ]]; then
+        print_lang_line "🐍 Python" "$py_s" "" "$py_tag (baseline)"
     else
-        verdict="${RED}${EMOJI_SLOW} C++ -${pct_abs}% slower${RESET}"
+        if [[ -n "$py_ns" ]]; then
+            py_delta="$(format_delta "$base_ns" "$py_ns")"
+        fi
+        print_lang_line "🐍 Python" "$py_s" "$py_delta" "$py_tag"
     fi
-    printf "%s: Python %ss, C++ %ss, %s (%ss)\n" "$label" "$py_s" "$cpp_s" "$verdict" "$diff_s"
+    if [[ -n "$pypy_ns" ]]; then
+        local pypy_delta=""
+        if [[ "$base_label" == "pypy" ]]; then
+            print_lang_line "🥭 PyPy" "$pypy_s" "" "$pypy_tag (baseline)"
+        else
+            pypy_delta="$(format_delta "$base_ns" "$pypy_ns")"
+            print_lang_line "🥭 PyPy" "$pypy_s" "$pypy_delta" "$pypy_tag"
+        fi
+    fi
+    if [[ -n "$cpp_ns" ]]; then
+        printf "%s\n" "-----------------------------"
+        local cpp_delta=""
+        if [[ "$base_label" == "cpp" ]]; then
+            print_lang_line "⚙️ C++" "$cpp_s" "" "$cpp_tag (baseline)"
+        else
+            cpp_delta="$(format_delta "$base_ns" "$cpp_ns")"
+            print_lang_line "⚙️ C++" "$cpp_s" "$cpp_delta" "$cpp_tag"
+        fi
+    fi
+    if [[ -n "$java_ns" ]]; then
+        printf "%s\n" "----------------------------"
+        local java_delta=""
+        if [[ "$base_label" == "java" ]]; then
+            print_lang_line "☕ Java" "$java_s" "" "$java_tag (baseline)"
+        else
+            java_delta="$(format_delta "$base_ns" "$java_ns")"
+            print_lang_line "☕ Java" "$java_s" "$java_delta" "$java_tag"
+        fi
+    fi
+    printf "\n"
 }
 
 printf "\nTiming summary (native):\n"
-compare_speed "fwxAES" "fwxaes_py_correct" "fwxaes_cpp_correct"
-compare_speed "b256" "b256_py_correct" "b256_cpp_correct"
-compare_speed "b512" "b512_py_correct" "b512_cpp_correct"
-compare_speed "pb512" "pb512_py_correct" "pb512_cpp_correct"
-TIMES["b512file_py_total"]=$B512FILE_PY_TOTAL
-TIMES["b512file_cpp_total"]=$B512FILE_CPP_TOTAL
-TIMES["pb512file_py_total"]=$PB512FILE_PY_TOTAL
-TIMES["pb512file_cpp_total"]=$PB512FILE_CPP_TOTAL
-compare_speed "b512file" "b512file_py_total" "b512file_cpp_total"
-compare_speed "pb512file" "pb512file_py_total" "pb512file_cpp_total"
+compare_speed_block "fwxAES" "fwxaes_py_correct" "fwxaes_pypy_correct" "fwxaes_cpp_correct" "fwxaes_java_correct"
+compare_speed_block "b256" "b256_py_correct" "b256_pypy_correct" "b256_cpp_correct" "b256_java_correct"
+compare_speed_block "b512" "b512_py_correct" "b512_pypy_correct" "b512_cpp_correct" "b512_java_correct"
+compare_speed_block "pb512" "pb512_py_correct" "pb512_pypy_correct" "pb512_cpp_correct" "pb512_java_correct"
+compare_speed_block "b64" "b64_py_correct" "b64_pypy_correct" "b64_cpp_correct" "b64_java_correct"
+compare_speed_block "a512" "a512_py_correct" "a512_pypy_correct" "a512_cpp_correct" "a512_java_correct"
+compare_speed_block "hash512" "hash512_py_correct" "hash512_pypy_correct" "hash512_cpp_correct" "hash512_java_correct"
+compare_speed_block "uhash513" "uhash513_py_correct" "uhash513_pypy_correct" "uhash513_cpp_correct" "uhash513_java_correct"
+compare_speed_block "bi512" "bi512_py_correct" "bi512_pypy_correct" "bi512_cpp_correct" "bi512_java_correct"
+compare_speed_block "b1024" "b1024_py_correct" "b1024_pypy_correct" "b1024_cpp_correct" "b1024_java_correct"
+if [[ "$RUN_PY_TESTS" == "1" && -z "${TIMES[b512file_py_total]-}" ]]; then
+    TIMES["b512file_py_total"]=$B512FILE_PY_TOTAL
+    TIMES["pb512file_py_total"]=$PB512FILE_PY_TOTAL
+fi
+if [[ "$RUN_CPP_TESTS" == "1" && -z "${TIMES[b512file_cpp_total]-}" ]]; then
+    TIMES["b512file_cpp_total"]=$B512FILE_CPP_TOTAL
+    TIMES["pb512file_cpp_total"]=$PB512FILE_CPP_TOTAL
+fi
+if [[ "$RUN_JAVA_TESTS" == "1" && -z "${TIMES[b512file_java_total]-}" ]]; then
+    TIMES["b512file_java_total"]=$B512FILE_JAVA_TOTAL
+    TIMES["pb512file_java_total"]=$PB512FILE_JAVA_TOTAL
+fi
+compare_speed_block "b512file" "b512file_py_total" "" "b512file_cpp_total" "b512file_java_total"
+compare_speed_block "pb512file" "pb512file_py_total" "" "pb512file_cpp_total" "pb512file_java_total"
 
 if (( ${#FAILURES[@]} > 0 )); then
     printf "\n%sFAILURES%s (%d):\n" "$RED$EMOJI_FAIL " "$RESET" "${#FAILURES[@]}"

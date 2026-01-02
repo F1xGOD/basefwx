@@ -453,15 +453,12 @@ section {
 .vt-table tbody td {
   background: var(--panel);
   font-weight: 500;
-  padding-top: 0;
-  padding-bottom: 0;
 }
 
-.vt-table tbody td.mono {
+.vt-file-cell {
   display: flex;
   align-items: center;
   gap: 10px;
-  height: 100%;
   font-weight: 600;
 }
 
@@ -539,9 +536,6 @@ section {
   text-align: left;
 }
 
-.vt-table tbody tr {
-  height: 56px;
-}
 
 .mono {
   font-family: "JetBrains Mono", "Fira Code", monospace;

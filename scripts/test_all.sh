@@ -141,6 +141,7 @@ fi
 if [[ ! "$COOLDOWN_SECONDS" =~ ^[0-9]+$ ]]; then
     COOLDOWN_SECONDS=1
 fi
+INTRA_LANG_COOLDOWN="${INTRA_LANG_COOLDOWN:-1}"
 
 LANG_COOLDOWN_SECONDS="${LANG_COOLDOWN_SECONDS:-3}"
 if [[ ! "$LANG_COOLDOWN_SECONDS" =~ ^[0-9]+$ ]]; then
@@ -325,6 +326,9 @@ run_with_heartbeat() {
 
 cooldown() {
     local reason="$1"
+    if [[ "${INTRA_LANG_COOLDOWN:-1}" == "0" ]]; then
+        return 0
+    fi
     if (( COOLDOWN_SECONDS <= 0 )); then
         return 0
     fi
@@ -344,16 +348,39 @@ lang_cooldown() {
 }
 
 ensure_venv() {
+    local pip_cmd
     if [[ "$USE_VENV" != "1" ]]; then
-        PYTHON_BIN="${PYTHON_BIN:-python3}"
+        if [[ -z "$PYTHON_BIN" ]]; then
+            PYTHON_BIN="$(command -v python3 || command -v python || true)"
+        fi
+        if [[ -z "$PYTHON_BIN" ]]; then
+            RUN_PY_TESTS=0
+            log "Python: unavailable (no interpreter)"
+            return 1
+        fi
+        pip_cmd=("$PYTHON_BIN" "-m" "pip")
+        time_cmd_no_fail "venv_pip" "${pip_cmd[@]}" install -U pip setuptools wheel
+        time_cmd_no_fail "venv_install" "${pip_cmd[@]}" install -e "$ROOT"
         return 0
     fi
     if [[ ! -x "$VENV_PY" ]]; then
         time_cmd_no_fail "venv_create" python3 -m venv "$VENV_DIR"
     fi
-    PYTHON_BIN="$VENV_PY"
-    time_cmd_no_fail "venv_pip" "$PIP_BIN" install -U pip setuptools wheel
-    time_cmd_no_fail "venv_install" "$PIP_BIN" install -e "$ROOT"
+    if [[ -x "$VENV_PY" ]]; then
+        PYTHON_BIN="$VENV_PY"
+        pip_cmd=("$PYTHON_BIN" "-m" "pip")
+    else
+        PYTHON_BIN="$(command -v python3 || command -v python || true)"
+        if [[ -z "$PYTHON_BIN" ]]; then
+            RUN_PY_TESTS=0
+            log "Python: unavailable (venv creation failed)"
+            return 1
+        fi
+        pip_cmd=("$PYTHON_BIN" "-m" "pip")
+    fi
+    time_cmd_no_fail "venv_pip" "${pip_cmd[@]}" install -U pip setuptools wheel
+    time_cmd_no_fail "venv_install" "${pip_cmd[@]}" install -e "$ROOT"
+    return 0
 }
 
 add_verify() {
@@ -1324,6 +1351,22 @@ printf "" >"$VERIFY_LIST"
 
 ensure_venv
 
+if [[ -z "$PYTHON_BIN" || ! -x "$PYTHON_BIN" ]]; then
+    fallback_py="$(command -v python3 || command -v python || true)"
+    if [[ -n "$fallback_py" ]]; then
+        PYTHON_BIN="$fallback_py"
+    fi
+fi
+if [[ -z "$PYTHON_BIN" || ! -x "$PYTHON_BIN" ]]; then
+    FAILURES+=("python_unavailable (no interpreter)")
+    printf "\nFAILURES (%d):\n" "${#FAILURES[@]}"
+    for failure in "${FAILURES[@]}"; do
+        printf " - %s\n" "$failure"
+    done
+    printf "See diagnose.log for details.\n"
+    exit 1
+fi
+
 log "Python: $("$PYTHON_BIN" --version 2>&1)"
 log "C++ binary: $CPP_BIN"
 if [[ -z "$JAVA_BIN" ]]; then
@@ -1812,6 +1855,14 @@ run_native_tests_block() {
     phase "PHASE2: run native ${label} tests"
 
     # keep STEP_INDEX/STEP_TOTAL managed by caller
+    if [[ "$RUN_CPP_TESTS" == "1" && "$CPP_AVAILABLE" == "1" && ! -x "$CPP_BIN" ]]; then
+        CPP_AVAILABLE=0
+        FAILURES+=("cpp_build (binary missing or stale)")
+    fi
+    if [[ "$RUN_JAVA_TESTS" == "1" && "$JAVA_AVAILABLE" == "1" && ! -f "$JAVA_JAR" ]]; then
+        JAVA_AVAILABLE=0
+        FAILURES+=("java_build (jar missing)")
+    fi
 
 # fwxAES correct
 if [[ "$RUN_PY_TESTS" == "1" ]]; then
@@ -2298,7 +2349,11 @@ if (( ${#JMG_CASES[@]} > 0 )) && { [[ "$RUN_PY_TESTS" == "1" ]] || [[ "$RUN_CPP_
         fi
     done
 else
-    phase "PHASE2.1: jMG media tests (${PHASE2_LABEL:-native}, skipped)"
+    if [[ "$RUN_PYPY_TESTS" == "1" && "$RUN_PY_TESTS" != "1" && "$RUN_CPP_TESTS" != "1" ]]; then
+        phase "PHASE2.1: jMG media tests (${PHASE2_LABEL:-native}, skipped - PyPy phase)"
+    else
+        phase "PHASE2.1: jMG media tests (${PHASE2_LABEL:-native}, skipped)"
+    fi
 fi
 }
 
@@ -2379,7 +2434,9 @@ for idx in "${!LANG_PHASES[@]}"; do
             RUN_JAVA_TESTS=1
             ;;
     esac
+    INTRA_LANG_COOLDOWN=0
     run_native_tests_block
+    INTRA_LANG_COOLDOWN=1
     if (( idx < ${#LANG_PHASES[@]} - 1 )); then
         lang_cooldown "${PHASE2_LABEL}"
     fi

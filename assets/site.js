@@ -252,8 +252,10 @@ const loadVirusTotal = async () => {
 
       row.innerHTML = `
         <td class="mono">
-          <span class="${statusClass}" aria-label="${statusLabel}" title="${statusLabel}">${statusIcon}</span>
-          ${file.name || ""}
+          <div class="vt-file-cell">
+            <span class="${statusClass}" aria-label="${statusLabel}" title="${statusLabel}">${statusIcon}</span>
+            ${file.name || ""}
+          </div>
         </td>
         <td>${malicious}</td>
         <td>${suspicious}</td>

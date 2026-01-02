@@ -421,6 +421,7 @@ section {
   border-spacing: 0 10px;
   font-size: 13px;
   background: transparent;
+  min-width: 560px;
 }
 
 .vt-table th,
@@ -429,6 +430,7 @@ section {
   border-bottom: none;
   text-align: center;
   vertical-align: middle;
+  white-space: nowrap;
 }
 
 .vt-table th {
@@ -460,6 +462,7 @@ section {
   align-items: center;
   gap: 10px;
   font-weight: 600;
+  white-space: nowrap;
 }
 
 .vt-check {
@@ -540,6 +543,11 @@ section {
 .mono {
   font-family: "JetBrains Mono", "Fira Code", monospace;
   font-size: 12px;
+}
+
+.table-scroll {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
 }
 
 footer {

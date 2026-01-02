@@ -569,39 +569,45 @@ int main(int argc, char** argv) {
                     throw std::runtime_error("Unknown flag: " + flag);
                 }
             }
-            auto data = ReadBinaryFile(input);
-            std::filesystem::path input_path(input);
-            std::string ext = input_path.extension().string();
             basefwx::filecodec::FileOptions file_opts;
             file_opts.use_master = use_master;
             file_opts.enable_aead = !disable_aead;
-            auto run_bench = [&](basefwx::filecodec::FileOptions opts) {
-                auto start = std::chrono::steady_clock::now();
-                if (command == "bench-b512file") {
-                    auto blob = basefwx::filecodec::B512EncodeBytes(data, ext, password, opts);
-                    auto decoded = basefwx::filecodec::B512DecodeBytes(blob, password, opts);
-                    g_bench_sink ^= decoded.data.size();
-                } else {
-                    auto blob = basefwx::filecodec::Pb512EncodeBytes(data, ext, password, opts);
-                    auto decoded = basefwx::filecodec::Pb512DecodeBytes(blob, password, opts);
-                    g_bench_sink ^= decoded.data.size();
-                }
-                auto end = std::chrono::steady_clock::now();
-                return std::chrono::duration_cast<std::chrono::nanoseconds>(end - start).count();
-            };
-            long long ns = 0;
             try {
-                ns = run_bench(file_opts);
+                std::filesystem::path src_path(input);
+                std::filesystem::path temp_dir = std::filesystem::temp_directory_path()
+                    / ("basefwx-bench-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+                std::filesystem::create_directories(temp_dir);
+                std::filesystem::path bench_input = temp_dir / src_path.filename();
+                std::filesystem::copy_file(src_path, bench_input, std::filesystem::copy_options::overwrite_existing);
+
+                auto run_bench = [&](const basefwx::filecodec::FileOptions& opts) {
+                    auto start = std::chrono::steady_clock::now();
+                    std::string enc_path;
+                    std::string dec_path;
+                    if (command == "bench-b512file") {
+                        enc_path = basefwx::filecodec::B512EncodeFile(bench_input.string(), password, opts);
+                        dec_path = basefwx::filecodec::B512DecodeFile(enc_path, password, opts);
+                    } else {
+                        enc_path = basefwx::filecodec::Pb512EncodeFile(bench_input.string(), password, opts);
+                        dec_path = basefwx::filecodec::Pb512DecodeFile(enc_path, password, opts);
+                    }
+                    auto end = std::chrono::steady_clock::now();
+                    std::error_code size_ec;
+                    auto dec_size = std::filesystem::file_size(dec_path, size_ec);
+                    if (!size_ec) {
+                        g_bench_sink ^= static_cast<std::size_t>(dec_size);
+                    }
+                    return std::chrono::duration_cast<std::chrono::nanoseconds>(end - start).count();
+                };
+
+                long long ns = run_bench(file_opts);
+                std::cout << "BENCH_NS=" << ns << "\n";
+                std::error_code ec;
+                std::filesystem::remove_all(temp_dir, ec);
+                return 0;
             } catch (const std::exception& exc) {
-                if (!disable_aead && std::string(exc.what()).find("HKDF derive failed") != std::string::npos) {
-                    file_opts.enable_aead = false;
-                    ns = run_bench(file_opts);
-                } else {
-                    throw;
-                }
+                throw;
             }
-            std::cout << "BENCH_NS=" << ns << "\n";
-            return 0;
         }
         if (command == "b64-enc") {
             if (argc < 3) {

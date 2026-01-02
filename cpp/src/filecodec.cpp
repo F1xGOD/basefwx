@@ -1635,8 +1635,12 @@ std::string B512EncodeFile(const std::string& path,
     std::string output;
     try {
         std::uint64_t size = FileSize(source);
-        if (EnableAead(options) && size >= options.stream_threshold) {
+        std::uint64_t b64_len = ((size + 2u) / 3u) * 4u;
+        bool force_stream = b64_len > basefwx::constants::kHkdfMaxLen;
+        if (EnableAead(options) && (size >= options.stream_threshold || force_stream)) {
             output = B512EncodeFileStream(source, password, options, kdf, pack_flag);
+        } else if (force_stream) {
+            throw std::runtime_error("b512file payload too large for non-AEAD mode; enable AEAD or use streaming");
         } else {
             output = B512EncodeFileSimple(source, password, options, kdf, pack_flag);
         }
@@ -1691,6 +1695,10 @@ std::vector<std::uint8_t> B512EncodeBytes(const std::vector<std::uint8_t>& data,
                                           const FileOptions& options,
                                           const basefwx::pb512::KdfOptions& kdf) {
     std::string resolved = basefwx::ResolvePassword(password);
+    std::uint64_t b64_len = ((data.size() + 2u) / 3u) * 4u;
+    if (b64_len > basefwx::constants::kHkdfMaxLen) {
+        throw std::runtime_error("b512file bytes payload too large; use file-based streaming APIs");
+    }
     std::string b64_payload = basefwx::base64::Encode(data);
     std::string ext = extension;
 
@@ -1803,6 +1811,10 @@ std::vector<std::uint8_t> Pb512EncodeBytes(const std::vector<std::uint8_t>& data
                                            const FileOptions& options,
                                            const basefwx::pb512::KdfOptions& kdf) {
     std::string resolved = basefwx::ResolvePassword(password);
+    std::uint64_t b64_len = ((data.size() + 2u) / 3u) * 4u;
+    if (b64_len > basefwx::constants::kHkdfMaxLen) {
+        throw std::runtime_error("pb512file bytes payload too large; use file-based streaming APIs");
+    }
     std::string b64_payload = basefwx::base64::Encode(data);
     std::string ext = extension;
 
@@ -1908,7 +1920,9 @@ std::string Pb512EncodeFile(const std::string& path,
     std::string output;
     try {
         std::uint64_t size = FileSize(source);
-        if (size >= options.stream_threshold) {
+        std::uint64_t b64_len = ((size + 2u) / 3u) * 4u;
+        bool force_stream = b64_len > basefwx::constants::kHkdfMaxLen;
+        if (size >= options.stream_threshold || force_stream) {
             output = Pb512EncodeFileStream(source, password, options, kdf, pack_flag);
         } else {
             output = Pb512EncodeFileSimple(source, password, options, kdf, pack_flag);

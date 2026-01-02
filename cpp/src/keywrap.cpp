@@ -115,7 +115,12 @@ Bytes MaskPayload(const Bytes& mask_key, const Bytes& payload, std::string_view 
     if (payload.empty()) {
         return {};
     }
-    Bytes stream = basefwx::crypto::HkdfSha256(info, mask_key, payload.size());
+    Bytes stream;
+    if (payload.size() > basefwx::constants::kHkdfMaxLen) {
+        stream = basefwx::crypto::HkdfSha256Stream(info, mask_key, payload.size());
+    } else {
+        stream = basefwx::crypto::HkdfSha256(info, mask_key, payload.size());
+    }
     Bytes out(payload.size());
     for (std::size_t i = 0; i < payload.size(); ++i) {
         out[i] = static_cast<std::uint8_t>(payload[i] ^ stream[i]);

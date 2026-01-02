@@ -106,6 +106,7 @@ class basefwx:
     STREAM_INFO_KEY = b'basefwx.stream.obf.key.v1'
     STREAM_INFO_IV = b'basefwx.stream.obf.iv.v1'
     STREAM_INFO_PERM = b'basefwx.stream.obf.perm.v1'
+    HKDF_MAX_LEN = 255 * 32
     HEAVY_PBKDF2_ITERATIONS = 1_000_000
     HEAVY_ARGON2_TIME_COST = 5
     HEAVY_ARGON2_MEMORY_COST = 2 ** 17
@@ -1271,6 +1272,33 @@ class basefwx:
         return hk.derive(key_material)
 
     @staticmethod
+    def _hkdf_stream_sha256(key_material: bytes, info: bytes, length: int) -> bytes:
+        if length <= 0:
+            return b""
+        info_bytes = info or b""
+        zero_salt = b"\x00" * 32
+        h = basefwx.hmac.HMAC(zero_salt, basefwx.hashes.SHA256())
+        h.update(key_material)
+        prk = h.finalize()
+        out = bytearray(length)
+        prev = b""
+        offset = 0
+        counter = 1
+        while offset < length:
+            h = basefwx.hmac.HMAC(prk, basefwx.hashes.SHA256())
+            if prev:
+                h.update(prev)
+            h.update(info_bytes)
+            h.update(counter.to_bytes(4, "big"))
+            block = h.finalize()
+            take = min(len(block), length - offset)
+            out[offset:offset + take] = block[:take]
+            offset += take
+            prev = block
+            counter += 1
+        return bytes(out)
+
+    @staticmethod
     def _aead_encrypt(key: bytes, plaintext: bytes, aad: "basefwx.typing.Optional[bytes]") -> bytes:
         nonce = basefwx.os.urandom(12)
         ct = basefwx.AESGCM(key).encrypt(nonce, plaintext, aad or None)
@@ -1319,7 +1347,10 @@ class basefwx:
     def _mask_payload(mask_key: bytes, payload: bytes, *, info: bytes) -> bytes:
         if not payload:
             return b""
-        stream = basefwx._hkdf_sha256(mask_key, length=len(payload), info=info)
+        if len(payload) > basefwx.HKDF_MAX_LEN:
+            stream = basefwx._hkdf_stream_sha256(mask_key, info, len(payload))
+        else:
+            stream = basefwx._hkdf_sha256(mask_key, length=len(payload), info=info)
         data_arr = basefwx.np.frombuffer(payload, dtype=basefwx.np.uint8)
         mask_arr = basefwx.np.frombuffer(stream, dtype=basefwx.np.uint8)
         total_len = data_arr.size
@@ -3047,6 +3078,8 @@ class basefwx:
         display_path = display_path or path
         output_path = output_path or path.with_suffix('.fwx')
         input_size = path.stat().st_size
+        approx_b64_len = ((input_size + 2) // 3) * 4
+        force_stream = approx_b64_len > basefwx.HKDF_MAX_LEN
         size_hint: "basefwx.typing.Optional[basefwx.typing.Tuple[int, int]]" = None
         if reporter:
             reporter.update(file_index, 0.05, "prepare", display_path)
@@ -3070,7 +3103,7 @@ class basefwx:
         heavy_argon_mem = basefwx.HEAVY_ARGON2_MEMORY_COST if basefwx.hash_secret_raw is not None else None
         heavy_argon_par = basefwx.HEAVY_ARGON2_PARALLELISM if basefwx.hash_secret_raw is not None else None
         obfuscate_payload = input_size <= basefwx.STREAM_THRESHOLD
-        if input_size >= basefwx.STREAM_THRESHOLD and basefwx.ENABLE_B512_AEAD:
+        if basefwx.ENABLE_B512_AEAD and (input_size >= basefwx.STREAM_THRESHOLD or force_stream):
             return basefwx._b512_encode_path_stream(
                 path,
                 password,
@@ -3086,6 +3119,8 @@ class basefwx:
                 input_size=input_size,
                 keep_input=keep_input
             )
+        if force_stream:
+            raise ValueError("b512file payload too large for non-AEAD mode; enable AEAD or use file streaming")
         data = path.read_bytes()
         if reporter:
             reporter.update(file_index, 0.25, "base64", display_path)
@@ -6538,7 +6573,8 @@ class basefwx:
         display_path = display_path or path
         output_path = output_path or path.with_suffix('.fwx')
         input_size = path.stat().st_size
-        if input_size >= basefwx.STREAM_THRESHOLD:
+        approx_b64_len = ((input_size + 2) // 3) * 4
+        if input_size >= basefwx.STREAM_THRESHOLD or approx_b64_len > basefwx.HKDF_MAX_LEN:
             return basefwx._aes_heavy_encode_path_stream(
                 path,
                 password,
@@ -7119,6 +7155,9 @@ class basefwx:
     ) -> bytes:
         if not isinstance(data, (bytes, bytearray, memoryview)):
             raise TypeError("b512file_encode_bytes expects bytes")
+        approx_b64_len = ((len(data) + 2) // 3) * 4
+        if approx_b64_len > basefwx.HKDF_MAX_LEN:
+            raise ValueError("b512file_encode_bytes payload too large; use file-based streaming APIs")
         pubkey_bytes, master_available = basefwx._resolve_master_usage(
             use_master and not strip_metadata,
             None,
@@ -7215,6 +7254,9 @@ class basefwx:
     ) -> bytes:
         if not isinstance(data, (bytes, bytearray, memoryview)):
             raise TypeError("pb512file_encode_bytes expects bytes")
+        approx_b64_len = ((len(data) + 2) // 3) * 4
+        if approx_b64_len > basefwx.HKDF_MAX_LEN:
+            raise ValueError("pb512file_encode_bytes payload too large; use file-based streaming APIs")
         use_master_effective = use_master and not strip_metadata
         password = basefwx._resolve_password(code, use_master=use_master_effective)
         b64_payload = basefwx.base64.b64encode(bytes(data)).decode('utf-8')

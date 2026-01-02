@@ -11,6 +11,9 @@
 #include <argon2.h>
 #endif
 
+#include <algorithm>
+#include <cstring>
+#include <memory>
 #include <stdexcept>
 
 namespace basefwx::crypto {
@@ -59,6 +62,50 @@ Bytes HkdfSha256(std::string_view info, const Bytes& key_material, std::size_t l
         throw;
     }
     EVP_PKEY_CTX_free(pctx);
+    return out;
+}
+
+Bytes HkdfSha256Stream(std::string_view info, const Bytes& key_material, std::size_t length) {
+    if (length == 0) {
+        return {};
+    }
+    static const Bytes zero_salt(32, 0);
+    Bytes prk = HmacSha256(zero_salt, key_material);
+    Bytes out(length);
+    Bytes prev;
+    std::size_t offset = 0;
+    std::uint32_t counter = 1;
+    unsigned char counter_bytes[4];
+    std::unique_ptr<HMAC_CTX, decltype(&HMAC_CTX_free)> ctx(HMAC_CTX_new(), &HMAC_CTX_free);
+    if (!ctx) {
+        throw std::runtime_error("HKDF stream context allocation failed");
+    }
+    while (offset < length) {
+        Ensure(HMAC_Init_ex(ctx.get(), prk.data(), static_cast<int>(prk.size()), EVP_sha256(), nullptr) == 1,
+               "HKDF stream init failed");
+        if (!prev.empty()) {
+            Ensure(HMAC_Update(ctx.get(), prev.data(), prev.size()) == 1, "HKDF stream update failed");
+        }
+        if (!info.empty()) {
+            Ensure(HMAC_Update(ctx.get(),
+                               reinterpret_cast<const unsigned char*>(info.data()),
+                               info.size()) == 1,
+                   "HKDF stream update failed");
+        }
+        counter_bytes[0] = static_cast<unsigned char>((counter >> 24) & 0xFF);
+        counter_bytes[1] = static_cast<unsigned char>((counter >> 16) & 0xFF);
+        counter_bytes[2] = static_cast<unsigned char>((counter >> 8) & 0xFF);
+        counter_bytes[3] = static_cast<unsigned char>(counter & 0xFF);
+        Ensure(HMAC_Update(ctx.get(), counter_bytes, sizeof(counter_bytes)) == 1, "HKDF stream update failed");
+        unsigned char digest[EVP_MAX_MD_SIZE];
+        unsigned int digest_len = 0;
+        Ensure(HMAC_Final(ctx.get(), digest, &digest_len) == 1, "HKDF stream final failed");
+        prev.assign(digest, digest + digest_len);
+        std::size_t take = std::min<std::size_t>(digest_len, length - offset);
+        std::memcpy(out.data() + offset, prev.data(), take);
+        offset += take;
+        counter++;
+    }
     return out;
 }
 

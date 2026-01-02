@@ -326,22 +326,35 @@ public final class BaseFwxCli {
                     File input = new File(args[1]);
                     String benchPass = args[2];
                     int warmup = benchWarmup();
-                    byte[] data = readAllBytes(input);
                     String name = input.getName();
                     int dot = name.lastIndexOf('.');
                     String ext = dot >= 0 ? name.substring(dot) : "";
-                    for (int i = 0; i < warmup; i++) {
-                        byte[] blob = BaseFwx.b512FileEncodeBytes(data, ext, benchPass, useMaster);
-                        BaseFwx.DecodedFile decoded = BaseFwx.b512FileDecodeBytes(blob, benchPass, useMaster);
-                        BENCH_SINK ^= decoded.data.length;
+                    File tempDir;
+                    try {
+                        tempDir = Files.createTempDirectory("basefwx-bench").toFile();
+                    } catch (java.io.IOException exc) {
+                        throw new RuntimeException("Failed to create bench temp dir", exc);
                     }
-                    long start = System.nanoTime();
-                    byte[] blob = BaseFwx.b512FileEncodeBytes(data, ext, benchPass, useMaster);
-                    BaseFwx.DecodedFile decoded = BaseFwx.b512FileDecodeBytes(blob, benchPass, useMaster);
-                    long end = System.nanoTime();
-                    BENCH_SINK ^= decoded.data.length;
-                    System.out.println("BENCH_NS=" + (end - start));
-                    return;
+                    File encFile = new File(tempDir, "bench.fwx");
+                    File decFile = new File(tempDir, "bench_dec" + ext);
+                    try {
+                        for (int i = 0; i < warmup; i++) {
+                            BaseFwx.b512FileEncodeFile(input, encFile, benchPass, useMaster);
+                            BaseFwx.b512FileDecodeFile(encFile, decFile, benchPass, useMaster);
+                            BENCH_SINK ^= (int) decFile.length();
+                        }
+                        long start = System.nanoTime();
+                        BaseFwx.b512FileEncodeFile(input, encFile, benchPass, useMaster);
+                        BaseFwx.b512FileDecodeFile(encFile, decFile, benchPass, useMaster);
+                        long end = System.nanoTime();
+                        BENCH_SINK ^= (int) decFile.length();
+                        System.out.println("BENCH_NS=" + (end - start));
+                        return;
+                    } finally {
+                        encFile.delete();
+                        decFile.delete();
+                        tempDir.delete();
+                    }
                 }
                 case "bench-pb512file": {
                     if (argc < 3) {
@@ -351,22 +364,35 @@ public final class BaseFwxCli {
                     File input = new File(args[1]);
                     String benchPass = args[2];
                     int warmup = benchWarmup();
-                    byte[] data = readAllBytes(input);
                     String name = input.getName();
                     int dot = name.lastIndexOf('.');
                     String ext = dot >= 0 ? name.substring(dot) : "";
-                    for (int i = 0; i < warmup; i++) {
-                        byte[] blob = BaseFwx.pb512FileEncodeBytes(data, ext, benchPass, useMaster);
-                        BaseFwx.DecodedFile decoded = BaseFwx.pb512FileDecodeBytes(blob, benchPass, useMaster);
-                        BENCH_SINK ^= decoded.data.length;
+                    File tempDir;
+                    try {
+                        tempDir = Files.createTempDirectory("basefwx-bench").toFile();
+                    } catch (java.io.IOException exc) {
+                        throw new RuntimeException("Failed to create bench temp dir", exc);
                     }
-                    long start = System.nanoTime();
-                    byte[] blob = BaseFwx.pb512FileEncodeBytes(data, ext, benchPass, useMaster);
-                    BaseFwx.DecodedFile decoded = BaseFwx.pb512FileDecodeBytes(blob, benchPass, useMaster);
-                    long end = System.nanoTime();
-                    BENCH_SINK ^= decoded.data.length;
-                    System.out.println("BENCH_NS=" + (end - start));
-                    return;
+                    File encFile = new File(tempDir, "bench.fwx");
+                    File decFile = new File(tempDir, "bench_dec" + ext);
+                    try {
+                        for (int i = 0; i < warmup; i++) {
+                            BaseFwx.pb512FileEncodeFile(input, encFile, benchPass, useMaster);
+                            BaseFwx.pb512FileDecodeFile(encFile, decFile, benchPass, useMaster);
+                            BENCH_SINK ^= (int) decFile.length();
+                        }
+                        long start = System.nanoTime();
+                        BaseFwx.pb512FileEncodeFile(input, encFile, benchPass, useMaster);
+                        BaseFwx.pb512FileDecodeFile(encFile, decFile, benchPass, useMaster);
+                        long end = System.nanoTime();
+                        BENCH_SINK ^= (int) decFile.length();
+                        System.out.println("BENCH_NS=" + (end - start));
+                        return;
+                    } finally {
+                        encFile.delete();
+                        decFile.delete();
+                        tempDir.delete();
+                    }
                 }
                 case "b256-enc":
                     if (argc < 2) {

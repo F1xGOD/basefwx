@@ -109,7 +109,7 @@ public final class KeyWrap {
         if (payload.length == 0) {
             return new byte[0];
         }
-        byte[] stream = Crypto.hkdfSha256(maskKey, info, payload.length);
+        byte[] stream = Crypto.hkdfSha256Stream(maskKey, info, payload.length);
         byte[] out = new byte[payload.length];
         int len = payload.length;
         int cores = Runtime.getRuntime().availableProcessors();

@@ -12,6 +12,7 @@ using Bytes = std::vector<std::uint8_t>;
 
 Bytes RandomBytes(std::size_t size);
 Bytes HkdfSha256(std::string_view info, const Bytes& key_material, std::size_t length);
+Bytes HkdfSha256Stream(std::string_view info, const Bytes& key_material, std::size_t length);
 Bytes Pbkdf2HmacSha256(const std::string& password, const Bytes& salt, std::size_t iterations, std::size_t length);
 Bytes HmacSha256(const Bytes& key, const Bytes& data);
 #if defined(BASEFWX_HAS_ARGON2) && BASEFWX_HAS_ARGON2

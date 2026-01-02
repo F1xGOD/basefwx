@@ -41,6 +41,14 @@ public final class Constants {
 
     public static final byte[] B512_FILE_MASK_INFO = "basefwx.b512file.mask.v1".getBytes(StandardCharsets.US_ASCII);
     public static final byte[] B512_AEAD_INFO = "basefwx.b512file.v1".getBytes(StandardCharsets.US_ASCII);
+    public static final int STREAM_THRESHOLD = 250 * 1024;
+    public static final int STREAM_CHUNK_SIZE = 1 << 20;
+    public static final int HKDF_MAX_LEN = 255 * 32;
+    public static final byte[] STREAM_MAGIC = "STRMOBF1".getBytes(StandardCharsets.US_ASCII);
+    public static final byte[] STREAM_INFO_KEY = "basefwx.stream.obf.key.v1".getBytes(StandardCharsets.US_ASCII);
+    public static final byte[] STREAM_INFO_IV = "basefwx.stream.obf.iv.v1".getBytes(StandardCharsets.US_ASCII);
+    public static final byte[] STREAM_INFO_PERM = "basefwx.stream.obf.perm.v1".getBytes(StandardCharsets.US_ASCII);
+    public static final int STREAM_SALT_LEN = 16;
 
     public static final String FWX_DELIM = "\u001f\u001e";
     public static final String FWX_HEAVY_DELIM = "\u001f\u001d";

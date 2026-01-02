@@ -153,8 +153,8 @@ void PrintUsage() {
     std::cout << "  basefwx_cpp bench-text <method> <text-file> [-p <password>] [--master-pub <path>] [--no-master]\n";
     std::cout << "  basefwx_cpp bench-hash <method> <text-file>\n";
     std::cout << "  basefwx_cpp bench-fwxaes <file> <password> [--master-pub <path>] [--no-master]\n";
-    std::cout << "  basefwx_cpp bench-b512file <file> <password> [--master-pub <path>] [--no-master]\n";
-    std::cout << "  basefwx_cpp bench-pb512file <file> <password> [--master-pub <path>] [--no-master]\n";
+    std::cout << "  basefwx_cpp bench-b512file <file> <password> [--master-pub <path>] [--no-master] [--no-aead]\n";
+    std::cout << "  basefwx_cpp bench-pb512file <file> <password> [--master-pub <path>] [--no-master] [--no-aead]\n";
 }
 
 struct ParsedOptions {
@@ -552,10 +552,13 @@ int main(int argc, char** argv) {
             std::string input = argv[2];
             std::string password = argv[3];
             bool use_master = true;
+            bool disable_aead = false;
             for (int idx = 4; idx < argc; ++idx) {
                 std::string flag(argv[idx]);
                 if (flag == "--no-master") {
                     use_master = false;
+                } else if (flag == "--no-aead") {
+                    disable_aead = true;
                 } else if (flag == "--master-pub" || flag == "--use-master-pub") {
                     if (idx + 1 >= argc) {
                         throw std::runtime_error("Missing master public key path");
@@ -571,18 +574,32 @@ int main(int argc, char** argv) {
             std::string ext = input_path.extension().string();
             basefwx::filecodec::FileOptions file_opts;
             file_opts.use_master = use_master;
-            auto start = std::chrono::steady_clock::now();
-            if (command == "bench-b512file") {
-                auto blob = basefwx::filecodec::B512EncodeBytes(data, ext, password, file_opts);
-                auto decoded = basefwx::filecodec::B512DecodeBytes(blob, password, file_opts);
-                g_bench_sink ^= decoded.data.size();
-            } else {
-                auto blob = basefwx::filecodec::Pb512EncodeBytes(data, ext, password, file_opts);
-                auto decoded = basefwx::filecodec::Pb512DecodeBytes(blob, password, file_opts);
-                g_bench_sink ^= decoded.data.size();
+            file_opts.enable_aead = !disable_aead;
+            auto run_bench = [&](basefwx::filecodec::FileOptions opts) {
+                auto start = std::chrono::steady_clock::now();
+                if (command == "bench-b512file") {
+                    auto blob = basefwx::filecodec::B512EncodeBytes(data, ext, password, opts);
+                    auto decoded = basefwx::filecodec::B512DecodeBytes(blob, password, opts);
+                    g_bench_sink ^= decoded.data.size();
+                } else {
+                    auto blob = basefwx::filecodec::Pb512EncodeBytes(data, ext, password, opts);
+                    auto decoded = basefwx::filecodec::Pb512DecodeBytes(blob, password, opts);
+                    g_bench_sink ^= decoded.data.size();
+                }
+                auto end = std::chrono::steady_clock::now();
+                return std::chrono::duration_cast<std::chrono::nanoseconds>(end - start).count();
+            };
+            long long ns = 0;
+            try {
+                ns = run_bench(file_opts);
+            } catch (const std::exception& exc) {
+                if (!disable_aead && std::string(exc.what()).find("HKDF derive failed") != std::string::npos) {
+                    file_opts.enable_aead = false;
+                    ns = run_bench(file_opts);
+                } else {
+                    throw;
+                }
             }
-            auto end = std::chrono::steady_clock::now();
-            auto ns = std::chrono::duration_cast<std::chrono::nanoseconds>(end - start).count();
             std::cout << "BENCH_NS=" << ns << "\n";
             return 0;
         }

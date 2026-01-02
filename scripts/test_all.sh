@@ -1175,6 +1175,14 @@ py_jmg_roundtrip() {
     "$PYTHON_BIN" "$PY_HELPER" jmg-roundtrip "$input" "$enc" "$dec" "$PW"
 }
 
+pypy_jmg_roundtrip() {
+    local input="$1"
+    local enc="$2"
+    local dec="$3"
+    log "STEP: pypy jmg-enc $input"
+    "$PYPY_BIN" "$PY_HELPER" jmg-roundtrip "$input" "$enc" "$dec" "$PW"
+}
+
 py_jmg_enc() {
     local input="$1"
     local enc="$2"
@@ -1182,11 +1190,25 @@ py_jmg_enc() {
     "$PYTHON_BIN" "$PY_HELPER" jmg-enc "$input" "$enc" "$PW"
 }
 
+pypy_jmg_enc() {
+    local input="$1"
+    local enc="$2"
+    log "STEP: pypy jmg-enc $input"
+    "$PYPY_BIN" "$PY_HELPER" jmg-enc "$input" "$enc" "$PW"
+}
+
 py_jmg_dec() {
     local input="$1"
     local dec="$2"
     log "STEP: python jmg-dec $input"
     "$PYTHON_BIN" "$PY_HELPER" jmg-dec "$input" "$dec" "$PW"
+}
+
+pypy_jmg_dec() {
+    local input="$1"
+    local dec="$2"
+    log "STEP: pypy jmg-dec $input"
+    "$PYPY_BIN" "$PY_HELPER" jmg-dec "$input" "$dec" "$PW"
 }
 
 cpp_jmg_roundtrip() {
@@ -1452,22 +1474,29 @@ if mode not in ("fast", "quickest"):
 
 ffmpeg = shutil.which("ffmpeg")
 if ffmpeg:
-    duration = "0.6" if mode == "quickest" else ("1.0" if mode == "fast" else "2.0")
-    v_size = "160x160" if mode in ("fast", "quickest") else "320x320"
+    duration = "1.0"
+    fps = "24"
+    v_size = "128x72" if mode in ("fast", "quickest") else "160x90"
     mp4_path = root / "jmg_sample.mp4"
     m4a_path = root / "jmg_sample.m4a"
     try:
         subprocess.run(
             [
                 ffmpeg, "-y",
-                "-f", "lavfi", "-i", f"testsrc=size={v_size}:rate=12",
+                "-f", "lavfi", "-i", f"testsrc=size={v_size}:rate={fps}",
                 "-f", "lavfi", "-i", f"sine=frequency=880:sample_rate=44100",
                 "-t", duration,
+                "-r", fps,
                 "-pix_fmt", "yuv420p",
                 "-c:v", "libx264",
                 "-preset", "ultrafast",
+                "-crf", "35",
+                "-b:v", "150k",
+                "-maxrate", "150k",
+                "-bufsize", "300k",
                 "-c:a", "aac",
-                "-b:a", "64k",
+                "-b:a", "32k",
+                "-movflags", "+faststart",
                 str(mp4_path),
             ],
             check=True,
@@ -1482,7 +1511,7 @@ if ffmpeg:
                 ffmpeg, "-y",
                 "-f", "lavfi", "-i", f"sine=frequency=440:duration={duration}",
                 "-c:a", "aac",
-                "-b:a", "64k",
+                "-b:a", "32k",
                 str(m4a_path),
             ],
             check=True,
@@ -1533,11 +1562,14 @@ if (( gen_rc != 0 )); then
         printf " - %s\n" "$failure"
     done
     printf "See diagnose.log for details.\n"
+    printf "\n---- diagnose.log ----\n"
+    cat "$LOG"
     exit 1
 fi
 
 cat >"$PY_HELPER" <<'PY'
 import sys
+import time
 from pathlib import Path
 import basefwx as basefwx_mod
 from basefwx.main import basefwx
@@ -2323,7 +2355,7 @@ for file_name in "${PB512FILE_CASES[@]}"; do
     fi
 done
 
-if (( ${#JMG_CASES[@]} > 0 )) && { [[ "$RUN_PY_TESTS" == "1" ]] || [[ "$RUN_CPP_TESTS" == "1" && "$CPP_AVAILABLE" == "1" ]]; }; then
+if (( ${#JMG_CASES[@]} > 0 )) && { [[ "$RUN_PY_TESTS" == "1" ]] || [[ "$RUN_PYPY_TESTS" == "1" && "$PYPY_AVAILABLE" == "1" ]] || [[ "$RUN_CPP_TESTS" == "1" && "$CPP_AVAILABLE" == "1" ]]; }; then
     phase "PHASE2.1: jMG media tests (${PHASE2_LABEL:-native})"
     for file_name in "${JMG_CASES[@]}"; do
         tag="$(case_tag "$file_name")"
@@ -2333,6 +2365,13 @@ if (( ${#JMG_CASES[@]} > 0 )) && { [[ "$RUN_PY_TESTS" == "1" ]] || [[ "$RUN_CPP_
             jmg_py_dec="$WORK_DIR/jmg_py_${tag}/dec_${file_name}"
             time_cmd "jmg_py_${tag}" py_jmg_roundtrip "$jmg_py_input" "$jmg_py_enc" "$jmg_py_dec"
             add_verify "$ORIG_DIR/$file_name" "$jmg_py_dec"
+        fi
+        if [[ "$RUN_PYPY_TESTS" == "1" && "$PYPY_AVAILABLE" == "1" ]]; then
+            jmg_pypy_input="$(copy_input "jmg_pypy_${tag}" "$file_name")"
+            jmg_pypy_enc="$WORK_DIR/jmg_pypy_${tag}/enc_${file_name}"
+            jmg_pypy_dec="$WORK_DIR/jmg_pypy_${tag}/dec_${file_name}"
+            time_cmd "jmg_pypy_${tag}" pypy_jmg_roundtrip "$jmg_pypy_input" "$jmg_pypy_enc" "$jmg_pypy_dec"
+            add_verify "$ORIG_DIR/$file_name" "$jmg_pypy_dec"
         fi
 
         if [[ "$RUN_CPP_TESTS" == "1" ]]; then
@@ -2359,17 +2398,29 @@ fi
 
 phase "PHASE2: prepare native runtimes"
 if [[ "$RUN_CPP_TESTS_ORIG" == "1" ]]; then
-    ensure_cpp || log "C++ binary unavailable; C++ tests will be marked failed"
+    if ! ensure_cpp; then
+        log "C++ binary unavailable; C++ tests will be skipped"
+        CPP_AVAILABLE=0
+        RUN_CPP_TESTS_ORIG=0
+    fi
 else
     CPP_AVAILABLE=0
 fi
 if [[ "$RUN_JAVA_TESTS_ORIG" == "1" ]]; then
-    ensure_java || log "Java CLI unavailable; Java tests will be marked failed"
+    if ! ensure_java; then
+        log "Java CLI unavailable; Java tests will be skipped"
+        JAVA_AVAILABLE=0
+        RUN_JAVA_TESTS_ORIG=0
+    fi
 else
     JAVA_AVAILABLE=0
 fi
 if [[ "$RUN_PYPY_TESTS_ORIG" == "1" ]]; then
-    ensure_pypy || log "PyPy unavailable; PyPy tests will be skipped"
+    if ! ensure_pypy; then
+        log "PyPy unavailable; PyPy tests will be skipped"
+        PYPY_AVAILABLE=0
+        RUN_PYPY_TESTS_ORIG=0
+    fi
 else
     PYPY_AVAILABLE=0
 fi
@@ -2882,6 +2933,8 @@ if (( ${#FAILURES[@]} > 0 )); then
         printf " - %s\n" "$failure"
     done
     printf "See diagnose.log for details.\n"
+    printf "\n---- diagnose.log ----\n"
+    cat "$LOG"
     exit 1
 fi
 

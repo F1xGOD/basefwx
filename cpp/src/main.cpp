@@ -1,6 +1,7 @@
 #include "basefwx/basefwx.hpp"
 #include "basefwx/env.hpp"
 
+#include <chrono>
 #include <cctype>
 #include <cstdlib>
 #include <filesystem>
@@ -107,11 +108,30 @@ void ApplyMasterPubPath(const std::string& path) {
 #endif
 }
 
+volatile std::size_t g_bench_sink = 0;
+
+std::string ReadTextFile(const std::string& path) {
+    auto data = basefwx::ReadFile(path);
+    return std::string(data.begin(), data.end());
+}
+
+std::vector<std::uint8_t> ReadBinaryFile(const std::string& path) {
+    return basefwx::ReadFile(path);
+}
+
 void PrintUsage() {
     bool plain = CliPlain();
     const char* cyan = "\033[36m";
     std::cout << StyleText(EmojiPrefix("✨", plain) + "Usage:", cyan, plain) << "\n";
     std::cout << "  basefwx_cpp info <file.fwx>\n";
+    std::cout << "  basefwx_cpp b64-enc <text>\n";
+    std::cout << "  basefwx_cpp b64-dec <text>\n";
+    std::cout << "  basefwx_cpp hash512 <text>\n";
+    std::cout << "  basefwx_cpp uhash513 <text>\n";
+    std::cout << "  basefwx_cpp a512-enc <text>\n";
+    std::cout << "  basefwx_cpp a512-dec <text>\n";
+    std::cout << "  basefwx_cpp bi512-enc <text>\n";
+    std::cout << "  basefwx_cpp b1024-enc <text>\n";
     std::cout << "  basefwx_cpp b256-enc <text>\n";
     std::cout << "  basefwx_cpp b256-dec <text>\n";
     std::cout << "  basefwx_cpp b512-enc <text> [-p <password>] [--master-pub <path>] [--no-master] [--kdf <label>] [--pbkdf2-iters <n>]\n";
@@ -120,12 +140,21 @@ void PrintUsage() {
     std::cout << "  basefwx_cpp pb512-dec <text> [-p <password>] [--master-pub <path>] [--no-master] [--kdf <label>] [--pbkdf2-iters <n>]\n";
     std::cout << "  basefwx_cpp b512file-enc <file> [-p <password>] [--master-pub <path>] [--no-master] [--strip-meta] [--no-aead] [--compress] [--keep-input] [--kdf <label>] [--pbkdf2-iters <n>]\n";
     std::cout << "  basefwx_cpp b512file-dec <file.fwx> [-p <password>] [--master-pub <path>] [--no-master] [--strip-meta] [--kdf <label>] [--pbkdf2-iters <n>]\n";
+    std::cout << "  basefwx_cpp b512file-bytes-rt <in> <out> [-p <password>] [--master-pub <path>] [--no-master] [--strip-meta] [--no-aead] [--kdf <label>] [--pbkdf2-iters <n>]\n";
+    std::cout << "  basefwx_cpp pb512file-bytes-rt <in> <out> [-p <password>] [--master-pub <path>] [--no-master] [--strip-meta] [--kdf <label>] [--pbkdf2-iters <n>]\n";
     std::cout << "  basefwx_cpp pb512file-enc <file> [-p <password>] [--master-pub <path>] [--no-master] [--strip-meta] [--no-obf] [--compress] [--keep-input] [--kdf <label>] [--pbkdf2-iters <n>]\n";
     std::cout << "  basefwx_cpp pb512file-dec <file.fwx> [-p <password>] [--master-pub <path>] [--no-master] [--strip-meta] [--kdf <label>] [--pbkdf2-iters <n>]\n";
     std::cout << "  basefwx_cpp fwxaes-enc <file> [-p <password>] [--master-pub <path>] [--no-master] [--out <path>] [--normalize] [--threshold <n>] [--cover-phrase <text>] [--compress] [--ignore-media] [--keep-meta] [--keep-input]\n";
     std::cout << "  basefwx_cpp fwxaes-dec <file> [-p <password>] [--master-pub <path>] [--no-master] [--out <path>]\n";
+    std::cout << "  basefwx_cpp fwxaes-stream-enc <file> [-p <password>] [--master-pub <path>] [--no-master] [--out <path>]\n";
+    std::cout << "  basefwx_cpp fwxaes-stream-dec <file> [-p <password>] [--master-pub <path>] [--no-master] [--out <path>]\n";
     std::cout << "  basefwx_cpp jmge <media> [-p <password>] [--master-pub <path>] [--out <path>] [--keep-meta] [--keep-input]\n";
     std::cout << "  basefwx_cpp jmgd <media> [-p <password>] [--master-pub <path>] [--out <path>]\n";
+    std::cout << "  basefwx_cpp bench-text <method> <text-file> [-p <password>] [--master-pub <path>] [--no-master]\n";
+    std::cout << "  basefwx_cpp bench-hash <method> <text-file>\n";
+    std::cout << "  basefwx_cpp bench-fwxaes <file> <password> [--master-pub <path>] [--no-master]\n";
+    std::cout << "  basefwx_cpp bench-b512file <file> <password> [--master-pub <path>] [--no-master]\n";
+    std::cout << "  basefwx_cpp bench-pb512file <file> <password> [--master-pub <path>] [--no-master]\n";
 }
 
 struct ParsedOptions {
@@ -413,6 +442,214 @@ int main(int argc, char** argv) {
             }
             return 0;
         }
+        if (command == "bench-text") {
+            if (argc < 4) {
+                PrintUsage();
+                return 2;
+            }
+            std::string method = ToLower(argv[2]);
+            ParsedOptions opts = ParseCodecArgs(argc, argv, 3);
+            std::string text = ReadTextFile(opts.input);
+            if ((method == "b512" || method == "pb512") && opts.password.empty()) {
+                throw std::runtime_error("Password required for b512/pb512 benchmark");
+            }
+            auto start = std::chrono::steady_clock::now();
+            if (method == "b64") {
+                std::string enc = basefwx::B64Encode(text);
+                std::string dec = basefwx::B64Decode(enc);
+                g_bench_sink ^= dec.size();
+            } else if (method == "b256") {
+                std::string enc = basefwx::B256Encode(text);
+                std::string dec = basefwx::B256Decode(enc);
+                g_bench_sink ^= dec.size();
+            } else if (method == "a512") {
+                std::string enc = basefwx::A512Encode(text);
+                std::string dec = basefwx::A512Decode(enc);
+                g_bench_sink ^= dec.size();
+            } else if (method == "b512") {
+                std::string enc = basefwx::B512Encode(text, opts.password, opts.use_master, opts.kdf);
+                std::string dec = basefwx::B512Decode(enc, opts.password, opts.use_master, opts.kdf);
+                g_bench_sink ^= dec.size();
+            } else if (method == "pb512") {
+                std::string enc = basefwx::Pb512Encode(text, opts.password, opts.use_master, opts.kdf);
+                std::string dec = basefwx::Pb512Decode(enc, opts.password, opts.use_master, opts.kdf);
+                g_bench_sink ^= dec.size();
+            } else {
+                throw std::runtime_error("Unsupported benchmark method: " + method);
+            }
+            auto end = std::chrono::steady_clock::now();
+            auto ns = std::chrono::duration_cast<std::chrono::nanoseconds>(end - start).count();
+            std::cout << "BENCH_NS=" << ns << "\n";
+            return 0;
+        }
+        if (command == "bench-hash") {
+            if (argc < 4) {
+                PrintUsage();
+                return 2;
+            }
+            std::string method = ToLower(argv[2]);
+            std::string text = ReadTextFile(argv[3]);
+            auto start = std::chrono::steady_clock::now();
+            if (method == "hash512") {
+                std::string digest = basefwx::Hash512(text);
+                g_bench_sink ^= digest.size();
+            } else if (method == "uhash513") {
+                std::string digest = basefwx::Uhash513(text);
+                g_bench_sink ^= digest.size();
+            } else if (method == "bi512") {
+                std::string digest = basefwx::Bi512Encode(text);
+                g_bench_sink ^= digest.size();
+            } else if (method == "b1024") {
+                std::string digest = basefwx::B1024Encode(text);
+                g_bench_sink ^= digest.size();
+            } else {
+                throw std::runtime_error("Unsupported hash benchmark method: " + method);
+            }
+            auto end = std::chrono::steady_clock::now();
+            auto ns = std::chrono::duration_cast<std::chrono::nanoseconds>(end - start).count();
+            std::cout << "BENCH_NS=" << ns << "\n";
+            return 0;
+        }
+        if (command == "bench-fwxaes") {
+            if (argc < 4) {
+                PrintUsage();
+                return 2;
+            }
+            std::string input = argv[2];
+            std::string password = argv[3];
+            bool use_master = true;
+            for (int idx = 4; idx < argc; ++idx) {
+                std::string flag(argv[idx]);
+                if (flag == "--no-master") {
+                    use_master = false;
+                } else if (flag == "--master-pub" || flag == "--use-master-pub") {
+                    if (idx + 1 >= argc) {
+                        throw std::runtime_error("Missing master public key path");
+                    }
+                    ApplyMasterPubPath(argv[idx + 1]);
+                    idx += 1;
+                } else {
+                    throw std::runtime_error("Unknown flag: " + flag);
+                }
+            }
+            auto data = ReadBinaryFile(input);
+            basefwx::fwxaes::Options opts;
+            opts.use_master = use_master;
+            auto start = std::chrono::steady_clock::now();
+            auto blob = basefwx::fwxaes::EncryptRaw(data, password, opts);
+            auto plain = basefwx::fwxaes::DecryptRaw(blob, password, use_master);
+            auto end = std::chrono::steady_clock::now();
+            g_bench_sink ^= plain.size();
+            auto ns = std::chrono::duration_cast<std::chrono::nanoseconds>(end - start).count();
+            std::cout << "BENCH_NS=" << ns << "\n";
+            return 0;
+        }
+        if (command == "bench-b512file" || command == "bench-pb512file") {
+            if (argc < 4) {
+                PrintUsage();
+                return 2;
+            }
+            std::string input = argv[2];
+            std::string password = argv[3];
+            bool use_master = true;
+            for (int idx = 4; idx < argc; ++idx) {
+                std::string flag(argv[idx]);
+                if (flag == "--no-master") {
+                    use_master = false;
+                } else if (flag == "--master-pub" || flag == "--use-master-pub") {
+                    if (idx + 1 >= argc) {
+                        throw std::runtime_error("Missing master public key path");
+                    }
+                    ApplyMasterPubPath(argv[idx + 1]);
+                    idx += 1;
+                } else {
+                    throw std::runtime_error("Unknown flag: " + flag);
+                }
+            }
+            auto data = ReadBinaryFile(input);
+            std::filesystem::path input_path(input);
+            std::string ext = input_path.extension().string();
+            basefwx::filecodec::FileOptions file_opts;
+            file_opts.use_master = use_master;
+            auto start = std::chrono::steady_clock::now();
+            if (command == "bench-b512file") {
+                auto blob = basefwx::filecodec::B512EncodeBytes(data, ext, password, file_opts);
+                auto decoded = basefwx::filecodec::B512DecodeBytes(blob, password, file_opts);
+                g_bench_sink ^= decoded.data.size();
+            } else {
+                auto blob = basefwx::filecodec::Pb512EncodeBytes(data, ext, password, file_opts);
+                auto decoded = basefwx::filecodec::Pb512DecodeBytes(blob, password, file_opts);
+                g_bench_sink ^= decoded.data.size();
+            }
+            auto end = std::chrono::steady_clock::now();
+            auto ns = std::chrono::duration_cast<std::chrono::nanoseconds>(end - start).count();
+            std::cout << "BENCH_NS=" << ns << "\n";
+            return 0;
+        }
+        if (command == "b64-enc") {
+            if (argc < 3) {
+                PrintUsage();
+                return 2;
+            }
+            std::cout << basefwx::B64Encode(argv[2]) << "\n";
+            return 0;
+        }
+        if (command == "b64-dec") {
+            if (argc < 3) {
+                PrintUsage();
+                return 2;
+            }
+            std::cout << basefwx::B64Decode(argv[2]) << "\n";
+            return 0;
+        }
+        if (command == "hash512") {
+            if (argc < 3) {
+                PrintUsage();
+                return 2;
+            }
+            std::cout << basefwx::Hash512(argv[2]) << "\n";
+            return 0;
+        }
+        if (command == "uhash513") {
+            if (argc < 3) {
+                PrintUsage();
+                return 2;
+            }
+            std::cout << basefwx::Uhash513(argv[2]) << "\n";
+            return 0;
+        }
+        if (command == "a512-enc") {
+            if (argc < 3) {
+                PrintUsage();
+                return 2;
+            }
+            std::cout << basefwx::A512Encode(argv[2]) << "\n";
+            return 0;
+        }
+        if (command == "a512-dec") {
+            if (argc < 3) {
+                PrintUsage();
+                return 2;
+            }
+            std::cout << basefwx::A512Decode(argv[2]) << "\n";
+            return 0;
+        }
+        if (command == "bi512-enc") {
+            if (argc < 3) {
+                PrintUsage();
+                return 2;
+            }
+            std::cout << basefwx::Bi512Encode(argv[2]) << "\n";
+            return 0;
+        }
+        if (command == "b1024-enc") {
+            if (argc < 3) {
+                PrintUsage();
+                return 2;
+            }
+            std::cout << basefwx::B1024Encode(argv[2]) << "\n";
+            return 0;
+        }
         if (command == "b256-enc") {
             if (argc < 3) {
                 PrintUsage();
@@ -443,7 +680,89 @@ int main(int argc, char** argv) {
             return 0;
         }
         if (command == "b512file-enc" || command == "b512file-dec"
-            || command == "pb512file-enc" || command == "pb512file-dec") {
+            || command == "pb512file-enc" || command == "pb512file-dec"
+            || command == "b512file-bytes-rt" || command == "pb512file-bytes-rt") {
+            if (command == "b512file-bytes-rt" || command == "pb512file-bytes-rt") {
+                if (argc < 4) {
+                    PrintUsage();
+                    return 2;
+                }
+                std::string input = argv[2];
+                std::string output = argv[3];
+                FileArgs opts;
+                opts.input = input;
+                int idx = 4;
+                while (idx < argc) {
+                    std::string flag(argv[idx]);
+                    if (flag == "-p" || flag == "--password") {
+                        if (idx + 1 >= argc) {
+                            throw std::runtime_error("Missing password value");
+                        }
+                        opts.password = argv[idx + 1];
+                        idx += 2;
+                    } else if (flag == "--no-master") {
+                        opts.use_master = false;
+                        idx += 1;
+                    } else if (flag == "--master-pub" || flag == "--use-master-pub") {
+                        if (idx + 1 >= argc) {
+                            throw std::runtime_error("Missing master public key path");
+                        }
+                        ApplyMasterPubPath(argv[idx + 1]);
+                        idx += 2;
+                    } else if (flag == "--strip-meta") {
+                        opts.strip_metadata = true;
+                        idx += 1;
+                    } else if (flag == "--no-aead") {
+                        if (command == "b512file-bytes-rt") {
+                            opts.enable_aead = false;
+                            idx += 1;
+                        } else {
+                            throw std::runtime_error("Unsupported flag for pb512file-bytes-rt: " + flag);
+                        }
+                    } else if (flag == "--kdf") {
+                        if (idx + 1 >= argc) {
+                            throw std::runtime_error("Missing kdf label");
+                        }
+                        opts.kdf.label = argv[idx + 1];
+                        idx += 2;
+                    } else if (flag == "--pbkdf2-iters") {
+                        if (idx + 1 >= argc) {
+                            throw std::runtime_error("Missing pbkdf2 iteration count");
+                        }
+                        opts.kdf.pbkdf2_iterations = static_cast<std::size_t>(std::stoul(argv[idx + 1]));
+                        idx += 2;
+                    } else if (flag == "--no-fallback") {
+                        opts.kdf.allow_pbkdf2_fallback = false;
+                        idx += 1;
+                    } else {
+                        throw std::runtime_error("Unknown flag: " + flag);
+                    }
+                }
+                basefwx::filecodec::FileOptions file_opts;
+                file_opts.strip_metadata = opts.strip_metadata;
+                file_opts.use_master = opts.use_master;
+                file_opts.enable_aead = opts.enable_aead;
+                std::filesystem::path input_path(input);
+                auto data = basefwx::ReadFile(input_path.string());
+                std::string ext = input_path.extension().string();
+                basefwx::filecodec::DecodedBytes decoded;
+                if (command == "b512file-bytes-rt") {
+                    auto blob = basefwx::filecodec::B512EncodeBytes(data, ext, opts.password, file_opts, opts.kdf);
+                    decoded = basefwx::filecodec::B512DecodeBytes(blob, opts.password, file_opts, opts.kdf);
+                } else {
+                    auto blob = basefwx::filecodec::Pb512EncodeBytes(data, ext, opts.password, file_opts, opts.kdf);
+                    decoded = basefwx::filecodec::Pb512DecodeBytes(blob, opts.password, file_opts, opts.kdf);
+                }
+                std::ofstream out(output, std::ios::binary);
+                if (!out) {
+                    throw std::runtime_error("Failed to open output file: " + output);
+                }
+                if (!decoded.data.empty()) {
+                    out.write(reinterpret_cast<const char*>(decoded.data.data()),
+                              static_cast<std::streamsize>(decoded.data.size()));
+                }
+                return 0;
+            }
             FileArgs opts = ParseFileArgs(argc, argv, 2);
             basefwx::filecodec::FileOptions file_opts;
             file_opts.strip_metadata = opts.strip_metadata;
@@ -463,7 +782,8 @@ int main(int argc, char** argv) {
             }
             return 0;
         }
-        if (command == "fwxaes-enc" || command == "fwxaes-dec") {
+        if (command == "fwxaes-enc" || command == "fwxaes-dec"
+            || command == "fwxaes-stream-enc" || command == "fwxaes-stream-dec") {
             FwxAesArgs opts = ParseFwxAesArgs(argc, argv, 2);
             if (opts.password.empty() && !opts.use_master) {
                 throw std::runtime_error("Password required when master key usage is disabled");
@@ -480,6 +800,27 @@ int main(int argc, char** argv) {
                 } else {
                     opts.output = opts.input + ".out";
                 }
+            }
+            if (command == "fwxaes-stream-enc" || command == "fwxaes-stream-dec") {
+                if (opts.normalize || opts.compress) {
+                    throw std::runtime_error("Streaming fwxAES does not support normalize or pack options");
+                }
+                std::ifstream input(opts.input, std::ios::binary);
+                if (!input) {
+                    throw std::runtime_error("Failed to open input file: " + opts.input);
+                }
+                std::ofstream output(opts.output, std::ios::binary);
+                if (!output) {
+                    throw std::runtime_error("Failed to open output file: " + opts.output);
+                }
+                basefwx::fwxaes::Options stream_opts;
+                stream_opts.use_master = opts.use_master;
+                if (command == "fwxaes-stream-enc") {
+                    basefwx::fwxaes::EncryptStream(input, output, opts.password, stream_opts);
+                } else {
+                    basefwx::fwxaes::DecryptStream(input, output, opts.password, opts.use_master);
+                }
+                return 0;
             }
             if (command == "fwxaes-enc") {
                 if (!opts.ignore_media && LooksLikeMediaPath(std::filesystem::path(opts.input))) {

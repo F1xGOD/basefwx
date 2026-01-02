@@ -12,12 +12,12 @@
 
 BASEFWX is a hybrid post-quantum + AEAD encryption toolkit for files and media, with cross-compatible Python and C++ implementations.
 
-- Website: https://www.fixcraft.jp and https://www.fixcraft.org
-- Documentation: docs/CLI.md
+- Website: https://basefwx.fixcraft.jp
+- Documentation: https://basefwx.fixcraft.jp/docs/CLI.html
 - Source code: https://github.com/F1xGOD/basefwx
-- Contributing: docs/CONTRIBUTING.md
+- Contributing: https://basefwx.fixcraft.jp/docs/CONTRIBUTING.html
 - Bug reports: https://github.com/F1xGOD/basefwx/issues
-- Report a security vulnerability: SECURITY.md
+- Report a security vulnerability: https://basefwx.fixcraft.jp/docs/SECURITY_MODEL.html
 
 It provides:
 
@@ -27,6 +27,7 @@ It provides:
 - b512/pb512 reversible encodings and file modes
 - jMG media cipher for images, video, and audio with metadata control
 - C++ library and CLI with Python and C++ format parity
+- Java (JVM) library and CLI for cross-compatible fwxAES/b512/pb512/b256
 
 Quick Start
 -----------
@@ -46,14 +47,15 @@ pip install basefwx[argon2]
 Documentation
 -------------
 
-- [Docs home (HTML)](https://github.com/F1xGOD/basefwx/blob/main/docs/index.html)
-- [CLI and usage](https://github.com/F1xGOD/basefwx/blob/main/docs/CLI.md)
-- [Security model](https://github.com/F1xGOD/basefwx/blob/main/docs/SECURITY_MODEL.md)
-- [Testing and benchmarks](https://github.com/F1xGOD/basefwx/blob/main/docs/TESTING.md)
-- [Release & signing](https://github.com/F1xGOD/basefwx/blob/main/docs/RELEASE.md)
-- [Contributing and code of conduct](https://github.com/F1xGOD/basefwx/blob/main/docs/CONTRIBUTING.md)
+- [Docs home (HTML)](https://basefwx.fixcraft.jp)
+- [CLI and usage](https://basefwx.fixcraft.jp/docs/CLI.html)
+- [Security model](https://basefwx.fixcraft.jp/docs/SECURITY_MODEL.html)
+- [Testing and benchmarks](https://basefwx.fixcraft.jp/docs/TESTING.html)
+- [Release & signing](https://basefwx.fixcraft.jp/docs/RELEASE.html)
+- [Contributing and code of conduct](https://basefwx.fixcraft.jp/docs/CONTRIBUTING.html)
+- [Java module](https://basefwx.fixcraft.jp/docs/CLI.html#java-cli)
 
 License
 -------
 
-See https://github.com/F1xGOD/basefwx/blob/main/LICENCE.
+See https://basefwx.fixcraft.jp/LICENCE.

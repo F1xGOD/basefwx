@@ -1,7 +1,9 @@
 #include "basefwx/pb512.hpp"
 
 #include "basefwx/base64.hpp"
+#include "basefwx/codec.hpp"
 #include "basefwx/constants.hpp"
+#include "basefwx/env.hpp"
 #include "basefwx/format.hpp"
 #include "basefwx/keywrap.hpp"
 
@@ -40,7 +42,11 @@ std::string EncodeMaskedPayload(const std::vector<std::uint8_t>& mask_key,
 
     std::vector<basefwx::format::Bytes> parts = {user_blob, master_blob, payload};
     std::vector<std::uint8_t> blob = basefwx::format::PackLengthPrefixed(parts);
-    return basefwx::base64::Encode(blob);
+    std::string encoded = basefwx::base64::Encode(blob);
+    if (basefwx::env::IsEnabled("BASEFWX_OBFUSCATE_CODECS", true)) {
+        return basefwx::codec::Code(encoded);
+    }
+    return encoded;
 }
 
 std::string DecodeMaskedPayload(const std::string& input,
@@ -50,8 +56,13 @@ std::string DecodeMaskedPayload(const std::string& input,
                                 std::string_view aad,
                                 std::string_view stream_info,
                                 const KdfOptions& kdf) {
+    std::string prepared = input;
     bool ok = false;
-    std::vector<std::uint8_t> raw = basefwx::base64::Decode(input, &ok);
+    std::vector<std::uint8_t> raw = basefwx::base64::Decode(prepared, &ok);
+    if (!ok) {
+        prepared = basefwx::codec::Decode(input);
+        raw = basefwx::base64::Decode(prepared, &ok);
+    }
     if (!ok) {
         throw std::runtime_error("Invalid payload encoding");
     }

@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <iosfwd>
 #include <string>
 #include <vector>
 
@@ -28,6 +29,14 @@ struct PackOptions {
 
 Bytes EncryptRaw(const Bytes& plaintext, const std::string& password, const Options& options = {});
 Bytes DecryptRaw(const Bytes& blob, const std::string& password, bool use_master = true);
+std::uint64_t EncryptStream(std::istream& source,
+                            std::ostream& dest,
+                            const std::string& password,
+                            const Options& options = {});
+std::uint64_t DecryptStream(std::istream& source,
+                            std::ostream& dest,
+                            const std::string& password,
+                            bool use_master = true);
 
 std::string NormalizeWrap(const Bytes& blob, const std::string& cover_phrase = "low taper fade");
 Bytes NormalizeUnwrap(const std::string& text);

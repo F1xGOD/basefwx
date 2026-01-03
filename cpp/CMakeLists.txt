@@ -17,7 +17,12 @@ if(BASEFWX_IPO_SUPPORTED)
 endif()
 
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    add_compile_options($<$<CONFIG:Release>:-O3 -march=native -mtune=native -flto>)
+    add_compile_options(
+        $<$<CONFIG:Release>:-O3>
+        $<$<CONFIG:Release>:-march=native>
+        $<$<CONFIG:Release>:-mtune=native>
+        $<$<CONFIG:Release>:-flto>
+    )
     add_link_options($<$<CONFIG:Release>:-flto>)
 elseif(MSVC)
     add_compile_options($<$<CONFIG:Release>:/O2 /GL>)

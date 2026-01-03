@@ -1,3 +1,2 @@
-// Implementation file content with CI detection added
-// Note: I need to retrieve the current file content first to make the precise insertion
-
+// This file will be retrieved and modified
+// I need to fetch the actual content first

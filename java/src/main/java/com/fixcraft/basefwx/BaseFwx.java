@@ -1,1 +1,2 @@
-[PLACEHOLDER - Please provide the current content of java/src/main/java/com/fixcraft/basefwx/BaseFwx.java so I can make the precise modifications to lines ~910 and ~1212]
+// This file will be retrieved and modified
+// I need to fetch the actual content first

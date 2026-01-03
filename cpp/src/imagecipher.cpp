@@ -26,6 +26,7 @@
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <iomanip>
 #include <iostream>
 #include <limits>
 #include <map>
@@ -42,8 +43,12 @@
 #include <openssl/evp.h>
 
 #if defined(_WIN32)
-#define popen _popen
-#define pclose _pclose
+#include <windows.h>
+#else
+#include <errno.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <unistd.h>
 #endif
 
 namespace basefwx::imagecipher {
@@ -161,15 +166,15 @@ Bytes DeriveMaterial(const std::string& password) {
 }
 
 Bytes DeriveMaterialFromMask(const Bytes& mask_key) {
-    return basefwx::crypto::HkdfSha256(basefwx::constants::kImageCipherStreamInfo, mask_key, 64);
+    return basefwx::crypto::HkdfSha256(mask_key, basefwx::constants::kImageCipherStreamInfo, 64);
 }
 
 Bytes BaseKeyFromMask(const Bytes& mask_key) {
-    return basefwx::crypto::HkdfSha256(basefwx::constants::kImageCipherStreamInfo, mask_key, 32);
+    return basefwx::crypto::HkdfSha256(mask_key, basefwx::constants::kImageCipherStreamInfo, 32);
 }
 
 Bytes ArchiveKeyFromMask(const Bytes& mask_key) {
-    return basefwx::crypto::HkdfSha256(basefwx::constants::kImageCipherArchiveInfo, mask_key, 32);
+    return basefwx::crypto::HkdfSha256(mask_key, basefwx::constants::kImageCipherArchiveInfo, 32);
 }
 
 Bytes BuildJmgHeader(const Bytes& user_blob, const Bytes& master_blob) {
@@ -389,6 +394,9 @@ void AppendTrailer(const std::filesystem::path& path, const Bytes& blob) {
     if (!blob.empty()) {
         out.write(reinterpret_cast<const char*>(blob.data()), static_cast<std::streamsize>(blob.size()));
     }
+    out.write(magic.data(), static_cast<std::streamsize>(magic.size()));
+    out.write(reinterpret_cast<const char*>(len_bytes.data()),
+              static_cast<std::streamsize>(len_bytes.size()));
     if (!out) {
         throw std::runtime_error("Failed to append trailer: " + path.string());
     }
@@ -423,7 +431,7 @@ void AppendTrailerStream(const std::filesystem::path& output_path,
     Bytes archive_key = archive_key_override;
     if (archive_key.empty()) {
         Bytes material = DeriveMaterial(password);
-        archive_key = basefwx::crypto::HkdfSha256(basefwx::constants::kImageCipherArchiveInfo, material, 32);
+        archive_key = basefwx::crypto::HkdfSha256(material, basefwx::constants::kImageCipherArchiveInfo, 32);
     }
     Bytes aad(basefwx::constants::kImageCipherArchiveInfo.begin(),
               basefwx::constants::kImageCipherArchiveInfo.end());
@@ -627,7 +635,7 @@ bool TryDecryptTrailerStream(const std::filesystem::path& input_path,
             cipher_len = blob_len - parsed_len - basefwx::constants::kAeadNonceLen - basefwx::constants::kAeadTagLen;
         } else {
             Bytes material = DeriveMaterial(password);
-            archive_key = basefwx::crypto::HkdfSha256(basefwx::constants::kImageCipherArchiveInfo, material, 32);
+            archive_key = basefwx::crypto::HkdfSha256(material, basefwx::constants::kImageCipherArchiveInfo, 32);
             std::memcpy(nonce.data(), prefix.data(), prefix.size());
             std::size_t remaining = nonce.size() - prefix.size();
             input.read(reinterpret_cast<char*>(nonce.data() + prefix.size()),
@@ -723,45 +731,64 @@ bool TryDecryptTrailerStream(const std::filesystem::path& input_path,
 }
 
 bool ExtractTrailer(const Bytes& data, Bytes& payload, Bytes& trailer) {
-    std::string magic(basefwx::constants::kImageCipherTrailerMagic.begin(),
-                      basefwx::constants::kImageCipherTrailerMagic.end());
-    if (magic.size() != 4) {
+    auto magic = basefwx::constants::kImageCipherTrailerMagic;
+    const std::size_t magic_len = magic.size();
+    const std::size_t footer_len = magic_len + 4;
+    payload = data;
+    trailer.clear();
+    if (magic_len == 0 || data.size() < footer_len) {
         return false;
     }
-    std::size_t idx = data.size();
-    bool found = false;
+
+    auto read_u32 = [](const std::uint8_t* ptr) {
+        return (static_cast<std::uint32_t>(ptr[0]) << 24)
+               | (static_cast<std::uint32_t>(ptr[1]) << 16)
+               | (static_cast<std::uint32_t>(ptr[2]) << 8)
+               | static_cast<std::uint32_t>(ptr[3]);
+    };
+
+    std::size_t footer_pos = data.size() - footer_len;
+    if (std::memcmp(data.data() + footer_pos, magic.data(), magic_len) == 0) {
+        std::uint32_t len = read_u32(data.data() + footer_pos + magic_len);
+        std::uint64_t total = static_cast<std::uint64_t>(data.size());
+        std::uint64_t needed = static_cast<std::uint64_t>(footer_len)
+                               + static_cast<std::uint64_t>(len)
+                               + static_cast<std::uint64_t>(footer_len);
+        if (needed <= total) {
+            std::uint64_t header_pos = total - needed;
+            if (std::memcmp(data.data() + header_pos, magic.data(), magic_len) == 0) {
+                std::uint32_t header_len = read_u32(data.data() + header_pos + magic_len);
+                if (header_len == len) {
+                    std::size_t blob_start = static_cast<std::size_t>(header_pos + footer_len);
+                    std::size_t blob_end = blob_start + len;
+                    payload.assign(data.begin(), data.begin() + static_cast<std::ptrdiff_t>(header_pos));
+                    trailer.assign(data.begin() + static_cast<std::ptrdiff_t>(blob_start),
+                                   data.begin() + static_cast<std::ptrdiff_t>(blob_end));
+                    return true;
+                }
+            }
+        }
+    }
+
     for (std::size_t i = data.size(); i-- > 0;) {
-        if (i + magic.size() > data.size()) {
+        if (i + footer_len > data.size()) {
             continue;
         }
-        if (std::memcmp(data.data() + i, magic.data(), magic.size()) == 0) {
-            idx = i;
-            found = true;
-            break;
+        if (std::memcmp(data.data() + i, magic.data(), magic_len) != 0) {
+            continue;
         }
+        std::uint32_t len = read_u32(data.data() + i + magic_len);
+        std::size_t blob_start = i + footer_len;
+        std::size_t blob_end = blob_start + len;
+        if (blob_end != data.size()) {
+            continue;
+        }
+        payload.assign(data.begin(), data.begin() + static_cast<std::ptrdiff_t>(i));
+        trailer.assign(data.begin() + static_cast<std::ptrdiff_t>(blob_start),
+                       data.begin() + static_cast<std::ptrdiff_t>(blob_end));
+        return true;
     }
-    if (!found) {
-        payload = data;
-        return false;
-    }
-    if (idx + magic.size() + 4 > data.size()) {
-        payload = data;
-        return false;
-    }
-    std::uint32_t len = (static_cast<std::uint32_t>(data[idx + 4]) << 24)
-                        | (static_cast<std::uint32_t>(data[idx + 5]) << 16)
-                        | (static_cast<std::uint32_t>(data[idx + 6]) << 8)
-                        | static_cast<std::uint32_t>(data[idx + 7]);
-    std::size_t blob_start = idx + magic.size() + 4;
-    std::size_t blob_end = blob_start + len;
-    if (blob_end > data.size()) {
-        payload = data;
-        return false;
-    }
-    payload.assign(data.begin(), data.begin() + static_cast<std::ptrdiff_t>(idx));
-    trailer.assign(data.begin() + static_cast<std::ptrdiff_t>(blob_start),
-                   data.begin() + static_cast<std::ptrdiff_t>(blob_end));
-    return true;
+    return false;
 }
 
 void BuildMaskAndShuffle(const std::string& password,
@@ -883,8 +910,15 @@ std::string EncryptImageInv(const std::string& path,
                             const std::string& output,
                             bool include_trailer) {
     std::string resolved = basefwx::ResolvePassword(password);
-    if (!include_trailer && resolved.empty()) {
-        throw std::runtime_error("Password is required for image encryption without trailer");
+    if (!include_trailer) {
+        if (basefwx::env::Get("BASEFWX_ALLOW_INSECURE_IMAGE_OBFUSCATION") != "1") {
+            throw std::runtime_error(
+                "Image encryption without trailer is deterministic and insecure; "
+                "set BASEFWX_ALLOW_INSECURE_IMAGE_OBFUSCATION=1 to allow or enable trailer");
+        }
+        if (resolved.empty()) {
+            throw std::runtime_error("Password is required for image encryption without trailer");
+        }
     }
     std::filesystem::path input_path = NormalizePath(path);
     if (!std::filesystem::exists(input_path)) {
@@ -994,8 +1028,7 @@ std::string DecryptImageInv(const std::string& path,
                 archive_key = ArchiveKeyFromMask(mask_key);
             } else {
                 Bytes material = DeriveMaterial(resolved);
-                archive_key = basefwx::crypto::HkdfSha256(basefwx::constants::kImageCipherArchiveInfo,
-                                                          material, 32);
+                archive_key = basefwx::crypto::HkdfSha256(material, basefwx::constants::kImageCipherArchiveInfo, 32);
             }
             Bytes aad(basefwx::constants::kImageCipherArchiveInfo.begin(),
                       basefwx::constants::kImageCipherArchiveInfo.end());
@@ -1063,22 +1096,9 @@ constexpr double kJmgTargetGrowth = 1.1;
 constexpr double kJmgMaxGrowth = 2.0;
 constexpr std::uint64_t kJmgMinAudioBps = 64000;
 constexpr std::uint64_t kJmgMinVideoBps = 200000;
+constexpr int kVideoGroupMaxFrames = 12;
 
-std::string QuoteArg(const std::string& arg) {
-    std::string out;
-    out.reserve(arg.size() + 2);
-    out.push_back('"');
-    for (char ch : arg) {
-        if (ch == '"' || ch == '\\') {
-            out.push_back('\\');
-        }
-        out.push_back(ch);
-    }
-    out.push_back('"');
-    return out;
-}
-
-std::string JoinArgs(const std::vector<std::string>& args) {
+std::string FormatCommandForError(const std::vector<std::string>& args) {
     std::ostringstream oss;
     bool first = true;
     for (const auto& arg : args) {
@@ -1086,34 +1106,233 @@ std::string JoinArgs(const std::vector<std::string>& args) {
             oss << ' ';
         }
         first = false;
-        oss << QuoteArg(arg);
+        oss << std::quoted(arg);
     }
     return oss.str();
 }
 
+#if defined(_WIN32)
+std::wstring Utf8ToWide(const std::string& value) {
+    if (value.empty()) {
+        return {};
+    }
+    int needed = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS,
+                                     value.data(), static_cast<int>(value.size()),
+                                     nullptr, 0);
+    if (needed <= 0) {
+        needed = MultiByteToWideChar(CP_ACP, 0,
+                                     value.data(), static_cast<int>(value.size()),
+                                     nullptr, 0);
+    }
+    if (needed <= 0) {
+        throw std::runtime_error("Failed to convert command argument to wide string");
+    }
+    std::wstring out(static_cast<std::size_t>(needed), L'\0');
+    if (MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS,
+                            value.data(), static_cast<int>(value.size()),
+                            out.data(), needed) == 0) {
+        if (MultiByteToWideChar(CP_ACP, 0,
+                                value.data(), static_cast<int>(value.size()),
+                                out.data(), needed) == 0) {
+            throw std::runtime_error("Failed to convert command argument to wide string");
+        }
+    }
+    return out;
+}
+
+std::wstring QuoteArgWindows(const std::wstring& arg) {
+    if (arg.empty()) {
+        return L"\"\"";
+    }
+    bool needs_quotes = arg.find_first_of(L" \t\n\v\"") != std::wstring::npos;
+    if (!needs_quotes) {
+        return arg;
+    }
+    std::wstring out;
+    out.reserve(arg.size() + 2);
+    out.push_back(L'"');
+    std::size_t i = 0;
+    while (i < arg.size()) {
+        std::size_t backslashes = 0;
+        while (i < arg.size() && arg[i] == L'\\') {
+            ++backslashes;
+            ++i;
+        }
+        if (i == arg.size()) {
+            out.append(backslashes * 2, L'\\');
+            break;
+        }
+        if (arg[i] == L'"') {
+            out.append(backslashes * 2 + 1, L'\\');
+            out.push_back(L'"');
+        } else {
+            out.append(backslashes, L'\\');
+            out.push_back(arg[i]);
+        }
+        ++i;
+    }
+    out.push_back(L'"');
+    return out;
+}
+
+std::wstring BuildCommandLine(const std::vector<std::string>& args) {
+    std::wstring out;
+    bool first = true;
+    for (const auto& arg : args) {
+        if (!first) {
+            out.push_back(L' ');
+        }
+        first = false;
+        out.append(QuoteArgWindows(Utf8ToWide(arg)));
+    }
+    return out;
+}
+
+int RunProcess(const std::vector<std::string>& args, std::string* output) {
+    if (args.empty()) {
+        throw std::runtime_error("Command is empty");
+    }
+    std::wstring cmdline = BuildCommandLine(args);
+    STARTUPINFOW si{};
+    si.cb = sizeof(si);
+    PROCESS_INFORMATION pi{};
+    HANDLE read_pipe = nullptr;
+    HANDLE write_pipe = nullptr;
+    BOOL inherit_handles = FALSE;
+    if (output) {
+        SECURITY_ATTRIBUTES sa{};
+        sa.nLength = sizeof(sa);
+        sa.bInheritHandle = TRUE;
+        if (!CreatePipe(&read_pipe, &write_pipe, &sa, 0)) {
+            throw std::runtime_error("Failed to create pipe for command output");
+        }
+        if (!SetHandleInformation(read_pipe, HANDLE_FLAG_INHERIT, 0)) {
+            CloseHandle(read_pipe);
+            CloseHandle(write_pipe);
+            throw std::runtime_error("Failed to configure pipe for command output");
+        }
+        si.dwFlags |= STARTF_USESTDHANDLES;
+        si.hStdOutput = write_pipe;
+        si.hStdError = GetStdHandle(STD_ERROR_HANDLE);
+        si.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+        inherit_handles = TRUE;
+    }
+
+    BOOL ok = CreateProcessW(nullptr,
+                             cmdline.data(),
+                             nullptr,
+                             nullptr,
+                             inherit_handles,
+                             0,
+                             nullptr,
+                             nullptr,
+                             &si,
+                             &pi);
+    if (!ok) {
+        if (write_pipe) {
+            CloseHandle(write_pipe);
+        }
+        if (read_pipe) {
+            CloseHandle(read_pipe);
+        }
+        throw std::runtime_error("Failed to run command: " + FormatCommandForError(args));
+    }
+    if (write_pipe) {
+        CloseHandle(write_pipe);
+    }
+    if (output && read_pipe) {
+        std::array<char, 4096> buffer{};
+        DWORD read = 0;
+        while (ReadFile(read_pipe, buffer.data(),
+                        static_cast<DWORD>(buffer.size()), &read, nullptr)
+               && read > 0) {
+            output->append(buffer.data(), buffer.data() + read);
+        }
+        CloseHandle(read_pipe);
+    }
+    WaitForSingleObject(pi.hProcess, INFINITE);
+    DWORD exit_code = 0;
+    if (!GetExitCodeProcess(pi.hProcess, &exit_code)) {
+        exit_code = 1;
+    }
+    CloseHandle(pi.hThread);
+    CloseHandle(pi.hProcess);
+    return static_cast<int>(exit_code);
+}
+#else
+int RunProcess(const std::vector<std::string>& args, std::string* output) {
+    if (args.empty()) {
+        throw std::runtime_error("Command is empty");
+    }
+    int pipefd[2] = {-1, -1};
+    if (output) {
+        if (pipe(pipefd) != 0) {
+            throw std::runtime_error("Failed to create pipe for command output");
+        }
+    }
+    pid_t pid = fork();
+    if (pid < 0) {
+        if (output) {
+            close(pipefd[0]);
+            close(pipefd[1]);
+        }
+        throw std::runtime_error("Failed to fork for command execution");
+    }
+    if (pid == 0) {
+        if (output) {
+            dup2(pipefd[1], STDOUT_FILENO);
+            close(pipefd[0]);
+            close(pipefd[1]);
+        }
+        std::vector<char*> argv;
+        argv.reserve(args.size() + 1);
+        for (const auto& arg : args) {
+            argv.push_back(const_cast<char*>(arg.c_str()));
+        }
+        argv.push_back(nullptr);
+        execvp(argv[0], argv.data());
+        _exit(127);
+    }
+    if (output) {
+        close(pipefd[1]);
+        std::array<char, 4096> buffer{};
+        while (true) {
+            ssize_t got = read(pipefd[0], buffer.data(), buffer.size());
+            if (got > 0) {
+                output->append(buffer.data(), buffer.data() + got);
+            } else if (got == 0) {
+                break;
+            } else if (errno != EINTR) {
+                break;
+            }
+        }
+        close(pipefd[0]);
+    }
+    int status = 0;
+    while (waitpid(pid, &status, 0) < 0 && errno == EINTR) {
+    }
+    if (WIFEXITED(status)) {
+        return WEXITSTATUS(status);
+    }
+    return 1;
+}
+#endif
+
 std::string RunCommandCapture(const std::vector<std::string>& args) {
-    std::string cmd = JoinArgs(args);
-    std::array<char, 4096> buffer{};
     std::string output;
-    FILE* pipe = popen(cmd.c_str(), "r");
-    if (!pipe) {
-        throw std::runtime_error("Failed to run command: " + cmd);
-    }
-    while (std::fgets(buffer.data(), static_cast<int>(buffer.size()), pipe)) {
-        output.append(buffer.data());
-    }
-    int rc = pclose(pipe);
+    int rc = RunProcess(args, &output);
     if (rc != 0) {
-        throw std::runtime_error("Command failed: " + cmd);
+        throw std::runtime_error("Command failed (" + std::to_string(rc) + "): "
+                                 + FormatCommandForError(args));
     }
     return output;
 }
 
 void RunCommand(const std::vector<std::string>& args) {
-    std::string cmd = JoinArgs(args);
-    int rc = std::system(cmd.c_str());
+    int rc = RunProcess(args, nullptr);
     if (rc != 0) {
-        throw std::runtime_error("Command failed: " + cmd);
+        throw std::runtime_error("Command failed (" + std::to_string(rc) + "): "
+                                 + FormatCommandForError(args));
     }
 }
 
@@ -1504,7 +1723,7 @@ Bytes UnitMaterial(const Bytes& base_key, const std::string& label, std::uint64_
     info.push_back(static_cast<std::uint8_t>((index >> 8) & 0xFF));
     info.push_back(static_cast<std::uint8_t>(index & 0xFF));
     std::string info_str(reinterpret_cast<const char*>(info.data()), info.size());
-    return basefwx::crypto::HkdfSha256(info_str, base_key, length);
+    return basefwx::crypto::HkdfSha256(base_key, info_str, length);
 }
 
 std::uint64_t SplitMix64(std::uint64_t& state) {
@@ -1643,6 +1862,7 @@ Bytes UnshuffleFrameBlocks(const Bytes& frame,
 }
 
 Bytes AudioMaskTransform(const Bytes& data, const Bytes& key, const Bytes& iv) {
+    // Obfuscation-only: masks low bits to preserve audio fidelity, not confidentiality.
     if (data.empty()) {
         return {};
     }
@@ -1666,6 +1886,7 @@ Bytes AudioMaskTransform(const Bytes& data, const Bytes& key, const Bytes& iv) {
 }
 
 Bytes VideoMaskTransform(const Bytes& data, const Bytes& key, const Bytes& iv) {
+    // Obfuscation-only: masks low bits to preserve video quality, not confidentiality.
     if (data.empty()) {
         return {};
     }
@@ -1723,6 +1944,7 @@ void ScrambleVideoRaw(const std::filesystem::path& raw_in,
         throw std::runtime_error("Invalid video dimensions");
     }
     int group_frames = static_cast<int>(std::max(2.0, std::round((video.fps > 0.0 ? video.fps : 30.0) * 1.0)));
+    group_frames = std::min(group_frames, kVideoGroupMaxFrames);
     std::ifstream input(raw_in, std::ios::binary);
     std::ofstream output(raw_out, std::ios::binary);
     if (!input || !output) {
@@ -1882,6 +2104,7 @@ void UnscrambleVideoRaw(const std::filesystem::path& raw_in,
         throw std::runtime_error("Invalid video dimensions");
     }
     int group_frames = static_cast<int>(std::max(2.0, std::round((video.fps > 0.0 ? video.fps : 30.0) * 1.0)));
+    group_frames = std::min(group_frames, kVideoGroupMaxFrames);
     std::ifstream input(raw_in, std::ios::binary);
     std::ofstream output(raw_out, std::ios::binary);
     if (!input || !output) {
@@ -2452,8 +2675,7 @@ std::string DecryptMedia(const std::string& path,
                     archive_key = ArchiveKeyFromMask(mask_key);
                 } else {
                     Bytes material = DeriveMaterial(resolved);
-                    archive_key = basefwx::crypto::HkdfSha256(basefwx::constants::kImageCipherArchiveInfo,
-                                                              material, 32);
+                    archive_key = basefwx::crypto::HkdfSha256(material, basefwx::constants::kImageCipherArchiveInfo, 32);
                 }
                 Bytes aad(basefwx::constants::kImageCipherArchiveInfo.begin(),
                           basefwx::constants::kImageCipherArchiveInfo.end());

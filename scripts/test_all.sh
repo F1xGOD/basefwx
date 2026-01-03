@@ -2758,7 +2758,7 @@ if [[ -z "${BENCH_WARMUP_LIGHT:-}" || -z "${BENCH_WARMUP_HEAVY:-}" ]]; then
     fi
 fi
 
-JAVA_BENCH_FLAGS="${JAVA_BENCH_FLAGS:--Xms2g -Xmx2g -XX:+AlwaysPreTouch -XX:+TieredCompilation -XX:CompileThreshold=100 -XX:TieredStopAtLevel=4 -XX:+UnlockExperimentalVMOptions -XX:+UseZGC}"
+JAVA_BENCH_FLAGS="${JAVA_BENCH_FLAGS:--Xms7g -Xmx9g -XX:+AlwaysPreTouch -XX:+TieredCompilation -XX:CompileThreshold=100 -XX:TieredStopAtLevel=4 -XX:+UnlockExperimentalVMOptions -XX:+UseZGC}"
 read -r -a JAVA_BENCH_FLAGS_ARR <<<"$JAVA_BENCH_FLAGS"
 
 BENCH_TEXT_METHODS=("b256" "b512" "pb512" "b64" "a512")
@@ -2855,39 +2855,58 @@ if [[ "${BASEFWX_KEEP_TMP:-0}" != "1" ]]; then
     rm -rf "$TMP_DIR"
 fi
 
+DELTA_EPSILON_NS=1000000
+
 format_ns() {
-    awk -v ns="$1" 'BEGIN { printf "%.3f", ns / 1000000000 }'
+    local ns="$1"
+    if [[ -z "$ns" ]]; then
+        return
+    fi
+    if (( ns < DELTA_EPSILON_NS )); then
+        printf "≈0s (below resolution)"
+        return
+    fi
+    awk -v ns="$ns" 'BEGIN { printf "%.3f", ns / 1000000000 }'
 }
 
 format_delta() {
     local base_ns="$1"
     local other_ns="$2"
-    if [[ -z "$base_ns" || -z "$other_ns" || "$base_ns" -le 0 ]]; then
-        printf "n/a"
+    if [[ -z "$base_ns" || -z "$other_ns" || "$base_ns" -le 0 || "$other_ns" -le 0 ]]; then
+        printf "❓ Not measurable (below timer resolution)"
+        return
+    fi
+    if (( base_ns < DELTA_EPSILON_NS )); then
+        printf "❓ Not measurable (below timer resolution)"
         return
     fi
     local abs_diff
     abs_diff=$(awk -v base="$base_ns" -v other="$other_ns" 'BEGIN { v=other-base; if (v<0) v=-v; printf "%.0f", v }')
-    if (( abs_diff < 1000000 )); then
-        printf "%s🔵 0.00%%%s" "$BLUE" "$RESET"
+    if (( abs_diff < DELTA_EPSILON_NS )); then
+        printf "🔵 Same (±0.00%%)"
         return
     fi
-    local base_for_pct="$base_ns"
-    if (( base_for_pct < 10000000 )); then
-        base_for_pct=10000000
-    fi
-    local pct abs_pct is_faster
-    pct=$(awk -v base="$base_for_pct" -v other="$other_ns" 'BEGIN { printf "%.6f", (other-base)/base*100 }')
-    abs_pct=$(awk -v p="$pct" 'BEGIN { v=p; if (v<0) v=-v; printf "%.6f", v }')
-    is_faster=$(awk -v p="$pct" 'BEGIN { print (p < 0) ? 1 : 0 }')
-    if (( is_faster == 1 )); then
-        local gain
-        gain=$(awk -v base="$base_for_pct" -v other="$other_ns" 'BEGIN { v=(base-other)/base*100; if (v<0) v=-v; if (v>999.99) v=999.99; printf "%.2f", v }')
-        printf "%s%s +%s%%%s" "$GREEN" "$EMOJI_FAST" "$gain" "$RESET"
+    local pct is_faster is_extreme
+    pct=$(awk -v base="$base_ns" -v other="$other_ns" 'BEGIN { printf "%.6f", (base-other)/base*100 }')
+    is_faster=$(awk -v p="$pct" 'BEGIN { print (p > 0) ? 1 : 0 }')
+    is_extreme=$(awk -v p="$pct" 'BEGIN { print (p >= 100 || p <= -100) ? 1 : 0 }')
+    if (( is_extreme == 1 )); then
+        local mult
+        if (( is_faster == 1 )); then
+            mult=$(awk -v base="$base_ns" -v other="$other_ns" 'BEGIN { if (other<=0) { print "∞"; } else { printf "%.2f", base/other } }')
+            printf "%s Faster (%s×)" "$EMOJI_FAST" "$mult"
+        else
+            mult=$(awk -v base="$base_ns" -v other="$other_ns" 'BEGIN { printf "%.2f", other/base }')
+            printf "%s Slower (%s×)" "$EMOJI_SLOW" "$mult"
+        fi
     else
-        local loss
-        loss=$(awk -v base="$base_for_pct" -v other="$other_ns" 'BEGIN { v=(other-base)/base*100; if (v<0) v=-v; if (v>999.99) v=999.99; printf "%.2f", v }')
-        printf "%s%s -%s%%%s" "$RED" "$EMOJI_SLOW" "$loss" "$RESET"
+        local pct_abs
+        pct_abs=$(awk -v p="$pct" 'BEGIN { v=p; if (v<0) v=-v; printf "%.2f", v }')
+        if (( is_faster == 1 )); then
+            printf "%s Faster (+%s%%)" "$EMOJI_FAST" "$pct_abs"
+        else
+            printf "%s Slower (−%s%%)" "$EMOJI_SLOW" "$pct_abs"
+        fi
     fi
 }
 
@@ -2900,10 +2919,22 @@ print_lang_line() {
         printf "%s n/a %s\n" "$tag" "$version"
         return
     fi
+    local is_numeric=0
+    if [[ "$time_s" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+        is_numeric=1
+    fi
     if [[ -n "$delta" ]]; then
-        printf "%s %ss %s %s\n" "$tag" "$time_s" "$delta" "$version"
+        if (( is_numeric == 1 )); then
+            printf "%s %ss %s %s\n" "$tag" "$time_s" "$delta" "$version"
+        else
+            printf "%s %s %s %s\n" "$tag" "$time_s" "$delta" "$version"
+        fi
     else
-        printf "%s %ss %s\n" "$tag" "$time_s" "$version"
+        if (( is_numeric == 1 )); then
+            printf "%s %ss %s\n" "$tag" "$time_s" "$version"
+        else
+            printf "%s %s %s\n" "$tag" "$time_s" "$version"
+        fi
     fi
 }
 
@@ -2930,40 +2961,9 @@ compare_speed_block() {
         printf "%s: %s missing timing data%s\n" "$label" "$YELLOW$EMOJI_WARN" "$RESET"
         return
     fi
-    local base_key=""
-    local base_label="$BASELINE_LANG"
-    case "$BASELINE_LANG" in
-        py)
-            base_key="$py_key"
-            ;;
-        pypy)
-            base_key="$pypy_key"
-            ;;
-        cpp)
-            base_key="$cpp_key"
-            ;;
-        java)
-            base_key="$java_key"
-            ;;
-    esac
-    local base_ns=""
-    if [[ -n "$base_key" ]]; then
-        base_ns="${TIMES[$base_key]:-}"
-    fi
-    if [[ -z "$base_ns" || "$base_ns" -le 0 ]]; then
-        if [[ -n "$py_ns" ]]; then
-            base_ns="$py_ns"
-            base_label="py"
-        elif [[ -n "$pypy_ns" ]]; then
-            base_ns="$pypy_ns"
-            base_label="pypy"
-        elif [[ -n "$cpp_ns" ]]; then
-            base_ns="$cpp_ns"
-            base_label="cpp"
-        else
-            base_ns="$java_ns"
-            base_label="java"
-        fi
+    local base_ns="${py_ns:-0}"
+    if [[ -z "$base_ns" ]]; then
+        base_ns=0
     fi
     local py_s="" pypy_s="" cpp_s="" java_s=""
     if [[ -n "$py_ns" ]]; then
@@ -2984,7 +2984,7 @@ compare_speed_block() {
     local cpp_tag="${CPP_VERSION_TAG:-cpp}"
     local java_tag="${JAVA_VERSION_TAG:-java}"
     local py_delta=""
-    if [[ "$base_label" == "py" ]]; then
+    if [[ -n "$py_ns" && "$base_ns" -gt 0 ]]; then
         print_lang_line "🐍 Python" "$py_s" "" "$py_tag (baseline)"
     else
         if [[ -n "$py_ns" ]]; then
@@ -2994,32 +2994,20 @@ compare_speed_block() {
     fi
     if [[ -n "$pypy_ns" ]]; then
         local pypy_delta=""
-        if [[ "$base_label" == "pypy" ]]; then
-            print_lang_line "🥭 PyPy" "$pypy_s" "" "$pypy_tag (baseline)"
-        else
-            pypy_delta="$(format_delta "$base_ns" "$pypy_ns")"
-            print_lang_line "🥭 PyPy" "$pypy_s" "$pypy_delta" "$pypy_tag"
-        fi
+        pypy_delta="$(format_delta "$base_ns" "$pypy_ns")"
+        print_lang_line "🥭 PyPy" "$pypy_s" "$pypy_delta" "$pypy_tag"
     fi
     if [[ -n "$cpp_ns" ]]; then
         printf "%s\n" "-----------------------------"
         local cpp_delta=""
-        if [[ "$base_label" == "cpp" ]]; then
-            print_lang_line "⚙️ C++" "$cpp_s" "" "$cpp_tag (baseline)"
-        else
-            cpp_delta="$(format_delta "$base_ns" "$cpp_ns")"
-            print_lang_line "⚙️ C++" "$cpp_s" "$cpp_delta" "$cpp_tag"
-        fi
+        cpp_delta="$(format_delta "$base_ns" "$cpp_ns")"
+        print_lang_line "⚙️ C++" "$cpp_s" "$cpp_delta" "$cpp_tag"
     fi
     if [[ -n "$java_ns" ]]; then
         printf "%s\n" "----------------------------"
         local java_delta=""
-        if [[ "$base_label" == "java" ]]; then
-            print_lang_line "☕ Java" "$java_s" "" "$java_tag (baseline)"
-        else
-            java_delta="$(format_delta "$base_ns" "$java_ns")"
-            print_lang_line "☕ Java" "$java_s" "$java_delta" "$java_tag"
-        fi
+        java_delta="$(format_delta "$base_ns" "$java_ns")"
+        print_lang_line "☕ Java" "$java_s" "$java_delta" "$java_tag"
     fi
     printf "\n"
 }
@@ -3028,16 +3016,10 @@ overall_sum_for_lang() {
     local lang="$1"
     local sum=0
     local count=0
+    local base_sum=0
     local entry label py_key pypy_key cpp_key java_key
     for entry in "${OVERALL_METHODS[@]}"; do
         IFS='|' read -r label py_key pypy_key cpp_key java_key <<<"$entry"
-        local base_key=""
-        case "$BASELINE_LANG" in
-            py) base_key="$py_key" ;;
-            pypy) base_key="$pypy_key" ;;
-            cpp) base_key="$cpp_key" ;;
-            java) base_key="$java_key" ;;
-        esac
         local lang_key=""
         case "$lang" in
             py) lang_key="$py_key" ;;
@@ -3045,14 +3027,15 @@ overall_sum_for_lang() {
             cpp) lang_key="$cpp_key" ;;
             java) lang_key="$java_key" ;;
         esac
-        local base_val="${TIMES[$base_key]:-}"
+        local base_val="${TIMES[$py_key]:-}"
         local lang_val="${TIMES[$lang_key]:-}"
         if [[ -n "$base_val" && "$base_val" -gt 0 && -n "$lang_val" && "$lang_val" -gt 0 ]]; then
+            base_sum=$((base_sum + base_val))
             sum=$((sum + lang_val))
             count=$((count + 1))
         fi
     done
-    printf "%s|%s" "$sum" "$count"
+    printf "%s|%s|%s" "$sum" "$count" "$base_sum"
 }
 
 overall_summary() {
@@ -3070,66 +3053,47 @@ overall_summary() {
         "b512file|b512file_py_total|b512file_pypy_total|b512file_cpp_total|b512file_java_total"
         "pb512file|pb512file_py_total|pb512file_pypy_total|pb512file_cpp_total|pb512file_java_total"
     )
-    local base_sum base_count
-    IFS='|' read -r base_sum base_count <<<"$(overall_sum_for_lang "$BASELINE_LANG")"
-    if [[ -z "$base_sum" || "$base_sum" -le 0 || "$base_count" -le 0 ]]; then
+    local py_sum py_count py_base_sum
+    IFS='|' read -r py_sum py_count py_base_sum <<<"$(overall_sum_for_lang py)"
+    if [[ -z "$py_sum" || "$py_sum" -le 0 || "$py_count" -le 0 ]]; then
         return
     fi
+    local base_sum="$py_sum"
+    local base_count="$py_count"
     printf "OVERALL:\n"
-    local py_sum py_count pypy_sum pypy_count cpp_sum cpp_count java_sum java_count
-    IFS='|' read -r py_sum py_count <<<"$(overall_sum_for_lang py)"
     if [[ "$RUN_PY_TESTS" == "1" && "$py_count" -gt 0 ]]; then
-        local py_delta=""
-        if [[ "$BASELINE_LANG" != "py" ]]; then
-            py_delta="$(format_delta "$base_sum" "$py_sum")"
-        fi
-        local py_tag="${PY_VERSION_TAG} (${py_count}/${base_count})"
-        if [[ "$BASELINE_LANG" == "py" ]]; then
-            py_tag="${PY_VERSION_TAG} (baseline, ${py_count}/${base_count})"
-        fi
-        print_lang_line "🐍 Python" "$(format_ns "$py_sum")" "$py_delta" "$py_tag"
+        local py_tag="${PY_VERSION_TAG} (baseline, ${py_count}/${base_count})"
+        print_lang_line "🐍 Python" "$(format_ns "$py_sum")" "" "$py_tag"
     fi
     if [[ "$RUN_PYPY_TESTS" == "1" && "$PYPY_AVAILABLE" == "1" ]]; then
-        IFS='|' read -r pypy_sum pypy_count <<<"$(overall_sum_for_lang pypy)"
+        local pypy_sum pypy_count pypy_base_sum
+        IFS='|' read -r pypy_sum pypy_count pypy_base_sum <<<"$(overall_sum_for_lang pypy)"
         if [[ "$pypy_count" -gt 0 ]]; then
             local pypy_delta=""
-            if [[ "$BASELINE_LANG" != "pypy" ]]; then
-                pypy_delta="$(format_delta "$base_sum" "$pypy_sum")"
-            fi
+            pypy_delta="$(format_delta "$pypy_base_sum" "$pypy_sum")"
             local pypy_tag="${PYPY_VERSION_TAG} (${pypy_count}/${base_count})"
-            if [[ "$BASELINE_LANG" == "pypy" ]]; then
-                pypy_tag="${PYPY_VERSION_TAG} (baseline, ${pypy_count}/${base_count})"
-            fi
             print_lang_line "🥭 PyPy" "$(format_ns "$pypy_sum")" "$pypy_delta" "$pypy_tag"
         fi
     fi
     if [[ "$RUN_CPP_TESTS" == "1" && "$CPP_AVAILABLE" == "1" ]]; then
-        IFS='|' read -r cpp_sum cpp_count <<<"$(overall_sum_for_lang cpp)"
+        local cpp_sum cpp_count cpp_base_sum
+        IFS='|' read -r cpp_sum cpp_count cpp_base_sum <<<"$(overall_sum_for_lang cpp)"
         if [[ "$cpp_count" -gt 0 ]]; then
             printf "%s\n" "-----------------------------"
             local cpp_delta=""
-            if [[ "$BASELINE_LANG" != "cpp" ]]; then
-                cpp_delta="$(format_delta "$base_sum" "$cpp_sum")"
-            fi
+            cpp_delta="$(format_delta "$cpp_base_sum" "$cpp_sum")"
             local cpp_tag="${CPP_VERSION_TAG} (${cpp_count}/${base_count})"
-            if [[ "$BASELINE_LANG" == "cpp" ]]; then
-                cpp_tag="${CPP_VERSION_TAG} (baseline, ${cpp_count}/${base_count})"
-            fi
             print_lang_line "⚙️ C++" "$(format_ns "$cpp_sum")" "$cpp_delta" "$cpp_tag"
         fi
     fi
     if [[ "$RUN_JAVA_TESTS" == "1" && "$JAVA_AVAILABLE" == "1" ]]; then
-        IFS='|' read -r java_sum java_count <<<"$(overall_sum_for_lang java)"
+        local java_sum java_count java_base_sum
+        IFS='|' read -r java_sum java_count java_base_sum <<<"$(overall_sum_for_lang java)"
         if [[ "$java_count" -gt 0 ]]; then
             printf "%s\n" "----------------------------"
             local java_delta=""
-            if [[ "$BASELINE_LANG" != "java" ]]; then
-                java_delta="$(format_delta "$base_sum" "$java_sum")"
-            fi
+            java_delta="$(format_delta "$java_base_sum" "$java_sum")"
             local java_tag="${JAVA_VERSION_TAG} (${java_count}/${base_count})"
-            if [[ "$BASELINE_LANG" == "java" ]]; then
-                java_tag="${JAVA_VERSION_TAG} (baseline, ${java_count}/${base_count})"
-            fi
             print_lang_line "☕ Java" "$(format_ns "$java_sum")" "$java_delta" "$java_tag"
         fi
     fi

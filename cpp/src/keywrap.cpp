@@ -117,9 +117,9 @@ Bytes MaskPayload(const Bytes& mask_key, const Bytes& payload, std::string_view 
     }
     Bytes stream;
     if (payload.size() > basefwx::constants::kHkdfMaxLen) {
-        stream = basefwx::crypto::HkdfSha256Stream(info, mask_key, payload.size());
+        stream = basefwx::crypto::HkdfSha256Stream(mask_key, info, payload.size());
     } else {
-        stream = basefwx::crypto::HkdfSha256(info, mask_key, payload.size());
+        stream = basefwx::crypto::HkdfSha256(mask_key, info, payload.size());
     }
     Bytes out(payload.size());
     for (std::size_t i = 0; i < payload.size(); ++i) {
@@ -161,11 +161,11 @@ MaskKeyResult PrepareMaskKey(const std::string& password,
         if (pq_pub.has_value()) {
             basefwx::pq::KemResult kem = basefwx::pq::KemEncrypt(*pq_pub);
             result.master_blob = kem.ciphertext;
-            result.mask_key = basefwx::crypto::HkdfSha256(mask_info, kem.shared, 32);
+            result.mask_key = basefwx::crypto::HkdfSha256(kem.shared, mask_info, 32);
         } else if (ec_pub.has_value()) {
             basefwx::ec::KemResult kem = basefwx::ec::KemEncrypt(*ec_pub);
             result.master_blob = kem.blob;
-            result.mask_key = basefwx::crypto::HkdfSha256(mask_info, kem.shared, 32);
+            result.mask_key = basefwx::crypto::HkdfSha256(kem.shared, mask_info, 32);
         } else {
             result.mask_key = basefwx::crypto::RandomBytes(32);
         }
@@ -208,11 +208,11 @@ Bytes RecoverMaskKey(const Bytes& user_blob,
         if (basefwx::ec::IsEcMasterBlob(master_blob)) {
             Bytes private_key = basefwx::ec::LoadMasterPrivateKey();
             Bytes shared = basefwx::ec::KemDecrypt(private_key, master_blob);
-            return basefwx::crypto::HkdfSha256(mask_info, shared, 32);
+            return basefwx::crypto::HkdfSha256(shared, mask_info, 32);
         }
         Bytes private_key = basefwx::pq::LoadMasterPrivateKey();
         Bytes shared = basefwx::pq::KemDecrypt(private_key, master_blob);
-        return basefwx::crypto::HkdfSha256(mask_info, shared, 32);
+        return basefwx::crypto::HkdfSha256(shared, mask_info, 32);
     }
     if (user_blob.empty()) {
         throw std::runtime_error("Ciphertext missing key transport data");

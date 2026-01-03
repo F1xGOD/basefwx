@@ -4184,8 +4184,14 @@ class basefwx:
             path_obj = basefwx.pathlib.Path(path)
             basefwx._ensure_existing_file(path_obj)
             password = basefwx._resolve_password(password, use_master=True)
-            if not include_trailer and not password:
-                raise ValueError("Password is required for image encryption without trailer")
+            if not include_trailer:
+                if basefwx.os.getenv("BASEFWX_ALLOW_INSECURE_IMAGE_OBFUSCATION") != "1":
+                    raise ValueError(
+                        "Image encryption without trailer is deterministic and insecure; "
+                        "set BASEFWX_ALLOW_INSECURE_IMAGE_OBFUSCATION=1 to allow or enable trailer"
+                    )
+                if not password:
+                    raise ValueError("Password is required for image encryption without trailer")
             output_path = basefwx.pathlib.Path(output) if output else basefwx.ImageCipher._default_encrypted_path(path_obj)
             original_bytes = path_obj.read_bytes()
             arr, mode, fmt = basefwx.ImageCipher._load_image(path_obj, original_bytes)
@@ -4235,6 +4241,8 @@ class basefwx:
                     handle.write(basefwx.IMAGECIPHER_TRAILER_MAGIC)
                     handle.write(len(trailer_blob).to_bytes(4, 'big'))
                     handle.write(trailer_blob)
+                    handle.write(basefwx.IMAGECIPHER_TRAILER_MAGIC)
+                    handle.write(len(trailer_blob).to_bytes(4, 'big'))
 
             basefwx._del('mask')
             basefwx._del('rotations')
@@ -4262,16 +4270,30 @@ class basefwx:
             output_path = basefwx.pathlib.Path(output) if output else basefwx.ImageCipher._default_decrypted_path(path_obj)
             file_bytes = path_obj.read_bytes()
             magic = basefwx.IMAGECIPHER_TRAILER_MAGIC
-            marker_idx = file_bytes.rfind(magic)
             orig_blob = None
             payload_bytes = file_bytes
-            if marker_idx >= 0 and marker_idx + len(magic) + 4 <= len(file_bytes):
-                length = int.from_bytes(file_bytes[marker_idx + len(magic):marker_idx + len(magic) + 4], 'big')
-                blob_start = marker_idx + len(magic) + 4
-                blob_end = blob_start + length
-                if blob_end <= len(file_bytes):
-                    orig_blob = file_bytes[blob_start:blob_end]
-                    payload_bytes = file_bytes[:marker_idx]
+            footer_len = len(magic) + 4
+            if len(file_bytes) >= footer_len:
+                footer_idx = len(file_bytes) - footer_len
+                if file_bytes[footer_idx:footer_idx + len(magic)] == magic:
+                    length = int.from_bytes(file_bytes[footer_idx + len(magic):footer_idx + footer_len], 'big')
+                    trailer_start = len(file_bytes) - footer_len - length - footer_len
+                    if trailer_start >= 0:
+                        header = file_bytes[trailer_start:trailer_start + footer_len]
+                        if header[:len(magic)] == magic and int.from_bytes(header[len(magic):], 'big') == length:
+                            blob_start = trailer_start + footer_len
+                            blob_end = blob_start + length
+                            orig_blob = file_bytes[blob_start:blob_end]
+                            payload_bytes = file_bytes[:trailer_start]
+            if orig_blob is None:
+                marker_idx = file_bytes.rfind(magic)
+                if marker_idx >= 0 and marker_idx + len(magic) + 4 <= len(file_bytes):
+                    length = int.from_bytes(file_bytes[marker_idx + len(magic):marker_idx + len(magic) + 4], 'big')
+                    blob_start = marker_idx + len(magic) + 4
+                    blob_end = blob_start + length
+                    if blob_end == len(file_bytes):
+                        orig_blob = file_bytes[blob_start:blob_end]
+                        payload_bytes = file_bytes[:marker_idx]
             arr, mode, fmt = basefwx.ImageCipher._load_image(path_obj, payload_bytes)
             shape = arr.shape
             if arr.ndim == 2:
@@ -4346,6 +4368,7 @@ class basefwx:
         """Media cipher for images/videos/audio with deterministic shuffling + AES-CTR masking."""
 
         VIDEO_GROUP_SECONDS = 1.0
+        VIDEO_GROUP_MAX_FRAMES = 12
         VIDEO_BLOCK_SIZE = 2
         VIDEO_MASK_BITS = 6
         AUDIO_BLOCK_SECONDS = 0.15
@@ -4615,6 +4638,7 @@ class basefwx:
         def _audio_mask_transform(data: bytes, key: bytes, iv: bytes) -> bytes:
             if not data:
                 return b""
+            # Obfuscation-only: masks low bits to preserve audio fidelity, not confidentiality.
             tail = b""
             if len(data) % 2:
                 tail = data[-1:]
@@ -4635,6 +4659,7 @@ class basefwx:
         def _video_mask_transform(data: bytes, key: bytes, iv: bytes) -> bytes:
             if not data:
                 return b""
+            # Obfuscation-only: masks low bits to preserve video quality, not confidentiality.
             cipher = basefwx.Cipher(basefwx.algorithms.AES(key), basefwx.modes.CTR(iv))
             encryptor = cipher.encryptor()
             keystream = encryptor.update(bytes(len(data))) + encryptor.finalize()
@@ -4851,6 +4876,7 @@ class basefwx:
             if frame_size <= 0:
                 raise ValueError("Invalid video dimensions")
             group_frames = max(2, int(round((fps or 30.0) * basefwx.MediaCipher.VIDEO_GROUP_SECONDS)))
+            group_frames = min(group_frames, basefwx.MediaCipher.VIDEO_GROUP_MAX_FRAMES)
             total_frames = 0
             if progress_cb:
                 try:
@@ -4940,6 +4966,7 @@ class basefwx:
             if frame_size <= 0:
                 raise ValueError("Invalid video dimensions")
             group_frames = max(2, int(round((fps or 30.0) * basefwx.MediaCipher.VIDEO_GROUP_SECONDS)))
+            group_frames = min(group_frames, basefwx.MediaCipher.VIDEO_GROUP_MAX_FRAMES)
             total_frames = 0
             if progress_cb:
                 try:
@@ -5281,18 +5308,35 @@ class basefwx:
             password: "basefwx.typing.Union[str, bytes, bytearray, memoryview]"
         ) -> "basefwx.typing.Optional[bytes]":
             magic = basefwx.IMAGECIPHER_TRAILER_MAGIC
-            marker_idx = file_bytes.rfind(magic)
-            if marker_idx < 0 or marker_idx + len(magic) + 4 > len(file_bytes):
-                return None
-            length = int.from_bytes(
-                file_bytes[marker_idx + len(magic):marker_idx + len(magic) + 4],
-                "big"
-            )
-            blob_start = marker_idx + len(magic) + 4
-            blob_end = blob_start + length
-            if blob_end > len(file_bytes):
-                return None
-            blob = file_bytes[blob_start:blob_end]
+            footer_len = len(magic) + 4
+            blob = None
+            if len(file_bytes) >= footer_len:
+                footer_idx = len(file_bytes) - footer_len
+                if file_bytes[footer_idx:footer_idx + len(magic)] == magic:
+                    length = int.from_bytes(
+                        file_bytes[footer_idx + len(magic):footer_idx + footer_len],
+                        "big"
+                    )
+                    trailer_start = len(file_bytes) - footer_len - length - footer_len
+                    if trailer_start >= 0:
+                        header = file_bytes[trailer_start:trailer_start + footer_len]
+                        if header[:len(magic)] == magic and int.from_bytes(header[len(magic):], "big") == length:
+                            blob_start = trailer_start + footer_len
+                            blob_end = blob_start + length
+                            blob = file_bytes[blob_start:blob_end]
+            if blob is None:
+                marker_idx = file_bytes.rfind(magic)
+                if marker_idx < 0 or marker_idx + len(magic) + 4 > len(file_bytes):
+                    return None
+                length = int.from_bytes(
+                    file_bytes[marker_idx + len(magic):marker_idx + len(magic) + 4],
+                    "big"
+                )
+                blob_start = marker_idx + len(magic) + 4
+                blob_end = blob_start + length
+                if blob_end != len(file_bytes):
+                    return None
+                blob = file_bytes[blob_start:blob_end]
             header = basefwx._jmg_parse_key_header(blob, password, use_master=True)
             if header is not None:
                 header_len, _, archive_key = header

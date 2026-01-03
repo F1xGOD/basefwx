@@ -364,11 +364,11 @@ Bytes EncryptAesPayload(const std::string& plaintext,
         if (pq_pub.has_value()) {
             basefwx::pq::KemResult kem = basefwx::pq::KemEncrypt(*pq_pub);
             master_payload = kem.ciphertext;
-            ephemeral_key = basefwx::crypto::HkdfSha256(constants::kKemInfo, kem.shared, 32);
+            ephemeral_key = basefwx::crypto::HkdfSha256(kem.shared, constants::kKemInfo, 32);
         } else if (ec_pub.has_value()) {
             basefwx::ec::KemResult kem = basefwx::ec::KemEncrypt(*ec_pub);
             master_payload = kem.blob;
-            ephemeral_key = basefwx::crypto::HkdfSha256(constants::kKemInfo, kem.shared, 32);
+            ephemeral_key = basefwx::crypto::HkdfSha256(kem.shared, constants::kKemInfo, 32);
         } else {
             ephemeral_key = basefwx::crypto::RandomBytes(constants::kEphemeralKeyLen);
         }
@@ -473,11 +473,11 @@ std::string DecryptAesPayload(const Bytes& blob,
         if (basefwx::ec::IsEcMasterBlob(master_blob)) {
             Bytes private_key = basefwx::ec::LoadMasterPrivateKey();
             Bytes shared = basefwx::ec::KemDecrypt(private_key, master_blob);
-            ephemeral_key = basefwx::crypto::HkdfSha256(constants::kKemInfo, shared, 32);
+            ephemeral_key = basefwx::crypto::HkdfSha256(shared, constants::kKemInfo, 32);
         } else {
             Bytes private_key = basefwx::pq::LoadMasterPrivateKey();
             Bytes shared = basefwx::pq::KemDecrypt(private_key, master_blob);
-            ephemeral_key = basefwx::crypto::HkdfSha256(constants::kKemInfo, shared, 32);
+            ephemeral_key = basefwx::crypto::HkdfSha256(shared, constants::kKemInfo, 32);
         }
     } else if (!user_blob.empty()) {
         if (resolved.empty()) {
@@ -591,7 +591,7 @@ std::string B512EncodeFileSimple(const std::filesystem::path& input,
             constants::kMaskAadB512File,
             kdf_opts
         );
-        Bytes aead_key = basefwx::crypto::HkdfSha256(constants::kB512AeadInfo, mask.mask_key, 32);
+        Bytes aead_key = basefwx::crypto::HkdfSha256(mask.mask_key, constants::kB512AeadInfo, 32);
         Bytes ct = basefwx::crypto::AeadEncrypt(aead_key, payload_bytes, Bytes(constants::kB512AeadInfo.begin(),
                                                                               constants::kB512AeadInfo.end()));
         std::vector<basefwx::format::Bytes> parts = {mask.user_blob, mask.master_blob, ct};
@@ -684,7 +684,7 @@ std::string B512EncodeFileStream(const std::filesystem::path& input,
         constants::kMaskAadB512File,
         kdf_opts
     );
-    Bytes aead_key = basefwx::crypto::HkdfSha256(constants::kB512AeadInfo, mask.mask_key, 32);
+    Bytes aead_key = basefwx::crypto::HkdfSha256(mask.mask_key, constants::kB512AeadInfo, 32);
     Bytes nonce = basefwx::crypto::RandomBytes(constants::kAeadNonceLen);
 
     std::uint64_t payload_len = 4 + metadata_bytes.size() + nonce.size() + plaintext_len + constants::kAeadTagLen;
@@ -846,7 +846,7 @@ std::string B512DecodeFileStream(const std::filesystem::path& input,
         constants::kMaskAadB512File,
         kdf
     );
-    Bytes aead_key = basefwx::crypto::HkdfSha256(constants::kB512AeadInfo, mask_key, 32);
+    Bytes aead_key = basefwx::crypto::HkdfSha256(mask_key, constants::kB512AeadInfo, 32);
 
     AesGcmDecryptor decryptor(aead_key, nonce, metadata_bytes);
     std::filesystem::path temp_plain = input;
@@ -1002,7 +1002,7 @@ std::string B512DecodeFileSimple(const std::filesystem::path& input,
         Bytes mask_key = basefwx::keywrap::RecoverMaskKey(
             parts[0], parts[1], resolved, use_master_effective,
             constants::kB512FileMaskInfo, constants::kMaskAadB512File, kdf);
-        Bytes aead_key = basefwx::crypto::HkdfSha256(constants::kB512AeadInfo, mask_key, 32);
+        Bytes aead_key = basefwx::crypto::HkdfSha256(mask_key, constants::kB512AeadInfo, 32);
         Bytes payload = basefwx::crypto::AeadDecrypt(
             aead_key, parts[2], Bytes(constants::kB512AeadInfo.begin(), constants::kB512AeadInfo.end()));
         content = ToString(payload);
@@ -1249,11 +1249,11 @@ std::string Pb512EncodeFileStream(const std::filesystem::path& input,
         if (pq_pub.has_value()) {
             basefwx::pq::KemResult kem = basefwx::pq::KemEncrypt(*pq_pub);
             master_payload = kem.ciphertext;
-            ephemeral_key = basefwx::crypto::HkdfSha256(constants::kKemInfo, kem.shared, 32);
+            ephemeral_key = basefwx::crypto::HkdfSha256(kem.shared, constants::kKemInfo, 32);
         } else if (ec_pub.has_value()) {
             basefwx::ec::KemResult kem = basefwx::ec::KemEncrypt(*ec_pub);
             master_payload = kem.blob;
-            ephemeral_key = basefwx::crypto::HkdfSha256(constants::kKemInfo, kem.shared, 32);
+            ephemeral_key = basefwx::crypto::HkdfSha256(kem.shared, constants::kKemInfo, 32);
         } else {
             ephemeral_key = basefwx::crypto::RandomBytes(constants::kEphemeralKeyLen);
         }
@@ -1447,11 +1447,11 @@ std::string Pb512DecodeFileStream(const std::filesystem::path& input,
         if (basefwx::ec::IsEcMasterBlob(master_blob)) {
             Bytes private_key = basefwx::ec::LoadMasterPrivateKey();
             Bytes shared = basefwx::ec::KemDecrypt(private_key, master_blob);
-            ephemeral_key = basefwx::crypto::HkdfSha256(constants::kKemInfo, shared, 32);
+            ephemeral_key = basefwx::crypto::HkdfSha256(shared, constants::kKemInfo, 32);
         } else {
             Bytes private_key = basefwx::pq::LoadMasterPrivateKey();
             Bytes shared = basefwx::pq::KemDecrypt(private_key, master_blob);
-            ephemeral_key = basefwx::crypto::HkdfSha256(constants::kKemInfo, shared, 32);
+            ephemeral_key = basefwx::crypto::HkdfSha256(shared, constants::kKemInfo, 32);
         }
     } else if (!user_blob.empty()) {
         if (resolved.empty()) {
@@ -1751,7 +1751,7 @@ std::vector<std::uint8_t> B512EncodeBytes(const std::vector<std::uint8_t>& data,
         constants::kMaskAadB512File,
         kdf_opts
     );
-    Bytes aead_key = basefwx::crypto::HkdfSha256(constants::kB512AeadInfo, mask.mask_key, 32);
+    Bytes aead_key = basefwx::crypto::HkdfSha256(mask.mask_key, constants::kB512AeadInfo, 32);
     Bytes ct = basefwx::crypto::AeadEncrypt(
         aead_key, payload_bytes,
         Bytes(constants::kB512AeadInfo.begin(), constants::kB512AeadInfo.end()));
@@ -1778,7 +1778,7 @@ DecodedBytes B512DecodeBytes(const std::vector<std::uint8_t>& blob,
         Bytes mask_key = basefwx::keywrap::RecoverMaskKey(
             parts[0], parts[1], resolved, use_master_effective,
             constants::kB512FileMaskInfo, constants::kMaskAadB512File, kdf);
-        Bytes aead_key = basefwx::crypto::HkdfSha256(constants::kB512AeadInfo, mask_key, 32);
+        Bytes aead_key = basefwx::crypto::HkdfSha256(mask_key, constants::kB512AeadInfo, 32);
         Bytes payload = basefwx::crypto::AeadDecrypt(
             aead_key, parts[2],
             Bytes(constants::kB512AeadInfo.begin(), constants::kB512AeadInfo.end()));

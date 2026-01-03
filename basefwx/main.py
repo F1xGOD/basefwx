@@ -2732,7 +2732,7 @@ class basefwx:
     @staticmethod
     def hash512(string: str):
 
-        return basefwx.hashlib.sha256(string.encode('utf-8')).hexdigest()
+        return basefwx.hashlib.sha512(string.encode('utf-8')).hexdigest()
 
     @staticmethod
     def _looks_like_base64(text: str) -> bool:

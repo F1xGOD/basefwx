@@ -290,7 +290,7 @@ std::string B64Decode(const std::string& input) {
 }
 
 std::string Hash512(const std::string& input) {
-    return DigestHex(input, EVP_sha256());
+    return DigestHex(input, EVP_sha512());
 }
 
 std::string Uhash513(const std::string& input) {

@@ -3236,7 +3236,7 @@ write_bench_results() {
     fi
     mkdir -p "$out_dir"
     local tag="${BASEFWX_RELEASE_TAG:-}"
-    local export_file="$TMP_DIR/bench_results.tsv"
+    local export_file="$out_dir/bench_results.tsv"
     : > "$export_file"
     local entry label py_key pypy_key cpp_key java_key
     for entry in "${BENCH_METHODS[@]}"; do

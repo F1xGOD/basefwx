@@ -1,0 +1,64 @@
+name: Benchmark (manual)
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Optional benchmark tag (used for results/benchmarks-<tag>.json)
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install system deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake build-essential libssl-dev zlib1g-dev ffmpeg
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: "temurin"
+          java-version: "17"
+
+      - name: Run full benchmark suite
+        env:
+          BASEFWX_OBFUSCATE: "1"
+          ALLOW_BAKED_PUB: "0"
+          BASEFWX_BENCH_RESULTS_DIR: results
+          BASEFWX_RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          if [[ -z "${BASEFWX_RELEASE_TAG}" ]]; then
+            BASEFWX_RELEASE_TAG="manual-$(date -u +%Y%m%d-%H%M%S)"
+            echo "BASEFWX_RELEASE_TAG=$BASEFWX_RELEASE_TAG" >> "$GITHUB_ENV"
+          fi
+          chmod +x scripts/test_all.sh
+          ./scripts/test_all.sh
+
+      - name: Publish benchmark results to main
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+          git add results/benchmarks-*.json results/benchmarks-*.txt
+          if git diff --cached --quiet; then
+            echo "No benchmark updates to publish."
+            exit 0
+          fi
+          git commit -m "Update benchmark results (${BASEFWX_RELEASE_TAG:-manual})"
+          git push origin HEAD:main

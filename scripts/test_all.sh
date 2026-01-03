@@ -51,6 +51,7 @@ SKIP_CROSS=0
 TEST_KDF_ITERS=""
 BASELINE_LANG="${BASELINE_LANG:-py}"
 EXPECT_BASELINE=0
+BENCH_ONLY=0
 
 for arg in "$@"; do
     if (( EXPECT_BASELINE == 1 )); then
@@ -83,6 +84,12 @@ for arg in "$@"; do
             ;;
         --baseline=*)
             BASELINE_LANG="${arg#*=}"
+            ;;
+        --bench|--banch)
+            BENCH_ONLY=1
+            TEST_MODE="bench"
+            SKIP_WRONG=1
+            SKIP_CROSS=1
             ;;
     esac
 done
@@ -2654,6 +2661,22 @@ done
 
 STEP_INDEX=0
 calc_total_steps
+
+# If requested, run a minimal "bench" (aka --banch) mode: skip most
+# correctness phases and only perform the benchmarks with reduced iters.
+if (( BENCH_ONLY == 1 )); then
+    log "Bench-only mode: minimizing tests"
+    # Keep Python as baseline by default and disable other language tests
+    RUN_PY_TESTS_ORIG=1
+    RUN_PYPY_TESTS_ORIG=0
+    RUN_CPP_TESTS_ORIG=0
+    RUN_JAVA_TESTS_ORIG=0
+    # Reduce benchmark iterations/warmup to keep runs short unless user overrides
+    export BASEFWX_BENCH_ITERS="${BASEFWX_BENCH_ITERS:-5}"
+    export BASEFWX_BENCH_WARMUP="${BASEFWX_BENCH_WARMUP:-1}"
+    SKIP_WRONG=1
+    SKIP_CROSS=1
+fi
 
 LANG_PHASES=()
 if [[ "$RUN_PY_TESTS_ORIG" == "1" ]]; then

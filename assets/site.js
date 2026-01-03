@@ -44,6 +44,13 @@ const assetMap = {
   }
 };
 
+const benchLanguages = [
+  { key: "python", label: "Python", emoji: "🐍" },
+  { key: "pypy", label: "PyPy", emoji: "🥭" },
+  { key: "cpp", label: "C++", emoji: "⚙️" },
+  { key: "java", label: "Java", emoji: "☕" }
+];
+
 const setText = (id, value) => {
   const el = document.getElementById(id);
   if (el) {
@@ -117,6 +124,132 @@ const applyDownloadFlags = () => {
         sig.setAttribute("title", "Signature disabled due to hash mismatch");
       }
     }
+  });
+};
+
+const formatNs = (ns, epsilon) => {
+  if (!Number.isFinite(ns)) {
+    return "n/a";
+  }
+  if (ns < epsilon) {
+    return "≈0s (below resolution)";
+  }
+  return `${(ns / 1_000_000_000).toFixed(3)}s`;
+};
+
+const deltaInfo = (baseNs, otherNs, epsilon) => {
+  if (!Number.isFinite(baseNs) || !Number.isFinite(otherNs)) {
+    return { label: "n/a", className: "delta-na" };
+  }
+  if (baseNs < epsilon || otherNs < epsilon) {
+    return { label: "❓ Not measurable", className: "delta-na" };
+  }
+  const pct = ((baseNs - otherNs) / baseNs) * 100;
+  const absPct = Math.abs(pct);
+  if (absPct < 0.005) {
+    return { label: "🔵 Same (±0.00%)", className: "delta-same" };
+  }
+  if (absPct >= 100) {
+    const ratio = pct > 0 ? baseNs / otherNs : otherNs / baseNs;
+    const ratioLabel = Number.isFinite(ratio) ? ratio.toFixed(2) : "∞";
+    return {
+      label: pct > 0 ? `⚡ Faster (${ratioLabel}×)` : `🐌 Slower (${ratioLabel}×)`,
+      className: pct > 0 ? "delta-fast" : "delta-slow"
+    };
+  }
+  const pctLabel = absPct.toFixed(2);
+  return {
+    label: pct > 0 ? `⚡ Faster (+${pctLabel}%)` : `🐌 Slower (−${pctLabel}%)`,
+    className: pct > 0 ? "delta-fast" : "delta-slow"
+  };
+};
+
+const computeOverall = (tests) => {
+  const totals = {};
+  benchLanguages.forEach((lang) => {
+    totals[lang.key] = { time_ns: 0, baseline_ns: 0, count: 0 };
+  });
+  tests.forEach((entry) => {
+    const base = entry.times?.python;
+    if (!Number.isFinite(base)) {
+      return;
+    }
+    benchLanguages.forEach((lang) => {
+      const value = entry.times?.[lang.key];
+      if (!Number.isFinite(value)) {
+        return;
+      }
+      totals[lang.key].time_ns += value;
+      totals[lang.key].baseline_ns += base;
+      totals[lang.key].count += 1;
+    });
+  });
+  const result = {};
+  benchLanguages.forEach((lang) => {
+    const entry = totals[lang.key];
+    if (entry.count > 0 && entry.time_ns > 0) {
+      result[lang.key] = entry;
+    }
+  });
+  return result;
+};
+
+const renderBenchTable = (tableBody, timesByLang, epsilon) => {
+  tableBody.innerHTML = "";
+  const baseNs = timesByLang?.python?.time_ns ?? timesByLang?.python;
+  benchLanguages.forEach((lang) => {
+    const value = timesByLang?.[lang.key];
+    const ns = value && typeof value === "object" ? value.time_ns : value;
+    if (!Number.isFinite(ns)) {
+      return;
+    }
+    const delta = lang.key === "python"
+      ? { label: "Baseline", className: "delta-base" }
+      : deltaInfo(baseNs, ns, epsilon);
+    const row = document.createElement("tr");
+    row.innerHTML = `
+      <td class="bench-runtime">${lang.emoji} ${lang.label}</td>
+      <td class="mono">${formatNs(ns, epsilon)}</td>
+      <td><span class="${delta.className}">${delta.label}</span></td>
+    `;
+    tableBody.appendChild(row);
+  });
+  if (!tableBody.children.length) {
+    tableBody.innerHTML = "<tr><td colspan=\"3\" class=\"mono\">No benchmark data available.</td></tr>";
+  }
+};
+
+const renderBenchDetails = (container, tests, epsilon) => {
+  container.innerHTML = "";
+  if (!tests.length) {
+    container.innerHTML = "<div class=\"card\">No detailed benchmark data available.</div>";
+    return;
+  }
+  tests.forEach((entry) => {
+    const baseNs = entry.times?.python;
+    const details = document.createElement("details");
+    details.className = "bench-detail";
+    const summary = document.createElement("summary");
+    summary.innerHTML = `
+      <span>${entry.label}</span>
+      <span class="bench-summary">${baseNs ? `Python ${formatNs(baseNs, epsilon)}` : "Python n/a"}</span>
+    `;
+    details.appendChild(summary);
+    const table = document.createElement("table");
+    table.className = "bench-table bench-table-compact";
+    table.innerHTML = `
+      <thead>
+        <tr>
+          <th>Runtime</th>
+          <th>Time</th>
+          <th>Delta vs Python</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    `;
+    renderBenchTable(table.querySelector("tbody"), entry.times || {}, epsilon);
+    details.appendChild(table);
+    container.appendChild(details);
   });
 };
 
@@ -273,14 +406,80 @@ const loadVirusTotal = async () => {
   }
 };
 
+const loadBenchmarks = async () => {
+  const status = document.getElementById("bench-status");
+  const tableBody = document.querySelector("#bench-overall-table tbody");
+  const detailsContainer = document.getElementById("bench-details");
+  if (!status || !tableBody || !detailsContainer) {
+    return;
+  }
+  try {
+    const resultsBases = getResultsBases(latestReleaseTag);
+    const localBase = new URL("results/", window.location.href).toString();
+    const candidates = [
+      `${resultsBases.primary}/benchmarks-latest.json`,
+      latestReleaseTag ? `${resultsBases.primary}/benchmarks-${latestReleaseTag}.json` : "",
+      `${resultsBases.fallback}/benchmarks-latest.json`,
+      latestReleaseTag ? `${resultsBases.fallback}/benchmarks-${latestReleaseTag}.json` : "",
+      `${localBase}benchmarks-latest.json`
+    ].filter(Boolean);
+
+    let resultsUrl = "";
+    let response = null;
+    for (const candidate of candidates) {
+      const attempt = await fetch(candidate);
+      if (attempt.ok) {
+        resultsUrl = candidate;
+        response = attempt;
+        break;
+      }
+    }
+    if (!response) {
+      throw new Error("bench results not found");
+    }
+    const resultsTxt = resultsUrl.replace(/\.json$/, ".txt");
+    setLink("#bench-results-text", resultsTxt);
+    setLink("#bench-results-json", resultsUrl);
+    const data = await response.json();
+    const epsilon = Number(data.epsilon_ns) || 1_000_000;
+    const generatedAt = data.generated_at
+      ? new Date(data.generated_at).toLocaleString()
+      : "Unknown";
+    setText("bench-release", data.release_tag || "Latest benchmark");
+    setText("bench-date", generatedAt);
+    setText(
+      "bench-meta",
+      `iters: ${data.bench_iters || "--"} · warmup: ${data.bench_warmup || "--"} · workers: ${data.bench_workers || "--"}`
+    );
+
+    const tests = Array.isArray(data.tests) ? data.tests : [];
+    const overall = data.overall && Object.keys(data.overall).length
+      ? data.overall
+      : computeOverall(tests);
+
+    status.textContent = `Report generated ${generatedAt}`;
+    status.className = "status-pill ok";
+    renderBenchTable(tableBody, overall, epsilon);
+    renderBenchDetails(detailsContainer, tests, epsilon);
+  } catch (err) {
+    status.textContent = "Benchmark results not available yet.";
+    status.className = "status-pill warn";
+    tableBody.innerHTML = "<tr><td colspan=\"3\" class=\"mono\">No results found.</td></tr>";
+    detailsContainer.innerHTML = "<div class=\"card\">No detailed benchmark data available.</div>";
+  }
+};
+
 document.addEventListener("DOMContentLoaded", () => {
   initBrandMask();
   const run = async () => {
-    if (document.getElementById("release-version")) {
+    if (document.getElementById("release-version") || document.getElementById("bench-release")) {
       await loadRelease();
     }
     if (document.getElementById("vt-table")) {
       await loadVirusTotal();
+    }
+    if (document.getElementById("bench-overall-table")) {
+      await loadBenchmarks();
     }
   };
   run();

@@ -140,5 +140,48 @@ std::vector<std::uint8_t> Decode(const std::string& input, bool* ok) {
     return out;
 }
 
+bool IsLikelyBase64(const std::string& input) {
+    std::string compact;
+    compact.reserve(input.size());
+    for (unsigned char c : input) {
+        if (!std::isspace(c)) {
+            compact.push_back(static_cast<char>(c));
+        }
+    }
+    if (compact.empty() || (compact.size() % 4u) != 0u) {
+        return false;
+    }
+    bool seen_pad = false;
+    std::size_t pad_count = 0;
+    for (unsigned char c : compact) {
+        if (c == '=') {
+            seen_pad = true;
+            pad_count += 1;
+            continue;
+        }
+        if (seen_pad) {
+            return false;
+        }
+        if (kDecTable[c] == 0xFF) {
+            return false;
+        }
+    }
+    if (pad_count > 2) {
+        return false;
+    }
+    if (pad_count > 0) {
+        if (compact.back() != '=') {
+            return false;
+        }
+        if (pad_count == 2 && compact.size() < 2) {
+            return false;
+        }
+        if (pad_count == 2 && compact[compact.size() - 2] != '=') {
+            return false;
+        }
+    }
+    return true;
+}
+
 
 }  // namespace basefwx::base64

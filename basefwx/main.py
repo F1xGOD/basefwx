@@ -64,6 +64,18 @@ class basefwx:
             return None
         return parsed
 
+    @staticmethod
+    def _perf_mode_enabled() -> bool:
+        raw = _os_module.getenv("BASEFWX_PERF")
+        if not raw:
+            return False
+        value = raw.strip().lower()
+        return value in ("1", "true", "yes", "on")
+
+    @staticmethod
+    def _use_fast_obfuscation(length: int) -> bool:
+        return basefwx._perf_mode_enabled() and length >= basefwx.PERF_OBFUSCATION_THRESHOLD
+
     MAX_INPUT_BYTES = 20 * 1024 * 1024 * 1024  # allow up to ~20 GiB per file
     PROGRESS_BAR_WIDTH = 30
     FWX_DELIM = "\x1f\x1e"
@@ -102,6 +114,7 @@ class basefwx:
     OBF_INFO_PERM = b'basefwx.obf.perm.v1'
     STREAM_THRESHOLD = 250 * 1024
     STREAM_CHUNK_SIZE = 1 << 20  # 1 MiB streaming blocks
+    PERF_OBFUSCATION_THRESHOLD = 1 << 20
     STREAM_MAGIC = b'STRMOBF1'
     STREAM_INFO_KEY = b'basefwx.stream.obf.key.v1'
     STREAM_INFO_IV = b'basefwx.stream.obf.iv.v1'
@@ -588,37 +601,39 @@ class basefwx:
             ctr += 1
 
     @staticmethod
-    def _obfuscate_bytes(data: bytes, ephemeral_key: bytes) -> bytes:
+    def _obfuscate_bytes(data: bytes, ephemeral_key: bytes, *, fast: bool = False) -> bytes:
         if not data:
             return data
-        perm_seed_bytes = basefwx._hkdf(
-            basefwx.OBF_INFO_PERM + len(data).to_bytes(8, 'big'),
-            ephemeral_key,
-            16
-        )
-        perm_seed = int.from_bytes(perm_seed_bytes, 'big')
         out = bytearray(data)
         basefwx._xor_keystream_inplace(out, ephemeral_key, basefwx.OBF_INFO_MASK)
-        out.reverse()
-        basefwx._permute_inplace(out, perm_seed)
-        basefwx._del('perm_seed')
+        if not fast:
+            perm_seed_bytes = basefwx._hkdf(
+                basefwx.OBF_INFO_PERM + len(data).to_bytes(8, 'big'),
+                ephemeral_key,
+                16
+            )
+            perm_seed = int.from_bytes(perm_seed_bytes, 'big')
+            out.reverse()
+            basefwx._permute_inplace(out, perm_seed)
+            basefwx._del('perm_seed')
         return bytes(out)
 
     @staticmethod
-    def _deobfuscate_bytes(data: bytes, ephemeral_key: bytes) -> bytes:
+    def _deobfuscate_bytes(data: bytes, ephemeral_key: bytes, *, fast: bool = False) -> bytes:
         if not data:
             return data
-        perm_seed_bytes = basefwx._hkdf(
-            basefwx.OBF_INFO_PERM + len(data).to_bytes(8, 'big'),
-            ephemeral_key,
-            16
-        )
-        perm_seed = int.from_bytes(perm_seed_bytes, 'big')
         out = bytearray(data)
-        basefwx._unpermute_inplace(out, perm_seed)
-        out.reverse()
+        if not fast:
+            perm_seed_bytes = basefwx._hkdf(
+                basefwx.OBF_INFO_PERM + len(data).to_bytes(8, 'big'),
+                ephemeral_key,
+                16
+            )
+            perm_seed = int.from_bytes(perm_seed_bytes, 'big')
+            basefwx._unpermute_inplace(out, perm_seed)
+            out.reverse()
+            basefwx._del('perm_seed')
         basefwx._xor_keystream_inplace(out, ephemeral_key, basefwx.OBF_INFO_MASK)
-        basefwx._del('perm_seed')
         return bytes(out)
 
     class _StreamObfuscator:
@@ -626,10 +641,11 @@ class basefwx:
 
         _SALT_LEN = 16
 
-        def __init__(self, cipher, perm_material: bytes):
+        def __init__(self, cipher, perm_material: bytes, fast: bool):
             self._cipher = cipher
             self._perm_material = perm_material
             self._chunk_index = 0
+            self._fast = fast
 
         @staticmethod
         def generate_salt() -> bytes:
@@ -639,7 +655,8 @@ class basefwx:
         def for_password(
             cls,
             password: "basefwx.typing.Union[str, bytes, bytearray, memoryview]",
-            salt: bytes
+            salt: bytes,
+            fast: bool = False
         ) -> "_StreamObfuscator":
             if not password:
                 raise ValueError("Password required for streaming obfuscation")
@@ -650,7 +667,7 @@ class basefwx:
             iv = basefwx._hkdf_sha256(base_material, info=basefwx.STREAM_INFO_IV, length=16)
             perm_material = basefwx._hkdf_sha256(base_material, info=basefwx.STREAM_INFO_PERM, length=32)
             cipher = basefwx.Cipher(basefwx.algorithms.AES(mask_key), basefwx.modes.CTR(iv)).encryptor()
-            return cls(cipher, perm_material)
+            return cls(cipher, perm_material, fast)
 
         def _next_params(self) -> "basefwx.typing.Tuple[int, int, bool]":
             idx_bytes = self._chunk_index.to_bytes(8, 'big')
@@ -690,6 +707,15 @@ class basefwx:
         def encode_chunk(self, chunk: bytes) -> bytes:
             if not chunk:
                 return b""
+            if self._fast:
+                buffer = bytearray(chunk)
+                mask = self._cipher.update(bytes(len(buffer)))
+                if mask:
+                    arr = basefwx.np.frombuffer(memoryview(buffer), dtype=basefwx.np.uint8)
+                    mask_arr = basefwx.np.frombuffer(mask, dtype=basefwx.np.uint8)
+                    basefwx.np.bitwise_xor(arr, mask_arr, out=arr)
+                self._chunk_index += 1
+                return bytes(buffer)
             perm_seed, rotation, swap = self._next_params()
             buffer = bytearray(chunk)
             mask = self._cipher.update(bytes(len(buffer)))
@@ -707,6 +733,15 @@ class basefwx:
         def decode_chunk(self, chunk: bytes) -> bytes:
             if not chunk:
                 return b""
+            if self._fast:
+                buffer = bytearray(chunk)
+                mask = self._cipher.update(bytes(len(buffer)))
+                if mask:
+                    arr = basefwx.np.frombuffer(memoryview(buffer), dtype=basefwx.np.uint8)
+                    mask_arr = basefwx.np.frombuffer(mask, dtype=basefwx.np.uint8)
+                    basefwx.np.bitwise_xor(arr, mask_arr, out=arr)
+                self._chunk_index += 1
+                return bytes(buffer)
             perm_seed, rotation, swap = self._next_params()
             buffer = bytearray(chunk)
             basefwx._unpermute_inplace(buffer, perm_seed)
@@ -730,10 +765,11 @@ class basefwx:
             salt: bytes,
             *,
             chunk_size: int,
+            fast: bool = False,
             forward_chunk: "basefwx.typing.Callable[[bytes], None]",
             progress_cb: "basefwx.typing.Optional[basefwx.typing.Callable[[int, int], None]]" = None
         ) -> int:
-            encoder = cls.for_password(password, salt)
+            encoder = cls.for_password(password, salt, fast=fast)
             total = src_path.stat().st_size
             processed = 0
             with open(src_path, 'rb') as src:
@@ -760,9 +796,10 @@ class basefwx:
             *,
             chunk_size: int,
             total_plain: int,
+            fast: bool = False,
             progress_cb: "basefwx.typing.Optional[basefwx.typing.Callable[[int, int], None]]" = None
         ) -> int:
-            decoder = cls.for_password(password, salt)
+            decoder = cls.for_password(password, salt, fast=fast)
             processed = 0
             while processed < total_plain:
                 to_read = min(chunk_size, total_plain - processed)
@@ -785,7 +822,7 @@ class basefwx:
         aead: str = "AESGCM",
         kdf: "basefwx.typing.Optional[str]" = None,
         mode: "basefwx.typing.Optional[str]" = None,
-        obfuscation: "basefwx.typing.Optional[bool]" = None,
+        obfuscation: "basefwx.typing.Optional[basefwx.typing.Union[bool, str]]" = None,
         kdf_iters: "basefwx.typing.Optional[int]" = None,
         argon2_time_cost: "basefwx.typing.Optional[int]" = None,
         argon2_memory_cost: "basefwx.typing.Optional[int]" = None,
@@ -809,7 +846,10 @@ class basefwx:
         if mode:
             info["ENC-MODE"] = mode
         if obfuscation is not None:
-            info["ENC-OBF"] = "yes" if obfuscation else "no"
+            if isinstance(obfuscation, str):
+                info["ENC-OBF"] = obfuscation.lower()
+            else:
+                info["ENC-OBF"] = "yes" if obfuscation else "no"
         if kdf_iters is not None:
             info["ENC-KDF-ITER"] = str(kdf_iters)
         if argon2_time_cost is not None:
@@ -1845,6 +1885,7 @@ class basefwx:
         kdf: "basefwx.typing.Optional[str]" = None,
         progress_callback: "basefwx.typing.Optional[basefwx.typing.Callable[[int, int], None]]" = None,
         obfuscate: bool = True,
+        fast_obfuscation: bool = False,
         kdf_iterations: "basefwx.typing.Optional[int]" = None,
         argon2_time_cost: "basefwx.typing.Optional[int]" = None,
         argon2_memory_cost: "basefwx.typing.Optional[int]" = None,
@@ -1894,7 +1935,7 @@ class basefwx:
             ephemeral_enc_user = b""
         payload_bytes = plaintext.encode('utf-8')
         if obfuscate and basefwx.ENABLE_OBFUSCATION:
-            payload_bytes = basefwx._obfuscate_bytes(payload_bytes, ephemeral_key)
+            payload_bytes = basefwx._obfuscate_bytes(payload_bytes, ephemeral_key, fast=fast_obfuscation)
 
         nonce = basefwx.os.urandom(basefwx.AEAD_NONCE_LEN)
         encryptor = basefwx.Cipher(
@@ -2034,7 +2075,9 @@ class basefwx:
             metadata_blob = ""
         aad = metadata_bytes if metadata_bytes else b''
         meta_info = basefwx._decode_metadata(metadata_blob) if metadata_blob else {}
-        should_deobfuscate = basefwx.ENABLE_OBFUSCATION and meta_info.get("ENC-OBF", "yes") != "no"
+        obf_hint = (meta_info.get("ENC-OBF") or "yes").lower()
+        should_deobfuscate = basefwx.ENABLE_OBFUSCATION and obf_hint != "no"
+        fast_obf = should_deobfuscate and obf_hint == "fast"
 
         def _parse_int(value: "basefwx.typing.Any", default: "basefwx.typing.Optional[int]") -> "basefwx.typing.Optional[int]":
             if value is None:
@@ -2119,7 +2162,7 @@ class basefwx:
                 return legacy_decrypt(ephemeral_enc_user, ephemeral_enc_master, payload_blob)
             raise ValueError("AEAD authentication failed; ciphertext or metadata tampered") from exc
         if should_deobfuscate:
-            payload_bytes = basefwx._deobfuscate_bytes(payload_bytes, ephemeral_key)
+            payload_bytes = basefwx._deobfuscate_bytes(payload_bytes, ephemeral_key, fast=fast_obf)
         plaintext = payload_bytes.decode('utf-8')
         header_blob, _ = basefwx._split_metadata(plaintext)
         if metadata_blob and header_blob and header_blob != metadata_blob:
@@ -2835,11 +2878,12 @@ class basefwx:
             raise ValueError("Master key required to decode this payload")
 
         def mdcode(s):
-            r = ""
+            parts = []
             for b in bytearray(s.encode('ascii')):
                 x = str(int(bin(b)[2:], 2))
-                r += str(len(x)) + x
-            return r
+                parts.append(str(len(x)))
+                parts.append(x)
+            return "".join(parts)
 
         def decrypt_chunks_from_string(e, n):
             c = len(n)
@@ -2855,7 +2899,7 @@ class basefwx:
             return ''.join(z)[:l]
 
         def mcode(s):
-            r = ""
+            chars = []
             h = 0
             L = 0
             o = 0
@@ -2865,13 +2909,13 @@ class basefwx:
                 if x != "":
                     if h == 1:
                         L = int(x)
-                        r += chr(int(s[h:h + L]))
+                        chars.append(chr(int(s[h:h + L])))
                         o = h
                     elif L + o + 1 == h:
                         L = int(x)
-                        r += chr(int(s[h:h + L]))
+                        chars.append(chr(int(s[h:h + L])))
                         o = h
-            return r
+            return "".join(chars)
 
         if master_blob_present:
             private_key = basefwx._load_master_pq_private()
@@ -2993,11 +3037,12 @@ class basefwx:
             raise ValueError("Master key required to decode this payload")
 
         def mdcode(s):
-            r = ""
+            parts = []
             for b in bytearray(s.encode('ascii')):
                 x = str(int(bin(b)[2:], 2))
-                r += str(len(x)) + x
-            return r
+                parts.append(str(len(x)))
+                parts.append(x)
+            return "".join(parts)
 
         def decrypt_chunks_from_string(e, n):
             c = len(n)
@@ -3013,7 +3058,7 @@ class basefwx:
             return ''.join(z)[:l]
 
         def mcode(s):
-            r = ""
+            chars = []
             h = 0
             L = 0
             o = 0
@@ -3023,13 +3068,13 @@ class basefwx:
                 if xx != "":
                     if h == 1:
                         L = int(xx)
-                        r += chr(int(s[h:h + L]))
+                        chars.append(chr(int(s[h:h + L])))
                         o = h
                     elif L + o + 1 == h:
                         L = int(xx)
-                        r += chr(int(s[h:h + L]))
+                        chars.append(chr(int(s[h:h + L])))
                         o = h
-            return r
+            return "".join(chars)
 
         if master_blob_present:
             private_key = basefwx._load_master_pq_private()
@@ -3225,11 +3270,14 @@ class basefwx:
         stream_salt = basefwx._StreamObfuscator.generate_salt()
         ext_bytes = (path.suffix or "").encode('utf-8')
 
+        fast_obf = not strip_metadata and basefwx._use_fast_obfuscation(input_size)
+        obf_mode = "fast" if fast_obf else "yes"
         metadata_blob = basefwx._build_metadata(
             "FWX512R",
             strip_metadata,
             use_master_effective,
             mode="STREAM",
+            obfuscation=obf_mode,
             pack=pack_flag or None
         )
         metadata_bytes = metadata_blob.encode('utf-8') if metadata_blob else b""
@@ -3318,6 +3366,7 @@ class basefwx:
                     password,
                     stream_salt,
                     chunk_size=chunk_size,
+                    fast=fast_obf,
                     forward_chunk=_write_plain,
                     progress_cb=_obf_progress
                 )
@@ -3397,13 +3446,15 @@ class basefwx:
         heavy_argon_mem = basefwx.HEAVY_ARGON2_MEMORY_COST if basefwx.hash_secret_raw is not None else None
         heavy_argon_par = basefwx.HEAVY_ARGON2_PARALLELISM if basefwx.hash_secret_raw is not None else None
         stream_salt = basefwx._StreamObfuscator.generate_salt()
+        fast_obf = not strip_metadata and basefwx._use_fast_obfuscation(input_size)
+        obf_mode = "fast" if fast_obf else "yes"
         metadata_blob = basefwx._build_metadata(
             "AES-HEAVY",
             strip_metadata,
             use_master_effective,
             kdf=kdf_used,
             mode="STREAM",
-            obfuscation=True,
+            obfuscation=obf_mode,
             kdf_iters=heavy_iters,
             argon2_time_cost=heavy_argon_time,
             argon2_memory_cost=heavy_argon_mem,
@@ -3517,6 +3568,7 @@ class basefwx:
                     password,
                     stream_salt,
                     chunk_size=chunk_size,
+                    fast=fast_obf,
                     forward_chunk=_write_plain,
                     progress_cb=lambda done, total: (
                         _obf_progress(done, total)
@@ -3868,7 +3920,9 @@ class basefwx:
                 if not password and not use_master_effective:
                     raise ValueError("Password required for streaming b512 decode")
 
-                decoder = basefwx._StreamObfuscator.for_password(password, stream_salt)
+                obf_hint = (meta.get("ENC-OBF") or "yes").lower()
+                fast_obf = obf_hint == "fast"
+                decoder = basefwx._StreamObfuscator.for_password(password, stream_salt, fast=fast_obf)
                 with basefwx.tempfile.NamedTemporaryFile('w+b', dir=temp_dir.name, delete=False) as clear_tmp:
                     cleanup_paths.append(clear_tmp.name)
                     decoded_path = clear_tmp.name
@@ -6196,12 +6250,14 @@ class basefwx:
         if reporter:
             reporter.update(file_index, 0.25, "base64", display_path)
         kdf_used = (basefwx.USER_KDF or "argon2id").lower()
+        fast_obf = obfuscate_payload and not strip_metadata and basefwx._use_fast_obfuscation(input_size)
+        obf_mode = "fast" if fast_obf else ("yes" if obfuscate_payload else "no")
         metadata_blob = basefwx._build_metadata(
             "AES-LIGHT",
             strip_metadata,
             use_master_effective,
             kdf=kdf_used,
-            obfuscation=obfuscate_payload,
+            obfuscation=obf_mode,
             pack=pack_flag or None
         )
         body = (path.suffix or "") + basefwx.FWX_DELIM + b64_payload
@@ -6227,7 +6283,8 @@ class basefwx:
             master_public_key=pubkey_bytes if use_master_effective else None,
             kdf=kdf_used,
             progress_callback=progress_cb,
-            obfuscate=obfuscate_payload
+            obfuscate=obfuscate_payload,
+            fast_obfuscation=fast_obf
         )
         compressor = basefwx.zlib.compressobj()
         compressed_parts: "basefwx.typing.List[bytes]" = []
@@ -6545,7 +6602,9 @@ class basefwx:
                     cleanup_paths.append(clear_tmp.name)
                     decoded_path = clear_tmp.name
                     processed = 0
-                    decoder = basefwx._StreamObfuscator.for_password(password, stream_salt)
+                    obf_hint = (meta.get("ENC-OBF") or "yes").lower()
+                    fast_obf = obf_hint == "fast"
+                    decoder = basefwx._StreamObfuscator.for_password(password, stream_salt, fast=fast_obf)
                     while processed < original_size:
                         to_read = min(chunk_size_value, original_size - processed)
                         chunk = plain_handle.read(to_read)
@@ -6659,12 +6718,14 @@ class basefwx:
             reporter.update(file_index, 0.55, "pb512", display_path)
 
         kdf_used = (basefwx.USER_KDF or "argon2id").lower()
+        fast_obf = not strip_metadata and basefwx._use_fast_obfuscation(input_size)
+        obf_mode = "fast" if fast_obf else "yes"
         metadata_blob = basefwx._build_metadata(
             "AES-HEAVY",
             strip_metadata,
             use_master_effective,
             kdf=kdf_used,
-            obfuscation=True,
+            obfuscation=obf_mode,
             kdf_iters=heavy_iters,
             argon2_time_cost=heavy_argon_time,
             argon2_memory_cost=heavy_argon_mem,
@@ -6701,7 +6762,8 @@ class basefwx:
             kdf_iterations=heavy_iters,
             argon2_time_cost=heavy_argon_time,
             argon2_memory_cost=heavy_argon_mem,
-            argon2_parallelism=heavy_argon_par
+            argon2_parallelism=heavy_argon_par,
+            fast_obfuscation=fast_obf
         )
         approx_size = len(ciphertext)
         actual_hint = (input_size, approx_size)
@@ -7311,12 +7373,14 @@ class basefwx:
         heavy_argon_time = basefwx.HEAVY_ARGON2_TIME_COST if basefwx.hash_secret_raw is not None else None
         heavy_argon_mem = basefwx.HEAVY_ARGON2_MEMORY_COST if basefwx.hash_secret_raw is not None else None
         heavy_argon_par = basefwx.HEAVY_ARGON2_PARALLELISM if basefwx.hash_secret_raw is not None else None
+        fast_obf = not strip_metadata and basefwx._use_fast_obfuscation(len(data))
+        obf_mode = "fast" if fast_obf else "yes"
         metadata_blob = basefwx._build_metadata(
             "AES-HEAVY",
             strip_metadata,
             use_master_effective,
             kdf=kdf_used,
-            obfuscation=True,
+            obfuscation=obf_mode,
             kdf_iters=heavy_iters,
             argon2_time_cost=heavy_argon_time,
             argon2_memory_cost=heavy_argon_mem,
@@ -7334,7 +7398,8 @@ class basefwx:
             kdf_iterations=heavy_iters,
             argon2_time_cost=heavy_argon_time,
             argon2_memory_cost=heavy_argon_mem,
-            argon2_parallelism=heavy_argon_par
+            argon2_parallelism=heavy_argon_par,
+            fast_obfuscation=fast_obf
         )
         return ciphertext
 
@@ -7372,10 +7437,12 @@ class basefwx:
         def mdcode(string: str):
             st = str(string)
             binaryvals = map(bin, bytearray(st.encode('ascii')))
-            end = ""
+            parts = []
             for bb in binaryvals:
-                end += str(len(str(int(bb, 2)))) + str(int(bb, 2))
-            return str(end)
+                val = str(int(bb, 2))
+                parts.append(str(len(val)))
+                parts.append(val)
+            return "".join(parts)
 
         def mainenc(string):
             left = mdcode(string)
@@ -7395,10 +7462,12 @@ class basefwx:
         def mdcode(string: str):
             st = str(string)
             binaryvals = map(bin, bytearray(st.encode('ascii')))
-            end = ""
+            parts = []
             for bb in binaryvals:
-                end += str(len(str(int(bb, 2)))) + str(int(bb, 2))
-            return str(end)
+                val = str(int(bb, 2))
+                parts.append(str(len(val)))
+                parts.append(val)
+            return "".join(parts)
 
         md_val = mdcode(string)
         md_len = len(md_val)
@@ -7422,7 +7491,7 @@ class basefwx:
         def mcode(strin: str):
             end = strin
             eand = list(end)
-            finish = ""
+            chars = []
             ht = 0
             len = 0
             oht = 0
@@ -7431,21 +7500,23 @@ class basefwx:
                 if een != "":
                     if ht == 1:
                         len = int(een)
-                        finish += str(chr(int(end[ht:len + ht])))
+                        chars.append(chr(int(end[ht:len + ht])))
                         oht = ht
                     if ht != 1 and len + oht + 1 == ht:
                         len = int(een)
-                        finish += str(chr(int(end[ht:len + ht])))
+                        chars.append(chr(int(end[ht:len + ht])))
                         oht = ht
-            return finish
+            return "".join(chars)
 
         def mdcode(string: str):
             st = str(string)
             binaryvals = map(bin, bytearray(st.encode('ascii')))
-            end = ""
+            parts = []
             for bb in binaryvals:
-                end += str(len(str(int(bb, 2)))) + str(int(bb, 2))
-            return str(end)
+                val = str(int(bb, 2))
+                parts.append(str(len(val)))
+                parts.append(val)
+            return "".join(parts)
 
         def maindc(string):
             try:

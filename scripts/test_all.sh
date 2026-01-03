@@ -125,6 +125,15 @@ export BASEFWX_USER_KDF="pbkdf2"
 export BASEFWX_B512_AEAD="1"
 export BASEFWX_OBFUSCATE="1"
 export BASEFWX_OBFUSCATE_CODECS="1"
+DEFAULT_BENCH_WORKERS=""
+if command -v nproc >/dev/null 2>&1; then
+    DEFAULT_BENCH_WORKERS="$(nproc)"
+else
+    DEFAULT_BENCH_WORKERS="$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 1)"
+fi
+export BASEFWX_BENCH_ITERS="${BASEFWX_BENCH_ITERS:-50}"
+export BASEFWX_BENCH_WARMUP="${BASEFWX_BENCH_WARMUP:-2}"
+export BASEFWX_BENCH_WORKERS="${BASEFWX_BENCH_WORKERS:-$DEFAULT_BENCH_WORKERS}"
 if [[ -n "$TEST_KDF_ITERS" ]]; then
     export BASEFWX_TEST_KDF_ITERS="$TEST_KDF_ITERS"
 fi
@@ -1619,6 +1628,9 @@ cat >"$PY_HELPER" <<'PY'
 import sys
 import time
 import tempfile
+import os
+import itertools
+from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 import basefwx as basefwx_mod
 from basefwx.main import basefwx
@@ -1793,18 +1805,31 @@ def cmd_pb512file_bytes_roundtrip(args: list[str]) -> int:
     Path(out_path).write_bytes(decoded)
     return 0
 
-def _bench(warmup: int, fn) -> None:
+def _median_ns(samples: list[int]) -> int:
+    samples.sort()
+    mid = len(samples) // 2
+    if len(samples) % 2 == 1:
+        return samples[mid]
+    return (samples[mid - 1] + samples[mid]) // 2
+
+def _bench(warmup: int, iters: int, fn) -> None:
     if warmup < 0:
         warmup = 0
+    if iters < 1:
+        iters = 1
     for _ in range(warmup):
         fn()
-    start = time.perf_counter_ns()
-    fn()
-    end = time.perf_counter_ns()
-    print(f"BENCH_NS={end - start}")
+    samples: list[int] = []
+    for _ in range(iters):
+        start = time.perf_counter_ns()
+        fn()
+        end = time.perf_counter_ns()
+        samples.append(end - start)
+    median = _median_ns(samples)
+    print(f"BENCH_NS={median}")
 
-def _warmup_env(default: int = 0) -> int:
-    value = basefwx.os.getenv("BASEFWX_BENCH_WARMUP")
+def _warmup_env(default: int = 2) -> int:
+    value = os.getenv("BASEFWX_BENCH_WARMUP")
     if not value:
         return default
     try:
@@ -1812,17 +1837,50 @@ def _warmup_env(default: int = 0) -> int:
     except ValueError:
         return default
 
+def _iters_env(default: int = 50) -> int:
+    value = os.getenv("BASEFWX_BENCH_ITERS")
+    if not value:
+        return default
+    try:
+        parsed = int(value)
+    except ValueError:
+        return default
+    return parsed if parsed > 0 else default
+
+def _workers_env() -> int:
+    value = os.getenv("BASEFWX_BENCH_WORKERS")
+    if value:
+        try:
+            parsed = int(value)
+            if parsed > 0:
+                return parsed
+        except ValueError:
+            pass
+    return os.cpu_count() or 1
+
+_BENCH_DATA_CACHE = {}
+
+def _bench_fwxaes_worker(inp: str, pw: str) -> int:
+    data = _BENCH_DATA_CACHE.get(inp)
+    if data is None:
+        data = Path(inp).read_bytes()
+        _BENCH_DATA_CACHE[inp] = data
+    blob = basefwx.fwxAES_encrypt_raw(data, pw, use_master=False)
+    plain = basefwx.fwxAES_decrypt_raw(blob, pw, use_master=False)
+    return len(plain)
+
 def cmd_bench_text(args: list[str]) -> int:
     if len(args) < 3:
         return 2
     method, text_path, pw = args[:3]
     text = read_text(text_path)
     warmup = _warmup_env()
+    iters = _iters_env()
     def run() -> int:
         enc = text_encode(method, text, pw)
         dec = text_decode(method, enc, pw)
         return len(dec)
-    _bench(warmup, run)
+    _bench(warmup, iters, run)
     return 0
 
 def cmd_bench_hash(args: list[str]) -> int:
@@ -1831,10 +1889,11 @@ def cmd_bench_hash(args: list[str]) -> int:
     method, text_path = args[:2]
     text = read_text(text_path)
     warmup = _warmup_env()
+    iters = _iters_env()
     def run() -> int:
         digest = text_hash(method, text)
         return len(digest)
-    _bench(warmup, run)
+    _bench(warmup, iters, run)
     return 0
 
 def cmd_bench_fwxaes(args: list[str]) -> int:
@@ -1843,11 +1902,45 @@ def cmd_bench_fwxaes(args: list[str]) -> int:
     inp, pw = args[:2]
     data = Path(inp).read_bytes()
     warmup = _warmup_env()
+    iters = _iters_env()
     def run() -> int:
         blob = basefwx.fwxAES_encrypt_raw(data, pw, use_master=False)
         plain = basefwx.fwxAES_decrypt_raw(blob, pw, use_master=False)
         return len(plain)
-    _bench(warmup, run)
+    _bench(warmup, iters, run)
+    return 0
+
+def cmd_bench_fwxaes_par(args: list[str]) -> int:
+    if len(args) < 2:
+        return 2
+    inp, pw = args[:2]
+    warmup = _warmup_env()
+    iters = _iters_env()
+    workers = _workers_env()
+    samples: list[int] = []
+    bytes_processed = 0
+    with ProcessPoolExecutor(max_workers=workers) as executor:
+        for _ in range(max(0, warmup)):
+            list(executor.map(
+                _bench_fwxaes_worker,
+                itertools.repeat(inp, workers),
+                itertools.repeat(pw, workers),
+            ))
+        for _ in range(max(1, iters)):
+            start = time.perf_counter_ns()
+            results = list(executor.map(
+                _bench_fwxaes_worker,
+                itertools.repeat(inp, workers),
+                itertools.repeat(pw, workers),
+            ))
+            end = time.perf_counter_ns()
+            bytes_processed = sum(results)
+            samples.append(end - start)
+    median = _median_ns(samples)
+    print(f"BENCH_NS={median}")
+    if bytes_processed > 0 and median > 0:
+        throughput = (bytes_processed / (median / 1_000_000_000)) / (1 << 30)
+        print(f"THROUGHPUT_GiBps={throughput:.3f} WORKERS={workers}")
     return 0
 
 def cmd_bench_b512file(args: list[str]) -> int:
@@ -1855,6 +1948,7 @@ def cmd_bench_b512file(args: list[str]) -> int:
         return 2
     inp, pw = args[:2]
     warmup = _warmup_env()
+    iters = _iters_env()
     source = Path(inp)
     with tempfile.TemporaryDirectory(prefix="basefwx-bench-") as tmpdir:
         tmp = Path(tmpdir)
@@ -1874,7 +1968,7 @@ def cmd_bench_b512file(args: list[str]) -> int:
                 use_master=False,
             )
             return decoded_path.stat().st_size
-        _bench(warmup, run)
+        _bench(warmup, iters, run)
     return 0
 
 def cmd_bench_pb512file(args: list[str]) -> int:
@@ -1882,6 +1976,7 @@ def cmd_bench_pb512file(args: list[str]) -> int:
         return 2
     inp, pw = args[:2]
     warmup = _warmup_env()
+    iters = _iters_env()
     source = Path(inp)
     with tempfile.TemporaryDirectory(prefix="basefwx-bench-") as tmpdir:
         tmp = Path(tmpdir)
@@ -1901,7 +1996,7 @@ def cmd_bench_pb512file(args: list[str]) -> int:
                 use_master=False,
             )
             return decoded_path.stat().st_size
-        _bench(warmup, run)
+        _bench(warmup, iters, run)
     return 0
 
 def main() -> int:
@@ -1947,6 +2042,8 @@ def main() -> int:
         return cmd_bench_hash(args)
     if cmd == "bench-fwxaes":
         return cmd_bench_fwxaes(args)
+    if cmd == "bench-fwxaes-par":
+        return cmd_bench_fwxaes_par(args)
     if cmd == "bench-b512file":
         return cmd_bench_b512file(args)
     if cmd == "bench-pb512file":
@@ -2758,7 +2855,8 @@ if [[ -z "${BENCH_WARMUP_LIGHT:-}" || -z "${BENCH_WARMUP_HEAVY:-}" ]]; then
     fi
 fi
 
-JAVA_BENCH_FLAGS="${JAVA_BENCH_FLAGS:--Xms7g -Xmx9g -XX:+AlwaysPreTouch -XX:+TieredCompilation -XX:CompileThreshold=100 -XX:TieredStopAtLevel=4 -XX:+UnlockExperimentalVMOptions -XX:+UseZGC}"
+JAVA_BENCH_FLAGS_DEFAULT="-XX:+AlwaysPreTouch -XX:+TieredCompilation -XX:CompileThreshold=100 -XX:TieredStopAtLevel=4 -XX:+UnlockExperimentalVMOptions -XX:+UseZGC -XX:InitialRAMPercentage=70 -XX:MaxRAMPercentage=95"
+JAVA_BENCH_FLAGS="${JAVA_BENCH_FLAGS:-$JAVA_BENCH_FLAGS_DEFAULT}"
 read -r -a JAVA_BENCH_FLAGS_ARR <<<"$JAVA_BENCH_FLAGS"
 
 BENCH_TEXT_METHODS=("b256" "b512" "pb512" "b64" "a512")
@@ -2782,24 +2880,28 @@ for idx in "${!BENCH_LANGS[@]}"; do
     lang="${BENCH_LANGS[$idx]}"
     case "$lang" in
         py)
-            time_cmd_bench "fwxaes_py_correct" env BASEFWX_BENCH_WARMUP=0 \
+            time_cmd_bench "fwxaes_py_correct" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_HEAVY" \
                 "$PYTHON_BIN" "$PY_HELPER" bench-fwxaes "$BENCH_BYTES_FILE" "$PW"
+            time_cmd_bench "fwxaes_py_par" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_HEAVY" \
+                "$PYTHON_BIN" "$PY_HELPER" bench-fwxaes-par "$BENCH_BYTES_FILE" "$PW"
             for method in "${BENCH_TEXT_METHODS[@]}"; do
-                time_cmd_bench "${method}_py_correct" env BASEFWX_BENCH_WARMUP=0 \
+                time_cmd_bench "${method}_py_correct" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_LIGHT" \
                     "$PYTHON_BIN" "$PY_HELPER" bench-text "$method" "$BENCH_TEXT" "$PW"
             done
             for method in "${BENCH_HASH_METHODS[@]}"; do
-                time_cmd_bench "${method}_py_correct" env BASEFWX_BENCH_WARMUP=0 \
+                time_cmd_bench "${method}_py_correct" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_LIGHT" \
                     "$PYTHON_BIN" "$PY_HELPER" bench-hash "$method" "$BENCH_TEXT"
             done
-            time_cmd_bench "b512file_py_total" env BASEFWX_BENCH_WARMUP=0 \
+            time_cmd_bench "b512file_py_total" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_FILE" \
                 "$PYTHON_BIN" "$PY_HELPER" bench-b512file "$BENCH_BYTES_FILE" "$PW"
-            time_cmd_bench "pb512file_py_total" env BASEFWX_BENCH_WARMUP=0 \
+            time_cmd_bench "pb512file_py_total" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_FILE" \
                 "$PYTHON_BIN" "$PY_HELPER" bench-pb512file "$BENCH_BYTES_FILE" "$PW"
             ;;
         pypy)
             time_cmd_bench "fwxaes_pypy_correct" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_HEAVY" \
                 "$PYPY_BIN" "$PY_HELPER" bench-fwxaes "$BENCH_BYTES_FILE" "$PW"
+            time_cmd_bench "fwxaes_pypy_par" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_HEAVY" \
+                "$PYPY_BIN" "$PY_HELPER" bench-fwxaes-par "$BENCH_BYTES_FILE" "$PW"
             for method in "${BENCH_TEXT_METHODS[@]}"; do
                 time_cmd_bench "${method}_pypy_correct" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_LIGHT" \
                     "$PYPY_BIN" "$PY_HELPER" bench-text "$method" "$BENCH_TEXT" "$PW"
@@ -2815,6 +2917,7 @@ for idx in "${!BENCH_LANGS[@]}"; do
             ;;
         cpp)
             time_cmd_bench "fwxaes_cpp_correct" "$CPP_BIN" bench-fwxaes "$BENCH_BYTES_FILE" "$PW" --no-master
+            time_cmd_bench "fwxaes_cpp_par" "$CPP_BIN" bench-fwxaes-par "$BENCH_BYTES_FILE" "$PW" --no-master
             for method in "${BENCH_TEXT_METHODS[@]}"; do
                 if [[ "$method" == "b512" || "$method" == "pb512" ]]; then
                     time_cmd_bench "${method}_cpp_correct" "$CPP_BIN" bench-text "$method" "$BENCH_TEXT" -p "$PW" --no-master
@@ -2831,6 +2934,8 @@ for idx in "${!BENCH_LANGS[@]}"; do
         java)
             time_cmd_bench "fwxaes_java_correct" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_HEAVY" \
                 "$JAVA_BIN" "${JAVA_BENCH_FLAGS_ARR[@]}" -jar "$JAVA_JAR" bench-fwxaes "$BENCH_BYTES_FILE" "$PW" --no-master
+            time_cmd_bench "fwxaes_java_par" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_HEAVY" \
+                "$JAVA_BIN" "${JAVA_BENCH_FLAGS_ARR[@]}" -jar "$JAVA_JAR" bench-fwxaes-par "$BENCH_BYTES_FILE" "$PW" --no-master
             for method in "${BENCH_TEXT_METHODS[@]}"; do
                 time_cmd_bench "${method}_java_correct" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_LIGHT" \
                     "$JAVA_BIN" "${JAVA_BENCH_FLAGS_ARR[@]}" -jar "$JAVA_JAR" bench-text "$method" "$BENCH_TEXT" "$PW" --no-master
@@ -3018,7 +3123,7 @@ overall_sum_for_lang() {
     local count=0
     local base_sum=0
     local entry label py_key pypy_key cpp_key java_key
-    for entry in "${OVERALL_METHODS[@]}"; do
+    for entry in "${BENCH_METHODS[@]}"; do
         IFS='|' read -r label py_key pypy_key cpp_key java_key <<<"$entry"
         local lang_key=""
         case "$lang" in
@@ -3038,21 +3143,22 @@ overall_sum_for_lang() {
     printf "%s|%s|%s" "$sum" "$count" "$base_sum"
 }
 
+BENCH_METHODS=(
+    "fwxAES|fwxaes_py_correct|fwxaes_pypy_correct|fwxaes_cpp_correct|fwxaes_java_correct"
+    "b256|b256_py_correct|b256_pypy_correct|b256_cpp_correct|b256_java_correct"
+    "b512|b512_py_correct|b512_pypy_correct|b512_cpp_correct|b512_java_correct"
+    "pb512|pb512_py_correct|pb512_pypy_correct|pb512_cpp_correct|pb512_java_correct"
+    "b64|b64_py_correct|b64_pypy_correct|b64_cpp_correct|b64_java_correct"
+    "a512|a512_py_correct|a512_pypy_correct|a512_cpp_correct|a512_java_correct"
+    "hash512|hash512_py_correct|hash512_pypy_correct|hash512_cpp_correct|hash512_java_correct"
+    "uhash513|uhash513_py_correct|uhash513_pypy_correct|uhash513_cpp_correct|uhash513_java_correct"
+    "bi512|bi512_py_correct|bi512_pypy_correct|bi512_cpp_correct|bi512_java_correct"
+    "b1024|b1024_py_correct|b1024_pypy_correct|b1024_cpp_correct|b1024_java_correct"
+    "b512file|b512file_py_total|b512file_pypy_total|b512file_cpp_total|b512file_java_total"
+    "pb512file|pb512file_py_total|pb512file_pypy_total|pb512file_cpp_total|pb512file_java_total"
+)
+
 overall_summary() {
-    OVERALL_METHODS=(
-        "fwxAES|fwxaes_py_correct|fwxaes_pypy_correct|fwxaes_cpp_correct|fwxaes_java_correct"
-        "b256|b256_py_correct|b256_pypy_correct|b256_cpp_correct|b256_java_correct"
-        "b512|b512_py_correct|b512_pypy_correct|b512_cpp_correct|b512_java_correct"
-        "pb512|pb512_py_correct|pb512_pypy_correct|pb512_cpp_correct|pb512_java_correct"
-        "b64|b64_py_correct|b64_pypy_correct|b64_cpp_correct|b64_java_correct"
-        "a512|a512_py_correct|a512_pypy_correct|a512_cpp_correct|a512_java_correct"
-        "hash512|hash512_py_correct|hash512_pypy_correct|hash512_cpp_correct|hash512_java_correct"
-        "uhash513|uhash513_py_correct|uhash513_pypy_correct|uhash513_cpp_correct|uhash513_java_correct"
-        "bi512|bi512_py_correct|bi512_pypy_correct|bi512_cpp_correct|bi512_java_correct"
-        "b1024|b1024_py_correct|b1024_pypy_correct|b1024_cpp_correct|b1024_java_correct"
-        "b512file|b512file_py_total|b512file_pypy_total|b512file_cpp_total|b512file_java_total"
-        "pb512file|pb512file_py_total|pb512file_pypy_total|pb512file_cpp_total|pb512file_java_total"
-    )
     local py_sum py_count py_base_sum
     IFS='|' read -r py_sum py_count py_base_sum <<<"$(overall_sum_for_lang py)"
     if [[ -z "$py_sum" || "$py_sum" -le 0 || "$py_count" -le 0 ]]; then
@@ -3100,6 +3206,150 @@ overall_summary() {
     printf "\n"
 }
 
+write_bench_results() {
+    local out_dir="${BASEFWX_BENCH_RESULTS_DIR:-}"
+    if [[ -z "$out_dir" ]]; then
+        return
+    fi
+    mkdir -p "$out_dir"
+    local tag="${BASEFWX_RELEASE_TAG:-}"
+    local export_file="$TMP_DIR/bench_results.tsv"
+    : > "$export_file"
+    local entry label py_key pypy_key cpp_key java_key
+    for entry in "${BENCH_METHODS[@]}"; do
+        IFS='|' read -r label py_key pypy_key cpp_key java_key <<<"$entry"
+        printf "%s\t%s\t%s\t%s\t%s\n" \
+            "$label" \
+            "${TIMES[$py_key]:-}" \
+            "${TIMES[$pypy_key]:-}" \
+            "${TIMES[$cpp_key]:-}" \
+            "${TIMES[$java_key]:-}" \
+            >> "$export_file"
+    done
+
+    local bench_python="${PYTHON_BIN:-python3}"
+    BENCH_EPSILON_NS="$DELTA_EPSILON_NS" \
+    BENCH_BYTES_FILE="$BENCH_BYTES_FILE" \
+    BENCH_TEXT_FILE="$BENCH_TEXT" \
+    "$bench_python" - "$export_file" "$out_dir" "$tag" <<'PY'
+import json
+import os
+import sys
+from datetime import datetime, timezone
+
+tsv_path = sys.argv[1]
+out_dir = sys.argv[2]
+tag = sys.argv[3]
+
+def to_int(value):
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+languages = ["python", "pypy", "cpp", "java"]
+versions = {
+    "python": os.getenv("PY_VERSION_TAG", ""),
+    "pypy": os.getenv("PYPY_VERSION_TAG", ""),
+    "cpp": os.getenv("CPP_VERSION_TAG", ""),
+    "java": os.getenv("JAVA_VERSION_TAG", ""),
+}
+
+tests = []
+with open(tsv_path, "r", encoding="utf-8") as handle:
+    for line in handle:
+        line = line.strip()
+        if not line:
+            continue
+        label, py, pypy, cpp, java = line.split("\t")
+        times = {}
+        values = [py, pypy, cpp, java]
+        for key, raw in zip(languages, values):
+            val = to_int(raw)
+            if val is not None and val > 0:
+                times[key] = val
+        tests.append({"label": label, "times": times})
+
+def overall_for(lang_key):
+    total = 0
+    base_total = 0
+    count = 0
+    for entry in tests:
+        base = entry["times"].get("python")
+        val = entry["times"].get(lang_key)
+        if base and val:
+            base_total += base
+            total += val
+            count += 1
+    return {"time_ns": total, "baseline_ns": base_total, "count": count}
+
+overall = {}
+for key in languages:
+    summary = overall_for(key)
+    if summary["time_ns"] > 0 and summary["count"] > 0:
+        overall[key] = summary
+
+generated_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+data = {
+    "generated_at": generated_at,
+    "release_tag": tag or "",
+    "bench_iters": to_int(os.getenv("BASEFWX_BENCH_ITERS", "0")) or 0,
+    "bench_warmup": to_int(os.getenv("BASEFWX_BENCH_WARMUP", "0")) or 0,
+    "bench_workers": to_int(os.getenv("BASEFWX_BENCH_WORKERS", "0")) or 0,
+    "baseline": "python",
+    "epsilon_ns": to_int(os.getenv("BENCH_EPSILON_NS", "1000000")) or 1000000,
+    "bench_files": {
+        "bytes": os.getenv("BENCH_BYTES_FILE", ""),
+        "text": os.getenv("BENCH_TEXT_FILE", "")
+    },
+    "versions": versions,
+    "overall": overall,
+    "tests": tests,
+}
+
+def write_json(path):
+    with open(path, "w", encoding="utf-8") as handle:
+        json.dump(data, handle, indent=2)
+
+def ns_to_s(ns):
+    return f"{ns / 1_000_000_000:.3f}s"
+
+def write_text(path):
+    lines = [
+        f"Generated: {generated_at}",
+        f"Release: {tag or 'latest'}",
+        f"Baseline: python",
+        "",
+        "OVERALL"
+    ]
+    for key in languages:
+        summary = overall.get(key)
+        if not summary:
+            continue
+        lines.append(f"{key}: {summary['time_ns']} ns ({ns_to_s(summary['time_ns'])})")
+    lines.append("")
+    lines.append("TESTS")
+    for entry in tests:
+        parts = [entry["label"]]
+        for key in languages:
+            value = entry["times"].get(key)
+            if value is None:
+                continue
+            parts.append(f"{key}={value}ns")
+        lines.append(" | ".join(parts))
+    with open(path, "w", encoding="utf-8") as handle:
+        handle.write("\n".join(lines))
+
+latest_json = os.path.join(out_dir, "benchmarks-latest.json")
+latest_txt = os.path.join(out_dir, "benchmarks-latest.txt")
+write_json(latest_json)
+write_text(latest_txt)
+if tag:
+    write_json(os.path.join(out_dir, f"benchmarks-{tag}.json"))
+    write_text(os.path.join(out_dir, f"benchmarks-{tag}.txt"))
+PY
+}
+
 printf "\nTiming summary (native):\n"
 compare_speed_block "fwxAES" "fwxaes_py_correct" "fwxaes_pypy_correct" "fwxaes_cpp_correct" "fwxaes_java_correct"
 compare_speed_block "b256" "b256_py_correct" "b256_pypy_correct" "b256_cpp_correct" "b256_java_correct"
@@ -3131,6 +3381,7 @@ compare_speed_block "b512file" "b512file_py_total" "b512file_pypy_total" "b512fi
 compare_speed_block "pb512file" "pb512file_py_total" "pb512file_pypy_total" "pb512file_cpp_total" "pb512file_java_total"
 
 overall_summary
+write_bench_results
 
 if (( ${#FAILURES[@]} > 0 )); then
     printf "\n%sFAILURES%s (%d):\n" "$RED$EMOJI_FAIL " "$RESET" "${#FAILURES[@]}"

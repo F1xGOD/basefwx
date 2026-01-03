@@ -66,6 +66,7 @@ inline constexpr std::size_t kUserWrapFixedLen = kUserKdfSaltSize + kAeadNonceLe
 
 inline constexpr std::size_t kStreamChunkSize = 1u << 20;
 inline constexpr std::size_t kStreamThreshold = 250u * 1024u;
+inline constexpr std::size_t kPerfObfuscationThreshold = 1u << 20;
 inline constexpr std::size_t kHkdfMaxLen = 255u * 32u;
 inline constexpr std::size_t kOfbFastMin = 64u * 1024u;
 inline constexpr std::size_t kPermFastMin = 4u * 1024u;

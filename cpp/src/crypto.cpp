@@ -6,6 +6,8 @@
 #include <openssl/hmac.h>
 #include <openssl/kdf.h>
 #include <openssl/rand.h>
+#include <openssl/core_names.h>
+#include <openssl/params.h>
 
 #if defined(BASEFWX_HAS_ARGON2) && BASEFWX_HAS_ARGON2
 #include <argon2.h>
@@ -76,36 +78,49 @@ Bytes HkdfSha256Stream(const Bytes& key_material, std::string_view info, std::si
     std::size_t offset = 0;
     std::uint32_t counter = 1;
     unsigned char counter_bytes[4];
-    std::unique_ptr<HMAC_CTX, decltype(&HMAC_CTX_free)> ctx(HMAC_CTX_new(), &HMAC_CTX_free);
-    if (!ctx) {
-        throw std::runtime_error("HKDF stream context allocation failed");
+
+    /* Use OpenSSL EVP_MAC (HMAC) instead of deprecated HMAC_* APIs */
+    EVP_MAC* mac = EVP_MAC_fetch(nullptr, "HMAC", nullptr);
+    if (!mac) {
+        throw std::runtime_error("HMAC fetch failed");
     }
+    OSSL_PARAM params[2];
+    params[0] = OSSL_PARAM_construct_utf8_string(OSSL_MAC_PARAM_DIGEST, const_cast<char*>("SHA256"), 0);
+    params[1] = OSSL_PARAM_construct_end();
+
+    EVP_MAC_CTX* ctx = EVP_MAC_CTX_new(mac);
+    if (!ctx) {
+        EVP_MAC_free(mac);
+        throw std::runtime_error("HMAC context allocation failed");
+    }
+
     while (offset < length) {
-        Ensure(HMAC_Init_ex(ctx.get(), prk.data(), static_cast<int>(prk.size()), EVP_sha256(), nullptr) == 1,
-               "HKDF stream init failed");
+        /* initialize with PRK as key */
+        Ensure(EVP_MAC_init(ctx, prk.data(), prk.size(), params) == 1, "HKDF stream init failed");
         if (!prev.empty()) {
-            Ensure(HMAC_Update(ctx.get(), prev.data(), prev.size()) == 1, "HKDF stream update failed");
+            Ensure(EVP_MAC_update(ctx, prev.data(), prev.size()) == 1, "HKDF stream update failed");
         }
         if (!info.empty()) {
-            Ensure(HMAC_Update(ctx.get(),
-                               reinterpret_cast<const unsigned char*>(info.data()),
-                               info.size()) == 1,
+            Ensure(EVP_MAC_update(ctx, reinterpret_cast<const unsigned char*>(info.data()), info.size()) == 1,
                    "HKDF stream update failed");
         }
         counter_bytes[0] = static_cast<unsigned char>((counter >> 24) & 0xFF);
         counter_bytes[1] = static_cast<unsigned char>((counter >> 16) & 0xFF);
         counter_bytes[2] = static_cast<unsigned char>((counter >> 8) & 0xFF);
         counter_bytes[3] = static_cast<unsigned char>(counter & 0xFF);
-        Ensure(HMAC_Update(ctx.get(), counter_bytes, sizeof(counter_bytes)) == 1, "HKDF stream update failed");
+        Ensure(EVP_MAC_update(ctx, counter_bytes, sizeof(counter_bytes)) == 1, "HKDF stream update failed");
         unsigned char digest[EVP_MAX_MD_SIZE];
-        unsigned int digest_len = 0;
-        Ensure(HMAC_Final(ctx.get(), digest, &digest_len) == 1, "HKDF stream final failed");
+        size_t digest_len = sizeof(digest);
+        Ensure(EVP_MAC_final(ctx, digest, &digest_len, sizeof(digest)) == 1, "HKDF stream final failed");
         prev.assign(digest, digest + digest_len);
         std::size_t take = std::min<std::size_t>(digest_len, length - offset);
         std::memcpy(out.data() + offset, prev.data(), take);
         offset += take;
         counter++;
     }
+
+    EVP_MAC_CTX_free(ctx);
+    EVP_MAC_free(mac);
     return out;
 }
 
@@ -119,13 +134,39 @@ Bytes Pbkdf2HmacSha256(const std::string& password, const Bytes& salt, std::size
 }
 
 Bytes HmacSha256(const Bytes& key, const Bytes& data) {
-    unsigned int out_len = EVP_MAX_MD_SIZE;
-    Bytes out(out_len);
-    if (!HMAC(EVP_sha256(), key.data(), static_cast<int>(key.size()), data.data(),
-              static_cast<int>(data.size()), out.data(), &out_len)) {
-        throw std::runtime_error("HMAC-SHA256 failed");
+    /* Implement HMAC using EVP_MAC (OpenSSL 3.0 compatible) */
+    EVP_MAC* mac = EVP_MAC_fetch(nullptr, "HMAC", nullptr);
+    if (!mac) {
+        throw std::runtime_error("HMAC fetch failed");
     }
-    out.resize(out_len);
+    OSSL_PARAM params[2];
+    params[0] = OSSL_PARAM_construct_utf8_string(OSSL_MAC_PARAM_DIGEST, const_cast<char*>("SHA256"), 0);
+    params[1] = OSSL_PARAM_construct_end();
+
+    EVP_MAC_CTX* ctx = EVP_MAC_CTX_new(mac);
+    if (!ctx) {
+        EVP_MAC_free(mac);
+        throw std::runtime_error("HMAC context allocation failed");
+    }
+
+    Bytes out(EVP_MD_size(EVP_sha256()));
+    size_t out_len = out.size();
+
+    try {
+        Ensure(EVP_MAC_init(ctx, key.data(), key.size(), params) == 1, "HMAC init failed");
+        if (!data.empty()) {
+            Ensure(EVP_MAC_update(ctx, data.data(), data.size()) == 1, "HMAC update failed");
+        }
+        Ensure(EVP_MAC_final(ctx, out.data(), &out_len, out.size()) == 1, "HMAC final failed");
+        out.resize(out_len);
+    } catch (...) {
+        EVP_MAC_CTX_free(ctx);
+        EVP_MAC_free(mac);
+        throw;
+    }
+
+    EVP_MAC_CTX_free(ctx);
+    EVP_MAC_free(mac);
     return out;
 }
 

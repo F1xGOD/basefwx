@@ -343,7 +343,8 @@ Bytes EncryptAesPayload(const std::string& plaintext,
                         std::optional<std::uint32_t> argon2_time,
                         std::optional<std::uint32_t> argon2_mem,
                         std::optional<std::uint32_t> argon2_par,
-                        bool obfuscate) {
+                        bool obfuscate,
+                        bool fast_obf) {
     std::string resolved = basefwx::ResolvePassword(password);
     Bytes metadata_bytes = ToBytes(metadata_blob);
     Bytes aad = metadata_bytes;
@@ -401,7 +402,7 @@ Bytes EncryptAesPayload(const std::string& plaintext,
 
     Bytes payload_bytes = ToBytes(plaintext);
     if (obfuscate) {
-        payload_bytes = basefwx::obf::ObfuscateBytes(payload_bytes, ephemeral_key);
+        payload_bytes = basefwx::obf::ObfuscateBytes(payload_bytes, ephemeral_key, fast_obf);
     }
 
     Bytes nonce = basefwx::crypto::RandomBytes(constants::kAeadNonceLen);
@@ -451,7 +452,12 @@ std::string DecryptAesPayload(const Bytes& blob,
         *metadata_out = metadata_blob;
     }
     auto meta = basefwx::metadata::Decode(metadata_blob);
-    bool should_deobfuscate = obfuscate && basefwx::metadata::GetValue(meta, "ENC-OBF") != "no";
+    std::string obf_hint = basefwx::metadata::GetValue(meta, "ENC-OBF");
+    if (obf_hint.empty()) {
+        obf_hint = "yes";
+    }
+    bool should_deobfuscate = obfuscate && obf_hint != "no";
+    bool fast_obf = should_deobfuscate && obf_hint == "fast";
 
     std::string kdf_label = basefwx::metadata::GetValue(meta, "ENC-KDF");
     kdf_label = basefwx::keywrap::ResolveKdfLabel(kdf_label.empty() ? kdf.label : kdf_label);
@@ -520,7 +526,7 @@ std::string DecryptAesPayload(const Bytes& blob,
 
     Bytes plain = basefwx::crypto::AesGcmDecryptWithIv(ephemeral_key, nonce, body_with_tag, metadata_bytes);
     if (should_deobfuscate) {
-        plain = basefwx::obf::DeobfuscateBytes(plain, ephemeral_key);
+        plain = basefwx::obf::DeobfuscateBytes(plain, ephemeral_key, fast_obf);
     }
     return ToString(plain);
 }
@@ -531,6 +537,21 @@ bool EnableAead(const FileOptions& options) {
 
 bool EnableObfuscation(const FileOptions& options) {
     return options.enable_obfuscation && basefwx::env::IsEnabled("BASEFWX_OBFUSCATE", true);
+}
+
+bool PerfModeEnabled() {
+    return basefwx::env::IsEnabled("BASEFWX_PERF", false);
+}
+
+bool UseFastObfuscation(std::uint64_t length) {
+    return PerfModeEnabled() && length >= basefwx::constants::kPerfObfuscationThreshold;
+}
+
+std::string ObfMode(bool obfuscate, bool fast) {
+    if (!obfuscate) {
+        return "no";
+    }
+    return fast ? "fast" : "yes";
 }
 
 std::string B512EncodeFileSimple(const std::filesystem::path& input,
@@ -636,6 +657,8 @@ std::string B512EncodeFileStream(const std::filesystem::path& input,
         && (pq_pub.has_value() || ec_pub.has_value());
     basefwx::pb512::KdfOptions kdf_opts = kdf;
     std::string kdf_label = ResolveKdfLabel(kdf_opts);
+    bool fast_obf = !options.strip_metadata && UseFastObfuscation(input_size);
+    std::string obf_mode = ObfMode(true, fast_obf);
 
     Bytes stream_salt = basefwx::obf::StreamObfuscator::GenerateSalt();
     std::string ext = input.extension().string();
@@ -648,7 +671,7 @@ std::string B512EncodeFileStream(const std::filesystem::path& input,
         "AESGCM",
         kdf_label,
         "STREAM",
-        std::nullopt,
+        obf_mode,
         std::nullopt,
         std::nullopt,
         std::nullopt,
@@ -723,7 +746,11 @@ std::string B512EncodeFileStream(const std::filesystem::path& input,
         output.write(reinterpret_cast<const char*>(ct.data()), static_cast<std::streamsize>(ct.size()));
     }
 
-    basefwx::obf::StreamObfuscator obfuscator = basefwx::obf::StreamObfuscator::ForPassword(resolved, stream_salt);
+    basefwx::obf::StreamObfuscator obfuscator = basefwx::obf::StreamObfuscator::ForPassword(
+        resolved,
+        stream_salt,
+        fast_obf
+    );
     std::ifstream input_stream(input, std::ios::binary);
     if (!input_stream) {
         throw std::runtime_error("Failed to open input file: " + input.string());
@@ -942,7 +969,16 @@ std::string B512DecodeFileStream(const std::filesystem::path& input,
         }
     }
 
-    basefwx::obf::StreamObfuscator decoder = basefwx::obf::StreamObfuscator::ForPassword(resolved, salt);
+    std::string obf_hint = basefwx::metadata::GetValue(meta, "ENC-OBF");
+    if (obf_hint.empty()) {
+        obf_hint = "yes";
+    }
+    bool fast_obf = obf_hint == "fast";
+    basefwx::obf::StreamObfuscator decoder = basefwx::obf::StreamObfuscator::ForPassword(
+        resolved,
+        salt,
+        fast_obf
+    );
     std::filesystem::path target = input;
     target.replace_extension("");
     std::string ext;
@@ -1114,6 +1150,8 @@ std::string Pb512EncodeFileSimple(const std::filesystem::path& input,
     basefwx::pb512::KdfOptions kdf_opts = kdf;
     std::string kdf_label = ResolveKdfLabel(kdf_opts);
     bool obf_enabled = EnableObfuscation(options);
+    bool fast_obf = obf_enabled && !options.strip_metadata && UseFastObfuscation(data.size());
+    std::string obf_mode = ObfMode(obf_enabled, fast_obf);
 
     std::string ext_token = basefwx::pb512::Pb512Encode(ext, resolved, use_master_effective, kdf_opts);
     std::string data_token = basefwx::pb512::Pb512Encode(b64_payload, resolved, use_master_effective, kdf_opts);
@@ -1134,7 +1172,7 @@ std::string Pb512EncodeFileSimple(const std::filesystem::path& input,
         "AESGCM",
         kdf_label,
         "",
-        obf_enabled,
+        obf_mode,
         basefwx::constants::HeavyPbkdf2Iterations(),
         argon_time,
         argon_mem,
@@ -1157,7 +1195,8 @@ std::string Pb512EncodeFileSimple(const std::filesystem::path& input,
         argon_time,
         argon_mem,
         argon_par,
-        obf_enabled
+        obf_enabled,
+        fast_obf
     );
 
     std::filesystem::path out_path = input;
@@ -1194,6 +1233,8 @@ std::string Pb512EncodeFileStream(const std::filesystem::path& input,
     basefwx::pb512::KdfOptions kdf_opts = kdf;
     std::string kdf_label = ResolveKdfLabel(kdf_opts);
     bool obf_enabled = EnableObfuscation(options);
+    bool fast_obf = obf_enabled && !options.strip_metadata && UseFastObfuscation(input_size);
+    std::string obf_mode = ObfMode(obf_enabled, fast_obf);
 
     std::optional<std::uint32_t> argon_time;
     std::optional<std::uint32_t> argon_mem;
@@ -1215,7 +1256,7 @@ std::string Pb512EncodeFileStream(const std::filesystem::path& input,
         "AESGCM",
         kdf_label,
         "STREAM",
-        obf_enabled,
+        obf_mode,
         basefwx::constants::HeavyPbkdf2Iterations(),
         argon_time,
         argon_mem,
@@ -1320,7 +1361,11 @@ std::string Pb512EncodeFileStream(const std::filesystem::path& input,
         output.write(reinterpret_cast<const char*>(ct.data()), static_cast<std::streamsize>(ct.size()));
     }
 
-    basefwx::obf::StreamObfuscator obfuscator = basefwx::obf::StreamObfuscator::ForPassword(resolved, stream_salt);
+    basefwx::obf::StreamObfuscator obfuscator = basefwx::obf::StreamObfuscator::ForPassword(
+        resolved,
+        stream_salt,
+        fast_obf
+    );
     std::ifstream input_stream(input, std::ios::binary);
     if (!input_stream) {
         throw std::runtime_error("Failed to open input file: " + input.string());
@@ -1579,7 +1624,16 @@ std::string Pb512DecodeFileStream(const std::filesystem::path& input,
         }
     }
 
-    basefwx::obf::StreamObfuscator decoder = basefwx::obf::StreamObfuscator::ForPassword(resolved, salt);
+    std::string obf_hint = basefwx::metadata::GetValue(meta, "ENC-OBF");
+    if (obf_hint.empty()) {
+        obf_hint = "yes";
+    }
+    bool fast_obf = obf_hint == "fast";
+    basefwx::obf::StreamObfuscator decoder = basefwx::obf::StreamObfuscator::ForPassword(
+        resolved,
+        salt,
+        fast_obf
+    );
     std::filesystem::path target = input;
     target.replace_extension("");
     std::string ext;
@@ -1831,6 +1885,8 @@ std::vector<std::uint8_t> Pb512EncodeBytes(const std::vector<std::uint8_t>& data
     basefwx::pb512::KdfOptions kdf_opts = kdf;
     std::string kdf_label = ResolveKdfLabel(kdf_opts);
     bool obf_enabled = EnableObfuscation(options);
+    bool fast_obf = obf_enabled && !options.strip_metadata && UseFastObfuscation(data.size());
+    std::string obf_mode = ObfMode(obf_enabled, fast_obf);
 
     std::string ext_token = basefwx::pb512::Pb512Encode(ext, resolved, use_master_effective, kdf_opts);
     std::string data_token = basefwx::pb512::Pb512Encode(b64_payload, resolved, use_master_effective, kdf_opts);
@@ -1851,7 +1907,7 @@ std::vector<std::uint8_t> Pb512EncodeBytes(const std::vector<std::uint8_t>& data
         "AESGCM",
         kdf_label,
         "",
-        obf_enabled,
+        obf_mode,
         basefwx::constants::HeavyPbkdf2Iterations(),
         argon_time,
         argon_mem,
@@ -1874,7 +1930,8 @@ std::vector<std::uint8_t> Pb512EncodeBytes(const std::vector<std::uint8_t>& data
         argon_time,
         argon_mem,
         argon_par,
-        obf_enabled
+        obf_enabled,
+        fast_obf
     );
     return blob;
 }

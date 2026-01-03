@@ -48,7 +48,7 @@ std::string Build(const std::string& method,
                   std::string_view aead,
                   std::string_view kdf_label,
                   std::string_view mode,
-                  std::optional<bool> obfuscation,
+                  std::optional<std::string_view> obfuscation,
                   std::optional<std::uint32_t> kdf_iters,
                   std::optional<std::uint32_t> argon2_time,
                   std::optional<std::uint32_t> argon2_mem,
@@ -69,7 +69,7 @@ std::string Build(const std::string& method,
         fields.emplace_back("ENC-MODE", std::string(mode));
     }
     if (obfuscation.has_value()) {
-        fields.emplace_back("ENC-OBF", obfuscation.value() ? "yes" : "no");
+        fields.emplace_back("ENC-OBF", std::string(obfuscation.value()));
     }
     if (kdf_iters.has_value()) {
         fields.emplace_back("ENC-KDF-ITER", std::to_string(kdf_iters.value()));

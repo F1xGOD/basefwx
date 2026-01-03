@@ -842,8 +842,8 @@ public final class BaseFwx {
                 useMasterEffective = false;
             }
             String obfHint = metaValue(metadataBlob, "ENC-OBF");
-            boolean obfuscate = !"no".equalsIgnoreCase(obfHint);
-            boolean fastObf = "fast".equalsIgnoreCase(obfHint);
+            obfuscateStream = !"no".equalsIgnoreCase(obfHint);
+            fastObfStream = "fast".equalsIgnoreCase(obfHint);
             byte[] nonce = readExactBytes(in, Constants.AEAD_NONCE_LEN, "Ciphertext payload truncated");
             long cipherBodyLen = (lenPayload & 0xFFFFFFFFL) - 4L - metaLen
                 - Constants.AEAD_NONCE_LEN - Constants.AEAD_TAG_LEN;
@@ -918,7 +918,9 @@ public final class BaseFwx {
                 ? readExactBytes(plainIn, extLen, "Malformed streaming payload: truncated extension")
                 : new byte[0];
 
-            StreamObfuscator decoder = obfuscate ? StreamObfuscator.forPassword(pw, salt, fastObf) : null;
+            StreamObfuscator decoder = obfuscateStream
+                ? StreamObfuscator.forPassword(pw, salt, fastObfStream)
+                : null;
             File outFile = resolveDecodedOutput(input, output, extBytes);
             try (FileOutputStream out = new FileOutputStream(outFile)) {
                 byte[] buffer = new byte[chunkSize];
@@ -1092,6 +1094,8 @@ public final class BaseFwx {
         byte[] metadataBytes;
         String metadataBlob = "";
         boolean useMasterEffective = useMaster;
+        boolean obfuscateStream = true;
+        boolean fastObfStream = false;
         try (FileInputStream in = new FileInputStream(input)) {
             int lenUser = readU32(in, "Ciphertext payload truncated");
             byte[] userBlob = readExactBytes(in, lenUser, "Ciphertext payload truncated");
@@ -2436,7 +2440,7 @@ public final class BaseFwx {
                 inBuf.clear();
             }
             outBuf.clear();
-            int finalLen = cipher.doFinal(outBuf);
+            int finalLen = cipher.doFinal(ByteBuffer.allocate(0), outBuf);
             if (finalLen > 0) {
                 outBuf.flip();
                 writeFully(output, outBuf);

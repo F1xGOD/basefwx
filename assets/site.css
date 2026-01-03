@@ -16,6 +16,7 @@
   --amber: #f4c04f;
   --red: #f08a4b;
   --burnt: #c74848;
+  --blue: #5cc5ff;
 }
 
 * { box-sizing: border-box; }
@@ -435,6 +436,112 @@ section {
   min-width: 560px;
 }
 
+.bench-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0 10px;
+  font-size: 13px;
+  background: transparent;
+  min-width: 520px;
+}
+
+.bench-table th,
+.bench-table td {
+  padding: 12px 14px;
+  border-bottom: none;
+  text-align: left;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+
+.bench-table th {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 1.2px;
+  color: var(--muted);
+  background: var(--panel);
+}
+
+.bench-table thead th:first-child {
+  border-top-left-radius: 12px;
+  border-bottom-left-radius: 12px;
+}
+
+.bench-table thead th:last-child {
+  border-top-right-radius: 12px;
+  border-bottom-right-radius: 12px;
+}
+
+.bench-table tbody td {
+  background: var(--panel);
+  font-weight: 500;
+}
+
+.bench-table-compact {
+  border-spacing: 0 6px;
+}
+
+.bench-runtime {
+  font-weight: 600;
+}
+
+.bench-detail {
+  margin-top: 14px;
+  padding: 6px 14px 12px;
+  border-radius: 16px;
+  border: 1px solid var(--border);
+  background: var(--panel-3);
+}
+
+.bench-detail summary {
+  list-style: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 8px 4px;
+  font-weight: 600;
+}
+
+.bench-detail summary::-webkit-details-marker {
+  display: none;
+}
+
+.bench-detail[open] summary {
+  border-bottom: 1px dashed var(--border);
+  margin-bottom: 8px;
+}
+
+.bench-summary {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.delta-fast {
+  color: var(--green);
+  font-weight: 600;
+}
+
+.delta-slow {
+  color: var(--red);
+  font-weight: 600;
+}
+
+.delta-same {
+  color: var(--blue);
+  font-weight: 600;
+}
+
+.delta-base {
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.delta-na {
+  color: var(--muted);
+}
+
 .vt-table th,
 .vt-table td {
   padding: 14px 16px;
@@ -750,6 +857,11 @@ footer {
     font-size: 12px;
     padding: 10px;
   }
+  .bench-table th,
+  .bench-table td {
+    font-size: 12px;
+    padding: 10px;
+  }
 }
 
 @media (max-width: 520px) {
@@ -775,6 +887,9 @@ footer {
     align-items: flex-start;
   }
   .vt-table {
+    min-width: 480px;
+  }
+  .bench-table {
     min-width: 480px;
   }
   footer {

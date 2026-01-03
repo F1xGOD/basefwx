@@ -343,12 +343,15 @@ public final class BaseFwxCli {
                     String method = args[1].toLowerCase();
                     File textFile = new File(args[2]);
                     String benchPass = args[3];
+                    final String methodFinal = method;
+                    final String benchPassFinal = benchPass;
+                    final boolean useMasterFlag = useMaster;
                     int warmup = benchWarmup();
                     int iters = benchIters();
                     String text = readText(textFile);
                     long ns = benchMedian(warmup, iters, () -> {
-                        String enc = encodeText(method, text, benchPass, useMaster);
-                        String dec = decodeText(method, enc, benchPass, useMaster);
+                        String enc = encodeText(methodFinal, text, benchPassFinal, useMasterFlag);
+                        String dec = decodeText(methodFinal, enc, benchPassFinal, useMasterFlag);
                         BENCH_SINK ^= dec.length();
                     });
                     System.out.println("BENCH_NS=" + ns);
@@ -378,12 +381,14 @@ public final class BaseFwxCli {
                     }
                     File input = new File(args[1]);
                     String benchPass = args[2];
+                    final String benchPassFinal = benchPass;
+                    final boolean useMasterFlag = useMaster;
                     int warmup = benchWarmup();
                     int iters = benchIters();
                     byte[] data = readAllBytes(input);
                     long ns = benchMedian(warmup, iters, () -> {
-                        byte[] blob = BaseFwx.fwxAesEncryptRaw(data, benchPass, useMaster);
-                        byte[] plain = BaseFwx.fwxAesDecryptRaw(blob, benchPass, useMaster);
+                        byte[] blob = BaseFwx.fwxAesEncryptRaw(data, benchPassFinal, useMasterFlag);
+                        byte[] plain = BaseFwx.fwxAesDecryptRaw(blob, benchPassFinal, useMasterFlag);
                         BENCH_SINK ^= plain.length;
                     });
                     System.out.println("BENCH_NS=" + ns);
@@ -396,6 +401,8 @@ public final class BaseFwxCli {
                     }
                     File input = new File(args[1]);
                     String benchPass = args[2];
+                    final String benchPassFinal = benchPass;
+                    final boolean useMasterFlag = useMaster;
                     int warmup = benchWarmup();
                     int iters = benchIters();
                     int workers = benchWorkers();
@@ -403,13 +410,13 @@ public final class BaseFwxCli {
                     ExecutorService pool = Executors.newFixedThreadPool(workers);
                     try {
                         for (int i = 0; i < warmup; i++) {
-                            benchFwxaesParallel(pool, workers, data, benchPass, useMaster);
+                            benchFwxaesParallel(pool, workers, data, benchPassFinal, useMasterFlag);
                         }
                         long[] samples = new long[iters];
                         long bytesPerRun = 0;
                         for (int i = 0; i < iters; i++) {
                             long start = System.nanoTime();
-                            bytesPerRun = benchFwxaesParallel(pool, workers, data, benchPass, useMaster);
+                            bytesPerRun = benchFwxaesParallel(pool, workers, data, benchPassFinal, useMasterFlag);
                             long end = System.nanoTime();
                             samples[i] = end - start;
                         }
@@ -435,6 +442,8 @@ public final class BaseFwxCli {
                     }
                     File input = new File(args[1]);
                     String benchPass = args[2];
+                    final String benchPassFinal = benchPass;
+                    final boolean useMasterFlag = useMaster;
                     int warmup = benchWarmup();
                     int iters = benchIters();
                     String name = input.getName();
@@ -450,8 +459,8 @@ public final class BaseFwxCli {
                     File decFile = new File(tempDir, "bench_dec" + ext);
                     try {
                         long ns = benchMedian(warmup, iters, () -> {
-                            BaseFwx.b512FileEncodeFile(input, encFile, benchPass, useMaster);
-                            BaseFwx.b512FileDecodeFile(encFile, decFile, benchPass, useMaster);
+                            BaseFwx.b512FileEncodeFile(input, encFile, benchPassFinal, useMasterFlag);
+                            BaseFwx.b512FileDecodeFile(encFile, decFile, benchPassFinal, useMasterFlag);
                             BENCH_SINK ^= (int) decFile.length();
                         });
                         System.out.println("BENCH_NS=" + ns);
@@ -469,6 +478,8 @@ public final class BaseFwxCli {
                     }
                     File input = new File(args[1]);
                     String benchPass = args[2];
+                    final String benchPassFinal = benchPass;
+                    final boolean useMasterFlag = useMaster;
                     int warmup = benchWarmup();
                     int iters = benchIters();
                     String name = input.getName();
@@ -484,8 +495,8 @@ public final class BaseFwxCli {
                     File decFile = new File(tempDir, "bench_dec" + ext);
                     try {
                         long ns = benchMedian(warmup, iters, () -> {
-                            BaseFwx.pb512FileEncodeFile(input, encFile, benchPass, useMaster);
-                            BaseFwx.pb512FileDecodeFile(encFile, decFile, benchPass, useMaster);
+                            BaseFwx.pb512FileEncodeFile(input, encFile, benchPassFinal, useMasterFlag);
+                            BaseFwx.pb512FileDecodeFile(encFile, decFile, benchPassFinal, useMasterFlag);
                             BENCH_SINK ^= (int) decFile.length();
                         });
                         System.out.println("BENCH_NS=" + ns);

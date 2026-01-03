@@ -8,6 +8,7 @@
 #include <openssl/rand.h>
 #include <openssl/core_names.h>
 #include <openssl/params.h>
+#include <openssl/opensslv.h>
 
 #if defined(BASEFWX_HAS_ARGON2) && BASEFWX_HAS_ARGON2
 #include <argon2.h>
@@ -67,6 +68,10 @@ Bytes HkdfSha256(const Bytes& key_material, std::string_view info, std::size_t l
     return out;
 }
 
+#if OPENSSL_VERSION_NUMBER >= 0x30000000L
+
+// OpenSSL 3.x: use EVP_MAC for HMAC operations
+
 Bytes HkdfSha256Stream(const Bytes& key_material, std::string_view info, std::size_t length) {
     if (length == 0) {
         return {};
@@ -79,7 +84,6 @@ Bytes HkdfSha256Stream(const Bytes& key_material, std::string_view info, std::si
     std::uint32_t counter = 1;
     unsigned char counter_bytes[4];
 
-    /* Use OpenSSL EVP_MAC (HMAC) instead of deprecated HMAC_* APIs */
     EVP_MAC* mac = EVP_MAC_fetch(nullptr, "HMAC", nullptr);
     if (!mac) {
         throw std::runtime_error("HMAC fetch failed");
@@ -95,7 +99,6 @@ Bytes HkdfSha256Stream(const Bytes& key_material, std::string_view info, std::si
     }
 
     while (offset < length) {
-        /* initialize with PRK as key */
         Ensure(EVP_MAC_init(ctx, prk.data(), prk.size(), params) == 1, "HKDF stream init failed");
         if (!prev.empty()) {
             Ensure(EVP_MAC_update(ctx, prev.data(), prev.size()) == 1, "HKDF stream update failed");
@@ -124,17 +127,7 @@ Bytes HkdfSha256Stream(const Bytes& key_material, std::string_view info, std::si
     return out;
 }
 
-Bytes Pbkdf2HmacSha256(const std::string& password, const Bytes& salt, std::size_t iterations, std::size_t length) {
-    Bytes out(length);
-    Ensure(PKCS5_PBKDF2_HMAC(password.c_str(), static_cast<int>(password.size()), salt.data(),
-                             static_cast<int>(salt.size()), static_cast<int>(iterations), EVP_sha256(),
-                             static_cast<int>(out.size()), out.data()) == 1,
-           "PBKDF2 failed");
-    return out;
-}
-
 Bytes HmacSha256(const Bytes& key, const Bytes& data) {
-    /* Implement HMAC using EVP_MAC (OpenSSL 3.0 compatible) */
     EVP_MAC* mac = EVP_MAC_fetch(nullptr, "HMAC", nullptr);
     if (!mac) {
         throw std::runtime_error("HMAC fetch failed");
@@ -170,6 +163,72 @@ Bytes HmacSha256(const Bytes& key, const Bytes& data) {
     return out;
 }
 
+#else // legacy OpenSSL: use HMAC_* APIs
+
+Bytes HkdfSha256Stream(const Bytes& key_material, std::string_view info, std::size_t length) {
+    if (length == 0) {
+        return {};
+    }
+    static const Bytes zero_salt(32, 0);
+    Bytes prk = HmacSha256(zero_salt, key_material);
+    Bytes out(length);
+    Bytes prev;
+    std::size_t offset = 0;
+    std::uint32_t counter = 1;
+    unsigned char counter_bytes[4];
+    std::unique_ptr<HMAC_CTX, decltype(&HMAC_CTX_free)> ctx(HMAC_CTX_new(), &HMAC_CTX_free);
+    if (!ctx) {
+        throw std::runtime_error("HKDF stream context allocation failed");
+    }
+    while (offset < length) {
+        Ensure(HMAC_Init_ex(ctx.get(), prk.data(), static_cast<int>(prk.size()), EVP_sha256(), nullptr) == 1,
+               "HKDF stream init failed");
+        if (!prev.empty()) {
+            Ensure(HMAC_Update(ctx.get(), prev.data(), prev.size()) == 1, "HKDF stream update failed");
+        }
+        if (!info.empty()) {
+            Ensure(HMAC_Update(ctx.get(), reinterpret_cast<const unsigned char*>(info.data()), info.size()) == 1,
+                   "HKDF stream update failed");
+        }
+        counter_bytes[0] = static_cast<unsigned char>((counter >> 24) & 0xFF);
+        counter_bytes[1] = static_cast<unsigned char>((counter >> 16) & 0xFF);
+        counter_bytes[2] = static_cast<unsigned char>((counter >> 8) & 0xFF);
+        counter_bytes[3] = static_cast<unsigned char>(counter & 0xFF);
+        Ensure(HMAC_Update(ctx.get(), counter_bytes, sizeof(counter_bytes)) == 1, "HKDF stream update failed");
+        unsigned char digest[EVP_MAX_MD_SIZE];
+        unsigned int digest_len = 0;
+        Ensure(HMAC_Final(ctx.get(), digest, &digest_len) == 1, "HKDF stream final failed");
+        prev.assign(digest, digest + digest_len);
+        std::size_t take = std::min<std::size_t>(digest_len, length - offset);
+        std::memcpy(out.data() + offset, prev.data(), take);
+        offset += take;
+        counter++;
+    }
+    return out;
+}
+
+Bytes HmacSha256(const Bytes& key, const Bytes& data) {
+    unsigned int out_len = EVP_MAX_MD_SIZE;
+    Bytes out(out_len);
+    if (!HMAC(EVP_sha256(), key.data(), static_cast<int>(key.size()), data.data(),
+              static_cast<int>(data.size()), out.data(), &out_len)) {
+        throw std::runtime_error("HMAC-SHA256 failed");
+    }
+    out.resize(out_len);
+    return out;
+}
+
+#endif // OPENSSL_VERSION_NUMBER
+
+Bytes Pbkdf2HmacSha256(const std::string& password, const Bytes& salt, std::size_t iterations, std::size_t length) {
+    Bytes out(length);
+    Ensure(PKCS5_PBKDF2_HMAC(password.c_str(), static_cast<int>(password.size()), salt.data(),
+                             static_cast<int>(salt.size()), static_cast<int>(iterations), EVP_sha256(),
+                             static_cast<int>(out.size()), out.data()) == 1,
+           "PBKDF2 failed");
+    return out;
+}
+
 #if defined(BASEFWX_HAS_ARGON2) && BASEFWX_HAS_ARGON2
 Bytes Argon2idHashRaw(const std::string& password,
                       const Bytes& salt,
@@ -193,6 +252,8 @@ Bytes Argon2idHashRaw(const std::string& password,
     return out;
 }
 #endif
+
+// ... rest of file unchanged (AES-GCM, AES-CTR, Sha3_512 etc.)
 
 Bytes AesGcmEncrypt(const Bytes& key, const Bytes& plaintext, const Bytes& aad) {
     if (key.size() != 32) {

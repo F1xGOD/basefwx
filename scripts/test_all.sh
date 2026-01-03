@@ -3231,8 +3231,9 @@ overall_summary() {
 
 write_bench_results() {
     local out_dir="${BASEFWX_BENCH_RESULTS_DIR:-}"
+    # If no external results dir specified, write results into the tmp dir
     if [[ -z "$out_dir" ]]; then
-        return
+        out_dir="$TMP_DIR"
     fi
     mkdir -p "$out_dir"
     local tag="${BASEFWX_RELEASE_TAG:-}"

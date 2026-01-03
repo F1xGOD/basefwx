@@ -908,8 +908,10 @@ public final class BaseFwx {
                 throw new IllegalArgumentException("Malformed streaming payload: magic mismatch");
             }
             int chunkSize = readU32(plainIn, "Malformed streaming payload: missing chunk size");
-            if (chunkSize <= 0 || chunkSize > (16 << 20)) {
-                chunkSize = Constants.STREAM_CHUNK_SIZE;
+            final int MAX_CHUNK = (16 << 20);  // 16 MiB
+            final int MIN_FALLBACK = 4 * 1024 * 1024;  // 4 MiB
+            if (chunkSize <= 0 || chunkSize > MAX_CHUNK) {
+                chunkSize = Math.max(Constants.STREAM_CHUNK_SIZE, MIN_FALLBACK);
             }
             long originalSize = readU64(plainIn, "Malformed streaming payload: missing original size");
             byte[] salt = readExactBytes(plainIn, Constants.STREAM_SALT_LEN, "Malformed streaming payload: missing salt");
@@ -1210,8 +1212,10 @@ public final class BaseFwx {
                 throw new IllegalArgumentException("Malformed streaming payload: magic mismatch");
             }
             int chunkSize = readU32(plainIn, "Malformed streaming payload: missing chunk size");
-            if (chunkSize <= 0 || chunkSize > (16 << 20)) {
-                chunkSize = Constants.STREAM_CHUNK_SIZE;
+            final int MAX_CHUNK = (16 << 20);  // 16 MiB
+            final int MIN_FALLBACK = 4 * 1024 * 1024;  // 4 MiB
+            if (chunkSize <= 0 || chunkSize > MAX_CHUNK) {
+                chunkSize = Math.max(Constants.STREAM_CHUNK_SIZE, MIN_FALLBACK);
             }
             long originalSize = readU64(plainIn, "Malformed streaming payload: missing original size");
             byte[] salt = readExactBytes(plainIn, Constants.STREAM_SALT_LEN, "Malformed streaming payload: missing salt");

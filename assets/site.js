@@ -63,6 +63,14 @@ const getAssetBase = () => {
   return base || "assets/";
 };
 
+const getResultsLocalBase = () => {
+  const base = document.documentElement.dataset.resultsBase;
+  if (base) {
+    return new URL(base, window.location.href).toString();
+  }
+  return new URL("results/", window.location.href).toString();
+};
+
 const initBrandMask = () => {
   if (!window.CSS || !CSS.supports) {
     return;
@@ -302,7 +310,7 @@ const loadVirusTotal = async () => {
   const tableBody = document.querySelector("#vt-table tbody");
   try {
     const resultsBases = getResultsBases(latestReleaseTag);
-    const localBase = new URL("results/", window.location.href).toString();
+    const localBase = getResultsLocalBase();
     const candidates = [
       `${resultsBases.primary}/virustotal-latest.json`,
       latestReleaseTag ? `${resultsBases.primary}/virustotal-${latestReleaseTag}.json` : "",
@@ -415,7 +423,7 @@ const loadBenchmarks = async () => {
   }
   try {
     const resultsBases = getResultsBases(latestReleaseTag);
-    const localBase = new URL("results/", window.location.href).toString();
+    const localBase = getResultsLocalBase();
     const candidates = [
       `${resultsBases.primary}/benchmarks-latest.json`,
       latestReleaseTag ? `${resultsBases.primary}/benchmarks-${latestReleaseTag}.json` : "",

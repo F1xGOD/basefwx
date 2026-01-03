@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en" data-asset-base="../assets/" data-results-base="../results/">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>BaseFWX Benchmarks</title>
+    <meta name="description" content="BaseFWX benchmark results across Python, PyPy, C++, and Java.">
+    <link rel="icon" type="image/svg+xml" href="../assets/basefwx-white.svg">
+    <link rel="stylesheet" href="../assets/site.css">
+    <script src="../assets/site.js" defer></script>
+  </head>
+  <body>
+    <div class="container">
+      <header class="site-header">
+        <div class="brand">
+          <div class="brand-mark" aria-hidden="true">
+            <span class="brand-icon" aria-hidden="true"></span>
+            <span class="brand-cutout" aria-hidden="true"></span>
+          </div>
+          <div>
+            <div class="brand-name">FixCraft</div>
+            <div class="brand-sub">BaseFWX secure toolkit</div>
+          </div>
+        </div>
+        <nav>
+          <a href="../#downloads">Downloads</a>
+          <a href="../#integrity">Integrity</a>
+          <a href="../#virustotal">VirusTotal</a>
+          <a href="./">Benchmark</a>
+          <a href="../#docs">Docs</a>
+          <a href="../#support">Support</a>
+        </nav>
+      </header>
+
+      <section class="hero" id="top">
+        <div>
+          <div class="chip">Benchmark telemetry</div>
+          <h1>Benchmark Dashboard</h1>
+          <p>
+            These results capture steady-state performance across Python, PyPy, C++, and Java.
+            Warmup iterations and median sampling are baked into every run to keep the numbers honest.
+          </p>
+          <div class="link-row">
+            <a id="bench-results-text" href="../results/benchmarks-latest.txt" target="_blank" rel="noopener">Download results.txt</a>
+            <a id="bench-results-json" href="../results/benchmarks-latest.json" target="_blank" rel="noopener">Raw JSON</a>
+          </div>
+        </div>
+        <div class="hero-panel">
+          <div>
+            <div class="meta">Latest benchmark</div>
+            <div class="panel-title" id="bench-release">Loading...</div>
+            <div class="meta-row">
+              <span id="bench-date">Fetching timestamp</span>
+              <span id="bench-meta">iters: -- · warmup: -- · workers: --</span>
+            </div>
+          </div>
+          <div class="panel-foot">
+            <a class="btn secondary" href="../#downloads">Download CLI</a>
+          </div>
+        </div>
+      </section>
+
+      <section>
+        <div class="section-title">Overall</div>
+        <p class="section-lead">Aggregated totals across the full benchmark suite.</p>
+        <div id="bench-status" class="status-pill ok">Loading benchmark data...</div>
+        <div class="table-scroll">
+          <table class="bench-table" id="bench-overall-table">
+            <thead>
+              <tr>
+                <th>Runtime</th>
+                <th>Time</th>
+                <th>Delta vs Python</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td colspan="3" class="mono">Waiting for results...</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section>
+        <div class="section-title">Detailed Results</div>
+        <p class="section-lead">Expand each benchmark to see per-runtime breakdowns.</p>
+        <div id="bench-details"></div>
+      </section>
+
+      <footer>
+        FixCraft BaseFWX Documentation and Release Portal
+      </footer>
+    </div>
+  </body>
+</html>

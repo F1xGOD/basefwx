@@ -394,7 +394,7 @@ void XorKeystreamInPlace(Bytes& buf, const Bytes& key, std::string_view info) {
     if (buf.empty()) {
         return;
     }
-    Bytes block_key = basefwx::crypto::HkdfSha256(info, key, 32);
+    Bytes block_key = basefwx::crypto::HkdfSha256(key, info, 32);
     std::array<std::uint8_t, 8> len_bytes{};
     std::uint64_t len = static_cast<std::uint64_t>(buf.size());
     for (int i = 7; i >= 0; --i) {
@@ -438,7 +438,7 @@ ChunkParams NextParams(const Bytes& perm_material, std::size_t& chunk_index) {
     }
     Bytes info(constants::kStreamInfoPerm.begin(), constants::kStreamInfoPerm.end());
     info.insert(info.end(), idx_bytes.begin(), idx_bytes.end());
-    Bytes seed_bytes = basefwx::crypto::HkdfSha256(AsStringView(info), perm_material, 16);
+    Bytes seed_bytes = basefwx::crypto::HkdfSha256(perm_material, AsStringView(info), 16);
     ChunkParams params;
     params.seed = Seed64FromBytes(seed_bytes);
     params.rotation = static_cast<std::uint8_t>(seed_bytes[0] & 0x07);
@@ -497,7 +497,7 @@ Bytes ObfuscateBytes(const Bytes& data, const Bytes& key) {
         return data;
     }
     Bytes info = BuildInfoWithLength(constants::kObfInfoPerm, data.size());
-    Bytes seed_bytes = basefwx::crypto::HkdfSha256(AsStringView(info), key, 16);
+    Bytes seed_bytes = basefwx::crypto::HkdfSha256(key, AsStringView(info), 16);
     std::uint64_t seed = Seed64FromBytes(seed_bytes);
 
     Bytes out = data;
@@ -512,7 +512,7 @@ Bytes DeobfuscateBytes(const Bytes& data, const Bytes& key) {
         return data;
     }
     Bytes info = BuildInfoWithLength(constants::kObfInfoPerm, data.size());
-    Bytes seed_bytes = basefwx::crypto::HkdfSha256(AsStringView(info), key, 16);
+    Bytes seed_bytes = basefwx::crypto::HkdfSha256(key, AsStringView(info), 16);
     std::uint64_t seed = Seed64FromBytes(seed_bytes);
 
     Bytes out = data;
@@ -566,9 +566,9 @@ StreamObfuscator StreamObfuscator::ForPassword(const std::string& password, cons
     }
     Bytes base_material(password.begin(), password.end());
     base_material.insert(base_material.end(), salt.begin(), salt.end());
-    Bytes mask_key = basefwx::crypto::HkdfSha256(constants::kStreamInfoKey, base_material, 32);
-    Bytes iv = basefwx::crypto::HkdfSha256(constants::kStreamInfoIv, base_material, 16);
-    Bytes perm_material = basefwx::crypto::HkdfSha256(constants::kStreamInfoPerm, base_material, 32);
+    Bytes mask_key = basefwx::crypto::HkdfSha256(base_material, constants::kStreamInfoKey, 32);
+    Bytes iv = basefwx::crypto::HkdfSha256(base_material, constants::kStreamInfoIv, 16);
+    Bytes perm_material = basefwx::crypto::HkdfSha256(base_material, constants::kStreamInfoPerm, 32);
     EVP_CIPHER_CTX* ctx = CreateAesCtrContext(mask_key, iv);
     return StreamObfuscator(std::move(perm_material), ctx);
 }

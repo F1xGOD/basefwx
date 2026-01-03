@@ -14,7 +14,8 @@ import javax.crypto.spec.SecretKeySpec;
 public final class Crypto {
     private static final SecureRandom RNG = new SecureRandom();
     private static final byte[] HKDF_ZERO_SALT = new byte[32];
-    private static final boolean PBKDF2_JCE_COMPAT = detectPbkdf2Compat();
+    private static final boolean PBKDF2_NATIVE_ENABLED = resolvePbkdf2Native();
+    private static final boolean PBKDF2_JCE_COMPAT = PBKDF2_NATIVE_ENABLED && detectPbkdf2Compat();
 
     private Crypto() {}
 
@@ -28,18 +29,23 @@ public final class Crypto {
 
     public static byte[] hkdfSha256(byte[] keyMaterial, byte[] info, int length) {
         byte[] prk = hmacSha256(HKDF_ZERO_SALT, keyMaterial);
-        return hkdfExpand(prk, info == null ? new byte[0] : info, length);
+        return hkdfExpandRfc(prk, info == null ? new byte[0] : info, length);
     }
 
+    /**
+     * Returns RFC HKDF output for lengths up to {@link Constants#HKDF_MAX_LEN}, and a PRF stream
+     * (HMAC-SHA256 with 4-byte counter) for larger lengths.
+     */
+    @Deprecated
     public static byte[] hkdfSha256Stream(byte[] keyMaterial, byte[] info, int length) {
         if (length <= Constants.HKDF_MAX_LEN) {
             return hkdfSha256(keyMaterial, info, length);
         }
         byte[] prk = hmacSha256(HKDF_ZERO_SALT, keyMaterial);
-        return hkdfExpandUnlimited(prk, info == null ? new byte[0] : info, length);
+        return prfStreamHmacSha256(prk, info == null ? new byte[0] : info, length);
     }
 
-    private static byte[] hkdfExpand(byte[] prk, byte[] info, int length) {
+    private static byte[] hkdfExpandRfc(byte[] prk, byte[] info, int length) {
         int hashLen = 32;
         int n = (length + hashLen - 1) / hashLen;
         if (n > 255) {
@@ -71,7 +77,14 @@ public final class Crypto {
         return out;
     }
 
-    private static byte[] hkdfExpandUnlimited(byte[] prk, byte[] info, int length) {
+    private static byte[] prfStreamHmacSha256(byte[] prk, byte[] info, int length) {
+        if (length < 0) {
+            throw new IllegalArgumentException("length < 0");
+        }
+        long blocks = (length + 31L) / 32L;
+        if (blocks > Integer.MAX_VALUE) {
+            throw new IllegalArgumentException("stream too large");
+        }
         int hashLen = 32;
         byte[] out = new byte[length];
         byte[] t = new byte[0];
@@ -100,6 +113,71 @@ public final class Crypto {
         return out;
     }
 
+    /**
+     * XORs input with a HMAC-SHA256 PRF stream (4-byte counter, not RFC HKDF).
+     */
+    public static void xorHmacStream(byte[] prk,
+                                     byte[] info,
+                                     byte[] in,
+                                     int inOff,
+                                     byte[] out,
+                                     int outOff,
+                                     int len,
+                                     int counterStart) {
+        if (len < 0) {
+            throw new IllegalArgumentException("length < 0");
+        }
+        if (len == 0) {
+            return;
+        }
+        if (inOff < 0 || outOff < 0 || inOff + len > in.length || outOff + len > out.length) {
+            throw new IllegalArgumentException("Invalid buffer bounds");
+        }
+        long blocks = (len + 31L) / 32L;
+        if (blocks > Integer.MAX_VALUE) {
+            throw new IllegalArgumentException("stream too large");
+        }
+        if (counterStart <= 0) {
+            throw new IllegalArgumentException("counterStart must be > 0");
+        }
+        long endCounter = (long) counterStart + blocks - 1L;
+        if (endCounter > Integer.MAX_VALUE) {
+            throw new IllegalArgumentException("counter overflow");
+        }
+        byte[] infoBytes = info == null ? new byte[0] : info;
+        try {
+            Mac mac = initHmac(prk);
+            byte[] t = new byte[32];
+            int tLen = 0;
+            int offset = 0;
+            int counter = counterStart;
+            byte[] counterBytes = new byte[4];
+            while (offset < len) {
+                if (tLen > 0) {
+                    mac.update(t, 0, tLen);
+                }
+                if (infoBytes.length > 0) {
+                    mac.update(infoBytes);
+                }
+                counterBytes[0] = (byte) (counter >>> 24);
+                counterBytes[1] = (byte) (counter >>> 16);
+                counterBytes[2] = (byte) (counter >>> 8);
+                counterBytes[3] = (byte) counter;
+                mac.update(counterBytes);
+                mac.doFinal(t, 0);
+                tLen = t.length;
+                int take = Math.min(tLen, len - offset);
+                for (int i = 0; i < take; i++) {
+                    out[outOff + offset + i] = (byte) (in[inOff + offset + i] ^ t[i]);
+                }
+                offset += take;
+                counter += 1;
+            }
+        } catch (GeneralSecurityException exc) {
+            throw new IllegalStateException("HKDF stream XOR failed", exc);
+        }
+    }
+
     public static byte[] hmacSha256(byte[] key, byte[] data) {
         Mac mac = initHmac(key);
         mac.update(data);
@@ -117,6 +195,12 @@ public final class Crypto {
     }
 
     public static byte[] pbkdf2HmacSha256(byte[] password, byte[] salt, int iterations, int length) {
+        if (iterations <= 0) {
+            throw new IllegalArgumentException("iterations must be > 0");
+        }
+        if (length <= 0) {
+            throw new IllegalArgumentException("length must be > 0");
+        }
         if (PBKDF2_JCE_COMPAT) {
             byte[] fast = pbkdf2HmacSha256Native(password, salt, iterations, length);
             if (fast != null) {
@@ -248,7 +332,16 @@ public final class Crypto {
             }
             return cipher.doFinal(ciphertext);
         } catch (GeneralSecurityException exc) {
-            throw new IllegalStateException("AES-GCM decrypt failed", exc);
+            throw new IllegalArgumentException("Bad password or corrupted payload", exc);
         }
+    }
+
+    private static boolean resolvePbkdf2Native() {
+        String raw = System.getenv("BASEFWX_PBKDF2_NATIVE");
+        if (raw == null || raw.trim().isEmpty()) {
+            return true;
+        }
+        String v = raw.trim().toLowerCase();
+        return v.equals("1") || v.equals("true") || v.equals("yes") || v.equals("on");
     }
 }

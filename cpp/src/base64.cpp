@@ -57,54 +57,88 @@ std::string Encode(const std::vector<std::uint8_t>& data) {
 }
 
 std::vector<std::uint8_t> Decode(const std::string& input, bool* ok) {
-    bool success = true;
+    auto fail = [&](std::vector<std::uint8_t>& out) {
+        if (ok) *ok = false;
+        out.clear();
+        return out;
+    };
+
     std::vector<std::uint8_t> out;
     out.reserve((input.size() / 4) * 3);
 
-    int val = 0;
-    int valb = -8;
+    // Collect non-space chars
+    std::string s;
+    s.reserve(input.size());
     for (unsigned char c : input) {
-        if (std::isspace(c)) {
-            continue;
+        if (!std::isspace(c)) s.push_back(static_cast<char>(c));
+    }
+
+    if (s.empty()) {
+        if (ok) *ok = true;
+        return out;
+    }
+    if (s.size() % 4 != 0) {
+        return fail(out);
+    }
+
+    for (std::size_t i = 0; i < s.size(); i += 4) {
+        unsigned char c0 = static_cast<unsigned char>(s[i + 0]);
+        unsigned char c1 = static_cast<unsigned char>(s[i + 1]);
+        unsigned char c2 = static_cast<unsigned char>(s[i + 2]);
+        unsigned char c3 = static_cast<unsigned char>(s[i + 3]);
+
+        auto d0 = (c0 == '=') ? 0xFF : kDecTable[c0];
+        auto d1 = (c1 == '=') ? 0xFF : kDecTable[c1];
+
+        if (c0 == '=' || c1 == '=' || d0 == 0xFF || d1 == 0xFF) {
+            return fail(out);
         }
-        if (c == '=') {
-            break;
+
+        bool pad2 = (c2 == '=');
+        bool pad3 = (c3 == '=');
+
+        std::uint8_t d2 = 0, d3 = 0;
+        if (!pad2) {
+            d2 = kDecTable[c2];
+            if (d2 == 0xFF) return fail(out);
+        } else {
+            // If c2 is '=', c3 must also be '='
+            if (!pad3) return fail(out);
         }
-        std::uint8_t decoded = kDecTable[c];
-        if (decoded == 0xFF) {
-            success = false;
-            break;
+
+        if (!pad3) {
+            d3 = kDecTable[c3];
+            if (d3 == 0xFF) return fail(out);
         }
-        val = (val << 6) + decoded;
-        valb += 6;
-        if (valb >= 0) {
-            out.push_back(static_cast<std::uint8_t>((val >> valb) & 0xFF));
-            valb -= 8;
+
+        std::uint32_t triple =
+            (static_cast<std::uint32_t>(d0) << 18) |
+            (static_cast<std::uint32_t>(d1) << 12) |
+            (static_cast<std::uint32_t>(d2) << 6)  |
+            (static_cast<std::uint32_t>(d3));
+
+        out.push_back(static_cast<std::uint8_t>((triple >> 16) & 0xFF));
+        if (!pad2) out.push_back(static_cast<std::uint8_t>((triple >> 8) & 0xFF));
+        if (!pad3) out.push_back(static_cast<std::uint8_t>(triple & 0xFF));
+
+        // If padding happened, it must be the last quartet
+        if (pad2 || pad3) {
+            if (i + 4 != s.size()) return fail(out);
+
+            // Extra strict: ensure unused bits are zero when padded
+            if (pad2) {
+                // "xx==" => last 4 bits of (d1) must be zero in output encoding
+                if ((triple & 0xFFFF) != 0) return fail(out);
+            } else if (pad3) {
+                // "xxx=" => last 2 bits must be zero
+                if ((triple & 0xFF) != 0) return fail(out);
+            }
         }
     }
-    if (ok) {
-        *ok = success;
-    }
-    if (!success) {
-        out.clear();
-    }
+
+    if (ok) *ok = true;
     return out;
 }
 
-bool IsLikelyBase64(const std::string& input) {
-    if (input.empty()) {
-        return true;
-    }
-    for (unsigned char c : input) {
-        if (std::isspace(c)) {
-            continue;
-        }
-        if (c == '=' || kDecTable[c] != 0xFF) {
-            continue;
-        }
-        return false;
-    }
-    return true;
-}
 
 }  // namespace basefwx::base64

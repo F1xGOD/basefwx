@@ -37,7 +37,7 @@ Bytes RandomBytes(std::size_t size) {
     return out;
 }
 
-Bytes HkdfSha256(std::string_view info, const Bytes& key_material, std::size_t length) {
+Bytes HkdfSha256(const Bytes& key_material, std::string_view info, std::size_t length) {
     EVP_PKEY_CTX* pctx = EVP_PKEY_CTX_new_id(EVP_PKEY_HKDF, nullptr);
     if (!pctx) {
         throw std::runtime_error("HKDF context allocation failed");
@@ -65,7 +65,7 @@ Bytes HkdfSha256(std::string_view info, const Bytes& key_material, std::size_t l
     return out;
 }
 
-Bytes HkdfSha256Stream(std::string_view info, const Bytes& key_material, std::size_t length) {
+Bytes HkdfSha256Stream(const Bytes& key_material, std::string_view info, std::size_t length) {
     if (length == 0) {
         return {};
     }

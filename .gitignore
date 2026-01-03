@@ -49,3 +49,11 @@ basefwx/bar.py
 MASS.py
 inst.exe
 .github/copilot-instructions.md
+
+# Gradle wrapper
+java/gradle/
+java/gradlew
+java/gradlew.bat
+
+# CodeQL
+_codeql_detected_source_root

@@ -1584,6 +1584,12 @@ HwAccel SelectHwAccel() {
     if (cached.has_value()) {
         return cached.value();
     }
+    const char* gha = std::getenv("GITHUB_ACTIONS");
+    const char* ci = std::getenv("CI");
+    if ((gha && std::string(gha) == "true") || (ci && std::string(ci) == "true")) {
+        cached = HwAccel::None;
+        return cached.value();
+    }
     std::string raw = basefwx::env::Get("BASEFWX_HWACCEL");
     std::string mode = ToLower(raw);
     if (mode.empty()) {

@@ -492,45 +492,49 @@ void ApplyAesCtrInPlace(EVP_CIPHER_CTX* ctx, Bytes& buffer) {
 
 }  // namespace
 
-Bytes ObfuscateBytes(const Bytes& data, const Bytes& key) {
+Bytes ObfuscateBytes(const Bytes& data, const Bytes& key, bool fast) {
     if (data.empty()) {
         return data;
     }
-    Bytes info = BuildInfoWithLength(constants::kObfInfoPerm, data.size());
-    Bytes seed_bytes = basefwx::crypto::HkdfSha256(key, AsStringView(info), 16);
-    std::uint64_t seed = Seed64FromBytes(seed_bytes);
-
     Bytes out = data;
     XorKeystreamInPlace(out, key, constants::kObfInfoMask);
-    std::reverse(out.begin(), out.end());
-    PermuteInPlace(out, seed);
+    if (!fast) {
+        Bytes info = BuildInfoWithLength(constants::kObfInfoPerm, data.size());
+        Bytes seed_bytes = basefwx::crypto::HkdfSha256(key, AsStringView(info), 16);
+        std::uint64_t seed = Seed64FromBytes(seed_bytes);
+        std::reverse(out.begin(), out.end());
+        PermuteInPlace(out, seed);
+    }
     return out;
 }
 
-Bytes DeobfuscateBytes(const Bytes& data, const Bytes& key) {
+Bytes DeobfuscateBytes(const Bytes& data, const Bytes& key, bool fast) {
     if (data.empty()) {
         return data;
     }
-    Bytes info = BuildInfoWithLength(constants::kObfInfoPerm, data.size());
-    Bytes seed_bytes = basefwx::crypto::HkdfSha256(key, AsStringView(info), 16);
-    std::uint64_t seed = Seed64FromBytes(seed_bytes);
-
     Bytes out = data;
-    UnpermuteInPlace(out, seed);
-    std::reverse(out.begin(), out.end());
+    if (!fast) {
+        Bytes info = BuildInfoWithLength(constants::kObfInfoPerm, data.size());
+        Bytes seed_bytes = basefwx::crypto::HkdfSha256(key, AsStringView(info), 16);
+        std::uint64_t seed = Seed64FromBytes(seed_bytes);
+        UnpermuteInPlace(out, seed);
+        std::reverse(out.begin(), out.end());
+    }
     XorKeystreamInPlace(out, key, constants::kObfInfoMask);
     return out;
 }
 
-StreamObfuscator::StreamObfuscator(Bytes perm_material, void* ctx)
-    : perm_material_(std::move(perm_material)), ctx_(ctx) {}
+StreamObfuscator::StreamObfuscator(Bytes perm_material, void* ctx, bool fast)
+    : perm_material_(std::move(perm_material)), fast_(fast), ctx_(ctx) {}
 
 StreamObfuscator::StreamObfuscator(StreamObfuscator&& other) noexcept {
     perm_material_ = std::move(other.perm_material_);
     ctx_ = other.ctx_;
     chunk_index_ = other.chunk_index_;
+    fast_ = other.fast_;
     other.ctx_ = nullptr;
     other.chunk_index_ = 0;
+    other.fast_ = false;
 }
 
 StreamObfuscator& StreamObfuscator::operator=(StreamObfuscator&& other) noexcept {
@@ -541,8 +545,10 @@ StreamObfuscator& StreamObfuscator::operator=(StreamObfuscator&& other) noexcept
         perm_material_ = std::move(other.perm_material_);
         ctx_ = other.ctx_;
         chunk_index_ = other.chunk_index_;
+        fast_ = other.fast_;
         other.ctx_ = nullptr;
         other.chunk_index_ = 0;
+        other.fast_ = false;
     }
     return *this;
 }
@@ -557,7 +563,7 @@ Bytes StreamObfuscator::GenerateSalt() {
     return basefwx::crypto::RandomBytes(kSaltLen);
 }
 
-StreamObfuscator StreamObfuscator::ForPassword(const std::string& password, const Bytes& salt) {
+StreamObfuscator StreamObfuscator::ForPassword(const std::string& password, const Bytes& salt, bool fast) {
     if (password.empty()) {
         throw std::runtime_error("Password required for streaming obfuscation");
     }
@@ -570,16 +576,20 @@ StreamObfuscator StreamObfuscator::ForPassword(const std::string& password, cons
     Bytes iv = basefwx::crypto::HkdfSha256(base_material, constants::kStreamInfoIv, 16);
     Bytes perm_material = basefwx::crypto::HkdfSha256(base_material, constants::kStreamInfoPerm, 32);
     EVP_CIPHER_CTX* ctx = CreateAesCtrContext(mask_key, iv);
-    return StreamObfuscator(std::move(perm_material), ctx);
+    return StreamObfuscator(std::move(perm_material), ctx, fast);
 }
 
 Bytes StreamObfuscator::EncodeChunk(const Bytes& chunk) {
     if (chunk.empty()) {
         return {};
     }
-    ChunkParams params = NextParams(perm_material_, chunk_index_);
     Bytes buffer = chunk;
     ApplyAesCtrInPlace(static_cast<EVP_CIPHER_CTX*>(ctx_), buffer);
+    if (fast_) {
+        chunk_index_ += 1;
+        return buffer;
+    }
+    ChunkParams params = NextParams(perm_material_, chunk_index_);
     if (params.swap) {
         SwapNibblesInPlace(buffer);
     }
@@ -594,8 +604,13 @@ Bytes StreamObfuscator::DecodeChunk(const Bytes& chunk) {
     if (chunk.empty()) {
         return {};
     }
-    ChunkParams params = NextParams(perm_material_, chunk_index_);
     Bytes buffer = chunk;
+    if (fast_) {
+        ApplyAesCtrInPlace(static_cast<EVP_CIPHER_CTX*>(ctx_), buffer);
+        chunk_index_ += 1;
+        return buffer;
+    }
+    ChunkParams params = NextParams(perm_material_, chunk_index_);
     UnpermuteInPlace(buffer, params.seed);
     if (params.rotation) {
         RotateRightInPlace(buffer, params.rotation);
@@ -611,8 +626,12 @@ void StreamObfuscator::EncodeChunkInPlace(Bytes& buffer) {
     if (buffer.empty()) {
         return;
     }
-    ChunkParams params = NextParams(perm_material_, chunk_index_);
     ApplyAesCtrInPlace(static_cast<EVP_CIPHER_CTX*>(ctx_), buffer);
+    if (fast_) {
+        chunk_index_ += 1;
+        return;
+    }
+    ChunkParams params = NextParams(perm_material_, chunk_index_);
     if (params.swap) {
         SwapNibblesInPlace(buffer);
     }
@@ -624,6 +643,11 @@ void StreamObfuscator::EncodeChunkInPlace(Bytes& buffer) {
 
 void StreamObfuscator::DecodeChunkInPlace(Bytes& buffer) {
     if (buffer.empty()) {
+        return;
+    }
+    if (fast_) {
+        ApplyAesCtrInPlace(static_cast<EVP_CIPHER_CTX*>(ctx_), buffer);
+        chunk_index_ += 1;
         return;
     }
     ChunkParams params = NextParams(perm_material_, chunk_index_);

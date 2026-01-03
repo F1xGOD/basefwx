@@ -9,15 +9,15 @@ namespace basefwx::obf {
 
 using Bytes = std::vector<std::uint8_t>;
 
-Bytes ObfuscateBytes(const Bytes& data, const Bytes& key);
-Bytes DeobfuscateBytes(const Bytes& data, const Bytes& key);
+Bytes ObfuscateBytes(const Bytes& data, const Bytes& key, bool fast = false);
+Bytes DeobfuscateBytes(const Bytes& data, const Bytes& key, bool fast = false);
 
 class StreamObfuscator {
 public:
     static constexpr std::size_t kSaltLen = 16;
 
     static Bytes GenerateSalt();
-    static StreamObfuscator ForPassword(const std::string& password, const Bytes& salt);
+    static StreamObfuscator ForPassword(const std::string& password, const Bytes& salt, bool fast = false);
 
     StreamObfuscator(StreamObfuscator&& other) noexcept;
     StreamObfuscator& operator=(StreamObfuscator&& other) noexcept;
@@ -29,12 +29,13 @@ public:
     void DecodeChunkInPlace(Bytes& buffer);
 
 private:
-    StreamObfuscator(Bytes perm_material, void* ctx);
+    StreamObfuscator(Bytes perm_material, void* ctx, bool fast);
     StreamObfuscator(const StreamObfuscator&) = delete;
     StreamObfuscator& operator=(const StreamObfuscator&) = delete;
 
     Bytes perm_material_;
     std::size_t chunk_index_ = 0;
+    bool fast_ = false;
     void* ctx_ = nullptr;
 };
 

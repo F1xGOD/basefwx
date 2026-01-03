@@ -1,0 +1,16 @@
+{
+  "generated_at": "1970-01-01T00:00:00Z",
+  "release_tag": "",
+  "bench_iters": 0,
+  "bench_warmup": 0,
+  "bench_workers": 0,
+  "baseline": "python",
+  "epsilon_ns": 1000000,
+  "bench_files": {
+    "bytes": "",
+    "text": ""
+  },
+  "versions": {},
+  "overall": {},
+  "tests": []
+}

@@ -2,12 +2,20 @@
 #include "basefwx/env.hpp"
 
 #include <chrono>
+#include <algorithm>
+#include <atomic>
 #include <cctype>
 #include <cstdlib>
+#include <condition_variable>
 #include <filesystem>
 #include <fstream>
+#include <iomanip>
 #include <iostream>
+#include <limits>
+#include <mutex>
+#include <sstream>
 #include <string>
+#include <thread>
 #include <unordered_set>
 #include <vector>
 
@@ -119,6 +127,101 @@ std::vector<std::uint8_t> ReadBinaryFile(const std::string& path) {
     return basefwx::ReadFile(path);
 }
 
+int ReadEnvInt(const char* name, int default_value, int min_value) {
+    const char* raw = std::getenv(name);
+    if (!raw || !*raw) {
+        return default_value;
+    }
+    char* end = nullptr;
+    long value = std::strtol(raw, &end, 10);
+    if (end == raw) {
+        return default_value;
+    }
+    if (value < min_value) {
+        return default_value;
+    }
+    if (value > static_cast<long>(std::numeric_limits<int>::max())) {
+        return std::numeric_limits<int>::max();
+    }
+    return static_cast<int>(value);
+}
+
+int BenchWarmup() {
+    return ReadEnvInt("BASEFWX_BENCH_WARMUP", 2, 0);
+}
+
+int BenchIters() {
+    return ReadEnvInt("BASEFWX_BENCH_ITERS", 50, 1);
+}
+
+int BenchWorkers() {
+    unsigned int hw = std::thread::hardware_concurrency();
+    int default_workers = hw == 0 ? 1 : static_cast<int>(hw);
+    return ReadEnvInt("BASEFWX_BENCH_WORKERS", default_workers, 1);
+}
+
+long long MedianNs(std::vector<long long>& samples) {
+    if (samples.empty()) {
+        return 0;
+    }
+    std::size_t mid = samples.size() / 2;
+    std::nth_element(samples.begin(), samples.begin() + static_cast<std::ptrdiff_t>(mid), samples.end());
+    long long high = samples[mid];
+    if (samples.size() % 2 == 1) {
+        return high;
+    }
+    auto lower_max = std::max_element(samples.begin(), samples.begin() + static_cast<std::ptrdiff_t>(mid));
+    long long low = lower_max == samples.begin() + static_cast<std::ptrdiff_t>(mid) ? high : *lower_max;
+    return low + (high - low) / 2;
+}
+
+template <typename Fn>
+long long BenchMedian(int warmup, int iters, Fn&& fn) {
+    if (warmup < 0) {
+        warmup = 0;
+    }
+    if (iters < 1) {
+        iters = 1;
+    }
+    for (int i = 0; i < warmup; ++i) {
+        fn();
+    }
+    std::vector<long long> samples;
+    samples.reserve(static_cast<std::size_t>(iters));
+    for (int i = 0; i < iters; ++i) {
+        auto start = std::chrono::steady_clock::now();
+        fn();
+        auto end = std::chrono::steady_clock::now();
+        samples.push_back(std::chrono::duration_cast<std::chrono::nanoseconds>(end - start).count());
+    }
+    return MedianNs(samples);
+}
+
+std::size_t RunFwxaesParallel(const std::vector<std::uint8_t>& data,
+                              const std::string& password,
+                              bool use_master,
+                              std::size_t workers) {
+    std::atomic<std::size_t> total{0};
+    std::vector<std::thread> threads;
+    threads.reserve(workers);
+    basefwx::fwxaes::Options opts;
+    opts.use_master = use_master;
+    for (std::size_t i = 0; i < workers; ++i) {
+        threads.emplace_back([&]() {
+            auto blob = basefwx::fwxaes::EncryptRaw(data, password, opts);
+            auto plain = basefwx::fwxaes::DecryptRaw(blob, password, use_master);
+            g_bench_sink ^= plain.size();
+            total.fetch_add(plain.size(), std::memory_order_relaxed);
+        });
+    }
+    for (auto& t : threads) {
+        if (t.joinable()) {
+            t.join();
+        }
+    }
+    return total.load(std::memory_order_relaxed);
+}
+
 void PrintUsage() {
     bool plain = CliPlain();
     const char* cyan = "\033[36m";
@@ -153,6 +256,7 @@ void PrintUsage() {
     std::cout << "  basefwx_cpp bench-text <method> <text-file> [-p <password>] [--master-pub <path>] [--no-master]\n";
     std::cout << "  basefwx_cpp bench-hash <method> <text-file>\n";
     std::cout << "  basefwx_cpp bench-fwxaes <file> <password> [--master-pub <path>] [--no-master]\n";
+    std::cout << "  basefwx_cpp bench-fwxaes-par <file> <password> [--master-pub <path>] [--no-master]\n";
     std::cout << "  basefwx_cpp bench-b512file <file> <password> [--master-pub <path>] [--no-master] [--no-aead]\n";
     std::cout << "  basefwx_cpp bench-pb512file <file> <password> [--master-pub <path>] [--no-master] [--no-aead]\n";
 }
@@ -453,32 +557,34 @@ int main(int argc, char** argv) {
             if ((method == "b512" || method == "pb512") && opts.password.empty()) {
                 throw std::runtime_error("Password required for b512/pb512 benchmark");
             }
-            auto start = std::chrono::steady_clock::now();
-            if (method == "b64") {
-                std::string enc = basefwx::B64Encode(text);
-                std::string dec = basefwx::B64Decode(enc);
-                g_bench_sink ^= dec.size();
-            } else if (method == "b256") {
-                std::string enc = basefwx::B256Encode(text);
-                std::string dec = basefwx::B256Decode(enc);
-                g_bench_sink ^= dec.size();
-            } else if (method == "a512") {
-                std::string enc = basefwx::A512Encode(text);
-                std::string dec = basefwx::A512Decode(enc);
-                g_bench_sink ^= dec.size();
-            } else if (method == "b512") {
-                std::string enc = basefwx::B512Encode(text, opts.password, opts.use_master, opts.kdf);
-                std::string dec = basefwx::B512Decode(enc, opts.password, opts.use_master, opts.kdf);
-                g_bench_sink ^= dec.size();
-            } else if (method == "pb512") {
-                std::string enc = basefwx::Pb512Encode(text, opts.password, opts.use_master, opts.kdf);
-                std::string dec = basefwx::Pb512Decode(enc, opts.password, opts.use_master, opts.kdf);
-                g_bench_sink ^= dec.size();
-            } else {
-                throw std::runtime_error("Unsupported benchmark method: " + method);
-            }
-            auto end = std::chrono::steady_clock::now();
-            auto ns = std::chrono::duration_cast<std::chrono::nanoseconds>(end - start).count();
+            int warmup = BenchWarmup();
+            int iters = BenchIters();
+            auto run = [&]() {
+                if (method == "b64") {
+                    std::string enc = basefwx::B64Encode(text);
+                    std::string dec = basefwx::B64Decode(enc);
+                    g_bench_sink ^= dec.size();
+                } else if (method == "b256") {
+                    std::string enc = basefwx::B256Encode(text);
+                    std::string dec = basefwx::B256Decode(enc);
+                    g_bench_sink ^= dec.size();
+                } else if (method == "a512") {
+                    std::string enc = basefwx::A512Encode(text);
+                    std::string dec = basefwx::A512Decode(enc);
+                    g_bench_sink ^= dec.size();
+                } else if (method == "b512") {
+                    std::string enc = basefwx::B512Encode(text, opts.password, opts.use_master, opts.kdf);
+                    std::string dec = basefwx::B512Decode(enc, opts.password, opts.use_master, opts.kdf);
+                    g_bench_sink ^= dec.size();
+                } else if (method == "pb512") {
+                    std::string enc = basefwx::Pb512Encode(text, opts.password, opts.use_master, opts.kdf);
+                    std::string dec = basefwx::Pb512Decode(enc, opts.password, opts.use_master, opts.kdf);
+                    g_bench_sink ^= dec.size();
+                } else {
+                    throw std::runtime_error("Unsupported benchmark method: " + method);
+                }
+            };
+            auto ns = BenchMedian(warmup, iters, run);
             std::cout << "BENCH_NS=" << ns << "\n";
             return 0;
         }
@@ -489,24 +595,26 @@ int main(int argc, char** argv) {
             }
             std::string method = ToLower(argv[2]);
             std::string text = ReadTextFile(argv[3]);
-            auto start = std::chrono::steady_clock::now();
-            if (method == "hash512") {
-                std::string digest = basefwx::Hash512(text);
-                g_bench_sink ^= digest.size();
-            } else if (method == "uhash513") {
-                std::string digest = basefwx::Uhash513(text);
-                g_bench_sink ^= digest.size();
-            } else if (method == "bi512") {
-                std::string digest = basefwx::Bi512Encode(text);
-                g_bench_sink ^= digest.size();
-            } else if (method == "b1024") {
-                std::string digest = basefwx::B1024Encode(text);
-                g_bench_sink ^= digest.size();
-            } else {
-                throw std::runtime_error("Unsupported hash benchmark method: " + method);
-            }
-            auto end = std::chrono::steady_clock::now();
-            auto ns = std::chrono::duration_cast<std::chrono::nanoseconds>(end - start).count();
+            int warmup = BenchWarmup();
+            int iters = BenchIters();
+            auto run = [&]() {
+                if (method == "hash512") {
+                    std::string digest = basefwx::Hash512(text);
+                    g_bench_sink ^= digest.size();
+                } else if (method == "uhash513") {
+                    std::string digest = basefwx::Uhash513(text);
+                    g_bench_sink ^= digest.size();
+                } else if (method == "bi512") {
+                    std::string digest = basefwx::Bi512Encode(text);
+                    g_bench_sink ^= digest.size();
+                } else if (method == "b1024") {
+                    std::string digest = basefwx::B1024Encode(text);
+                    g_bench_sink ^= digest.size();
+                } else {
+                    throw std::runtime_error("Unsupported hash benchmark method: " + method);
+                }
+            };
+            auto ns = BenchMedian(warmup, iters, run);
             std::cout << "BENCH_NS=" << ns << "\n";
             return 0;
         }
@@ -535,13 +643,69 @@ int main(int argc, char** argv) {
             auto data = ReadBinaryFile(input);
             basefwx::fwxaes::Options opts;
             opts.use_master = use_master;
-            auto start = std::chrono::steady_clock::now();
-            auto blob = basefwx::fwxaes::EncryptRaw(data, password, opts);
-            auto plain = basefwx::fwxaes::DecryptRaw(blob, password, use_master);
-            auto end = std::chrono::steady_clock::now();
-            g_bench_sink ^= plain.size();
-            auto ns = std::chrono::duration_cast<std::chrono::nanoseconds>(end - start).count();
+            int warmup = BenchWarmup();
+            int iters = BenchIters();
+            auto run = [&]() {
+                auto blob = basefwx::fwxaes::EncryptRaw(data, password, opts);
+                auto plain = basefwx::fwxaes::DecryptRaw(blob, password, use_master);
+                g_bench_sink ^= plain.size();
+            };
+            auto ns = BenchMedian(warmup, iters, run);
             std::cout << "BENCH_NS=" << ns << "\n";
+            return 0;
+        }
+        if (command == "bench-fwxaes-par") {
+            if (argc < 4) {
+                PrintUsage();
+                return 2;
+            }
+            std::string input = argv[2];
+            std::string password = argv[3];
+            bool use_master = true;
+            for (int idx = 4; idx < argc; ++idx) {
+                std::string flag(argv[idx]);
+                if (flag == "--no-master") {
+                    use_master = false;
+                } else if (flag == "--master-pub" || flag == "--use-master-pub") {
+                    if (idx + 1 >= argc) {
+                        throw std::runtime_error("Missing master public key path");
+                    }
+                    ApplyMasterPubPath(argv[idx + 1]);
+                    idx += 1;
+                } else {
+                    throw std::runtime_error("Unknown flag: " + flag);
+                }
+            }
+            auto data = ReadBinaryFile(input);
+            int warmup = BenchWarmup();
+            int iters = BenchIters();
+            std::size_t workers = static_cast<std::size_t>(BenchWorkers());
+            if (workers == 0) {
+                workers = 1;
+            }
+            for (int i = 0; i < warmup; ++i) {
+                RunFwxaesParallel(data, password, use_master, workers);
+            }
+            std::vector<long long> samples;
+            samples.reserve(static_cast<std::size_t>(iters));
+            std::size_t bytes_per_run = 0;
+            for (int i = 0; i < iters; ++i) {
+                auto start = std::chrono::steady_clock::now();
+                bytes_per_run = RunFwxaesParallel(data, password, use_master, workers);
+                auto end = std::chrono::steady_clock::now();
+                samples.push_back(std::chrono::duration_cast<std::chrono::nanoseconds>(end - start).count());
+            }
+            auto median = MedianNs(samples);
+            std::cout << "BENCH_NS=" << median << "\n";
+            if (median > 0 && bytes_per_run > 0) {
+                double seconds = static_cast<double>(median) / 1'000'000'000.0;
+                double gib = static_cast<double>(bytes_per_run) / static_cast<double>(1ULL << 30);
+                double throughput = gib / seconds;
+                std::ostringstream out;
+                out.setf(std::ios::fixed);
+                out << std::setprecision(3) << throughput;
+                std::cout << "THROUGHPUT_GiBps=" << out.str() << " WORKERS=" << workers << "\n";
+            }
             return 0;
         }
         if (command == "bench-b512file" || command == "bench-pb512file") {
@@ -572,6 +736,7 @@ int main(int argc, char** argv) {
             basefwx::filecodec::FileOptions file_opts;
             file_opts.use_master = use_master;
             file_opts.enable_aead = !disable_aead;
+            file_opts.keep_input = true;
             try {
                 std::filesystem::path src_path(input);
                 std::filesystem::path temp_dir = std::filesystem::temp_directory_path()
@@ -580,27 +745,26 @@ int main(int argc, char** argv) {
                 std::filesystem::path bench_input = temp_dir / src_path.filename();
                 std::filesystem::copy_file(src_path, bench_input, std::filesystem::copy_options::overwrite_existing);
 
-                auto run_bench = [&](const basefwx::filecodec::FileOptions& opts) {
-                    auto start = std::chrono::steady_clock::now();
+                int warmup = BenchWarmup();
+                int iters = BenchIters();
+                auto run_once = [&]() {
                     std::string enc_path;
                     std::string dec_path;
                     if (command == "bench-b512file") {
-                        enc_path = basefwx::filecodec::B512EncodeFile(bench_input.string(), password, opts);
-                        dec_path = basefwx::filecodec::B512DecodeFile(enc_path, password, opts);
+                        enc_path = basefwx::filecodec::B512EncodeFile(bench_input.string(), password, file_opts);
+                        dec_path = basefwx::filecodec::B512DecodeFile(enc_path, password, file_opts);
                     } else {
-                        enc_path = basefwx::filecodec::Pb512EncodeFile(bench_input.string(), password, opts);
-                        dec_path = basefwx::filecodec::Pb512DecodeFile(enc_path, password, opts);
+                        enc_path = basefwx::filecodec::Pb512EncodeFile(bench_input.string(), password, file_opts);
+                        dec_path = basefwx::filecodec::Pb512DecodeFile(enc_path, password, file_opts);
                     }
-                    auto end = std::chrono::steady_clock::now();
                     std::error_code size_ec;
                     auto dec_size = std::filesystem::file_size(dec_path, size_ec);
                     if (!size_ec) {
                         g_bench_sink ^= static_cast<std::size_t>(dec_size);
                     }
-                    return std::chrono::duration_cast<std::chrono::nanoseconds>(end - start).count();
                 };
 
-                long long ns = run_bench(file_opts);
+                long long ns = BenchMedian(warmup, iters, run_once);
                 std::cout << "BENCH_NS=" << ns << "\n";
                 std::error_code ec;
                 std::filesystem::remove_all(temp_dir, ec);

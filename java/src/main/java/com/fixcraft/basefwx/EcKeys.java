@@ -6,6 +6,9 @@ import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.attribute.PosixFilePermission;
+import java.nio.file.attribute.PosixFilePermissions;
 import java.security.AlgorithmParameters;
 import java.security.GeneralSecurityException;
 import java.security.KeyFactory;
@@ -21,6 +24,7 @@ import java.security.spec.ECPoint;
 import java.security.spec.ECPublicKeySpec;
 import java.security.spec.PKCS8EncodedKeySpec;
 import java.security.spec.X509EncodedKeySpec;
+import java.util.Set;
 import javax.crypto.KeyAgreement;
 
 public final class EcKeys {
@@ -66,25 +70,28 @@ public final class EcKeys {
         if (encoded.length > 0xFFFF) {
             throw new IllegalArgumentException("EC public key encoding too large");
         }
-        byte[] masterBlob = new byte[Constants.MASTER_EC_MAGIC.length + 2 + encoded.length];
-        System.arraycopy(Constants.MASTER_EC_MAGIC, 0, masterBlob, 0, Constants.MASTER_EC_MAGIC.length);
-        masterBlob[3] = (byte) ((encoded.length >> 8) & 0xFF);
-        masterBlob[4] = (byte) (encoded.length & 0xFF);
-        System.arraycopy(encoded, 0, masterBlob, 5, encoded.length);
+        int magicLen = Constants.MASTER_EC_MAGIC.length;
+        byte[] masterBlob = new byte[magicLen + 2 + encoded.length];
+        System.arraycopy(Constants.MASTER_EC_MAGIC, 0, masterBlob, 0, magicLen);
+        int offset = magicLen;
+        masterBlob[offset] = (byte) ((encoded.length >> 8) & 0xFF);
+        masterBlob[offset + 1] = (byte) (encoded.length & 0xFF);
+        System.arraycopy(encoded, 0, masterBlob, offset + 2, encoded.length);
         return new EcKemResult(masterBlob, shared);
     }
 
     public static byte[] kemDecrypt(byte[] masterBlob, PrivateKey privateKey) {
-        if (masterBlob.length < 5) {
+        int magicLen = Constants.MASTER_EC_MAGIC.length;
+        if (masterBlob.length < magicLen + 2) {
             throw new IllegalArgumentException("Malformed EC master blob");
         }
-        for (int i = 0; i < Constants.MASTER_EC_MAGIC.length; i++) {
+        for (int i = 0; i < magicLen; i++) {
             if (masterBlob[i] != Constants.MASTER_EC_MAGIC[i]) {
                 throw new IllegalArgumentException("Invalid EC master blob");
             }
         }
-        int length = ((masterBlob[3] & 0xFF) << 8) | (masterBlob[4] & 0xFF);
-        int start = 5;
+        int length = ((masterBlob[magicLen] & 0xFF) << 8) | (masterBlob[magicLen + 1] & 0xFF);
+        int start = magicLen + 2;
         int end = start + length;
         if (end > masterBlob.length) {
             throw new IllegalArgumentException("Truncated EC master blob");
@@ -218,23 +225,38 @@ public final class EcKeys {
         } catch (IOException exc) {
             throw new IllegalStateException("Failed to write EC key", exc);
         }
+        if ("PRIVATE KEY".equals(type)) {
+            try {
+                Set<PosixFilePermission> perms = PosixFilePermissions.fromString("rw-------");
+                Files.setPosixFilePermissions(path.toPath(), perms);
+            } catch (UnsupportedOperationException | IOException exc) {
+                // Best-effort; ignore on non-POSIX filesystems.
+            }
+        }
     }
 
     private static byte[] decodePem(byte[] data) {
         String text = new String(data, StandardCharsets.US_ASCII);
-        int begin = text.indexOf("-----BEGIN");
-        int end = text.indexOf("-----END");
-        if (begin >= 0 && end >= 0) {
-            String body = text.substring(begin, end);
-            String[] lines = body.split("\r?\n");
-            StringBuilder b64 = new StringBuilder();
-            for (String line : lines) {
-                if (line.startsWith("-----")) {
-                    continue;
+        String[] lines = text.split("\r?\n");
+        String type = null;
+        boolean inBlock = false;
+        StringBuilder b64 = new StringBuilder();
+        for (String line : lines) {
+            if (!inBlock) {
+                if (line.startsWith("-----BEGIN ") && line.endsWith("-----")) {
+                    type = line.substring(11, line.length() - 5);
+                    inBlock = true;
                 }
-                b64.append(line.trim());
+                continue;
             }
-            return Base64Codec.decode(b64.toString());
+            if (line.startsWith("-----END ") && line.endsWith("-----")) {
+                String endType = line.substring(9, line.length() - 5);
+                if (type != null && type.equals(endType)) {
+                    return Base64Codec.decode(b64.toString());
+                }
+                break;
+            }
+            b64.append(line.trim());
         }
         return data;
     }

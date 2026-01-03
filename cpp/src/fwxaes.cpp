@@ -30,6 +30,7 @@ const std::uint8_t kKdfWrap = 0x02;
 const std::uint8_t kAadBytes[] = {'f', 'w', 'x', 'A', 'E', 'S'};
 const std::uint8_t kPackMagic[] = {'F', 'W', 'X', 'P', 'K', '1'};
 constexpr std::size_t kPackHeaderLen = sizeof(kPackMagic) + 1 + 8;
+constexpr std::size_t kMaxKeyHeaderLen = 4 * 1024 * 1024;
 
 std::uint32_t ResolveTestIters(std::uint32_t fallback) {
     std::string raw = basefwx::env::Get("BASEFWX_FWXAES_PBKDF2_ITERS");
@@ -235,7 +236,7 @@ Bytes EncryptRaw(const Bytes& plaintext, const std::string& password, const Opti
     Bytes aad(kAadBytes, kAadBytes + sizeof(kAadBytes));
     Bytes key;
     if (use_wrap) {
-        key = basefwx::crypto::HkdfSha256(basefwx::constants::kFwxAesKeyInfo, mask_key.mask_key, 32);
+        key = basefwx::crypto::HkdfSha256(mask_key.mask_key, basefwx::constants::kFwxAesKeyInfo, 32);
     } else {
         Bytes salt = basefwx::crypto::RandomBytes(effective.salt_len);
         key = basefwx::crypto::Pbkdf2HmacSha256(resolved, salt, effective.pbkdf2_iters, 32);
@@ -297,7 +298,14 @@ Bytes DecryptRaw(const Bytes& blob, const std::string& password, bool use_master
     std::size_t offset = header_len;
     if (kdf == kKdfWrap) {
         std::size_t header_len_wrap = static_cast<std::size_t>(iters);
-        if (blob.size() < offset + header_len_wrap + iv_len + ct_len) {
+        if (header_len_wrap > kMaxKeyHeaderLen) {
+            throw std::runtime_error("fwxAES key header too large");
+        }
+        if (header_len_wrap > blob.size() - offset) {
+            throw std::runtime_error("fwxAES blob truncated");
+        }
+        std::size_t remaining = blob.size() - offset - header_len_wrap;
+        if (remaining < iv_len || (remaining - iv_len) < ct_len) {
             throw std::runtime_error("fwxAES blob truncated");
         }
         Bytes header(blob.begin() + static_cast<std::ptrdiff_t>(offset),
@@ -319,7 +327,7 @@ Bytes DecryptRaw(const Bytes& blob, const std::string& password, bool use_master
             std::string_view(reinterpret_cast<const char*>(kAadBytes), sizeof(kAadBytes)),
             kdf_opts
         );
-        Bytes key = basefwx::crypto::HkdfSha256(basefwx::constants::kFwxAesKeyInfo, mask_key, 32);
+        Bytes key = basefwx::crypto::HkdfSha256(mask_key, basefwx::constants::kFwxAesKeyInfo, 32);
         Bytes aad(kAadBytes, kAadBytes + sizeof(kAadBytes));
         return basefwx::crypto::AesGcmDecryptWithIv(key, iv, ct, aad);
     }
@@ -376,7 +384,7 @@ std::uint64_t EncryptStream(std::istream& source,
         Bytes iv = basefwx::crypto::RandomBytes(effective.iv_len);
         Bytes key;
         if (use_wrap) {
-            key = basefwx::crypto::HkdfSha256(basefwx::constants::kFwxAesKeyInfo, mask_key.mask_key, 32);
+            key = basefwx::crypto::HkdfSha256(mask_key.mask_key, basefwx::constants::kFwxAesKeyInfo, 32);
         } else {
             if (resolved.empty()) {
                 throw std::runtime_error("Password required when master key usage is disabled");
@@ -556,6 +564,9 @@ std::uint64_t DecryptStream(std::istream& source,
     Bytes key;
     if (kdf == kKdfWrap) {
         std::size_t header_len = iters;
+        if (header_len > kMaxKeyHeaderLen) {
+            throw std::runtime_error("fwxAES key header too large");
+        }
         Bytes key_header(header_len);
         if (header_len > 0) {
             ReadExact(source, key_header.data(), header_len, "fwxAES blob truncated");
@@ -572,7 +583,7 @@ std::uint64_t DecryptStream(std::istream& source,
             std::string_view(reinterpret_cast<const char*>(kAadBytes), sizeof(kAadBytes)),
             basefwx::pb512::KdfOptions{}
         );
-        key = basefwx::crypto::HkdfSha256(basefwx::constants::kFwxAesKeyInfo, mask_key, 32);
+        key = basefwx::crypto::HkdfSha256(mask_key, basefwx::constants::kFwxAesKeyInfo, 32);
     } else {
         Bytes salt(salt_len);
         ReadExact(source, salt.data(), salt.size(), "fwxAES blob truncated");
@@ -581,9 +592,7 @@ std::uint64_t DecryptStream(std::istream& source,
         if (resolved.empty()) {
             throw std::runtime_error("fwxAES password required for PBKDF2 payload");
         }
-        std::uint32_t effective_iters = ResolveTestIters(iters);
-        effective_iters = HardenPbkdf2Iterations(resolved, effective_iters);
-        key = basefwx::crypto::Pbkdf2HmacSha256(resolved, salt, effective_iters, 32);
+        key = basefwx::crypto::Pbkdf2HmacSha256(resolved, salt, iters, 32);
     }
 
     struct CtxDeleter {

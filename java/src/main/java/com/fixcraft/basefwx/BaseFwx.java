@@ -40,6 +40,7 @@ public final class BaseFwx {
     }
 
     private static final int STREAM_CHUNK = 1 << 20;
+    private static final int PERF_OBFUSCATION_THRESHOLD = 1 << 20;
 
     public static byte[] fwxAesEncryptRaw(byte[] plaintext, String password, boolean useMaster) {
         if (plaintext == null) {
@@ -247,65 +248,101 @@ public final class BaseFwx {
         }
 
         try {
-            Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
-            GCMParameterSpec spec = new GCMParameterSpec(Constants.AEAD_TAG_LEN * 8, iv);
-            cipher.init(Cipher.DECRYPT_MODE, new SecretKeySpec(key, "AES"), spec);
-            cipher.updateAAD(Constants.FWXAES_AAD);
-            long remaining = (long) ctLen - Constants.AEAD_TAG_LEN;
-            byte[] buf = new byte[STREAM_CHUNK];
-            long written = 0;
-            while (remaining > 0) {
-                int toRead = (int) Math.min(buf.length, remaining);
-                readExact(input, buf, toRead, "fwxAES blob truncated");
-                byte[] chunk = cipher.update(buf, 0, toRead);
-                if (chunk != null && chunk.length > 0) {
-                    output.write(chunk);
-                    written += chunk.length;
+            CryptoBackend backend = CryptoBackends.get();
+            try (CryptoBackend.AeadDecryptor dec = backend.newGcmDecryptor(key, iv, Constants.FWXAES_AAD)) {
+                long remaining = (long) ctLen - Constants.AEAD_TAG_LEN;
+                byte[] buf = new byte[STREAM_CHUNK];
+                byte[] outBuf = new byte[STREAM_CHUNK];
+                long written = 0;
+                while (remaining > 0) {
+                    int toRead = (int) Math.min(buf.length, remaining);
+                    readExact(input, buf, toRead, "fwxAES blob truncated");
+                    int outLen = dec.update(buf, 0, toRead, outBuf, 0);
+                    if (outLen > 0) {
+                        output.write(outBuf, 0, outLen);
+                        written += outLen;
+                    }
+                    remaining -= toRead;
                 }
-                remaining -= toRead;
-            }
-            byte[] tag = new byte[Constants.AEAD_TAG_LEN];
-            readExact(input, tag, tag.length, "fwxAES blob truncated");
-            try {
-                byte[] finalOut = cipher.doFinal(tag);
-                if (finalOut != null && finalOut.length > 0) {
-                    output.write(finalOut);
-                    written += finalOut.length;
+                byte[] tag = new byte[Constants.AEAD_TAG_LEN];
+                readExact(input, tag, tag.length, "fwxAES blob truncated");
+                try {
+                    int finalLen = dec.doFinal(tag, 0, tag.length, outBuf, 0);
+                    if (finalLen > 0) {
+                        output.write(outBuf, 0, finalLen);
+                        written += finalLen;
+                    }
+                } catch (AEADBadTagException exc) {
+                    throw new IllegalArgumentException("AES-GCM auth failed");
                 }
-            } catch (AEADBadTagException exc) {
-                throw new IllegalArgumentException("AES-GCM auth failed");
+                output.flush();
+                return written;
             }
-            output.flush();
-            return written;
         } catch (GeneralSecurityException exc) {
             throw new IllegalStateException("fwxAES decrypt failed", exc);
         }
     }
 
     public static String b512Encode(String input, String password, boolean useMaster) {
+        byte[] blob = b512EncodeBytes(input.getBytes(StandardCharsets.UTF_8), password, useMaster);
+        return encodePayloadString(blob);
+    }
+
+    public static byte[] b512EncodeBytes(byte[] input, String password, boolean useMaster) {
+        if (input == null) {
+            throw new IllegalArgumentException("b512encode expects bytes");
+        }
         byte[] pw = resolvePasswordBytes(password, useMaster);
         KeyWrap.MaskKeyResult mask = KeyWrap.prepareMaskKey(pw, useMaster, Constants.B512_MASK_INFO,
             false, Constants.MASK_AAD_B512, new KeyWrap.KdfOptions("pbkdf2", Constants.USER_KDF_ITERATIONS));
-        return encodeMaskedPayload(mask, input, Constants.B512_STREAM_INFO);
+        return encodeMaskedPayloadBytes(mask, input, Constants.B512_STREAM_INFO);
     }
 
     public static String b512Decode(String input, String password, boolean useMaster) {
         byte[] pw = resolvePasswordBytes(password, useMaster);
-        return decodeMaskedPayload(input, pw, useMaster, Constants.B512_MASK_INFO, Constants.MASK_AAD_B512,
-            Constants.B512_STREAM_INFO);
+        byte[] plain = decodeMaskedPayloadBytesFromString(input, pw, useMaster,
+            Constants.B512_MASK_INFO, Constants.MASK_AAD_B512, Constants.B512_STREAM_INFO);
+        return new String(plain, StandardCharsets.UTF_8);
+    }
+
+    public static byte[] b512DecodeBytes(byte[] blob, String password, boolean useMaster) {
+        if (blob == null) {
+            throw new IllegalArgumentException("b512decode expects bytes");
+        }
+        byte[] pw = resolvePasswordBytes(password, useMaster);
+        return decodeMaskedPayloadBytes(blob, pw, useMaster,
+            Constants.B512_MASK_INFO, Constants.MASK_AAD_B512, Constants.B512_STREAM_INFO);
     }
 
     public static String pb512Encode(String input, String password, boolean useMaster) {
+        byte[] blob = pb512EncodeBytes(input.getBytes(StandardCharsets.UTF_8), password, useMaster);
+        return encodePayloadString(blob);
+    }
+
+    public static byte[] pb512EncodeBytes(byte[] input, String password, boolean useMaster) {
+        if (input == null) {
+            throw new IllegalArgumentException("pb512encode expects bytes");
+        }
         byte[] pw = resolvePasswordBytes(password, useMaster);
         KeyWrap.MaskKeyResult mask = KeyWrap.prepareMaskKey(pw, useMaster, Constants.PB512_MASK_INFO,
             true, Constants.MASK_AAD_PB512, new KeyWrap.KdfOptions("pbkdf2", Constants.USER_KDF_ITERATIONS));
-        return encodeMaskedPayload(mask, input, Constants.PB512_STREAM_INFO);
+        return encodeMaskedPayloadBytes(mask, input, Constants.PB512_STREAM_INFO);
     }
 
     public static String pb512Decode(String input, String password, boolean useMaster) {
         byte[] pw = resolvePasswordBytes(password, useMaster);
-        return decodeMaskedPayload(input, pw, useMaster, Constants.PB512_MASK_INFO, Constants.MASK_AAD_PB512,
-            Constants.PB512_STREAM_INFO);
+        byte[] plain = decodeMaskedPayloadBytesFromString(input, pw, useMaster,
+            Constants.PB512_MASK_INFO, Constants.MASK_AAD_PB512, Constants.PB512_STREAM_INFO);
+        return new String(plain, StandardCharsets.UTF_8);
+    }
+
+    public static byte[] pb512DecodeBytes(byte[] blob, String password, boolean useMaster) {
+        if (blob == null) {
+            throw new IllegalArgumentException("pb512decode expects bytes");
+        }
+        byte[] pw = resolvePasswordBytes(password, useMaster);
+        return decodeMaskedPayloadBytes(blob, pw, useMaster,
+            Constants.PB512_MASK_INFO, Constants.MASK_AAD_PB512, Constants.PB512_STREAM_INFO);
     }
 
     public static String b256Encode(String input) {
@@ -325,7 +362,7 @@ public final class BaseFwx {
     }
 
     public static String hash512(String input) {
-        return digestHex("SHA-256", input);
+        return digestHex("SHA-512", input);
     }
 
     public static String uhash513(String input) {
@@ -565,6 +602,9 @@ public final class BaseFwx {
         String extToken = pb512Encode(ext, resolvedPassword, useMasterEffective);
         String dataToken = pb512Encode(b64Payload, resolvedPassword, useMasterEffective);
 
+        String body = extToken + Constants.FWX_HEAVY_DELIM + dataToken;
+        boolean fastObf = obfuscate && !stripMetadata && useFastObfuscation(body.length());
+        String obfMode = obfuscate ? (fastObf ? "fast" : "yes") : "no";
         String metadata = buildMetadata(
             "AES-HEAVY",
             stripMetadata,
@@ -573,17 +613,19 @@ public final class BaseFwx {
             kdfLabel,
             null,
             obfuscate,
+            obfMode,
             heavyIters,
             null,
             null,
             null,
             null
         );
-        String body = extToken + Constants.FWX_HEAVY_DELIM + dataToken;
         String plaintext = metadata.isEmpty()
             ? body
             : metadata + Constants.META_DELIM + body;
-        return encryptAesPayload(plaintext, resolvedPassword, useMasterEffective, metadata, kdfLabel, heavyIters, obfuscate);
+        byte[] plaintextBytes = plaintext.getBytes(StandardCharsets.UTF_8);
+        return encryptAesPayloadBytes(plaintextBytes, resolvedPassword, useMasterEffective, metadata,
+            kdfLabel, heavyIters, obfuscate, fastObf);
     }
 
     public static DecodedFile pb512FileDecodeBytes(byte[] blob,
@@ -687,8 +729,9 @@ public final class BaseFwx {
         String ext = getExtension(input);
         byte[] extBytes = ext.isEmpty() ? new byte[0] : ext.getBytes(StandardCharsets.UTF_8);
         byte[] streamSalt = StreamObfuscator.generateSalt();
+        boolean fastObf = useFastObfuscation(input.length());
         String metadata = buildMetadata("FWX512R", false, useMasterEffective, "AESGCM", "pbkdf2",
-            "STREAM", null, null, null, null, null, null);
+            "STREAM", null, fastObf ? "fast" : "yes", null, null, null, null, null);
         byte[] metadataBytes = metadata.isEmpty()
             ? new byte[0]
             : metadata.getBytes(StandardCharsets.UTF_8);
@@ -704,7 +747,7 @@ public final class BaseFwx {
         File outFile = output != null ? output : new File(input.getParentFile(), input.getName() + ".fwx");
         byte[] aeadKey = Crypto.hkdfSha256(mask.maskKey, Constants.B512_AEAD_INFO, 32);
         byte[] nonce = Crypto.randomBytes(Constants.AEAD_NONCE_LEN);
-        StreamObfuscator obfuscator = StreamObfuscator.forPassword(pw, streamSalt);
+        StreamObfuscator obfuscator = StreamObfuscator.forPassword(pw, streamSalt, fastObf);
 
         try (FileInputStream in = new FileInputStream(input);
              FileOutputStream out = new FileOutputStream(outFile)) {
@@ -719,41 +762,42 @@ public final class BaseFwx {
             }
             out.write(nonce);
 
-            Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
-            GCMParameterSpec spec = new GCMParameterSpec(Constants.AEAD_TAG_LEN * 8, nonce);
-            cipher.init(Cipher.ENCRYPT_MODE, new SecretKeySpec(aeadKey, "AES"), spec);
-            if (metadataBytes.length > 0) {
-                cipher.updateAAD(metadataBytes);
-            }
-            if (prefixBytes.length > 0) {
-                byte[] ct = cipher.update(prefixBytes);
-                if (ct != null && ct.length > 0) {
-                    out.write(ct);
+            CryptoBackend backend = CryptoBackends.get();
+            try (CryptoBackend.AeadEncryptor enc = backend.newGcmEncryptor(aeadKey, nonce, metadataBytes)) {
+                byte[] outBuf = new byte[Constants.STREAM_CHUNK_SIZE + Constants.AEAD_TAG_LEN];
+                if (prefixBytes.length > 0) {
+                    int outLen = enc.update(prefixBytes, 0, prefixBytes.length, outBuf, 0);
+                    if (outLen > 0) {
+                        out.write(outBuf, 0, outLen);
+                    }
                 }
-            }
-            byte[] headerCt = cipher.update(streamHeader);
-            if (headerCt != null && headerCt.length > 0) {
-                out.write(headerCt);
-            }
+                int headerLen = enc.update(streamHeader, 0, streamHeader.length, outBuf, 0);
+                if (headerLen > 0) {
+                    out.write(outBuf, 0, headerLen);
+                }
 
-            byte[] buffer = new byte[Constants.STREAM_CHUNK_SIZE];
-            int read;
-            while ((read = in.read(buffer)) != -1) {
-                obfuscator.encodeChunkInPlace(buffer, read);
-                byte[] ct = cipher.update(buffer, 0, read);
-                if (ct != null && ct.length > 0) {
-                    out.write(ct);
+                byte[] buffer = new byte[Constants.STREAM_CHUNK_SIZE];
+                long remaining = input.length();
+                while (remaining > 0) {
+                    int take = (int) Math.min(buffer.length, remaining);
+                    readExact(in, buffer, take, "Streaming payload truncated");
+                    obfuscator.encodeChunkInPlace(buffer, take);
+                    int outLen = enc.update(buffer, 0, take, outBuf, 0);
+                    if (outLen > 0) {
+                        out.write(outBuf, 0, outLen);
+                    }
+                    remaining -= take;
                 }
+                int finalLen = enc.doFinal(outBuf, 0);
+                if (finalLen < Constants.AEAD_TAG_LEN) {
+                    throw new IllegalStateException("AES-GCM final block too short");
+                }
+                int ctLen = finalLen - Constants.AEAD_TAG_LEN;
+                if (ctLen > 0) {
+                    out.write(outBuf, 0, ctLen);
+                }
+                out.write(outBuf, ctLen, Constants.AEAD_TAG_LEN);
             }
-            byte[] finalCt = cipher.doFinal();
-            if (finalCt.length < Constants.AEAD_TAG_LEN) {
-                throw new IllegalStateException("AES-GCM final block too short");
-            }
-            int ctLen = finalCt.length - Constants.AEAD_TAG_LEN;
-            if (ctLen > 0) {
-                out.write(finalCt, 0, ctLen);
-            }
-            out.write(finalCt, ctLen, Constants.AEAD_TAG_LEN);
             out.flush();
         } catch (IOException | GeneralSecurityException exc) {
             throw new IllegalStateException("Streaming b512 encode failed", exc);
@@ -774,6 +818,8 @@ public final class BaseFwx {
         byte[] metadataBytes;
         String metadataBlob = "";
         boolean useMasterEffective = useMaster;
+        boolean obfuscateStream = true;
+        boolean fastObfStream = false;
         try (FileInputStream in = new FileInputStream(input)) {
             int lenUser = readU32(in, "Ciphertext payload truncated");
             byte[] userBlob = readExactBytes(in, lenUser, "Ciphertext payload truncated");
@@ -795,6 +841,9 @@ public final class BaseFwx {
             if ("no".equalsIgnoreCase(masterHint)) {
                 useMasterEffective = false;
             }
+            String obfHint = metaValue(metadataBlob, "ENC-OBF");
+            boolean obfuscate = !"no".equalsIgnoreCase(obfHint);
+            boolean fastObf = "fast".equalsIgnoreCase(obfHint);
             byte[] nonce = readExactBytes(in, Constants.AEAD_NONCE_LEN, "Ciphertext payload truncated");
             long cipherBodyLen = (lenPayload & 0xFFFFFFFFL) - 4L - metaLen
                 - Constants.AEAD_NONCE_LEN - Constants.AEAD_TAG_LEN;
@@ -812,30 +861,27 @@ public final class BaseFwx {
             );
             byte[] aeadKey = Crypto.hkdfSha256(maskKey, Constants.B512_AEAD_INFO, 32);
 
-            Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
-            GCMParameterSpec spec = new GCMParameterSpec(Constants.AEAD_TAG_LEN * 8, nonce);
-            cipher.init(Cipher.DECRYPT_MODE, new SecretKeySpec(aeadKey, "AES"), spec);
-            if (metadataBytes.length > 0) {
-                cipher.updateAAD(metadataBytes);
-            }
-
-            tempPlain = File.createTempFile("basefwx-stream", ".plain");
-            try (FileOutputStream plainOut = new FileOutputStream(tempPlain)) {
-                byte[] buffer = new byte[Constants.STREAM_CHUNK_SIZE];
-                long remaining = cipherBodyLen;
-                while (remaining > 0) {
-                    int take = (int) Math.min(buffer.length, remaining);
-                    readExact(in, buffer, take, "Ciphertext truncated");
-                    byte[] plain = cipher.update(buffer, 0, take);
-                    if (plain != null && plain.length > 0) {
-                        plainOut.write(plain);
+            CryptoBackend backend = CryptoBackends.get();
+            try (CryptoBackend.AeadDecryptor dec = backend.newGcmDecryptor(aeadKey, nonce, metadataBytes)) {
+                tempPlain = File.createTempFile("basefwx-stream", ".plain");
+                try (FileOutputStream plainOut = new FileOutputStream(tempPlain)) {
+                    byte[] buffer = new byte[Constants.STREAM_CHUNK_SIZE];
+                    byte[] outBuf = new byte[Constants.STREAM_CHUNK_SIZE];
+                    long remaining = cipherBodyLen;
+                    while (remaining > 0) {
+                        int take = (int) Math.min(buffer.length, remaining);
+                        readExact(in, buffer, take, "Ciphertext truncated");
+                        int outLen = dec.update(buffer, 0, take, outBuf, 0);
+                        if (outLen > 0) {
+                            plainOut.write(outBuf, 0, outLen);
+                        }
+                        remaining -= take;
                     }
-                    remaining -= take;
-                }
-                byte[] tag = readExactBytes(in, Constants.AEAD_TAG_LEN, "Ciphertext payload truncated");
-                byte[] finalPlain = cipher.doFinal(tag);
-                if (finalPlain != null && finalPlain.length > 0) {
-                    plainOut.write(finalPlain);
+                    byte[] tag = readExactBytes(in, Constants.AEAD_TAG_LEN, "Ciphertext payload truncated");
+                    int finalLen = dec.doFinal(tag, 0, tag.length, outBuf, 0);
+                    if (finalLen > 0) {
+                        plainOut.write(outBuf, 0, finalLen);
+                    }
                 }
             }
         } catch (IOException | GeneralSecurityException exc) {
@@ -872,7 +918,7 @@ public final class BaseFwx {
                 ? readExactBytes(plainIn, extLen, "Malformed streaming payload: truncated extension")
                 : new byte[0];
 
-            StreamObfuscator decoder = StreamObfuscator.forPassword(pw, salt);
+            StreamObfuscator decoder = obfuscate ? StreamObfuscator.forPassword(pw, salt, fastObf) : null;
             File outFile = resolveDecodedOutput(input, output, extBytes);
             try (FileOutputStream out = new FileOutputStream(outFile)) {
                 byte[] buffer = new byte[chunkSize];
@@ -880,7 +926,9 @@ public final class BaseFwx {
                 while (remaining > 0) {
                     int take = (int) Math.min(buffer.length, remaining);
                     readExact(plainIn, buffer, take, "Streaming payload truncated");
-                    decoder.decodeChunkInPlace(buffer, take);
+                    if (decoder != null) {
+                        decoder.decodeChunkInPlace(buffer, take);
+                    }
                     out.write(buffer, 0, take);
                     remaining -= take;
                 }
@@ -932,6 +980,8 @@ public final class BaseFwx {
         byte[] streamSalt = StreamObfuscator.generateSalt();
         String ext = getExtension(input);
         byte[] extBytes = ext.isEmpty() ? new byte[0] : ext.getBytes(StandardCharsets.UTF_8);
+        boolean fastObf = obfuscate && useFastObfuscation(input.length());
+        String obfMode = obfuscate ? (fastObf ? "fast" : "yes") : "no";
         String metadata = buildMetadata(
             "AES-HEAVY",
             false,
@@ -940,6 +990,7 @@ public final class BaseFwx {
             kdfLabel,
             "STREAM",
             obfuscate,
+            obfMode,
             heavyIters,
             null,
             null,
@@ -969,7 +1020,7 @@ public final class BaseFwx {
             System.arraycopy(wrapped, 0, userBlob, salt.length, wrapped.length);
         }
         byte[] nonce = Crypto.randomBytes(Constants.AEAD_NONCE_LEN);
-        StreamObfuscator obfuscator = StreamObfuscator.forPassword(pw, streamSalt);
+        StreamObfuscator obfuscator = StreamObfuscator.forPassword(pw, streamSalt, fastObf);
         File outFile = output != null ? output : new File(input.getParentFile(), input.getName() + ".fwx");
 
         try (FileInputStream in = new FileInputStream(input);
@@ -985,41 +1036,42 @@ public final class BaseFwx {
             }
             out.write(nonce);
 
-            Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
-            GCMParameterSpec spec = new GCMParameterSpec(Constants.AEAD_TAG_LEN * 8, nonce);
-            cipher.init(Cipher.ENCRYPT_MODE, new SecretKeySpec(ephemeralKey, "AES"), spec);
-            if (metadataBytes.length > 0) {
-                cipher.updateAAD(metadataBytes);
-            }
-            if (prefixBytes.length > 0) {
-                byte[] ct = cipher.update(prefixBytes);
-                if (ct != null && ct.length > 0) {
-                    out.write(ct);
+            CryptoBackend backend = CryptoBackends.get();
+            try (CryptoBackend.AeadEncryptor enc = backend.newGcmEncryptor(ephemeralKey, nonce, metadataBytes)) {
+                byte[] outBuf = new byte[Constants.STREAM_CHUNK_SIZE + Constants.AEAD_TAG_LEN];
+                if (prefixBytes.length > 0) {
+                    int outLen = enc.update(prefixBytes, 0, prefixBytes.length, outBuf, 0);
+                    if (outLen > 0) {
+                        out.write(outBuf, 0, outLen);
+                    }
                 }
-            }
-            byte[] headerCt = cipher.update(streamHeader);
-            if (headerCt != null && headerCt.length > 0) {
-                out.write(headerCt);
-            }
+                int headerLen = enc.update(streamHeader, 0, streamHeader.length, outBuf, 0);
+                if (headerLen > 0) {
+                    out.write(outBuf, 0, headerLen);
+                }
 
-            byte[] buffer = new byte[Constants.STREAM_CHUNK_SIZE];
-            int read;
-            while ((read = in.read(buffer)) != -1) {
-                obfuscator.encodeChunkInPlace(buffer, read);
-                byte[] ct = cipher.update(buffer, 0, read);
-                if (ct != null && ct.length > 0) {
-                    out.write(ct);
+                byte[] buffer = new byte[Constants.STREAM_CHUNK_SIZE];
+                long remaining = input.length();
+                while (remaining > 0) {
+                    int take = (int) Math.min(buffer.length, remaining);
+                    readExact(in, buffer, take, "Streaming payload truncated");
+                    obfuscator.encodeChunkInPlace(buffer, take);
+                    int outLen = enc.update(buffer, 0, take, outBuf, 0);
+                    if (outLen > 0) {
+                        out.write(outBuf, 0, outLen);
+                    }
+                    remaining -= take;
                 }
+                int finalLen = enc.doFinal(outBuf, 0);
+                if (finalLen < Constants.AEAD_TAG_LEN) {
+                    throw new IllegalStateException("AES-GCM final block too short");
+                }
+                int ctLen = finalLen - Constants.AEAD_TAG_LEN;
+                if (ctLen > 0) {
+                    out.write(outBuf, 0, ctLen);
+                }
+                out.write(outBuf, ctLen, Constants.AEAD_TAG_LEN);
             }
-            byte[] finalCt = cipher.doFinal();
-            if (finalCt.length < Constants.AEAD_TAG_LEN) {
-                throw new IllegalStateException("AES-GCM final block too short");
-            }
-            int ctLen = finalCt.length - Constants.AEAD_TAG_LEN;
-            if (ctLen > 0) {
-                out.write(finalCt, 0, ctLen);
-            }
-            out.write(finalCt, ctLen, Constants.AEAD_TAG_LEN);
             out.flush();
         } catch (IOException | GeneralSecurityException exc) {
             throw new IllegalStateException("AES-heavy streaming encode failed", exc);
@@ -1061,6 +1113,9 @@ public final class BaseFwx {
             if ("no".equalsIgnoreCase(masterHint)) {
                 useMasterEffective = false;
             }
+            String obfHint = metaValue(metadataBlob, "ENC-OBF");
+            obfuscateStream = !"no".equalsIgnoreCase(obfHint);
+            fastObfStream = "fast".equalsIgnoreCase(obfHint);
             String kdfHint = metaValue(metadataBlob, "ENC-KDF");
             if (kdfHint == null || kdfHint.isEmpty()) {
                 kdfHint = resolveUserKdfLabel();
@@ -1104,30 +1159,27 @@ public final class BaseFwx {
                 throw new IllegalArgumentException("Unable to derive payload key");
             }
 
-            Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
-            GCMParameterSpec spec = new GCMParameterSpec(Constants.AEAD_TAG_LEN * 8, nonce);
-            cipher.init(Cipher.DECRYPT_MODE, new SecretKeySpec(ephemeralKey, "AES"), spec);
-            if (metadataBytes.length > 0) {
-                cipher.updateAAD(metadataBytes);
-            }
-
-            tempPlain = File.createTempFile("basefwx-stream", ".plain");
-            try (FileOutputStream plainOut = new FileOutputStream(tempPlain)) {
-                byte[] buffer = new byte[Constants.STREAM_CHUNK_SIZE];
-                long remaining = cipherBodyLen;
-                while (remaining > 0) {
-                    int take = (int) Math.min(buffer.length, remaining);
-                    readExact(in, buffer, take, "Ciphertext truncated");
-                    byte[] plain = cipher.update(buffer, 0, take);
-                    if (plain != null && plain.length > 0) {
-                        plainOut.write(plain);
+            CryptoBackend backend = CryptoBackends.get();
+            try (CryptoBackend.AeadDecryptor dec = backend.newGcmDecryptor(ephemeralKey, nonce, metadataBytes)) {
+                tempPlain = File.createTempFile("basefwx-stream", ".plain");
+                try (FileOutputStream plainOut = new FileOutputStream(tempPlain)) {
+                    byte[] buffer = new byte[Constants.STREAM_CHUNK_SIZE];
+                    byte[] outBuf = new byte[Constants.STREAM_CHUNK_SIZE];
+                    long remaining = cipherBodyLen;
+                    while (remaining > 0) {
+                        int take = (int) Math.min(buffer.length, remaining);
+                        readExact(in, buffer, take, "Ciphertext truncated");
+                        int outLen = dec.update(buffer, 0, take, outBuf, 0);
+                        if (outLen > 0) {
+                            plainOut.write(outBuf, 0, outLen);
+                        }
+                        remaining -= take;
                     }
-                    remaining -= take;
-                }
-                byte[] tag = readExactBytes(in, Constants.AEAD_TAG_LEN, "Ciphertext payload truncated");
-                byte[] finalPlain = cipher.doFinal(tag);
-                if (finalPlain != null && finalPlain.length > 0) {
-                    plainOut.write(finalPlain);
+                    byte[] tag = readExactBytes(in, Constants.AEAD_TAG_LEN, "Ciphertext payload truncated");
+                    int finalLen = dec.doFinal(tag, 0, tag.length, outBuf, 0);
+                    if (finalLen > 0) {
+                        plainOut.write(outBuf, 0, finalLen);
+                    }
                 }
             }
         } catch (IOException | GeneralSecurityException exc) {
@@ -1164,7 +1216,9 @@ public final class BaseFwx {
                 ? readExactBytes(plainIn, extLen, "Malformed streaming payload: truncated extension")
                 : new byte[0];
 
-            StreamObfuscator decoder = StreamObfuscator.forPassword(pw, salt);
+            StreamObfuscator decoder = obfuscateStream
+                ? StreamObfuscator.forPassword(pw, salt, fastObfStream)
+                : null;
             File outFile = resolveDecodedOutput(input, output, extBytes);
             try (FileOutputStream out = new FileOutputStream(outFile)) {
                 byte[] buffer = new byte[chunkSize];
@@ -1172,7 +1226,9 @@ public final class BaseFwx {
                 while (remaining > 0) {
                     int take = (int) Math.min(buffer.length, remaining);
                     readExact(plainIn, buffer, take, "Streaming payload truncated");
-                    decoder.decodeChunkInPlace(buffer, take);
+                    if (decoder != null) {
+                        decoder.decodeChunkInPlace(buffer, take);
+                    }
                     out.write(buffer, 0, take);
                     remaining -= take;
                 }
@@ -1275,13 +1331,46 @@ public final class BaseFwx {
         }
     }
 
+    public static void fwxAesEncryptFileNio(File input, File output, String password, boolean useMaster) {
+        try (FileChannel in = new FileInputStream(input).getChannel();
+             FileChannel out = new FileOutputStream(output).getChannel()) {
+            long ctLen = fwxAesEncryptChannel(in, out, password, useMaster);
+            patchCtLen(out, ctLen);
+        } catch (IOException exc) {
+            throw new IllegalStateException("fwxAES file encrypt failed", exc);
+        }
+    }
+
+    public static void fwxAesDecryptFileNio(File input, File output, String password, boolean useMaster) {
+        try (FileChannel in = new FileInputStream(input).getChannel();
+             FileChannel out = new FileOutputStream(output).getChannel()) {
+            fwxAesDecryptChannel(in, out, password, useMaster);
+        } catch (IOException exc) {
+            throw new IllegalStateException("fwxAES file decrypt failed", exc);
+        }
+    }
+
     private static byte[] encryptAesPayload(String plaintext,
                                             String password,
                                             boolean useMaster,
                                             String metadataBlob,
                                             String kdfLabel,
                                             int kdfIterations,
-                                            boolean obfuscate) {
+                                            boolean obfuscate,
+                                            boolean fastObf) {
+        byte[] payloadBytes = plaintext.getBytes(StandardCharsets.UTF_8);
+        return encryptAesPayloadBytes(payloadBytes, password, useMaster, metadataBlob,
+            kdfLabel, kdfIterations, obfuscate, fastObf);
+    }
+
+    private static byte[] encryptAesPayloadBytes(byte[] payloadBytes,
+                                                 String password,
+                                                 boolean useMaster,
+                                                 String metadataBlob,
+                                                 String kdfLabel,
+                                                 int kdfIterations,
+                                                 boolean obfuscate,
+                                                 boolean fastObf) {
         byte[] pw = resolvePasswordBytes(password, useMaster);
         if (pw.length == 0 && !useMaster) {
             throw new IllegalArgumentException("Cannot encrypt without password or master key");
@@ -1322,9 +1411,8 @@ public final class BaseFwx {
             System.arraycopy(wrapped, 0, userBlob, salt.length, wrapped.length);
         }
 
-        byte[] payloadBytes = plaintext.getBytes(StandardCharsets.UTF_8);
         if (obfuscate && payloadObfuscationEnabled()) {
-            payloadBytes = obfuscateBytes(payloadBytes, ephemeralKey);
+            payloadBytes = obfuscateBytes(payloadBytes, ephemeralKey, fastObf);
         }
 
         byte[] ciphertext = Crypto.aesGcmEncrypt(ephemeralKey, payloadBytes, aad);
@@ -1336,6 +1424,11 @@ public final class BaseFwx {
     }
 
     private static String decryptAesPayload(byte[] blob, String password, boolean useMaster) {
+        byte[] plain = decryptAesPayloadBytes(blob, password, useMaster);
+        return new String(plain, StandardCharsets.UTF_8);
+    }
+
+    private static byte[] decryptAesPayloadBytes(byte[] blob, String password, boolean useMaster) {
         byte[] pw = resolvePasswordBytes(password, useMaster);
         List<byte[]> parts = Format.unpackLengthPrefixed(blob, 3);
         byte[] userBlob = parts.get(0);
@@ -1356,6 +1449,7 @@ public final class BaseFwx {
 
         String obfHint = metaValue(metadataBlob, "ENC-OBF");
         boolean shouldDeobfuscate = payloadObfuscationEnabled() && !"no".equalsIgnoreCase(obfHint);
+        boolean fastObf = "fast".equalsIgnoreCase(obfHint);
         String kdfHint = metaValue(metadataBlob, "ENC-KDF");
         if (kdfHint.isEmpty()) {
             kdfHint = resolveUserKdfLabel();
@@ -1368,7 +1462,7 @@ public final class BaseFwx {
                 throw new IllegalArgumentException("Master key required to decrypt this payload");
             }
             if (!startsWith(masterBlob, Constants.MASTER_EC_MAGIC)) {
-                throw new IllegalArgumentException("PQ master key not supported in Java");
+                throw new IllegalArgumentException("Invalid master key blob magic");
             }
             java.security.PrivateKey priv = EcKeys.loadMasterPrivate();
             byte[] shared = EcKeys.kemDecrypt(masterBlob, priv);
@@ -1396,9 +1490,9 @@ public final class BaseFwx {
         byte[] ciphertext = Arrays.copyOfRange(payloadBlob, metadataEnd, payloadBlob.length);
         byte[] plain = Crypto.aesGcmDecrypt(ephemeralKey, ciphertext, metadataBytes);
         if (shouldDeobfuscate) {
-            plain = deobfuscateBytes(plain, ephemeralKey);
+            plain = deobfuscateBytes(plain, ephemeralKey, fastObf);
         }
-        return new String(plain, StandardCharsets.UTF_8);
+        return plain;
     }
 
     private static boolean payloadObfuscationEnabled() {
@@ -1408,6 +1502,19 @@ public final class BaseFwx {
         }
         String v = raw.trim().toLowerCase();
         return v.equals("1") || v.equals("true") || v.equals("yes") || v.equals("on");
+    }
+
+    private static boolean perfModeEnabled() {
+        String raw = System.getenv("BASEFWX_PERF");
+        if (raw == null || raw.trim().isEmpty()) {
+            return false;
+        }
+        String v = raw.trim().toLowerCase();
+        return v.equals("1") || v.equals("true") || v.equals("yes") || v.equals("on");
+    }
+
+    private static boolean useFastObfuscation(long length) {
+        return perfModeEnabled() && length >= PERF_OBFUSCATION_THRESHOLD;
     }
 
     private static String resolveUserKdfLabel() {
@@ -1457,29 +1564,41 @@ public final class BaseFwx {
     }
 
     private static byte[] obfuscateBytes(byte[] data, byte[] key) {
+        return obfuscateBytes(data, key, useFastObfuscation(data.length));
+    }
+
+    private static byte[] obfuscateBytes(byte[] data, byte[] key, boolean fast) {
         if (data.length == 0) {
             return data;
         }
-        byte[] info = buildInfoWithLength(Constants.OBF_INFO_PERM, data.length);
-        byte[] seedBytes = Crypto.hkdfSha256(key, info, 16);
-        long seed = seed64FromBytes(seedBytes);
         byte[] out = data.clone();
         xorKeystreamInPlace(out, key, Constants.OBF_INFO_MASK);
-        reverseInPlace(out);
-        permuteInPlace(out, seed);
+        if (!fast) {
+            byte[] info = buildInfoWithLength(Constants.OBF_INFO_PERM, data.length);
+            byte[] seedBytes = Crypto.hkdfSha256(key, info, 16);
+            long seed = seed64FromBytes(seedBytes);
+            reverseInPlace(out);
+            permuteInPlace(out, seed);
+        }
         return out;
     }
 
     private static byte[] deobfuscateBytes(byte[] data, byte[] key) {
+        return deobfuscateBytes(data, key, useFastObfuscation(data.length));
+    }
+
+    private static byte[] deobfuscateBytes(byte[] data, byte[] key, boolean fast) {
         if (data.length == 0) {
             return data;
         }
-        byte[] info = buildInfoWithLength(Constants.OBF_INFO_PERM, data.length);
-        byte[] seedBytes = Crypto.hkdfSha256(key, info, 16);
-        long seed = seed64FromBytes(seedBytes);
         byte[] out = data.clone();
-        unpermuteInPlace(out, seed);
-        reverseInPlace(out);
+        if (!fast) {
+            byte[] info = buildInfoWithLength(Constants.OBF_INFO_PERM, data.length);
+            byte[] seedBytes = Crypto.hkdfSha256(key, info, 16);
+            long seed = seed64FromBytes(seedBytes);
+            unpermuteInPlace(out, seed);
+            reverseInPlace(out);
+        }
         xorKeystreamInPlace(out, key, Constants.OBF_INFO_MASK);
         return out;
     }
@@ -1836,21 +1955,23 @@ public final class BaseFwx {
         private final Cipher ctrCipher;
         private final byte[] permMaterial;
         private final byte[] permInfo;
+        private final boolean fast;
         private long chunkIndex = 0L;
         private byte[] scratch = new byte[0];
 
-        private StreamObfuscator(byte[] permMaterial, Cipher ctrCipher) {
+        private StreamObfuscator(byte[] permMaterial, Cipher ctrCipher, boolean fast) {
             this.permMaterial = permMaterial;
             this.permInfo = new byte[Constants.STREAM_INFO_PERM.length + 8];
             System.arraycopy(Constants.STREAM_INFO_PERM, 0, permInfo, 0, Constants.STREAM_INFO_PERM.length);
             this.ctrCipher = ctrCipher;
+            this.fast = fast;
         }
 
         static byte[] generateSalt() {
             return Crypto.randomBytes(Constants.STREAM_SALT_LEN);
         }
 
-        static StreamObfuscator forPassword(byte[] password, byte[] salt) {
+        static StreamObfuscator forPassword(byte[] password, byte[] salt, boolean fast) {
             if (password == null || password.length == 0) {
                 throw new IllegalArgumentException("Password required for streaming obfuscation");
             }
@@ -1866,7 +1987,7 @@ public final class BaseFwx {
             try {
                 Cipher cipher = Cipher.getInstance("AES/CTR/NoPadding");
                 cipher.init(Cipher.ENCRYPT_MODE, new SecretKeySpec(maskKey, "AES"), new IvParameterSpec(iv));
-                return new StreamObfuscator(permMaterial, cipher);
+                return new StreamObfuscator(permMaterial, cipher, fast);
             } catch (GeneralSecurityException exc) {
                 throw new IllegalStateException("AES-CTR init failed", exc);
             }
@@ -1878,6 +1999,11 @@ public final class BaseFwx {
 
         void encodeChunkInPlace(byte[] buffer, int length) {
             if (length <= 0) {
+                return;
+            }
+            if (fast) {
+                applyCtrInPlace(buffer, length);
+                chunkIndex += 1;
                 return;
             }
             ChunkParams params = nextParams();
@@ -1897,6 +2023,11 @@ public final class BaseFwx {
 
         void decodeChunkInPlace(byte[] buffer, int length) {
             if (length <= 0) {
+                return;
+            }
+            if (fast) {
+                applyCtrInPlace(buffer, length);
+                chunkIndex += 1;
                 return;
             }
             ChunkParams params = nextParams();
@@ -1990,36 +2121,71 @@ public final class BaseFwx {
         }
     }
 
-    private static String encodeMaskedPayload(KeyWrap.MaskKeyResult mask, String input, byte[] streamInfo) {
-        byte[] plain = input.getBytes(StandardCharsets.UTF_8);
+    private static byte[] encodeMaskedPayloadBytes(KeyWrap.MaskKeyResult mask,
+                                                   byte[] plain,
+                                                   byte[] streamInfo) {
         byte[] masked = KeyWrap.maskPayload(mask.maskKey, plain, streamInfo);
         byte[] payload = new byte[1 + 4 + masked.length];
         payload[0] = 0x02;
         writeU32(payload, 1, plain.length);
         System.arraycopy(masked, 0, payload, 5, masked.length);
-        byte[] blob = Format.packLengthPrefixed(Arrays.asList(mask.userBlob, mask.masterBlob, payload));
-        String encoded = Base64Codec.encode(blob);
-        return maybeObfuscateCodecs(encoded);
+        return Format.packLengthPrefixed(Arrays.asList(mask.userBlob, mask.masterBlob, payload));
     }
 
-    private static String decodeMaskedPayload(String input,
-                                              byte[] password,
-                                              boolean useMaster,
-                                              byte[] maskInfo,
-                                              byte[] aad,
-                                              byte[] streamInfo) {
-        byte[] raw;
-        try {
-            raw = Base64Codec.decode(input);
-        } catch (IllegalArgumentException exc) {
-            String deob = maybeDeobfuscateCodecs(input);
+    private static byte[] decodeMaskedPayloadBytesFromString(String input,
+                                                             byte[] password,
+                                                             boolean useMaster,
+                                                             byte[] maskInfo,
+                                                             byte[] aad,
+                                                             byte[] streamInfo) {
+        List<byte[]> parts = null;
+        IllegalArgumentException firstError = null;
+        for (int attempt = 0; attempt < 2; attempt++) {
+            String candidate = attempt == 0 ? input : Codec.decode(input);
+            if (attempt == 1 && candidate.equals(input)) {
+                break;
+            }
             try {
-                raw = Base64Codec.decode(deob);
-            } catch (IllegalArgumentException exc2) {
-                throw new IllegalArgumentException("Invalid payload encoding", exc2);
+                byte[] raw = Base64Codec.decode(candidate);
+                parts = Format.unpackLengthPrefixed(raw, 3);
+                byte[] payload = parts.get(2);
+                if (payload.length < 5 || payload[0] != 0x02) {
+                    throw new IllegalArgumentException("Unsupported payload format");
+                }
+                int expectedLen = readU32(payload, 1);
+                if (expectedLen != payload.length - 5) {
+                    throw new IllegalArgumentException("Payload length mismatch");
+                }
+                break;
+            } catch (IllegalArgumentException exc) {
+                if (firstError == null) {
+                    firstError = exc;
+                }
+                parts = null;
             }
         }
-        List<byte[]> parts = Format.unpackLengthPrefixed(raw, 3);
+        if (parts == null) {
+            throw new IllegalArgumentException("Invalid payload encoding", firstError);
+        }
+        return decodeMaskedPayloadBytesFromParts(parts, password, useMaster, maskInfo, aad, streamInfo);
+    }
+
+    private static byte[] decodeMaskedPayloadBytes(byte[] blob,
+                                                   byte[] password,
+                                                   boolean useMaster,
+                                                   byte[] maskInfo,
+                                                   byte[] aad,
+                                                   byte[] streamInfo) {
+        List<byte[]> parts = Format.unpackLengthPrefixed(blob, 3);
+        return decodeMaskedPayloadBytesFromParts(parts, password, useMaster, maskInfo, aad, streamInfo);
+    }
+
+    private static byte[] decodeMaskedPayloadBytesFromParts(List<byte[]> parts,
+                                                            byte[] password,
+                                                            boolean useMaster,
+                                                            byte[] maskInfo,
+                                                            byte[] aad,
+                                                            byte[] streamInfo) {
         byte[] maskKey = KeyWrap.recoverMaskKey(parts.get(0), parts.get(1), password, useMaster,
             maskInfo, aad, new KeyWrap.KdfOptions("pbkdf2", Constants.USER_KDF_ITERATIONS));
         byte[] payload = parts.get(2);
@@ -2027,12 +2193,15 @@ public final class BaseFwx {
             throw new IllegalArgumentException("Unsupported payload format");
         }
         int expectedLen = readU32(payload, 1);
-        byte[] masked = Arrays.copyOfRange(payload, 5, payload.length);
-        if (expectedLen != masked.length) {
+        if (expectedLen != payload.length - 5) {
             throw new IllegalArgumentException("Payload length mismatch");
         }
-        byte[] clear = KeyWrap.maskPayload(maskKey, masked, streamInfo);
-        return new String(clear, StandardCharsets.UTF_8);
+        return KeyWrap.maskPayload(maskKey, payload, 5, expectedLen, streamInfo);
+    }
+
+    private static String encodePayloadString(byte[] blob) {
+        String encoded = Base64Codec.encode(blob);
+        return maybeObfuscateCodecs(encoded);
     }
 
     private static String digestHex(String algorithm, String input) {
@@ -2159,29 +2328,217 @@ public final class BaseFwx {
         }
 
         try {
+            CryptoBackend backend = CryptoBackends.get();
+            try (CryptoBackend.AeadEncryptor enc = backend.newGcmEncryptor(key, iv, Constants.FWXAES_AAD)) {
+                byte[] buf = new byte[STREAM_CHUNK];
+                byte[] outBuf = new byte[STREAM_CHUNK + Constants.AEAD_TAG_LEN];
+                long ctLen = 0;
+                int read;
+                while ((read = input.read(buf)) != -1) {
+                    int outLen = enc.update(buf, 0, read, outBuf, 0);
+                    if (outLen > 0) {
+                        output.write(outBuf, 0, outLen);
+                        ctLen += outLen;
+                    }
+                }
+                int finalLen = enc.doFinal(outBuf, 0);
+                if (finalLen > 0) {
+                    output.write(outBuf, 0, finalLen);
+                    ctLen += finalLen;
+                }
+                output.flush();
+                return ctLen;
+            }
+        } catch (GeneralSecurityException exc) {
+            throw new IllegalStateException("fwxAES encrypt failed", exc);
+        }
+    }
+
+    private static long fwxAesEncryptChannel(FileChannel input,
+                                             FileChannel output,
+                                             String password,
+                                             boolean useMaster) throws IOException {
+        byte[] pw = resolvePasswordBytes(password, useMaster);
+        boolean hasPassword = pw.length > 0;
+        boolean useWrap = false;
+        byte[] keyHeader = new byte[0];
+        byte[] maskKey = new byte[0];
+
+        if (useMaster) {
+            KeyWrap.MaskKeyResult mask = KeyWrap.prepareMaskKey(
+                pw,
+                true,
+                Constants.FWXAES_MASK_INFO,
+                false,
+                Constants.FWXAES_AAD,
+                new KeyWrap.KdfOptions("pbkdf2", Constants.USER_KDF_ITERATIONS)
+            );
+            useWrap = mask.usedMaster || !hasPassword;
+            if (useWrap) {
+                keyHeader = Format.packLengthPrefixed(Arrays.asList(mask.userBlob, mask.masterBlob));
+                maskKey = mask.maskKey;
+            }
+        }
+
+        byte[] iv = Crypto.randomBytes(Constants.FWXAES_IV_LEN);
+        byte[] header = new byte[16];
+        System.arraycopy(Constants.FWXAES_MAGIC, 0, header, 0, Constants.FWXAES_MAGIC.length);
+        header[4] = (byte) Constants.FWXAES_ALGO;
+        byte[] key;
+        if (useWrap) {
+            key = Crypto.hkdfSha256(maskKey, Constants.FWXAES_KEY_INFO, Constants.FWXAES_KEY_LEN);
+            header[5] = (byte) Constants.FWXAES_KDF_WRAP;
+            header[6] = 0;
+            header[7] = (byte) Constants.FWXAES_IV_LEN;
+            writeU32(header, 8, keyHeader.length);
+            writeU32(header, 12, 0);
+            writeFully(output, ByteBuffer.wrap(header));
+            if (keyHeader.length > 0) {
+                writeFully(output, ByteBuffer.wrap(keyHeader));
+            }
+            writeFully(output, ByteBuffer.wrap(iv));
+        } else {
+            byte[] salt = Crypto.randomBytes(Constants.FWXAES_SALT_LEN);
+            int iters = fwxaesIterations(pw);
+            key = Crypto.pbkdf2HmacSha256(pw, salt, iters, Constants.FWXAES_KEY_LEN);
+            header[5] = (byte) Constants.FWXAES_KDF_PBKDF2;
+            header[6] = (byte) Constants.FWXAES_SALT_LEN;
+            header[7] = (byte) Constants.FWXAES_IV_LEN;
+            writeU32(header, 8, iters);
+            writeU32(header, 12, 0);
+            writeFully(output, ByteBuffer.wrap(header));
+            writeFully(output, ByteBuffer.wrap(salt));
+            writeFully(output, ByteBuffer.wrap(iv));
+        }
+
+        try {
             Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
             GCMParameterSpec spec = new GCMParameterSpec(Constants.AEAD_TAG_LEN * 8, iv);
             cipher.init(Cipher.ENCRYPT_MODE, new SecretKeySpec(key, "AES"), spec);
             cipher.updateAAD(Constants.FWXAES_AAD);
-            byte[] buf = new byte[STREAM_CHUNK];
+
+            ByteBuffer inBuf = ByteBuffer.allocateDirect(STREAM_CHUNK);
+            ByteBuffer outBuf = ByteBuffer.allocateDirect(STREAM_CHUNK + Constants.AEAD_TAG_LEN);
             long ctLen = 0;
-            int read;
-            while ((read = input.read(buf)) != -1) {
-                byte[] chunk = cipher.update(buf, 0, read);
-                if (chunk != null && chunk.length > 0) {
-                    output.write(chunk);
-                    ctLen += chunk.length;
+            while (true) {
+                int read = input.read(inBuf);
+                if (read < 0) {
+                    break;
                 }
+                inBuf.flip();
+                outBuf.clear();
+                int outLen = cipher.update(inBuf, outBuf);
+                if (outLen > 0) {
+                    outBuf.flip();
+                    writeFully(output, outBuf);
+                    ctLen += outLen;
+                }
+                inBuf.clear();
             }
-            byte[] finalOut = cipher.doFinal();
-            if (finalOut != null && finalOut.length > 0) {
-                output.write(finalOut);
-                ctLen += finalOut.length;
+            outBuf.clear();
+            int finalLen = cipher.doFinal(outBuf);
+            if (finalLen > 0) {
+                outBuf.flip();
+                writeFully(output, outBuf);
+                ctLen += finalLen;
             }
-            output.flush();
             return ctLen;
         } catch (GeneralSecurityException exc) {
             throw new IllegalStateException("fwxAES encrypt failed", exc);
+        }
+    }
+
+    private static void fwxAesDecryptChannel(FileChannel input,
+                                             FileChannel output,
+                                             String password,
+                                             boolean useMaster) throws IOException {
+        byte[] header = new byte[16];
+        readExactChannel(input, ByteBuffer.wrap(header), header.length, "fwxAES blob too short");
+        for (int i = 0; i < Constants.FWXAES_MAGIC.length; i++) {
+            if (header[i] != Constants.FWXAES_MAGIC[i]) {
+                throw new IllegalArgumentException("fwxAES bad magic");
+            }
+        }
+        int algo = header[4] & 0xFF;
+        int kdf = header[5] & 0xFF;
+        int saltLen = header[6] & 0xFF;
+        int ivLen = header[7] & 0xFF;
+        if (algo != Constants.FWXAES_ALGO
+            || (kdf != Constants.FWXAES_KDF_PBKDF2 && kdf != Constants.FWXAES_KDF_WRAP)) {
+            throw new IllegalArgumentException("fwxAES unsupported algo/kdf");
+        }
+        int iters = readU32(header, 8);
+        int ctLen = readU32(header, 12);
+        if (ctLen < Constants.AEAD_TAG_LEN) {
+            throw new IllegalArgumentException("fwxAES ciphertext too short");
+        }
+        byte[] key;
+        byte[] iv;
+        byte[] pw = resolvePasswordBytes(password, useMaster);
+        if (kdf == Constants.FWXAES_KDF_WRAP) {
+            int headerLen = iters;
+            byte[] keyHeader = new byte[headerLen];
+            if (headerLen > 0) {
+                readExactChannel(input, ByteBuffer.wrap(keyHeader), headerLen, "fwxAES blob truncated");
+            }
+            iv = new byte[ivLen];
+            readExactChannel(input, ByteBuffer.wrap(iv), ivLen, "fwxAES blob truncated");
+            List<byte[]> parts = Format.unpackLengthPrefixed(keyHeader, 2);
+            byte[] maskKey = KeyWrap.recoverMaskKey(
+                parts.get(0),
+                parts.get(1),
+                pw,
+                useMaster,
+                Constants.FWXAES_MASK_INFO,
+                Constants.FWXAES_AAD,
+                new KeyWrap.KdfOptions("pbkdf2", Constants.USER_KDF_ITERATIONS)
+            );
+            key = Crypto.hkdfSha256(maskKey, Constants.FWXAES_KEY_INFO, Constants.FWXAES_KEY_LEN);
+        } else {
+            byte[] salt = new byte[saltLen];
+            readExactChannel(input, ByteBuffer.wrap(salt), saltLen, "fwxAES blob truncated");
+            iv = new byte[ivLen];
+            readExactChannel(input, ByteBuffer.wrap(iv), ivLen, "fwxAES blob truncated");
+            if (pw.length == 0) {
+                throw new IllegalArgumentException("fwxAES password required for PBKDF2 payload");
+            }
+            key = Crypto.pbkdf2HmacSha256(pw, salt, iters, Constants.FWXAES_KEY_LEN);
+        }
+
+        try {
+            Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
+            GCMParameterSpec spec = new GCMParameterSpec(Constants.AEAD_TAG_LEN * 8, iv);
+            cipher.init(Cipher.DECRYPT_MODE, new SecretKeySpec(key, "AES"), spec);
+            cipher.updateAAD(Constants.FWXAES_AAD);
+
+            long remaining = (long) ctLen - Constants.AEAD_TAG_LEN;
+            ByteBuffer inBuf = ByteBuffer.allocateDirect(STREAM_CHUNK);
+            ByteBuffer outBuf = ByteBuffer.allocateDirect(STREAM_CHUNK);
+            while (remaining > 0) {
+                int toRead = (int) Math.min(inBuf.capacity(), remaining);
+                readExactChannel(input, inBuf, toRead, "fwxAES blob truncated");
+                outBuf.clear();
+                int outLen = cipher.update(inBuf, outBuf);
+                if (outLen > 0) {
+                    outBuf.flip();
+                    writeFully(output, outBuf);
+                }
+                remaining -= toRead;
+            }
+            ByteBuffer tagBuf = ByteBuffer.allocate(Constants.AEAD_TAG_LEN);
+            readExactChannel(input, tagBuf, Constants.AEAD_TAG_LEN, "fwxAES blob truncated");
+            outBuf.clear();
+            try {
+                int finalLen = cipher.doFinal(tagBuf, outBuf);
+                if (finalLen > 0) {
+                    outBuf.flip();
+                    writeFully(output, outBuf);
+                }
+            } catch (AEADBadTagException exc) {
+                throw new IllegalArgumentException("AES-GCM auth failed");
+            }
+        } catch (GeneralSecurityException exc) {
+            throw new IllegalStateException("fwxAES decrypt failed", exc);
         }
     }
 
@@ -2199,6 +2556,19 @@ public final class BaseFwx {
         channel.position(pos);
     }
 
+    private static void patchCtLen(FileChannel channel, long ctLen) throws IOException {
+        if (ctLen > 0xFFFFFFFFL) {
+            throw new IllegalArgumentException("fwxAES ciphertext too large");
+        }
+        long pos = channel.position();
+        ByteBuffer buf = ByteBuffer.allocate(4);
+        buf.putInt((int) ctLen);
+        buf.flip();
+        channel.position(12);
+        writeFully(channel, buf);
+        channel.position(pos);
+    }
+
     private static void readExact(InputStream input, byte[] buffer, int length, String error) throws IOException {
         int offset = 0;
         while (offset < length) {
@@ -2206,10 +2576,36 @@ public final class BaseFwx {
             if (read < 0) {
                 break;
             }
+            if (read == 0) {
+                int single = input.read();
+                if (single < 0) {
+                    break;
+                }
+                buffer[offset++] = (byte) single;
+                continue;
+            }
             offset += read;
         }
         if (offset != length) {
             throw new IllegalArgumentException(error);
+        }
+    }
+
+    private static void readExactChannel(FileChannel channel, ByteBuffer buffer, int length, String error) throws IOException {
+        buffer.clear();
+        buffer.limit(length);
+        while (buffer.hasRemaining()) {
+            int read = channel.read(buffer);
+            if (read < 0) {
+                throw new IllegalArgumentException(error);
+            }
+        }
+        buffer.flip();
+    }
+
+    private static void writeFully(FileChannel channel, ByteBuffer buffer) throws IOException {
+        while (buffer.hasRemaining()) {
+            channel.write(buffer);
         }
     }
 
@@ -2233,6 +2629,14 @@ public final class BaseFwx {
             int read = input.read(buf, 0, take);
             if (read < 0) {
                 throw new IllegalArgumentException(error);
+            }
+            if (read == 0) {
+                int single = input.read();
+                if (single < 0) {
+                    throw new IllegalArgumentException(error);
+                }
+                remaining -= 1;
+                continue;
             }
             remaining -= read;
         }
@@ -2356,7 +2760,7 @@ public final class BaseFwx {
                                         String aead,
                                         String kdfLabel) {
         return buildMetadata(method, strip, useMaster, aead, kdfLabel,
-            null, null, null, null, null, null, null);
+            null, null, null, null, null, null, null, null);
     }
 
     private static String buildMetadata(String method,
@@ -2366,6 +2770,7 @@ public final class BaseFwx {
                                         String kdfLabel,
                                         String mode,
                                         Boolean obfuscation,
+                                        String obfMode,
                                         Integer kdfIters,
                                         Integer argonTime,
                                         Integer argonMem,
@@ -2385,7 +2790,9 @@ public final class BaseFwx {
         if (mode != null && !mode.isEmpty()) {
             info.put("ENC-MODE", mode);
         }
-        if (obfuscation != null) {
+        if (obfMode != null && !obfMode.isEmpty()) {
+            info.put("ENC-OBF", obfMode);
+        } else if (obfuscation != null) {
             info.put("ENC-OBF", obfuscation ? "yes" : "no");
         }
         if (kdfIters != null) {
@@ -2445,20 +2852,146 @@ public final class BaseFwx {
         }
         try {
             String json = new String(Base64Codec.decode(metadataBlob), StandardCharsets.UTF_8);
-            String needle = "\"" + key + "\":\"";
-            int start = json.indexOf(needle);
-            if (start < 0) {
-                return "";
-            }
-            start += needle.length();
-            int end = json.indexOf('"', start);
-            if (end < 0) {
-                return "";
-            }
-            return json.substring(start, end);
+            return jsonValue(json, key);
         } catch (IllegalArgumentException exc) {
             return "";
         }
+    }
+
+    private static String jsonValue(String json, String key) {
+        int idx = skipJsonWhitespace(json, 0);
+        if (idx >= json.length() || json.charAt(idx) != '{') {
+            return "";
+        }
+        idx++;
+        while (idx < json.length()) {
+            idx = skipJsonWhitespace(json, idx);
+            if (idx >= json.length()) {
+                return "";
+            }
+            if (json.charAt(idx) == '}') {
+                return "";
+            }
+            StringBuilder name = new StringBuilder();
+            int next = parseJsonString(json, idx, name);
+            if (next < 0) {
+                return "";
+            }
+            idx = skipJsonWhitespace(json, next);
+            if (idx >= json.length() || json.charAt(idx) != ':') {
+                return "";
+            }
+            idx = skipJsonWhitespace(json, idx + 1);
+            if (idx >= json.length()) {
+                return "";
+            }
+            StringBuilder value = new StringBuilder();
+            next = parseJsonString(json, idx, value);
+            if (next < 0) {
+                return "";
+            }
+            if (name.toString().equals(key)) {
+                return value.toString();
+            }
+            idx = skipJsonWhitespace(json, next);
+            if (idx >= json.length()) {
+                return "";
+            }
+            char ch = json.charAt(idx);
+            if (ch == ',') {
+                idx++;
+                continue;
+            }
+            if (ch == '}') {
+                return "";
+            }
+            return "";
+        }
+        return "";
+    }
+
+    private static int skipJsonWhitespace(String json, int idx) {
+        int len = json.length();
+        int pos = idx;
+        while (pos < len) {
+            char ch = json.charAt(pos);
+            if (ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n') {
+                pos++;
+            } else {
+                break;
+            }
+        }
+        return pos;
+    }
+
+    private static int parseJsonString(String json, int start, StringBuilder out) {
+        int len = json.length();
+        if (start >= len || json.charAt(start) != '"') {
+            return -1;
+        }
+        int i = start + 1;
+        while (i < len) {
+            char ch = json.charAt(i);
+            if (ch == '"') {
+                return i + 1;
+            }
+            if (ch == '\\') {
+                if (i + 1 >= len) {
+                    return -1;
+                }
+                char esc = json.charAt(i + 1);
+                if (esc == 'u') {
+                    if (i + 5 >= len) {
+                        return -1;
+                    }
+                    int code = 0;
+                    for (int j = 0; j < 4; j++) {
+                        int val = Character.digit(json.charAt(i + 2 + j), 16);
+                        if (val < 0) {
+                            return -1;
+                        }
+                        code = (code << 4) | val;
+                    }
+                    out.append((char) code);
+                    i += 6;
+                    continue;
+                }
+                switch (esc) {
+                    case '"':
+                        out.append('"');
+                        break;
+                    case '\\':
+                        out.append('\\');
+                        break;
+                    case '/':
+                        out.append('/');
+                        break;
+                    case 'b':
+                        out.append('\b');
+                        break;
+                    case 'f':
+                        out.append('\f');
+                        break;
+                    case 'n':
+                        out.append('\n');
+                        break;
+                    case 'r':
+                        out.append('\r');
+                        break;
+                    case 't':
+                        out.append('\t');
+                        break;
+                    default:
+                        out.append(esc);
+                        break;
+                }
+                i += 2;
+                continue;
+            }
+            out.append(ch);
+            i++;
+        }
+        return -1;
     }
 
     private static String[] splitWithDelims(String payload, String delim, String legacy, String label) {

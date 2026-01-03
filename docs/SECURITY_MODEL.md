@@ -33,6 +33,8 @@ If master wrapping is disabled, a password is required. If master wrapping is en
 BASEFWX includes a size-preserving obfuscation layer before AEAD.
 It is deterministic and reversible, designed to remove obvious plaintext structure.
 It is not a substitute for encryption.
+Video/audio scrambling masks only low-order bits to preserve playability and will leak structure.
+Image encryption without trailers is deterministic and reuses keystream material; only enable it with explicit opt-in (BASEFWX_ALLOW_INSECURE_IMAGE_OBFUSCATION=1).
 
 ## Legacy CBC
 

@@ -2,10 +2,11 @@ package com.fixcraft.basefwx;
 
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
-import java.util.stream.IntStream;
 
 public final class KeyWrap {
     private KeyWrap() {}
+
+    private static final byte[] HKDF_ZERO_SALT = new byte[32];
 
     public static MaskKeyResult prepareMaskKey(byte[] password,
                                                boolean useMaster,
@@ -77,12 +78,20 @@ public final class KeyWrap {
             if (!useMaster) {
                 throw new IllegalArgumentException("Master key required to decode this payload");
             }
-            if (!startsWith(masterBlob, Constants.MASTER_EC_MAGIC)) {
-                throw new IllegalArgumentException("PQ master key not supported in Java");
+            try {
+                if (!startsWith(masterBlob, Constants.MASTER_EC_MAGIC)) {
+                    throw new IllegalArgumentException("Invalid master key blob magic");
+                }
+                java.security.PrivateKey priv = EcKeys.loadMasterPrivate();
+                byte[] shared = EcKeys.kemDecrypt(masterBlob, priv);
+                return Crypto.hkdfSha256(shared, maskInfo, 32);
+            } catch (RuntimeException exc) {
+                boolean canFallback = userBlob != null && userBlob.length > 0
+                        && password != null && password.length > 0;
+                if (!canFallback) {
+                    throw exc;
+                }
             }
-            java.security.PrivateKey priv = EcKeys.loadMasterPrivate();
-            byte[] shared = EcKeys.kemDecrypt(masterBlob, priv);
-            return Crypto.hkdfSha256(shared, maskInfo, 32);
         }
         if (userBlob == null || userBlob.length == 0) {
             throw new IllegalArgumentException("Ciphertext missing key transport data");
@@ -109,26 +118,41 @@ public final class KeyWrap {
         if (payload.length == 0) {
             return new byte[0];
         }
-        byte[] stream = Crypto.hkdfSha256Stream(maskKey, info, payload.length);
         byte[] out = new byte[payload.length];
         int len = payload.length;
-        int cores = Runtime.getRuntime().availableProcessors();
-        int threshold = 1 << 20;
-        if (len < threshold || cores < 2) {
+        if (len <= Constants.HKDF_MAX_LEN) {
+            byte[] stream = Crypto.hkdfSha256(maskKey, info, len);
             for (int i = 0; i < len; i++) {
                 out[i] = (byte) (payload[i] ^ stream[i]);
             }
             return out;
         }
-        int chunk = 1 << 20;
-        int segments = (len + chunk - 1) / chunk;
-        IntStream.range(0, segments).parallel().forEach(seg -> {
-            int start = seg * chunk;
-            int end = Math.min(len, start + chunk);
-            for (int i = start; i < end; i++) {
-                out[i] = (byte) (payload[i] ^ stream[i]);
+        byte[] prk = Crypto.hmacSha256(HKDF_ZERO_SALT, maskKey);
+        Crypto.xorHmacStream(prk, info, payload, 0, out, 0, len, 1);
+        return out;
+    }
+
+    public static byte[] maskPayload(byte[] maskKey,
+                                     byte[] payload,
+                                     int offset,
+                                     int length,
+                                     byte[] info) {
+        if (length <= 0) {
+            return new byte[0];
+        }
+        if (offset < 0 || offset + length > payload.length) {
+            throw new IllegalArgumentException("Invalid payload bounds");
+        }
+        byte[] out = new byte[length];
+        if (length <= Constants.HKDF_MAX_LEN) {
+            byte[] stream = Crypto.hkdfSha256(maskKey, info, length);
+            for (int i = 0; i < length; i++) {
+                out[i] = (byte) (payload[offset + i] ^ stream[i]);
             }
-        });
+            return out;
+        }
+        byte[] prk = Crypto.hmacSha256(HKDF_ZERO_SALT, maskKey);
+        Crypto.xorHmacStream(prk, info, payload, offset, out, 0, length, 1);
         return out;
     }
 

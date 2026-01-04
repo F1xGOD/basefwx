@@ -459,9 +459,15 @@ public final class BaseFwxCli {
                     File decFile = new File(tempDir, "bench_dec" + ext);
                     try {
                         long ns = benchMedian(warmup, iters, () -> {
-                            BaseFwx.b512FileEncodeFile(input, encFile, benchPassFinal, useMasterFlag);
-                            BaseFwx.b512FileDecodeFile(encFile, decFile, benchPassFinal, useMasterFlag);
-                            BENCH_SINK ^= (int) decFile.length();
+                            try {
+                                BaseFwx.b512FileEncodeFile(input, encFile, benchPassFinal, useMasterFlag);
+                                BaseFwx.b512FileDecodeFile(encFile, decFile, benchPassFinal, useMasterFlag);
+                                BENCH_SINK ^= (int) decFile.length();
+                            } finally {
+                                // Clean up temp files between iterations
+                                encFile.delete();
+                                decFile.delete();
+                            }
                         });
                         System.out.println("BENCH_NS=" + ns);
                         return;
@@ -495,9 +501,15 @@ public final class BaseFwxCli {
                     File decFile = new File(tempDir, "bench_dec" + ext);
                     try {
                         long ns = benchMedian(warmup, iters, () -> {
-                            BaseFwx.pb512FileEncodeFile(input, encFile, benchPassFinal, useMasterFlag);
-                            BaseFwx.pb512FileDecodeFile(encFile, decFile, benchPassFinal, useMasterFlag);
-                            BENCH_SINK ^= (int) decFile.length();
+                            try {
+                                BaseFwx.pb512FileEncodeFile(input, encFile, benchPassFinal, useMasterFlag);
+                                BaseFwx.pb512FileDecodeFile(encFile, decFile, benchPassFinal, useMasterFlag);
+                                BENCH_SINK ^= (int) decFile.length();
+                            } finally {
+                                // Clean up temp files between iterations
+                                encFile.delete();
+                                decFile.delete();
+                            }
                         });
                         System.out.println("BENCH_NS=" + ns);
                         return;

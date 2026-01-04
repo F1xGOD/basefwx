@@ -83,12 +83,13 @@ std::string Code(const std::string& input) {
     }
     std::string out;
     out.reserve(input.size() * 4);
-    for (unsigned char ch : input) {
-        const char* token = kCodeLookupTable[ch];
+    for (char ch : input) {
+        unsigned char idx = static_cast<unsigned char>(ch);
+        const char* token = kCodeLookupTable[idx];
         if (token != nullptr) {
             out.append(token);
         } else {
-            out.push_back(static_cast<char>(ch));
+            out.push_back(ch);
         }
     }
     return out;

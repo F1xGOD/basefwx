@@ -443,7 +443,7 @@ public final class BaseFwx {
         String mdCode = mdCode(new String(code));
         BigInteger diff = new BigInteger(md).subtract(new BigInteger(mdCode));
         String diffStr = diff.toString();
-        if (diffStr.charAt(0) == '-') {
+        if (!diffStr.isEmpty() && diffStr.charAt(0) == '-') {
             diffStr = '0' + diffStr.substring(1);
         }
         String packed = Codec.b256Encode(diffStr).replace("=", "4G5tRA");
@@ -455,18 +455,17 @@ public final class BaseFwx {
         int mdLen = md.length();
         String mdLenStr = Integer.toString(mdLen);
         String prefixLenStr = Integer.toString(mdLenStr.length());
-        StringBuilder prefix = new StringBuilder(prefixLenStr.length() + mdLenStr.length());
-        prefix.append(prefixLenStr).append(mdLenStr);
+        String prefix = prefixLenStr + mdLenStr;
         long lenVal = mdLen;
         String code = Long.toString(lenVal * lenVal);
         String mdCode = mdCode(code);
         BigInteger diff = new BigInteger(md).subtract(new BigInteger(mdCode));
         String diffStr = diff.toString();
-        if (diffStr.charAt(0) == '-') {
+        if (!diffStr.isEmpty() && diffStr.charAt(0) == '-') {
             diffStr = '0' + diffStr.substring(1);
         }
         String packed = Codec.b256Encode(diffStr).replace("=", "4G5tRA");
-        return prefix.toString() + packed;
+        return prefix + packed;
     }
 
     public static String a512Decode(String input) {

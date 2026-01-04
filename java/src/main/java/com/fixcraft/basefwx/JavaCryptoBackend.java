@@ -50,8 +50,8 @@ public final class JavaCryptoBackend implements CryptoBackend {
 
     private static final class JavaGcmDecryptor implements AeadDecryptor {
         private final Cipher cipher;
-        private final byte[] pendingTag;
-        private int pendingTagLen;
+        private final byte[] tagBuffer;
+        private int tagLen;
 
         private JavaGcmDecryptor(byte[] key, byte[] iv, byte[] aad) throws GeneralSecurityException {
             cipher = Cipher.getInstance("AES/GCM/NoPadding");
@@ -60,33 +60,35 @@ public final class JavaCryptoBackend implements CryptoBackend {
             if (aad != null && aad.length > 0) {
                 cipher.updateAAD(aad);
             }
-            // Pre-allocate tag buffer to avoid allocation on every call
-            pendingTag = new byte[Constants.AEAD_TAG_LEN];
-            pendingTagLen = 0;
+            // Pre-allocate tag buffer
+            tagBuffer = new byte[Constants.AEAD_TAG_LEN];
+            tagLen = 0;
         }
 
         @Override
         public int update(byte[] in, int inOff, int len, byte[] out, int outOff) throws GeneralSecurityException {
-            // Process ciphertext chunks immediately using Cipher.update for true streaming
+            // Process ciphertext chunks using Cipher.update for true streaming
+            // Java GCM can handle this - it just needs the tag appended at the end
             return cipher.update(in, inOff, len, out, outOff);
         }
 
         @Override
         public int doFinal(byte[] tag, int tagOff, int tagLen, byte[] out, int outOff)
             throws GeneralSecurityException {
-            // Copy tag to our buffer
-            if (tagLen > pendingTag.length) {
+            // Store tag for final processing
+            if (tagLen > tagBuffer.length) {
                 throw new IllegalArgumentException("Tag too large: " + tagLen);
             }
-            System.arraycopy(tag, tagOff, pendingTag, 0, tagLen);
-            pendingTagLen = tagLen;
+            System.arraycopy(tag, tagOff, tagBuffer, 0, tagLen);
+            this.tagLen = tagLen;
             
-            // In Java GCM, the tag must be fed to the cipher along with ciphertext
-            // Feed the tag data to cipher.update before calling doFinal
-            int processed = cipher.update(pendingTag, 0, pendingTagLen, out, outOff);
+            // In Java GCM, the tag must be appended to the ciphertext and processed via doFinal
+            // We feed the tag as the final chunk of "ciphertext" data
+            // This tells the cipher "here's the authentication tag, verify it"
+            int processed = cipher.update(tagBuffer, 0, this.tagLen, out, outOff);
             
-            // Call doFinal to complete authentication and get any remaining plaintext
-            // This will verify the tag and throw AEADBadTagException if authentication fails
+            // Complete the decryption and verify the tag
+            // If tag verification fails, this will throw AEADBadTagException
             int finalLen = cipher.doFinal(out, outOff + processed);
             
             return processed + finalLen;

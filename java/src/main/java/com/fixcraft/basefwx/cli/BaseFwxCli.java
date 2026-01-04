@@ -10,7 +10,6 @@ import java.util.Locale;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.concurrent.atomic.LongAdder;
 
 public final class BaseFwxCli {
     private static volatile int BENCH_SINK = 0;
@@ -96,14 +95,17 @@ public final class BaseFwxCli {
                                             String password,
                                             boolean useMaster) {
         CountDownLatch latch = new CountDownLatch(workers);
-        LongAdder bytes = new LongAdder();
+        // Use a simple AtomicLong instead of LongAdder for low contention scenarios
+        final long[] totalBytes = new long[1];
         for (int i = 0; i < workers; i++) {
             pool.execute(() -> {
                 try {
                     byte[] blob = BaseFwx.fwxAesEncryptRaw(data, password, useMaster);
                     byte[] plain = BaseFwx.fwxAesDecryptRaw(blob, password, useMaster);
                     BENCH_SINK ^= plain.length;
-                    bytes.add(plain.length);
+                    synchronized (totalBytes) {
+                        totalBytes[0] += plain.length;
+                    }
                 } finally {
                     latch.countDown();
                 }
@@ -115,7 +117,7 @@ public final class BaseFwxCli {
             Thread.currentThread().interrupt();
             throw new RuntimeException("Parallel benchmark interrupted", exc);
         }
-        return bytes.sum();
+        return totalBytes[0];
     }
 
     private static String encodeText(String method, String text, String password, boolean useMaster) {

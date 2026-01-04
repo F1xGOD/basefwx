@@ -95,7 +95,7 @@ public final class Base64Codec {
             if (ch == '=') {
                 quad[quadLen++] = -2;
             } else {
-                int val = (ch >= 0 && ch < 256) ? DECODE[ch] : -1;
+                int val = ch < 256 ? DECODE[ch] : -1;
                 if (val < 0) {
                     throw new IllegalArgumentException("Invalid base64 payload");
                 }

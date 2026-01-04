@@ -50,6 +50,7 @@ public final class JavaCryptoBackend implements CryptoBackend {
 
     private static final class JavaGcmDecryptor implements AeadDecryptor {
         private final Cipher cipher;
+        private final java.io.ByteArrayOutputStream buffer;
 
         private JavaGcmDecryptor(byte[] key, byte[] iv, byte[] aad) throws GeneralSecurityException {
             cipher = Cipher.getInstance("AES/GCM/NoPadding");
@@ -58,17 +59,41 @@ public final class JavaCryptoBackend implements CryptoBackend {
             if (aad != null && aad.length > 0) {
                 cipher.updateAAD(aad);
             }
+            // Initialize buffer with reasonable capacity to reduce reallocations for larger files
+            // Default ByteArrayOutputStream starts at 32 bytes, so use 1MB as a middle ground
+            buffer = new java.io.ByteArrayOutputStream(Constants.STREAM_CHUNK_SIZE);
         }
 
         @Override
         public int update(byte[] in, int inOff, int len, byte[] out, int outOff) throws GeneralSecurityException {
-            return cipher.update(in, inOff, len, out, outOff);
+            // Buffer the ciphertext instead of processing it immediately
+            // This is because Java's GCM implementation doesn't support streaming
+            buffer.write(in, inOff, len);
+            return 0;  // No output until doFinal
         }
 
         @Override
         public int doFinal(byte[] tag, int tagOff, int tagLen, byte[] out, int outOff)
             throws GeneralSecurityException {
-            return cipher.doFinal(tag, tagOff, tagLen, out, outOff);
+            // Append tag to buffered ciphertext
+            buffer.write(tag, tagOff, tagLen);
+            byte[] ciphertext = buffer.toByteArray();
+            
+            // Process all at once
+            byte[] plaintext = cipher.doFinal(ciphertext);
+            
+            // Check if output buffer is large enough
+            if (out.length - outOff < plaintext.length) {
+                throw new javax.crypto.ShortBufferException(
+                    "Output buffer too small: need " + plaintext.length + 
+                    " bytes but only " + (out.length - outOff) + " available");
+            }
+            
+            // Copy result to output buffer
+            if (plaintext.length > 0) {
+                System.arraycopy(plaintext, 0, out, outOff, plaintext.length);
+            }
+            return plaintext.length;
         }
 
         @Override

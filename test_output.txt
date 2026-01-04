@@ -1,0 +1,203 @@
+🧪 PHASE1: generate temporary files
+🧪 PHASE2: prepare native runtimes
+🧪 PHASE2: run native Python tests
+🔹 [1/53] fwxaes_py_correct
+🔹 [2/53] fwxaes_py_stream
+🔹 [3/53] b512file_py_bytes
+🔹 [4/53] pb512file_py_bytes
+🔹 [5/53] b64_py_correct
+🔹 [6/53] b256_py_correct
+🔹 [7/53] a512_py_correct
+🔹 [8/53] b512_py_correct
+🔹 [9/53] pb512_py_correct
+🔹 [10/53] hash512_py_correct
+🔹 [11/53] uhash513_py_correct
+🔹 [12/53] bi512_py_correct
+🔹 [13/53] b1024_py_correct
+🔹 [14/53] b512file_py_correct_sample_payload_bin
+🔹 [15/53] b512file_py_correct_sample_payload_copy_bin
+🔹 [16/53] pb512file_py_correct_sample_payload_bin
+🔹 [17/53] pb512file_py_correct_sample_payload_copy_bin
+🧪 PHASE2.1: jMG media tests (Python)
+🔹 [18/53] jmg_py_jmg_sample_png
+  ⏳ cooldown 3s
+🧪 PHASE2: run native C++ tests
+🔹 [19/53] fwxaes_cpp_correct
+🔹 [20/53] fwxaes_cpp_stream
+🔹 [21/53] b512file_cpp_bytes
+🔹 [22/53] pb512file_cpp_bytes
+🔹 [23/53] b64_cpp_correct
+🔹 [24/53] b256_cpp_correct
+🔹 [25/53] a512_cpp_correct
+🔹 [26/53] b512_cpp_correct
+🔹 [27/53] pb512_cpp_correct
+🔹 [28/53] hash512_cpp_correct
+🔹 [29/53] uhash513_cpp_correct
+🔹 [30/53] bi512_cpp_correct
+🔹 [31/53] b1024_cpp_correct
+🔹 [32/53] b512file_cpp_correct_sample_payload_bin
+🔹 [33/53] b512file_cpp_correct_sample_payload_copy_bin
+🔹 [34/53] pb512file_cpp_correct_sample_payload_bin
+🔹 [35/53] pb512file_cpp_correct_sample_payload_copy_bin
+🧪 PHASE2.1: jMG media tests (C++)
+🔹 [36/53] jmg_cpp_jmg_sample_png
+  ⏳ cooldown 3s
+🧪 PHASE2: run native Java tests
+🔹 [37/53] fwxaes_java_correct
+🔹 [38/53] fwxaes_java_stream
+🔹 [39/53] b512file_java_bytes
+🔹 [40/53] pb512file_java_bytes
+🔹 [41/53] b64_java_correct
+🔹 [42/53] b256_java_correct
+🔹 [43/53] a512_java_correct
+🔹 [44/53] b512_java_correct
+🔹 [45/53] pb512_java_correct
+🔹 [46/53] hash512_java_correct
+🔹 [47/53] uhash513_java_correct
+🔹 [48/53] bi512_java_correct
+🔹 [49/53] b1024_java_correct
+🔹 [50/53] b512file_java_correct_sample_payload_bin
+🔹 [51/53] b512file_java_correct_sample_payload_copy_bin
+🔹 [52/53] pb512file_java_correct_sample_payload_bin
+🔹 [53/53] pb512file_java_correct_sample_payload_copy_bin
+🧪 PHASE2.1: jMG media tests (Java, skipped)
+🧪 PHASE2.2: cross-compat tests (skipped)
+🧪 PHASE3: verify outputs
+🧪 PHASE4: benchmark timings
+🔹 [1] fwxaes_py_correct
+🔹 [2] fwxaes_py_par
+🔹 [3] b256_py_correct
+🔹 [4] b512_py_correct
+🔹 [5] pb512_py_correct
+🔹 [6] b64_py_correct
+🔹 [7] a512_py_correct
+🔹 [8] hash512_py_correct
+🔹 [9] uhash513_py_correct
+🔹 [10] bi512_py_correct
+🔹 [11] b1024_py_correct
+🔹 [12] b512file_py_total
+🔹 [13] pb512file_py_total
+  ⏳ cooldown 3s
+🔹 [14] fwxaes_cpp_correct
+🔹 [15] fwxaes_cpp_par
+🔹 [16] b256_cpp_correct
+🔹 [17] b512_cpp_correct
+🔹 [18] pb512_cpp_correct
+🔹 [19] b64_cpp_correct
+🔹 [20] a512_cpp_correct
+🔹 [21] hash512_cpp_correct
+🔹 [22] uhash513_cpp_correct
+🔹 [23] bi512_cpp_correct
+🔹 [24] b1024_cpp_correct
+🔹 [25] b512file_cpp_total
+🔹 [26] pb512file_cpp_total
+  ⏳ cooldown 3s
+🔹 [27] fwxaes_java_correct
+🔹 [28] fwxaes_java_par
+🔹 [29] b256_java_correct
+🔹 [30] b512_java_correct
+🔹 [31] pb512_java_correct
+🔹 [32] b64_java_correct
+🔹 [33] a512_java_correct
+🔹 [34] hash512_java_correct
+🔹 [35] uhash513_java_correct
+🔹 [36] bi512_java_correct
+🔹 [37] b1024_java_correct
+🔹 [38] b512file_java_total
+🔹 [39] pb512file_java_total
+🧪 PHASE5: cleanup and summary
+
+Timing summary (native):
+fwxAES:
+🐍 Python 0.002s py3.12.3 (baseline)
+-----------------------------
+⚙️ C++ 0.004s 🐌 Slower (−83.50%) v3.6.1
+----------------------------
+☕ Java 0.014s 🐌 Slower (6.38×) java17.0.17
+
+b256:
+🐍 Python ≈0s (below resolution) py3.12.3 (baseline)
+-----------------------------
+⚙️ C++ ≈0s (below resolution) ❓ Not measurable (below timer resolution) v3.6.1
+----------------------------
+☕ Java ≈0s (below resolution) ❓ Not measurable (below timer resolution) java17.0.17
+
+b512:
+🐍 Python 0.002s py3.12.3 (baseline)
+-----------------------------
+⚙️ C++ 0.124s 🐌 Slower (71.47×) v3.6.1
+----------------------------
+☕ Java 0.006s 🐌 Slower (3.65×) java17.0.17
+
+pb512:
+🐍 Python 0.002s py3.12.3 (baseline)
+-----------------------------
+⚙️ C++ 0.125s 🐌 Slower (71.90×) v3.6.1
+----------------------------
+☕ Java 0.004s 🐌 Slower (2.53×) java17.0.17
+
+b64:
+🐍 Python ≈0s (below resolution) py3.12.3 (baseline)
+-----------------------------
+⚙️ C++ ≈0s (below resolution) ❓ Not measurable (below timer resolution) v3.6.1
+----------------------------
+☕ Java ≈0s (below resolution) ❓ Not measurable (below timer resolution) java17.0.17
+
+a512:
+🐍 Python ≈0s (below resolution) py3.12.3 (baseline)
+-----------------------------
+⚙️ C++ ≈0s (below resolution) ❓ Not measurable (below timer resolution) v3.6.1
+----------------------------
+☕ Java ≈0s (below resolution) ❓ Not measurable (below timer resolution) java17.0.17
+
+hash512:
+🐍 Python ≈0s (below resolution) py3.12.3 (baseline)
+-----------------------------
+⚙️ C++ ≈0s (below resolution) ❓ Not measurable (below timer resolution) v3.6.1
+----------------------------
+☕ Java ≈0s (below resolution) ❓ Not measurable (below timer resolution) java17.0.17
+
+uhash513:
+🐍 Python ≈0s (below resolution) py3.12.3 (baseline)
+-----------------------------
+⚙️ C++ ≈0s (below resolution) ❓ Not measurable (below timer resolution) v3.6.1
+----------------------------
+☕ Java ≈0s (below resolution) ❓ Not measurable (below timer resolution) java17.0.17
+
+bi512:
+🐍 Python ≈0s (below resolution) py3.12.3 (baseline)
+-----------------------------
+⚙️ C++ ≈0s (below resolution) ❓ Not measurable (below timer resolution) v3.6.1
+----------------------------
+☕ Java ≈0s (below resolution) ❓ Not measurable (below timer resolution) java17.0.17
+
+b1024:
+🐍 Python 0.007s py3.12.3 (baseline)
+-----------------------------
+⚙️ C++ ≈0s (below resolution) ⚡ Faster (+89.76%) v3.6.1
+----------------------------
+☕ Java 0.003s ⚡ Faster (+56.76%) java17.0.17
+
+b512file:
+🐍 Python 0.017s py3.12.3 (baseline)
+-----------------------------
+⚙️ C++ 0.131s 🐌 Slower (7.85×) v3.6.1
+----------------------------
+☕ Java 0.029s 🐌 Slower (−72.25%) java17.0.17
+
+pb512file:
+🐍 Python 0.017s py3.12.3 (baseline)
+-----------------------------
+⚙️ C++ 0.011s ⚡ Faster (+38.89%) v3.6.1
+----------------------------
+☕ Java 0.029s 🐌 Slower (−62.95%) java17.0.17
+
+OVERALL:
+🐍 Python 0.048s py3.12.3 (baseline, 12/12)
+-----------------------------
+⚙️ C++ 0.395s 🐌 Slower (8.15×) v3.6.1 (12/12)
+----------------------------
+☕ Java 0.087s 🐌 Slower (−79.16%) java17.0.17 (12/12)
+
+
+✅ All tests passed. See diagnose.log for details.

@@ -64,76 +64,98 @@ std::vector<std::uint8_t> Decode(const std::string& input, bool* ok) {
     };
 
     std::vector<std::uint8_t> out;
-    out.reserve((input.size() / 4) * 3);
-
-    // Collect non-space chars
-    std::string s;
-    s.reserve(input.size());
+    
+    // Fast path: count non-whitespace characters first
+    std::size_t valid_count = 0;
     for (unsigned char c : input) {
-        if (!std::isspace(c)) s.push_back(static_cast<char>(c));
+        if (!std::isspace(c)) ++valid_count;
     }
-
-    if (s.empty()) {
+    
+    if (valid_count == 0) {
         if (ok) *ok = true;
         return out;
     }
-    if (s.size() % 4 != 0) {
+    
+    if (valid_count % 4 != 0) {
         return fail(out);
     }
-
-    for (std::size_t i = 0; i < s.size(); i += 4) {
-        unsigned char c0 = static_cast<unsigned char>(s[i + 0]);
-        unsigned char c1 = static_cast<unsigned char>(s[i + 1]);
-        unsigned char c2 = static_cast<unsigned char>(s[i + 2]);
-        unsigned char c3 = static_cast<unsigned char>(s[i + 3]);
-
-        auto d0 = (c0 == '=') ? 0xFF : kDecTable[c0];
-        auto d1 = (c1 == '=') ? 0xFF : kDecTable[c1];
-
-        if (c0 == '=' || c1 == '=' || d0 == 0xFF || d1 == 0xFF) {
-            return fail(out);
-        }
-
-        bool pad2 = (c2 == '=');
-        bool pad3 = (c3 == '=');
-
-        std::uint8_t d2 = 0, d3 = 0;
-        if (!pad2) {
-            d2 = kDecTable[c2];
-            if (d2 == 0xFF) return fail(out);
-        } else {
-            // If c2 is '=', c3 must also be '='
-            if (!pad3) return fail(out);
-        }
-
-        if (!pad3) {
-            d3 = kDecTable[c3];
-            if (d3 == 0xFF) return fail(out);
-        }
-
-        std::uint32_t triple =
-            (static_cast<std::uint32_t>(d0) << 18) |
-            (static_cast<std::uint32_t>(d1) << 12) |
-            (static_cast<std::uint32_t>(d2) << 6)  |
-            (static_cast<std::uint32_t>(d3));
-
-        out.push_back(static_cast<std::uint8_t>((triple >> 16) & 0xFF));
-        if (!pad2) out.push_back(static_cast<std::uint8_t>((triple >> 8) & 0xFF));
-        if (!pad3) out.push_back(static_cast<std::uint8_t>(triple & 0xFF));
-
-        // If padding happened, it must be the last quartet
-        if (pad2 || pad3) {
-            if (i + 4 != s.size()) return fail(out);
-
-            // Extra strict: ensure unused bits are zero when padded
-            if (pad2) {
-                // "xx==" => last 4 bits of (d1) must be zero in output encoding
-                if ((triple & 0xFFFF) != 0) return fail(out);
-            } else if (pad3) {
-                // "xxx=" => last 2 bits must be zero
-                if ((triple & 0xFF) != 0) return fail(out);
+    
+    // Pre-allocate output buffer with exact size needed
+    out.reserve((valid_count / 4) * 3);
+    
+    // Process input directly without creating intermediate string
+    unsigned char quad[4];
+    std::size_t quad_pos = 0;
+    std::size_t processed_quads = 0;
+    std::size_t total_quads = valid_count / 4;
+    
+    for (unsigned char c : input) {
+        if (std::isspace(c)) continue;
+        
+        quad[quad_pos++] = c;
+        
+        if (quad_pos == 4) {
+            unsigned char c0 = quad[0];
+            unsigned char c1 = quad[1];
+            unsigned char c2 = quad[2];
+            unsigned char c3 = quad[3];
+            
+            auto d0 = (c0 == '=') ? 0xFF : kDecTable[c0];
+            auto d1 = (c1 == '=') ? 0xFF : kDecTable[c1];
+            
+            if (c0 == '=' || c1 == '=' || d0 == 0xFF || d1 == 0xFF) {
+                return fail(out);
             }
+            
+            bool pad2 = (c2 == '=');
+            bool pad3 = (c3 == '=');
+            
+            std::uint8_t d2 = 0, d3 = 0;
+            if (!pad2) {
+                d2 = kDecTable[c2];
+                if (d2 == 0xFF) return fail(out);
+            } else {
+                // If c2 is '=', c3 must also be '='
+                if (!pad3) return fail(out);
+            }
+            
+            if (!pad3) {
+                d3 = kDecTable[c3];
+                if (d3 == 0xFF) return fail(out);
+            }
+            
+            std::uint32_t triple =
+                (static_cast<std::uint32_t>(d0) << 18) |
+                (static_cast<std::uint32_t>(d1) << 12) |
+                (static_cast<std::uint32_t>(d2) << 6)  |
+                (static_cast<std::uint32_t>(d3));
+            
+            out.push_back(static_cast<std::uint8_t>((triple >> 16) & 0xFF));
+            if (!pad2) out.push_back(static_cast<std::uint8_t>((triple >> 8) & 0xFF));
+            if (!pad3) out.push_back(static_cast<std::uint8_t>(triple & 0xFF));
+            
+            processed_quads++;
+            
+            // If padding happened, it must be the last quartet
+            if (pad2 || pad3) {
+                if (processed_quads != total_quads) return fail(out);
+                
+                // Extra strict: ensure unused bits are zero when padded
+                if (pad2) {
+                    // "xx==" => last 4 bits of (d1) must be zero in output encoding
+                    if ((triple & 0xFFFF) != 0) return fail(out);
+                } else if (pad3) {
+                    // "xxx=" => last 2 bits must be zero
+                    if ((triple & 0xFF) != 0) return fail(out);
+                }
+            }
+            
+            quad_pos = 0;
         }
+    }
+    
+    if (quad_pos != 0) {
+        return fail(out);
     }
 
     if (ok) *ok = true;

@@ -1,7 +1,5 @@
 package com.fixcraft.basefwx;
 
-import java.io.ByteArrayOutputStream;
-
 public final class Base64Codec {
     private Base64Codec() {}
 
@@ -59,15 +57,41 @@ public final class Base64Codec {
         if (input == null || input.isEmpty()) {
             return new byte[0];
         }
-        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        
+        // Fast path: count non-whitespace characters to pre-calculate output size
+        int validChars = 0;
+        int inputLen = input.length();
+        for (int i = 0; i < inputLen; i++) {
+            char ch = input.charAt(i);
+            if (!Character.isWhitespace(ch)) {
+                validChars++;
+            }
+        }
+        
+        if (validChars == 0) {
+            return new byte[0];
+        }
+        
+        // Base64 produces 3 bytes for every 4 characters
+        if ((validChars & 3) != 0) {
+            throw new IllegalArgumentException("Invalid base64 length");
+        }
+        
+        // Pre-allocate output buffer (max size, may be slightly less with padding)
+        int maxOutLen = (validChars / 4) * 3;
+        byte[] out = new byte[maxOutLen];
+        int outPos = 0;
+        
         int[] quad = new int[4];
         int quadLen = 0;
         boolean sawPadding = false;
-        for (int i = 0; i < input.length(); i++) {
+        
+        for (int i = 0; i < inputLen; i++) {
             char ch = input.charAt(i);
             if (Character.isWhitespace(ch)) {
                 continue;
             }
+            
             if (ch == '=') {
                 quad[quadLen++] = -2;
             } else {
@@ -77,8 +101,9 @@ public final class Base64Codec {
                 }
                 quad[quadLen++] = val;
             }
+            
             if (quadLen == 4) {
-                decodeQuad(quad, out);
+                outPos = decodeQuadFast(quad, out, outPos);
                 if (quad[2] == -2 || quad[3] == -2) {
                     sawPadding = true;
                 }
@@ -87,40 +112,62 @@ public final class Base64Codec {
                 throw new IllegalArgumentException("Invalid base64 padding");
             }
         }
+        
         if (quadLen != 0) {
             throw new IllegalArgumentException("Invalid base64 length");
         }
-        return out.toByteArray();
+        
+        // Return appropriately sized array if we wrote less due to padding
+        if (outPos < maxOutLen) {
+            byte[] result = new byte[outPos];
+            System.arraycopy(out, 0, result, 0, outPos);
+            return result;
+        }
+        return out;
     }
 
-    private static void decodeQuad(int[] quad, ByteArrayOutputStream out) {
+    private static int decodeQuadFast(int[] quad, byte[] out, int outPos) {
         int b0 = quad[0];
         int b1 = quad[1];
         int b2 = quad[2];
         int b3 = quad[3];
+        
         if (b0 < 0 || b1 < 0) {
             throw new IllegalArgumentException("Invalid base64 payload");
         }
+        
+        // Decode the 24-bit value
+        int v = (b0 << 18) | (b1 << 12);
+        
         if (b2 == -2 && b3 == -2) {
-            int v = (b0 << 18) | (b1 << 12);
-            out.write((v >> 16) & 0xFF);
-            return;
+            // Two padding chars: output 1 byte
+            out[outPos++] = (byte) ((v >> 16) & 0xFF);
+            return outPos;
         }
+        
         if (b2 < 0) {
             throw new IllegalArgumentException("Invalid base64 payload");
         }
+        
+        v |= (b2 << 6);
+        
         if (b3 == -2) {
-            int v = (b0 << 18) | (b1 << 12) | (b2 << 6);
-            out.write((v >> 16) & 0xFF);
-            out.write((v >> 8) & 0xFF);
-            return;
+            // One padding char: output 2 bytes
+            out[outPos++] = (byte) ((v >> 16) & 0xFF);
+            out[outPos++] = (byte) ((v >> 8) & 0xFF);
+            return outPos;
         }
+        
         if (b3 < 0) {
             throw new IllegalArgumentException("Invalid base64 payload");
         }
-        int v = (b0 << 18) | (b1 << 12) | (b2 << 6) | b3;
-        out.write((v >> 16) & 0xFF);
-        out.write((v >> 8) & 0xFF);
-        out.write(v & 0xFF);
+        
+        v |= b3;
+        
+        // No padding: output 3 bytes
+        out[outPos++] = (byte) ((v >> 16) & 0xFF);
+        out[outPos++] = (byte) ((v >> 8) & 0xFF);
+        out[outPos++] = (byte) (v & 0xFF);
+        return outPos;
     }
 }

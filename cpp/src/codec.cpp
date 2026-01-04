@@ -49,6 +49,32 @@ std::array<int, 256> BuildBase32DecodeTable() {
 
 const std::array<int, 256> kBase32DecodeTable = BuildBase32DecodeTable();
 
+// Build a lookup table for fast character-to-token mapping
+std::array<const char*, 256> BuildCodeLookupTable() {
+    std::array<const char*, 256> table{};
+    table.fill(nullptr);
+    for (const auto& entry : kCodeMap) {
+        table[static_cast<unsigned char>(entry.ch)] = entry.token;
+    }
+    return table;
+}
+
+const std::array<const char*, 256> kCodeLookupTable = BuildCodeLookupTable();
+
+// Build sorted tokens for decoding (build once at startup)
+std::vector<std::pair<std::string, char>> BuildSortedTokens() {
+    std::vector<std::pair<std::string, char>> tokens;
+    tokens.reserve(sizeof(kCodeMap) / sizeof(kCodeMap[0]));
+    for (const auto& entry : kCodeMap) {
+        tokens.emplace_back(entry.token, entry.ch);
+    }
+    std::sort(tokens.begin(), tokens.end(),
+              [](const auto& a, const auto& b) { return a.first.size() > b.first.size(); });
+    return tokens;
+}
+
+const std::vector<std::pair<std::string, char>> kSortedTokens = BuildSortedTokens();
+
 }  // namespace
 
 std::string Code(const std::string& input) {
@@ -58,15 +84,11 @@ std::string Code(const std::string& input) {
     std::string out;
     out.reserve(input.size() * 4);
     for (char ch : input) {
-        bool mapped = false;
-        for (const auto& entry : kCodeMap) {
-            if (entry.ch == ch) {
-                out.append(entry.token);
-                mapped = true;
-                break;
-            }
-        }
-        if (!mapped) {
+        unsigned char idx = static_cast<unsigned char>(ch);
+        const char* token = kCodeLookupTable[idx];
+        if (token != nullptr) {
+            out.append(token);
+        } else {
             out.push_back(ch);
         }
     }
@@ -77,20 +99,12 @@ std::string Decode(const std::string& input) {
     if (input.empty()) {
         return input;
     }
-    std::vector<std::pair<std::string, char>> tokens;
-    tokens.reserve(sizeof(kCodeMap) / sizeof(kCodeMap[0]));
-    for (const auto& entry : kCodeMap) {
-        tokens.emplace_back(entry.token, entry.ch);
-    }
-    std::sort(tokens.begin(), tokens.end(),
-              [](const auto& a, const auto& b) { return a.first.size() > b.first.size(); });
-
     std::string out;
     out.reserve(input.size());
     std::size_t idx = 0;
     while (idx < input.size()) {
         bool matched = false;
-        for (const auto& token : tokens) {
+        for (const auto& token : kSortedTokens) {
             if (token.first.size() == 0) {
                 continue;
             }

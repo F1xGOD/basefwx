@@ -374,48 +374,52 @@ public final class BaseFwx {
             // h1 = SHA-256(input)
             MessageDigest md256 = MessageDigest.getInstance("SHA-256");
             byte[] h1Bytes = md256.digest(inputBytes);
-            char[] h1 = new char[h1Bytes.length * 2];
+            
+            // Convert h1 to hex bytes (not string)
+            byte[] h1Hex = new byte[h1Bytes.length * 2];
             for (int i = 0; i < h1Bytes.length; i++) {
                 int v = h1Bytes[i] & 0xFF;
-                h1[i * 2] = HEX_CHARS[v >>> 4];
-                h1[i * 2 + 1] = HEX_CHARS[v & 0x0F];
+                h1Hex[i * 2] = (byte) HEX_CHARS[v >>> 4];
+                h1Hex[i * 2 + 1] = (byte) HEX_CHARS[v & 0x0F];
             }
             
             // h2 = SHA-1(h1)
             MessageDigest md1 = MessageDigest.getInstance("SHA-1");
-            byte[] h2Bytes = md1.digest(new String(h1).getBytes(StandardCharsets.UTF_8));
-            char[] h2 = new char[h2Bytes.length * 2];
+            byte[] h2Bytes = md1.digest(h1Hex);
+            
+            // Convert h2 to hex bytes
+            byte[] h2Hex = new byte[h2Bytes.length * 2];
             for (int i = 0; i < h2Bytes.length; i++) {
                 int v = h2Bytes[i] & 0xFF;
-                h2[i * 2] = HEX_CHARS[v >>> 4];
-                h2[i * 2 + 1] = HEX_CHARS[v & 0x0F];
+                h2Hex[i * 2] = (byte) HEX_CHARS[v >>> 4];
+                h2Hex[i * 2 + 1] = (byte) HEX_CHARS[v & 0x0F];
             }
             
             // h3 = SHA-512(h2)
             MessageDigest md512a = MessageDigest.getInstance("SHA-512");
-            byte[] h3Bytes = md512a.digest(new String(h2).getBytes(StandardCharsets.UTF_8));
+            byte[] h3Bytes = md512a.digest(h2Hex);
             
             // h4 = SHA-512(input)
             MessageDigest md512b = MessageDigest.getInstance("SHA-512");
             byte[] h4Bytes = md512b.digest(inputBytes);
             
-            // Concatenate h3 and h4 hex strings
-            char[] h3h4 = new char[(h3Bytes.length + h4Bytes.length) * 2];
+            // Concatenate h3 and h4 hex bytes
+            byte[] h3h4Hex = new byte[(h3Bytes.length + h4Bytes.length) * 2];
             int pos = 0;
             for (int i = 0; i < h3Bytes.length; i++) {
                 int v = h3Bytes[i] & 0xFF;
-                h3h4[pos++] = HEX_CHARS[v >>> 4];
-                h3h4[pos++] = HEX_CHARS[v & 0x0F];
+                h3h4Hex[pos++] = (byte) HEX_CHARS[v >>> 4];
+                h3h4Hex[pos++] = (byte) HEX_CHARS[v & 0x0F];
             }
             for (int i = 0; i < h4Bytes.length; i++) {
                 int v = h4Bytes[i] & 0xFF;
-                h3h4[pos++] = HEX_CHARS[v >>> 4];
-                h3h4[pos++] = HEX_CHARS[v & 0x0F];
+                h3h4Hex[pos++] = (byte) HEX_CHARS[v >>> 4];
+                h3h4Hex[pos++] = (byte) HEX_CHARS[v & 0x0F];
             }
             
             // Final SHA-256
             md256.reset();
-            byte[] finalDigest = md256.digest(new String(h3h4).getBytes(StandardCharsets.UTF_8));
+            byte[] finalDigest = md256.digest(h3h4Hex);
             char[] out = new char[finalDigest.length * 2];
             for (int i = 0; i < finalDigest.length; i++) {
                 int v = finalDigest[i] & 0xFF;
@@ -450,9 +454,9 @@ public final class BaseFwx {
         String md = mdCode(input);
         int mdLen = md.length();
         String mdLenStr = Integer.toString(mdLen);
-        int prefixLen = Integer.toString(mdLenStr.length()).length();
-        StringBuilder prefix = new StringBuilder(prefixLen + mdLenStr.length());
-        prefix.append(mdLenStr.length()).append(mdLenStr);
+        String prefixLenStr = Integer.toString(mdLenStr.length());
+        StringBuilder prefix = new StringBuilder(prefixLenStr.length() + mdLenStr.length());
+        prefix.append(prefixLenStr).append(mdLenStr);
         long lenVal = mdLen;
         String code = Long.toString(lenVal * lenVal);
         String mdCode = mdCode(code);

@@ -884,9 +884,12 @@ public final class BaseFwx {
                         remaining -= take;
                     }
                     byte[] tag = readExactBytes(in, Constants.AEAD_TAG_LEN, "Ciphertext payload truncated");
-                    int finalLen = dec.doFinal(tag, 0, tag.length, outBuf, 0);
+                    // Allocate buffer large enough for doFinal output (which may be the entire plaintext)
+                    byte[] finalBuf = cipherBodyLen <= Constants.STREAM_CHUNK_SIZE ? outBuf 
+                        : new byte[(int) Math.min(cipherBodyLen, Integer.MAX_VALUE)];
+                    int finalLen = dec.doFinal(tag, 0, tag.length, finalBuf, 0);
                     if (finalLen > 0) {
-                        plainOut.write(outBuf, 0, finalLen);
+                        plainOut.write(finalBuf, 0, finalLen);
                     }
                 }
             }
@@ -1198,9 +1201,12 @@ public final class BaseFwx {
                         remaining -= take;
                     }
                     byte[] tag = readExactBytes(in, Constants.AEAD_TAG_LEN, "Ciphertext payload truncated");
-                    int finalLen = dec.doFinal(tag, 0, tag.length, outBuf, 0);
+                    // Allocate buffer large enough for doFinal output (which may be the entire plaintext)
+                    byte[] finalBuf = cipherBodyLen <= Constants.STREAM_CHUNK_SIZE ? outBuf 
+                        : new byte[(int) Math.min(cipherBodyLen, Integer.MAX_VALUE)];
+                    int finalLen = dec.doFinal(tag, 0, tag.length, finalBuf, 0);
                     if (finalLen > 0) {
-                        plainOut.write(outBuf, 0, finalLen);
+                        plainOut.write(finalBuf, 0, finalLen);
                     }
                 }
             }

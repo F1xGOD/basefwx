@@ -74,18 +74,19 @@ public final class JavaCryptoBackend implements CryptoBackend {
         @Override
         public int doFinal(byte[] tag, int tagOff, int tagLen, byte[] out, int outOff)
             throws GeneralSecurityException {
-            // Copy tag to our buffer for the final decrypt step
+            // Copy tag to our buffer
             if (tagLen > pendingTag.length) {
                 throw new IllegalArgumentException("Tag too large: " + tagLen);
             }
             System.arraycopy(tag, tagOff, pendingTag, 0, tagLen);
             pendingTagLen = tagLen;
             
-            // Process the tag through cipher to finalize and verify
-            // First, feed the tag data to cipher
+            // In Java GCM, the tag must be fed to the cipher along with ciphertext
+            // Feed the tag data to cipher.update before calling doFinal
             int processed = cipher.update(pendingTag, 0, pendingTagLen, out, outOff);
             
-            // Then call doFinal to complete authentication and get any remaining plaintext
+            // Call doFinal to complete authentication and get any remaining plaintext
+            // This will verify the tag and throw AEADBadTagException if authentication fails
             int finalLen = cipher.doFinal(out, outOff + processed);
             
             return processed + finalLen;

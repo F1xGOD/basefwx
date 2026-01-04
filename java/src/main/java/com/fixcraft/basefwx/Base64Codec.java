@@ -25,32 +25,33 @@ public final class Base64Codec {
         int full = data.length / 3;
         int rem = data.length % 3;
         int outLen = (full + (rem > 0 ? 1 : 0)) * 4;
-        StringBuilder out = new StringBuilder(outLen);
+        char[] out = new char[outLen];
+        int outPos = 0;
         int idx = 0;
         for (int i = 0; i < full; i++) {
             int b0 = data[idx++] & 0xFF;
             int b1 = data[idx++] & 0xFF;
             int b2 = data[idx++] & 0xFF;
-            out.append(ALPHABET[(b0 >> 2) & 0x3F]);
-            out.append(ALPHABET[((b0 << 4) | (b1 >> 4)) & 0x3F]);
-            out.append(ALPHABET[((b1 << 2) | (b2 >> 6)) & 0x3F]);
-            out.append(ALPHABET[b2 & 0x3F]);
+            out[outPos++] = ALPHABET[(b0 >> 2) & 0x3F];
+            out[outPos++] = ALPHABET[((b0 << 4) | (b1 >> 4)) & 0x3F];
+            out[outPos++] = ALPHABET[((b1 << 2) | (b2 >> 6)) & 0x3F];
+            out[outPos++] = ALPHABET[b2 & 0x3F];
         }
         if (rem == 1) {
             int b0 = data[idx] & 0xFF;
-            out.append(ALPHABET[(b0 >> 2) & 0x3F]);
-            out.append(ALPHABET[(b0 << 4) & 0x3F]);
-            out.append('=');
-            out.append('=');
+            out[outPos++] = ALPHABET[(b0 >> 2) & 0x3F];
+            out[outPos++] = ALPHABET[(b0 << 4) & 0x3F];
+            out[outPos++] = '=';
+            out[outPos++] = '=';
         } else if (rem == 2) {
             int b0 = data[idx++] & 0xFF;
             int b1 = data[idx] & 0xFF;
-            out.append(ALPHABET[(b0 >> 2) & 0x3F]);
-            out.append(ALPHABET[((b0 << 4) | (b1 >> 4)) & 0x3F]);
-            out.append(ALPHABET[(b1 << 2) & 0x3F]);
-            out.append('=');
+            out[outPos++] = ALPHABET[(b0 >> 2) & 0x3F];
+            out[outPos++] = ALPHABET[((b0 << 4) | (b1 >> 4)) & 0x3F];
+            out[outPos++] = ALPHABET[(b1 << 2) & 0x3F];
+            out[outPos++] = '=';
         }
-        return out.toString();
+        return new String(out);
     }
 
     public static byte[] decode(String input) {

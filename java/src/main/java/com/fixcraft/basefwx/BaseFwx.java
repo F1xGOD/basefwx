@@ -3174,8 +3174,8 @@ public final class BaseFwx {
 
     private static byte[] readFileBytes(File file) {
         try (FileInputStream in = new FileInputStream(file);
-             ByteArrayOutputStream out = new ByteArrayOutputStream()) {
-            byte[] buffer = new byte[8192];
+             ByteArrayOutputStream out = new ByteArrayOutputStream((int) Math.min(file.length(), Integer.MAX_VALUE))) {
+            byte[] buffer = new byte[Constants.STREAM_CHUNK_SIZE];
             int read;
             while ((read = in.read(buffer)) != -1) {
                 out.write(buffer, 0, read);

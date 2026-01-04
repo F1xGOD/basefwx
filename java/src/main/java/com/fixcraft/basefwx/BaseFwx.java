@@ -28,6 +28,21 @@ import javax.crypto.spec.IvParameterSpec;
 import javax.crypto.spec.GCMParameterSpec;
 import javax.crypto.spec.SecretKeySpec;
 
+/**
+ * BaseFWX Java implementation using native-backed standard library components.
+ * 
+ * Performance Strategy:
+ * - Base64: Uses java.util.Base64 (native implementation, similar to Python's C-backed base64 module)
+ * - Hashing: Uses java.security.MessageDigest (JVM native implementations for SHA-256, SHA-512, SHA-1)
+ * - Crypto: Uses javax.crypto.Cipher (JVM native implementations for AES-GCM)
+ * - PBKDF2: Uses javax.crypto.SecretKeyFactory (optimized native implementation)
+ * 
+ * Memory Management:
+ * - Pre-sized arrays and buffers to minimize allocations
+ * - Direct char[] construction for string building instead of StringBuilder where beneficial
+ * - Reuse of byte arrays in hot paths
+ * - Java's garbage collector handles automatic memory cleanup
+ */
 public final class BaseFwx {
     private BaseFwx() {}
 
@@ -368,35 +383,102 @@ public final class BaseFwx {
     }
 
     public static String uhash513(String input) {
-        String h1 = digestHex("SHA-256", input);
-        String h2 = digestHex("SHA-1", h1);
-        String h3 = digestHex("SHA-512", h2);
-        String h4 = digestHex("SHA-512", input);
-        return digestHex("SHA-256", h3 + h4);
+        try {
+            byte[] inputBytes = input.getBytes(StandardCharsets.UTF_8);
+            
+            // h1 = SHA-256(input)
+            MessageDigest md256 = MessageDigest.getInstance("SHA-256");
+            byte[] h1Bytes = md256.digest(inputBytes);
+            
+            // Convert h1 to hex bytes (not string)
+            byte[] h1Hex = new byte[h1Bytes.length * 2];
+            for (int i = 0; i < h1Bytes.length; i++) {
+                int v = h1Bytes[i] & 0xFF;
+                h1Hex[i * 2] = (byte) HEX_CHARS[v >>> 4];
+                h1Hex[i * 2 + 1] = (byte) HEX_CHARS[v & 0x0F];
+            }
+            
+            // h2 = SHA-1(h1)
+            MessageDigest md1 = MessageDigest.getInstance("SHA-1");
+            byte[] h2Bytes = md1.digest(h1Hex);
+            
+            // Convert h2 to hex bytes
+            byte[] h2Hex = new byte[h2Bytes.length * 2];
+            for (int i = 0; i < h2Bytes.length; i++) {
+                int v = h2Bytes[i] & 0xFF;
+                h2Hex[i * 2] = (byte) HEX_CHARS[v >>> 4];
+                h2Hex[i * 2 + 1] = (byte) HEX_CHARS[v & 0x0F];
+            }
+            
+            // h3 = SHA-512(h2)
+            MessageDigest md512a = MessageDigest.getInstance("SHA-512");
+            byte[] h3Bytes = md512a.digest(h2Hex);
+            
+            // h4 = SHA-512(input)
+            MessageDigest md512b = MessageDigest.getInstance("SHA-512");
+            byte[] h4Bytes = md512b.digest(inputBytes);
+            
+            // Concatenate h3 and h4 hex bytes
+            byte[] h3h4Hex = new byte[(h3Bytes.length + h4Bytes.length) * 2];
+            int pos = 0;
+            for (int i = 0; i < h3Bytes.length; i++) {
+                int v = h3Bytes[i] & 0xFF;
+                h3h4Hex[pos++] = (byte) HEX_CHARS[v >>> 4];
+                h3h4Hex[pos++] = (byte) HEX_CHARS[v & 0x0F];
+            }
+            for (int i = 0; i < h4Bytes.length; i++) {
+                int v = h4Bytes[i] & 0xFF;
+                h3h4Hex[pos++] = (byte) HEX_CHARS[v >>> 4];
+                h3h4Hex[pos++] = (byte) HEX_CHARS[v & 0x0F];
+            }
+            
+            // Final SHA-256
+            md256.reset();
+            byte[] finalDigest = md256.digest(h3h4Hex);
+            char[] out = new char[finalDigest.length * 2];
+            for (int i = 0; i < finalDigest.length; i++) {
+                int v = finalDigest[i] & 0xFF;
+                out[i * 2] = HEX_CHARS[v >>> 4];
+                out[i * 2 + 1] = HEX_CHARS[v & 0x0F];
+            }
+            return new String(out);
+        } catch (NoSuchAlgorithmException exc) {
+            throw new IllegalStateException("Digest unavailable", exc);
+        }
     }
 
     public static String bi512Encode(String input) {
         if (input == null || input.isEmpty()) {
             throw new IllegalArgumentException("bi512encode expects non-empty input");
         }
-        String code = "" + input.charAt(0) + input.charAt(input.length() - 1);
+        char[] code = new char[2];
+        code[0] = input.charAt(0);
+        code[1] = input.charAt(input.length() - 1);
         String md = mdCode(input);
-        String mdCode = mdCode(code);
+        String mdCode = mdCode(new String(code));
         BigInteger diff = new BigInteger(md).subtract(new BigInteger(mdCode));
-        String diffStr = diff.toString().replace("-", "0");
+        String diffStr = diff.toString();
+        if (!diffStr.isEmpty() && diffStr.charAt(0) == '-') {
+            diffStr = '0' + diffStr.substring(1);
+        }
         String packed = Codec.b256Encode(diffStr).replace("=", "4G5tRA");
         return digestHex("SHA-256", packed);
     }
 
     public static String a512Encode(String input) {
         String md = mdCode(input);
-        String mdLen = Integer.toString(md.length());
-        String prefix = Integer.toString(mdLen.length()) + mdLen;
-        long lenVal = md.length();
+        int mdLen = md.length();
+        String mdLenStr = Integer.toString(mdLen);
+        String prefixLenStr = Integer.toString(mdLenStr.length());
+        String prefix = prefixLenStr + mdLenStr;
+        long lenVal = mdLen;
         String code = Long.toString(lenVal * lenVal);
         String mdCode = mdCode(code);
         BigInteger diff = new BigInteger(md).subtract(new BigInteger(mdCode));
-        String diffStr = diff.toString().replace("-", "0");
+        String diffStr = diff.toString();
+        if (!diffStr.isEmpty() && diffStr.charAt(0) == '-') {
+            diffStr = '0' + diffStr.substring(1);
+        }
         String packed = Codec.b256Encode(diffStr).replace("=", "4G5tRA");
         return prefix + packed;
     }
@@ -2240,17 +2322,19 @@ public final class BaseFwx {
         return maybeObfuscateCodecs(encoded);
     }
 
+    private static final char[] HEX_CHARS = "0123456789abcdef".toCharArray();
+    
     private static String digestHex(String algorithm, String input) {
         try {
             MessageDigest md = MessageDigest.getInstance(algorithm);
             byte[] digest = md.digest(input.getBytes(StandardCharsets.UTF_8));
-            char[] hex = "0123456789abcdef".toCharArray();
-            StringBuilder out = new StringBuilder(digest.length * 2);
-            for (byte b : digest) {
-                out.append(hex[(b >> 4) & 0x0F]);
-                out.append(hex[b & 0x0F]);
+            char[] out = new char[digest.length * 2];
+            for (int i = 0; i < digest.length; i++) {
+                int v = digest[i] & 0xFF;
+                out[i * 2] = HEX_CHARS[v >>> 4];
+                out[i * 2 + 1] = HEX_CHARS[v & 0x0F];
             }
-            return out.toString();
+            return new String(out);
         } catch (NoSuchAlgorithmException exc) {
             throw new IllegalStateException("Digest unavailable: " + algorithm, exc);
         }
@@ -2262,15 +2346,19 @@ public final class BaseFwx {
         StringBuilder out = new StringBuilder(bytes.length * 3);
         for (byte b : bytes) {
             int val = b & 0xFF;
-            String digits = Integer.toString(val);
-            out.append(digits.length());
-            out.append(digits);
+            if (val < 10) {
+                out.append('1').append((char)('0' + val));
+            } else if (val < 100) {
+                out.append('2').append((char)('0' + val / 10)).append((char)('0' + val % 10));
+            } else {
+                out.append('3').append((char)('0' + val / 100)).append((char)('0' + (val / 10) % 10)).append((char)('0' + val % 10));
+            }
         }
         return out.toString();
     }
 
     private static String mcode(String input) {
-        StringBuilder out = new StringBuilder();
+        StringBuilder out = new StringBuilder(input.length() / 2);
         int idx = 0;
         while (idx < input.length()) {
             char ch = input.charAt(idx);
@@ -2282,7 +2370,10 @@ public final class BaseFwx {
             if (idx + len > input.length()) {
                 throw new IllegalArgumentException("Invalid mcode length");
             }
-            int val = Integer.parseInt(input.substring(idx, idx + len));
+            int val = 0;
+            for (int i = 0; i < len; i++) {
+                val = val * 10 + (input.charAt(idx + i) - '0');
+            }
             out.append((char) val);
             idx += len;
         }

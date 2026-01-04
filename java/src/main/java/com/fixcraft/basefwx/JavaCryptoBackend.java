@@ -50,7 +50,8 @@ public final class JavaCryptoBackend implements CryptoBackend {
 
     private static final class JavaGcmDecryptor implements AeadDecryptor {
         private final Cipher cipher;
-        private final java.io.ByteArrayOutputStream buffer;
+        private final byte[] pendingTag;
+        private int pendingTagLen;
 
         private JavaGcmDecryptor(byte[] key, byte[] iv, byte[] aad) throws GeneralSecurityException {
             cipher = Cipher.getInstance("AES/GCM/NoPadding");
@@ -59,41 +60,35 @@ public final class JavaCryptoBackend implements CryptoBackend {
             if (aad != null && aad.length > 0) {
                 cipher.updateAAD(aad);
             }
-            // Initialize buffer with reasonable capacity to reduce reallocations for larger files
-            // Default ByteArrayOutputStream starts at 32 bytes, so use 1MB as a middle ground
-            buffer = new java.io.ByteArrayOutputStream(Constants.STREAM_CHUNK_SIZE);
+            // Pre-allocate tag buffer to avoid allocation on every call
+            pendingTag = new byte[Constants.AEAD_TAG_LEN];
+            pendingTagLen = 0;
         }
 
         @Override
         public int update(byte[] in, int inOff, int len, byte[] out, int outOff) throws GeneralSecurityException {
-            // Buffer the ciphertext instead of processing it immediately
-            // This is because Java's GCM implementation doesn't support streaming
-            buffer.write(in, inOff, len);
-            return 0;  // No output until doFinal
+            // Process ciphertext chunks immediately using Cipher.update for true streaming
+            return cipher.update(in, inOff, len, out, outOff);
         }
 
         @Override
         public int doFinal(byte[] tag, int tagOff, int tagLen, byte[] out, int outOff)
             throws GeneralSecurityException {
-            // Append tag to buffered ciphertext
-            buffer.write(tag, tagOff, tagLen);
-            byte[] ciphertext = buffer.toByteArray();
-            
-            // Process all at once
-            byte[] plaintext = cipher.doFinal(ciphertext);
-            
-            // Check if output buffer is large enough
-            if (out.length - outOff < plaintext.length) {
-                throw new javax.crypto.ShortBufferException(
-                    "Output buffer too small: need " + plaintext.length + 
-                    " bytes but only " + (out.length - outOff) + " available");
+            // Copy tag to our buffer for the final decrypt step
+            if (tagLen > pendingTag.length) {
+                throw new IllegalArgumentException("Tag too large: " + tagLen);
             }
+            System.arraycopy(tag, tagOff, pendingTag, 0, tagLen);
+            pendingTagLen = tagLen;
             
-            // Copy result to output buffer
-            if (plaintext.length > 0) {
-                System.arraycopy(plaintext, 0, out, outOff, plaintext.length);
-            }
-            return plaintext.length;
+            // Process the tag through cipher to finalize and verify
+            // First, feed the tag data to cipher
+            int processed = cipher.update(pendingTag, 0, pendingTagLen, out, outOff);
+            
+            // Then call doFinal to complete authentication and get any remaining plaintext
+            int finalLen = cipher.doFinal(out, outOff + processed);
+            
+            return processed + finalLen;
         }
 
         @Override

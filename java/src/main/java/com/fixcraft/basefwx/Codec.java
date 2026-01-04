@@ -46,8 +46,9 @@ public final class Codec {
         if (input == null || input.isEmpty()) {
             return input == null ? "" : input;
         }
-        StringBuilder out = new StringBuilder(input.length() * 4);
-        for (int i = 0; i < input.length(); i++) {
+        int len = input.length();
+        StringBuilder out = new StringBuilder(len * 4);
+        for (int i = 0; i < len; i++) {
             char ch = input.charAt(i);
             String token = ch < CHAR_TO_TOKEN.length ? CHAR_TO_TOKEN[ch] : null;
             if (token != null) {
@@ -63,10 +64,10 @@ public final class Codec {
         if (input == null || input.isEmpty()) {
             return input == null ? "" : input;
         }
-        StringBuilder out = new StringBuilder(input.length());
+        int len = input.length();
+        StringBuilder out = new StringBuilder(len);
         int idx = 0;
         TrieNode root = TOKEN_TRIE;
-        int len = input.length();
         while (idx < len) {
             char ch = input.charAt(idx);
             if (ch >= root.next.length) {
@@ -119,7 +120,9 @@ public final class Codec {
         if (data.length == 0) {
             return "";
         }
-        StringBuilder out = new StringBuilder(((data.length + 4) / 5) * 8);
+        int outLen = ((data.length + 4) / 5) * 8;
+        char[] out = new char[outLen];
+        int outPos = 0;
         int buffer = 0;
         int bitsLeft = 0;
         for (byte b : data) {
@@ -127,19 +130,19 @@ public final class Codec {
             bitsLeft += 8;
             while (bitsLeft >= 5) {
                 int index = (buffer >> (bitsLeft - 5)) & 0x1F;
-                out.append(BASE32HEX_ALPHABET[index]);
+                out[outPos++] = BASE32HEX_ALPHABET[index];
                 bitsLeft -= 5;
             }
         }
         if (bitsLeft > 0) {
             buffer <<= (5 - bitsLeft);
             int index = buffer & 0x1F;
-            out.append(BASE32HEX_ALPHABET[index]);
+            out[outPos++] = BASE32HEX_ALPHABET[index];
         }
-        while (out.length() % 8 != 0) {
-            out.append('=');
+        while (outPos % 8 != 0) {
+            out[outPos++] = '=';
         }
-        return out.toString();
+        return new String(out, 0, outPos);
     }
 
     public static byte[] base32HexDecode(String input) {
@@ -208,11 +211,9 @@ public final class Codec {
     }
 
     private static String repeat(char ch, int count) {
-        StringBuilder out = new StringBuilder(count);
-        for (int i = 0; i < count; i++) {
-            out.append(ch);
-        }
-        return out.toString();
+        char[] chars = new char[count];
+        Arrays.fill(chars, ch);
+        return new String(chars);
     }
 
     private static String[] buildCharToToken() {

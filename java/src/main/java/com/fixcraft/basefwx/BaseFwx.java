@@ -2240,17 +2240,19 @@ public final class BaseFwx {
         return maybeObfuscateCodecs(encoded);
     }
 
+    private static final char[] HEX_CHARS = "0123456789abcdef".toCharArray();
+    
     private static String digestHex(String algorithm, String input) {
         try {
             MessageDigest md = MessageDigest.getInstance(algorithm);
             byte[] digest = md.digest(input.getBytes(StandardCharsets.UTF_8));
-            char[] hex = "0123456789abcdef".toCharArray();
-            StringBuilder out = new StringBuilder(digest.length * 2);
-            for (byte b : digest) {
-                out.append(hex[(b >> 4) & 0x0F]);
-                out.append(hex[b & 0x0F]);
+            char[] out = new char[digest.length * 2];
+            for (int i = 0; i < digest.length; i++) {
+                int v = digest[i] & 0xFF;
+                out[i * 2] = HEX_CHARS[v >>> 4];
+                out[i * 2 + 1] = HEX_CHARS[v & 0x0F];
             }
-            return out.toString();
+            return new String(out);
         } catch (NoSuchAlgorithmException exc) {
             throw new IllegalStateException("Digest unavailable: " + algorithm, exc);
         }
@@ -2262,15 +2264,19 @@ public final class BaseFwx {
         StringBuilder out = new StringBuilder(bytes.length * 3);
         for (byte b : bytes) {
             int val = b & 0xFF;
-            String digits = Integer.toString(val);
-            out.append(digits.length());
-            out.append(digits);
+            if (val < 10) {
+                out.append('1').append((char)('0' + val));
+            } else if (val < 100) {
+                out.append('2').append((char)('0' + val / 10)).append((char)('0' + val % 10));
+            } else {
+                out.append('3').append((char)('0' + val / 100)).append((char)('0' + (val / 10) % 10)).append((char)('0' + val % 10));
+            }
         }
         return out.toString();
     }
 
     private static String mcode(String input) {
-        StringBuilder out = new StringBuilder();
+        StringBuilder out = new StringBuilder(input.length() / 2);
         int idx = 0;
         while (idx < input.length()) {
             char ch = input.charAt(idx);
@@ -2282,7 +2288,10 @@ public final class BaseFwx {
             if (idx + len > input.length()) {
                 throw new IllegalArgumentException("Invalid mcode length");
             }
-            int val = Integer.parseInt(input.substring(idx, idx + len));
+            int val = 0;
+            for (int i = 0; i < len; i++) {
+                val = val * 10 + (input.charAt(idx + i) - '0');
+            }
             out.append((char) val);
             idx += len;
         }

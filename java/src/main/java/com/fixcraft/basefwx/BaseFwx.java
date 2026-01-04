@@ -888,6 +888,8 @@ public final class BaseFwx {
             if (tempPlain != null) {
                 tempPlain.delete();
             }
+            System.err.println("ERROR: Streaming b512 decode failed");
+            exc.printStackTrace(System.err);
             throw new IllegalStateException("Streaming b512 decode failed", exc);
         }
 
@@ -942,6 +944,8 @@ public final class BaseFwx {
             }
             return outFile;
         } catch (IOException exc) {
+            System.err.println("ERROR: Streaming b512 decode failed");
+            exc.printStackTrace(System.err);
             throw new IllegalStateException("Streaming b512 decode failed", exc);
         } finally {
             if (tempPlain != null) {
@@ -1192,6 +1196,8 @@ public final class BaseFwx {
             if (tempPlain != null) {
                 tempPlain.delete();
             }
+            System.err.println("ERROR: AES-heavy streaming decode failed");
+            exc.printStackTrace(System.err);
             throw new IllegalStateException("AES-heavy streaming decode failed", exc);
         }
 
@@ -1246,6 +1252,8 @@ public final class BaseFwx {
             }
             return outFile;
         } catch (IOException exc) {
+            System.err.println("ERROR: AES-heavy streaming decode failed");
+            exc.printStackTrace(System.err);
             throw new IllegalStateException("AES-heavy streaming decode failed", exc);
         } finally {
             if (tempPlain != null) {

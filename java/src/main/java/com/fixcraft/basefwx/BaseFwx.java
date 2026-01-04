@@ -368,37 +368,101 @@ public final class BaseFwx {
     }
 
     public static String uhash513(String input) {
-        String h1 = digestHex("SHA-256", input);
-        String h2 = digestHex("SHA-1", h1);
-        String h3 = digestHex("SHA-512", h2);
-        String h4 = digestHex("SHA-512", input);
-        return digestHex("SHA-256", h3 + h4);
+        try {
+            byte[] inputBytes = input.getBytes(StandardCharsets.UTF_8);
+            
+            // h1 = SHA-256(input)
+            MessageDigest md256 = MessageDigest.getInstance("SHA-256");
+            byte[] h1Bytes = md256.digest(inputBytes);
+            char[] h1 = new char[h1Bytes.length * 2];
+            for (int i = 0; i < h1Bytes.length; i++) {
+                int v = h1Bytes[i] & 0xFF;
+                h1[i * 2] = HEX_CHARS[v >>> 4];
+                h1[i * 2 + 1] = HEX_CHARS[v & 0x0F];
+            }
+            
+            // h2 = SHA-1(h1)
+            MessageDigest md1 = MessageDigest.getInstance("SHA-1");
+            byte[] h2Bytes = md1.digest(new String(h1).getBytes(StandardCharsets.UTF_8));
+            char[] h2 = new char[h2Bytes.length * 2];
+            for (int i = 0; i < h2Bytes.length; i++) {
+                int v = h2Bytes[i] & 0xFF;
+                h2[i * 2] = HEX_CHARS[v >>> 4];
+                h2[i * 2 + 1] = HEX_CHARS[v & 0x0F];
+            }
+            
+            // h3 = SHA-512(h2)
+            MessageDigest md512a = MessageDigest.getInstance("SHA-512");
+            byte[] h3Bytes = md512a.digest(new String(h2).getBytes(StandardCharsets.UTF_8));
+            
+            // h4 = SHA-512(input)
+            MessageDigest md512b = MessageDigest.getInstance("SHA-512");
+            byte[] h4Bytes = md512b.digest(inputBytes);
+            
+            // Concatenate h3 and h4 hex strings
+            char[] h3h4 = new char[(h3Bytes.length + h4Bytes.length) * 2];
+            int pos = 0;
+            for (int i = 0; i < h3Bytes.length; i++) {
+                int v = h3Bytes[i] & 0xFF;
+                h3h4[pos++] = HEX_CHARS[v >>> 4];
+                h3h4[pos++] = HEX_CHARS[v & 0x0F];
+            }
+            for (int i = 0; i < h4Bytes.length; i++) {
+                int v = h4Bytes[i] & 0xFF;
+                h3h4[pos++] = HEX_CHARS[v >>> 4];
+                h3h4[pos++] = HEX_CHARS[v & 0x0F];
+            }
+            
+            // Final SHA-256
+            md256.reset();
+            byte[] finalDigest = md256.digest(new String(h3h4).getBytes(StandardCharsets.UTF_8));
+            char[] out = new char[finalDigest.length * 2];
+            for (int i = 0; i < finalDigest.length; i++) {
+                int v = finalDigest[i] & 0xFF;
+                out[i * 2] = HEX_CHARS[v >>> 4];
+                out[i * 2 + 1] = HEX_CHARS[v & 0x0F];
+            }
+            return new String(out);
+        } catch (NoSuchAlgorithmException exc) {
+            throw new IllegalStateException("Digest unavailable", exc);
+        }
     }
 
     public static String bi512Encode(String input) {
         if (input == null || input.isEmpty()) {
             throw new IllegalArgumentException("bi512encode expects non-empty input");
         }
-        String code = "" + input.charAt(0) + input.charAt(input.length() - 1);
+        char[] code = new char[2];
+        code[0] = input.charAt(0);
+        code[1] = input.charAt(input.length() - 1);
         String md = mdCode(input);
-        String mdCode = mdCode(code);
+        String mdCode = mdCode(new String(code));
         BigInteger diff = new BigInteger(md).subtract(new BigInteger(mdCode));
-        String diffStr = diff.toString().replace("-", "0");
+        String diffStr = diff.toString();
+        if (diffStr.charAt(0) == '-') {
+            diffStr = '0' + diffStr.substring(1);
+        }
         String packed = Codec.b256Encode(diffStr).replace("=", "4G5tRA");
         return digestHex("SHA-256", packed);
     }
 
     public static String a512Encode(String input) {
         String md = mdCode(input);
-        String mdLen = Integer.toString(md.length());
-        String prefix = Integer.toString(mdLen.length()) + mdLen;
-        long lenVal = md.length();
+        int mdLen = md.length();
+        String mdLenStr = Integer.toString(mdLen);
+        int prefixLen = Integer.toString(mdLenStr.length()).length();
+        StringBuilder prefix = new StringBuilder(prefixLen + mdLenStr.length());
+        prefix.append(mdLenStr.length()).append(mdLenStr);
+        long lenVal = mdLen;
         String code = Long.toString(lenVal * lenVal);
         String mdCode = mdCode(code);
         BigInteger diff = new BigInteger(md).subtract(new BigInteger(mdCode));
-        String diffStr = diff.toString().replace("-", "0");
+        String diffStr = diff.toString();
+        if (diffStr.charAt(0) == '-') {
+            diffStr = '0' + diffStr.substring(1);
+        }
         String packed = Codec.b256Encode(diffStr).replace("=", "4G5tRA");
-        return prefix + packed;
+        return prefix.toString() + packed;
     }
 
     public static String a512Decode(String input) {

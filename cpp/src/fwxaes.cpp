@@ -178,7 +178,20 @@ std::string ReadText(const std::string& path) {
     if (!input) {
         throw std::runtime_error("Failed to open file: " + path);
     }
-    std::string data((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
+    // Use efficient seek-based reading instead of slow iterators
+    input.seekg(0, std::ios::end);
+    std::streamoff size = input.tellg();
+    if (size < 0) {
+        throw std::runtime_error("Failed to read file size: " + path);
+    }
+    input.seekg(0, std::ios::beg);
+    std::string data(static_cast<std::size_t>(size), '\0');
+    if (!data.empty()) {
+        input.read(&data[0], static_cast<std::streamsize>(data.size()));
+        if (!input) {
+            throw std::runtime_error("Failed to read file: " + path);
+        }
+    }
     return data;
 }
 

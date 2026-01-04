@@ -59,7 +59,9 @@ public final class JavaCryptoBackend implements CryptoBackend {
             if (aad != null && aad.length > 0) {
                 cipher.updateAAD(aad);
             }
-            buffer = new java.io.ByteArrayOutputStream();
+            // Initialize buffer with reasonable capacity to reduce reallocations for larger files
+            // Default ByteArrayOutputStream starts at 32 bytes, so use 1MB as a middle ground
+            buffer = new java.io.ByteArrayOutputStream(Constants.STREAM_CHUNK_SIZE);
         }
 
         @Override

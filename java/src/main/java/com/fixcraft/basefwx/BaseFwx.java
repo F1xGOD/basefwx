@@ -1,5 +1,7 @@
 package com.fixcraft.basefwx;
 
+import java.io.BufferedInputStream;
+import java.io.BufferedOutputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileInputStream;
@@ -749,8 +751,10 @@ public final class BaseFwx {
         byte[] nonce = Crypto.randomBytes(Constants.AEAD_NONCE_LEN);
         StreamObfuscator obfuscator = StreamObfuscator.forPassword(pw, streamSalt, fastObf);
 
-        try (FileInputStream in = new FileInputStream(input);
-             FileOutputStream out = new FileOutputStream(outFile)) {
+        try (FileInputStream fin = new FileInputStream(input);
+             BufferedInputStream in = new BufferedInputStream(fin, Constants.STREAM_CHUNK_SIZE);
+             FileOutputStream fout = new FileOutputStream(outFile);
+             BufferedOutputStream out = new BufferedOutputStream(fout, Constants.STREAM_CHUNK_SIZE)) {
             writeU32(out, mask.userBlob.length);
             out.write(mask.userBlob);
             writeU32(out, mask.masterBlob.length);
@@ -820,7 +824,8 @@ public final class BaseFwx {
         boolean useMasterEffective = useMaster;
         boolean obfuscateStream = true;
         boolean fastObfStream = false;
-        try (FileInputStream in = new FileInputStream(input)) {
+        try (FileInputStream fin = new FileInputStream(input);
+             BufferedInputStream in = new BufferedInputStream(fin, Constants.STREAM_CHUNK_SIZE)) {
             int lenUser = readU32(in, "Ciphertext payload truncated");
             byte[] userBlob = readExactBytes(in, lenUser, "Ciphertext payload truncated");
             int lenMaster = readU32(in, "Ciphertext payload truncated");
@@ -864,7 +869,8 @@ public final class BaseFwx {
             CryptoBackend backend = CryptoBackends.get();
             try (CryptoBackend.AeadDecryptor dec = backend.newGcmDecryptor(aeadKey, nonce, metadataBytes)) {
                 tempPlain = File.createTempFile("basefwx-stream", ".plain");
-                try (FileOutputStream plainOut = new FileOutputStream(tempPlain)) {
+                try (FileOutputStream fout = new FileOutputStream(tempPlain);
+                     BufferedOutputStream plainOut = new BufferedOutputStream(fout, Constants.STREAM_CHUNK_SIZE)) {
                     byte[] buffer = new byte[Constants.STREAM_CHUNK_SIZE];
                     byte[] outBuf = new byte[Constants.STREAM_CHUNK_SIZE];
                     long remaining = cipherBodyLen;
@@ -893,7 +899,8 @@ public final class BaseFwx {
             throw new IllegalStateException("Streaming b512 decode failed", exc);
         }
 
-        try (FileInputStream plainIn = new FileInputStream(tempPlain)) {
+        try (FileInputStream fin = new FileInputStream(tempPlain);
+             BufferedInputStream plainIn = new BufferedInputStream(fin, Constants.STREAM_CHUNK_SIZE)) {
             if (metadataBytes.length > 0) {
                 byte[] metaBuf = readExactBytes(plainIn, metadataBytes.length, "Metadata integrity mismatch detected");
                 if (!Arrays.equals(metaBuf, metadataBytes)) {
@@ -926,7 +933,8 @@ public final class BaseFwx {
                 ? StreamObfuscator.forPassword(pw, salt, fastObfStream)
                 : null;
             File outFile = resolveDecodedOutput(input, output, extBytes);
-            try (FileOutputStream out = new FileOutputStream(outFile)) {
+            try (FileOutputStream fout = new FileOutputStream(outFile);
+                 BufferedOutputStream out = new BufferedOutputStream(fout, Constants.STREAM_CHUNK_SIZE)) {
                 byte[] buffer = new byte[chunkSize];
                 long remaining = originalSize;
                 while (remaining > 0) {
@@ -1031,8 +1039,10 @@ public final class BaseFwx {
         StreamObfuscator obfuscator = StreamObfuscator.forPassword(pw, streamSalt, fastObf);
         File outFile = output != null ? output : new File(input.getParentFile(), input.getName() + ".fwx");
 
-        try (FileInputStream in = new FileInputStream(input);
-             FileOutputStream out = new FileOutputStream(outFile)) {
+        try (FileInputStream fin = new FileInputStream(input);
+             BufferedInputStream in = new BufferedInputStream(fin, Constants.STREAM_CHUNK_SIZE);
+             FileOutputStream fout = new FileOutputStream(outFile);
+             BufferedOutputStream out = new BufferedOutputStream(fout, Constants.STREAM_CHUNK_SIZE)) {
             writeU32(out, userBlob.length);
             out.write(userBlob);
             writeU32(out, masterBlob.length);
@@ -1102,7 +1112,8 @@ public final class BaseFwx {
         boolean useMasterEffective = useMaster;
         boolean obfuscateStream = true;
         boolean fastObfStream = false;
-        try (FileInputStream in = new FileInputStream(input)) {
+        try (FileInputStream fin = new FileInputStream(input);
+             BufferedInputStream in = new BufferedInputStream(fin, Constants.STREAM_CHUNK_SIZE)) {
             int lenUser = readU32(in, "Ciphertext payload truncated");
             byte[] userBlob = readExactBytes(in, lenUser, "Ciphertext payload truncated");
             int lenMaster = readU32(in, "Ciphertext payload truncated");
@@ -1172,7 +1183,8 @@ public final class BaseFwx {
             CryptoBackend backend = CryptoBackends.get();
             try (CryptoBackend.AeadDecryptor dec = backend.newGcmDecryptor(ephemeralKey, nonce, metadataBytes)) {
                 tempPlain = File.createTempFile("basefwx-stream", ".plain");
-                try (FileOutputStream plainOut = new FileOutputStream(tempPlain)) {
+                try (FileOutputStream fout = new FileOutputStream(tempPlain);
+                     BufferedOutputStream plainOut = new BufferedOutputStream(fout, Constants.STREAM_CHUNK_SIZE)) {
                     byte[] buffer = new byte[Constants.STREAM_CHUNK_SIZE];
                     byte[] outBuf = new byte[Constants.STREAM_CHUNK_SIZE];
                     long remaining = cipherBodyLen;
@@ -1201,7 +1213,8 @@ public final class BaseFwx {
             throw new IllegalStateException("AES-heavy streaming decode failed", exc);
         }
 
-        try (FileInputStream plainIn = new FileInputStream(tempPlain)) {
+        try (FileInputStream fin = new FileInputStream(tempPlain);
+             BufferedInputStream plainIn = new BufferedInputStream(fin, Constants.STREAM_CHUNK_SIZE)) {
             if (metadataBytes.length > 0) {
                 byte[] metaBuf = readExactBytes(plainIn, metadataBytes.length, "Metadata integrity mismatch detected");
                 if (!Arrays.equals(metaBuf, metadataBytes)) {
@@ -1234,7 +1247,8 @@ public final class BaseFwx {
                 ? StreamObfuscator.forPassword(pw, salt, fastObfStream)
                 : null;
             File outFile = resolveDecodedOutput(input, output, extBytes);
-            try (FileOutputStream out = new FileOutputStream(outFile)) {
+            try (FileOutputStream fout = new FileOutputStream(outFile);
+                 BufferedOutputStream out = new BufferedOutputStream(fout, Constants.STREAM_CHUNK_SIZE)) {
                 byte[] buffer = new byte[chunkSize];
                 long remaining = originalSize;
                 while (remaining > 0) {

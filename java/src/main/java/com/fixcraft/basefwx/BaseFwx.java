@@ -28,6 +28,21 @@ import javax.crypto.spec.IvParameterSpec;
 import javax.crypto.spec.GCMParameterSpec;
 import javax.crypto.spec.SecretKeySpec;
 
+/**
+ * BaseFWX Java implementation using native-backed standard library components.
+ * 
+ * Performance Strategy:
+ * - Base64: Uses java.util.Base64 (native implementation, similar to Python's C-backed base64 module)
+ * - Hashing: Uses java.security.MessageDigest (JVM native implementations for SHA-256, SHA-512, SHA-1)
+ * - Crypto: Uses javax.crypto.Cipher (JVM native implementations for AES-GCM)
+ * - PBKDF2: Uses javax.crypto.SecretKeyFactory (optimized native implementation)
+ * 
+ * Memory Management:
+ * - Pre-sized arrays and buffers to minimize allocations
+ * - Direct char[] construction for string building instead of StringBuilder where beneficial
+ * - Reuse of byte arrays in hot paths
+ * - Java's garbage collector handles automatic memory cleanup
+ */
 public final class BaseFwx {
     private BaseFwx() {}
 

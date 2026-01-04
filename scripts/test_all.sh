@@ -2867,18 +2867,21 @@ if [[ -z "${BENCH_WARMUP_LIGHT:-}" || -z "${BENCH_WARMUP_HEAVY:-}" ]]; then
         BENCH_WARMUP_LIGHT="${BENCH_WARMUP_LIGHT:-3}"
         BENCH_WARMUP_HEAVY="${BENCH_WARMUP_HEAVY:-5}"
         BENCH_WARMUP_FILE="${BENCH_WARMUP_FILE:-0}"
+        BENCH_WARMUP_FILE_JAVA="${BENCH_WARMUP_FILE_JAVA:-1}"
     elif [[ "$TEST_MODE" == "fast" ]]; then
         BENCH_WARMUP_LIGHT="${BENCH_WARMUP_LIGHT:-5}"
         BENCH_WARMUP_HEAVY="${BENCH_WARMUP_HEAVY:-10}"
         BENCH_WARMUP_FILE="${BENCH_WARMUP_FILE:-1}"
+        BENCH_WARMUP_FILE_JAVA="${BENCH_WARMUP_FILE_JAVA:-2}"
     else
         BENCH_WARMUP_LIGHT="${BENCH_WARMUP_LIGHT:-10}"
         BENCH_WARMUP_HEAVY="${BENCH_WARMUP_HEAVY:-20}"
         BENCH_WARMUP_FILE="${BENCH_WARMUP_FILE:-1}"
+        BENCH_WARMUP_FILE_JAVA="${BENCH_WARMUP_FILE_JAVA:-3}"
     fi
 fi
 
-JAVA_BENCH_FLAGS_DEFAULT="-XX:+AlwaysPreTouch -XX:+TieredCompilation -XX:CompileThreshold=100 -XX:TieredStopAtLevel=4 -XX:+UnlockExperimentalVMOptions -XX:+UseZGC -XX:InitialRAMPercentage=70 -XX:MaxRAMPercentage=95"
+JAVA_BENCH_FLAGS_DEFAULT="-server -XX:+UseG1GC -XX:+AlwaysPreTouch -XX:+TieredCompilation -XX:CompileThreshold=1000 -XX:+UseStringDeduplication -XX:MaxGCPauseMillis=200 -XX:InitialRAMPercentage=70 -XX:MaxRAMPercentage=95"
 JAVA_BENCH_FLAGS="${JAVA_BENCH_FLAGS:-$JAVA_BENCH_FLAGS_DEFAULT}"
 read -r -a JAVA_BENCH_FLAGS_ARR <<<"$JAVA_BENCH_FLAGS"
 
@@ -2967,9 +2970,9 @@ for idx in "${!BENCH_LANGS[@]}"; do
                 time_cmd_bench "${method}_java_correct" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_LIGHT" \
                     "$JAVA_BIN" "${JAVA_BENCH_FLAGS_ARR[@]}" -jar "$JAVA_JAR" bench-hash "$method" "$BENCH_TEXT"
             done
-            time_cmd_bench "b512file_java_total" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_FILE" \
+            time_cmd_bench "b512file_java_total" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_FILE_JAVA" \
                 "$JAVA_BIN" "${JAVA_BENCH_FLAGS_ARR[@]}" -jar "$JAVA_JAR" bench-b512file "$BENCH_BYTES_FILE" "$PW" --no-master
-            time_cmd_bench "pb512file_java_total" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_FILE" \
+            time_cmd_bench "pb512file_java_total" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_FILE_JAVA" \
                 "$JAVA_BIN" "${JAVA_BENCH_FLAGS_ARR[@]}" -jar "$JAVA_JAR" bench-pb512file "$BENCH_BYTES_FILE" "$PW" --no-master
             ;;
     esac

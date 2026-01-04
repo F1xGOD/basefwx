@@ -72,7 +72,7 @@ public final class Base64Codec {
             return new byte[0];
         }
         
-        // Base64 produces 3 bytes for every 4 characters
+        // Base64 must have characters in groups of 4 (after removing whitespace)
         if ((validChars & 3) != 0) {
             throw new IllegalArgumentException("Invalid base64 length");
         }

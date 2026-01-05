@@ -27,7 +27,7 @@ It provides:
 - b512/pb512 reversible encodings and file modes
 - jMG media cipher for images, video, and audio with metadata control
 - C++ library and CLI with Python and C++ format parity
-- Java (JVM) library and CLI for cross-compatible fwxAES/b512/pb512/b256
+- Java (JVM) library and CLI for cross-compatible fwxAES/b512/pb512/b256/jMG
 
 Quick Start
 -----------

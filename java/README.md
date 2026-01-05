@@ -5,6 +5,7 @@ This module provides a Java implementation of the core BaseFWX codecs so it can 
 ## Scope (v1)
 - fwxAES raw encrypt/decrypt (PBKDF2 mode + EC master-key wrap)
 - fwxAES streaming encrypt/decrypt (InputStream/OutputStream)
+- jMG media cipher for images, video, and audio (ffmpeg/ffprobe required)
 - b512 / pb512 encode/decode (PBKDF2 + optional EC master-key wrap)
 - b256 encode/decode
 - b64 encode/decode
@@ -17,7 +18,6 @@ This module provides a Java implementation of the core BaseFWX codecs so it can 
 Not yet included:
 - PQ master-key (ML-KEM) support
 - Argon2 KDF support
-- jMG media pipeline
 
 ## Build
 Use Gradle if available:
@@ -55,6 +55,12 @@ java -jar build/libs/basefwx-java.jar pb512-dec <text> <password>
 java -jar build/libs/basefwx-java.jar b512file-enc <in> <out> <password>
 java -jar build/libs/basefwx-java.jar b512file-dec <in> <out> <password>
 
+java -jar build/libs/basefwx-java.jar pb512file-enc <in> <out> <password>
+java -jar build/libs/basefwx-java.jar pb512file-dec <in> <out> <password>
+
+java -jar build/libs/basefwx-java.jar jmge <in> <out> <password>
+java -jar build/libs/basefwx-java.jar jmgd <in> <out> <password>
+
 java -jar build/libs/basefwx-java.jar b64-enc <text>
 java -jar build/libs/basefwx-java.jar b64-dec <text>
 
@@ -71,6 +77,10 @@ java -jar build/libs/basefwx-java.jar b256-enc <text>
 java -jar build/libs/basefwx-java.jar b256-dec <text>
 ```
 
+Notes:
+- jMG requires `ffmpeg` and `ffprobe` on PATH.
+- `jmge` supports `--keep-meta` and `--keep-input` for metadata/input preservation.
+
 ## Cross-compat notes
 - For b512/pb512, set the KDF label to `pbkdf2` in Python/C++ when you need Java interop.
 - fwxAES PBKDF2 mode is fully compatible across Python/C++/Java.
@@ -85,6 +95,7 @@ Java reads EC public/private keys from:
 ## Android
 The library is pure Java and uses standard `javax.crypto` APIs. AES-GCM requires API 21+ on Android.
 File helpers are built on `java.io` to keep Android compatibility.
+The jMG media pipeline depends on `ffmpeg`/`ffprobe` and `ImageIO`, so it is not Android-compatible.
 
 ## Testing overrides
 For fast tests, you can set `BASEFWX_TEST_KDF_ITERS` to reduce PBKDF2 iterations.

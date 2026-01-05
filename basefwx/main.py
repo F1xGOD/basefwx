@@ -21,6 +21,7 @@ class basefwx:
     import os
     import zlib
     import hashlib
+    import hmac as stdlib_hmac
     import time
     import tempfile
     import string
@@ -208,6 +209,9 @@ class basefwx:
         "|".join(
             _re_module.escape(token) for token in sorted(_DECODE_MAP, key=len, reverse=True)
         )
+    )
+    _MD_CODE_TABLE: typing.ClassVar[tuple[str, ...]] = tuple(
+        f"{len(str(i))}{i}" for i in range(256)
     )
 
     class _ProgressReporter:
@@ -1317,26 +1321,57 @@ class basefwx:
             return b""
         info_bytes = info or b""
         zero_salt = b"\x00" * 32
-        h = basefwx.hmac.HMAC(zero_salt, basefwx.hashes.SHA256())
-        h.update(key_material)
-        prk = h.finalize()
+        prk = basefwx.stdlib_hmac.new(
+            zero_salt,
+            key_material,
+            basefwx.hashlib.sha256
+        ).digest()
         out = bytearray(length)
         prev = b""
         offset = 0
         counter = 1
+        base_hmac = basefwx.stdlib_hmac.new(prk, digestmod=basefwx.hashlib.sha256)
+        counter_bytes = bytearray(4)
         while offset < length:
-            h = basefwx.hmac.HMAC(prk, basefwx.hashes.SHA256())
+            h = base_hmac.copy()
             if prev:
                 h.update(prev)
-            h.update(info_bytes)
-            h.update(counter.to_bytes(4, "big"))
-            block = h.finalize()
+            if info_bytes:
+                h.update(info_bytes)
+            basefwx.struct.pack_into(">I", counter_bytes, 0, counter)
+            h.update(counter_bytes)
+            block = h.digest()
             take = min(len(block), length - offset)
             out[offset:offset + take] = block[:take]
             offset += take
             prev = block
             counter += 1
         return bytes(out)
+
+    @staticmethod
+    def _mdcode_ascii(text: str) -> str:
+        data = text.encode("ascii")
+        table = basefwx._MD_CODE_TABLE
+        return "".join(table[b] for b in data)
+
+    @staticmethod
+    def _mcode_digits(encoded: str) -> str:
+        if not encoded:
+            return ""
+        out = []
+        idx = 0
+        total = len(encoded)
+        while idx < total:
+            ch = encoded[idx]
+            if ch < "0" or ch > "9":
+                raise ValueError("Invalid mcode payload")
+            span = ord(ch) - 48
+            idx += 1
+            if span <= 0 or idx + span > total:
+                raise ValueError("Invalid mcode payload length")
+            out.append(chr(int(encoded[idx:idx + span])))
+            idx += span
+        return "".join(out)
 
     @staticmethod
     def _aead_encrypt(key: bytes, plaintext: bytes, aad: "basefwx.typing.Optional[bytes]") -> bytes:
@@ -7431,93 +7466,50 @@ class basefwx:
 
     @staticmethod
     def bi512encode(string: str):
-
         code = string[0] + string[len(string) - 1]
-
-        def mdcode(string: str):
-            st = str(string)
-            binaryvals = map(bin, bytearray(st.encode('ascii')))
-            parts = []
-            for bb in binaryvals:
-                val = str(int(bb, 2))
-                parts.append(str(len(val)))
-                parts.append(val)
-            return "".join(parts)
-
-        def mainenc(string):
-            left = mdcode(string)
-            right = mdcode(code)
+        left = basefwx._mdcode_ascii(string)
+        right = basefwx._mdcode_ascii(code)
+        diff = None
+        try:
+            left_int = int(left)
+            right_int = int(right)
+            if left_int >= right_int:
+                diff = str(left_int - right_int)
+            else:
+                diff = "0" + str(right_int - left_int)
+        except (ValueError, OverflowError, MemoryError):
             if basefwx._compare_magnitude(left, right) >= 0:
                 diff = basefwx._subtract_magnitude(left, right)
             else:
                 diff = "0" + basefwx._subtract_magnitude(right, left)
-            packed = basefwx.fwx256bin(diff).replace("=", "4G5tRA")
-            return str(basefwx.hashlib.sha256(packed.encode('utf-8')).hexdigest()).replace("-", "0")
-
-        return mainenc(string)
+        packed = basefwx.fwx256bin(diff).replace("=", "4G5tRA")
+        return str(basefwx.hashlib.sha256(packed.encode('utf-8')).hexdigest()).replace("-", "0")
 
     # CODELESS ENCODE - SECURITY: ❙
     @staticmethod
     def a512encode(string: str):
-        def mdcode(string: str):
-            st = str(string)
-            binaryvals = map(bin, bytearray(st.encode('ascii')))
-            parts = []
-            for bb in binaryvals:
-                val = str(int(bb, 2))
-                parts.append(str(len(val)))
-                parts.append(val)
-            return "".join(parts)
-
-        md_val = mdcode(string)
-        md_len = len(md_val)
+        left = basefwx._mdcode_ascii(string)
+        md_len = len(left)
         code = str(md_len * md_len)
-
-        def mainenc(string):
-            left = mdcode(string)
-            right = mdcode(code)
+        right = basefwx._mdcode_ascii(code)
+        diff = None
+        try:
+            left_int = int(left)
+            right_int = int(right)
+            if left_int >= right_int:
+                diff = str(left_int - right_int)
+            else:
+                diff = "0" + str(right_int - left_int)
+        except (ValueError, OverflowError, MemoryError):
             if basefwx._compare_magnitude(left, right) >= 0:
                 diff = basefwx._subtract_magnitude(left, right)
             else:
                 diff = "0" + basefwx._subtract_magnitude(right, left)
-            prefix = str(len(str(len(left)))) + str(len(left))
-            return prefix + basefwx.fwx256bin(diff).replace("=", "4G5tRA")
-
-        return mainenc(string)
+        prefix = str(len(str(md_len))) + str(md_len)
+        return prefix + basefwx.fwx256bin(diff).replace("=", "4G5tRA")
 
     @staticmethod
     def a512decode(string: str):
-
-        def mcode(strin: str):
-            end = strin
-            eand = list(end)
-            chars = []
-            ht = 0
-            len = 0
-            oht = 0
-            for een in eand:
-                ht += 1
-                if een != "":
-                    if ht == 1:
-                        len = int(een)
-                        chars.append(chr(int(end[ht:len + ht])))
-                        oht = ht
-                    if ht != 1 and len + oht + 1 == ht:
-                        len = int(een)
-                        chars.append(chr(int(end[ht:len + ht])))
-                        oht = ht
-            return "".join(chars)
-
-        def mdcode(string: str):
-            st = str(string)
-            binaryvals = map(bin, bytearray(st.encode('ascii')))
-            parts = []
-            for bb in binaryvals:
-                val = str(int(bb, 2))
-                parts.append(str(len(val)))
-                parts.append(val)
-            return "".join(parts)
-
         def maindc(string):
             try:
                 if not string or not string[0].isdigit():
@@ -7531,11 +7523,15 @@ class basefwx:
                 payload = string[leoa + 1:]
                 string3 = basefwx.fwx256unbin(payload.replace("4G5tRA", "="))
                 if string3 and string3[0] == "0":
-                    string3 = "-" + string3[1:len(string3)]
-                total = basefwx._add_signed(string3, mdcode(code))
+                    string3 = "-" + string3[1:]
+                md_code = basefwx._mdcode_ascii(code)
+                try:
+                    total = str(int(string3) + int(md_code))
+                except (ValueError, OverflowError, MemoryError):
+                    total = basefwx._add_signed(string3, md_code)
                 if total.startswith("-"):
                     return "AN ERROR OCCURED!"
-                return mcode(total)
+                return basefwx._mcode_digits(total)
             except Exception:
                 return "AN ERROR OCCURED!"
 

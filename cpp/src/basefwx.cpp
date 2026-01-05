@@ -276,17 +276,16 @@ std::string B256Decode(const std::string& input) {
 }
 
 std::string B64Encode(const std::string& input) {
-    std::vector<std::uint8_t> data(input.begin(), input.end());
-    return basefwx::base64::Encode(data);
+    return basefwx::base64::Encode(std::string_view(input));
 }
 
 std::string B64Decode(const std::string& input) {
     bool ok = false;
-    std::vector<std::uint8_t> decoded = basefwx::base64::Decode(input, &ok);
+    std::string decoded = basefwx::base64::DecodeToString(input, &ok);
     if (!ok) {
         throw std::runtime_error("Invalid base64 payload");
     }
-    return std::string(decoded.begin(), decoded.end());
+    return decoded;
 }
 
 std::string Hash512(const std::string& input) {

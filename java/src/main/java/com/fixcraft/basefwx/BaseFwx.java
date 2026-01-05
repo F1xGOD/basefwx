@@ -1431,6 +1431,22 @@ public final class BaseFwx {
         return new File(input.getParentFile(), name);
     }
 
+    public static File jmgEncryptFile(File input,
+                                      File output,
+                                      String password,
+                                      boolean useMaster,
+                                      boolean keepMeta,
+                                      boolean keepInput) {
+        return MediaCipher.encryptMedia(input, output, password, keepMeta, keepInput, useMaster);
+    }
+
+    public static File jmgDecryptFile(File input,
+                                      File output,
+                                      String password,
+                                      boolean useMaster) {
+        return MediaCipher.decryptMedia(input, output, password, useMaster);
+    }
+
     public static void fwxAesEncryptFile(File input, File output, String password, boolean useMaster) {
         try (FileInputStream in = new FileInputStream(input);
              FileOutputStream out = new FileOutputStream(output)) {

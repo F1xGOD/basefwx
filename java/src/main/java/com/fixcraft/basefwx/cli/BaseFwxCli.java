@@ -337,6 +337,16 @@ public final class BaseFwxCli {
                         throw new RuntimeException("pb512file bytes roundtrip failed", exc);
                     }
                     return;
+                case "jmge": {
+                    JmgArgs opts = parseJmgArgs(args, 1);
+                    BaseFwx.jmgEncryptFile(opts.input, opts.output, opts.password, useMaster, opts.keepMeta, opts.keepInput);
+                    return;
+                }
+                case "jmgd": {
+                    JmgArgs opts = parseJmgArgs(args, 1);
+                    BaseFwx.jmgDecryptFile(opts.input, opts.output, opts.password, useMaster);
+                    return;
+                }
                 case "bench-text": {
                     if (argc < 4) {
                         usage();
@@ -624,6 +634,8 @@ public final class BaseFwxCli {
         System.out.println("  pb512file-enc <in> <out> <password> [--no-master]");
         System.out.println("  pb512file-bytes-rt <in> <out> <password> [--no-master]");
         System.out.println("  pb512file-dec <in> <out> <password> [--no-master]");
+        System.out.println("  jmge <in> <out> <password> [--keep-meta] [--keep-input] [--no-master]");
+        System.out.println("  jmgd <in> <out> <password> [--no-master]");
         System.out.println("  b256-enc <text>");
         System.out.println("  b256-dec <text>");
         System.out.println("  bench-text <method> <text-file> <password> [--no-master]");
@@ -632,5 +644,82 @@ public final class BaseFwxCli {
         System.out.println("  bench-fwxaes-par <file> <password> [--no-master]");
         System.out.println("  bench-b512file <file> <password> [--no-master]");
         System.out.println("  bench-pb512file <file> <password> [--no-master]");
+    }
+
+    private static JmgArgs parseJmgArgs(String[] args, int startIndex) {
+        JmgArgs parsed = new JmgArgs();
+        java.util.List<String> positional = new java.util.ArrayList<>();
+        for (int i = startIndex; i < args.length; i++) {
+            String arg = args[i];
+            if ("--keep-meta".equalsIgnoreCase(arg)) {
+                parsed.keepMeta = true;
+                continue;
+            }
+            if ("--keep-input".equalsIgnoreCase(arg)) {
+                parsed.keepInput = true;
+                continue;
+            }
+            if ("--no-master".equalsIgnoreCase(arg)) {
+                continue;
+            }
+            if ("-p".equalsIgnoreCase(arg) || "--password".equalsIgnoreCase(arg)) {
+                if (i + 1 >= args.length) {
+                    throw new IllegalArgumentException("Missing password value");
+                }
+                parsed.password = args[++i];
+                continue;
+            }
+            if ("-o".equalsIgnoreCase(arg) || "--out".equalsIgnoreCase(arg)) {
+                if (i + 1 >= args.length) {
+                    throw new IllegalArgumentException("Missing output value");
+                }
+                parsed.output = new File(args[++i]);
+                continue;
+            }
+            positional.add(arg);
+        }
+        if (positional.isEmpty()) {
+            throw new IllegalArgumentException("Missing input path");
+        }
+        parsed.input = new File(positional.get(0));
+        if (parsed.output == null) {
+            if (positional.size() >= 3) {
+                parsed.output = new File(positional.get(1));
+                if (parsed.password == null || parsed.password.isEmpty()) {
+                    parsed.password = positional.get(2);
+                }
+                if (positional.size() > 3) {
+                    throw new IllegalArgumentException("Too many arguments for jMG command");
+                }
+            } else if (positional.size() == 2) {
+                if (parsed.password == null || parsed.password.isEmpty()) {
+                    parsed.password = positional.get(1);
+                } else {
+                    parsed.output = new File(positional.get(1));
+                }
+            }
+        } else if (positional.size() >= 2) {
+            if (parsed.password == null || parsed.password.isEmpty()) {
+                parsed.password = positional.get(1);
+            }
+            if (positional.size() > 2) {
+                throw new IllegalArgumentException("Too many arguments for jMG command");
+            }
+        }
+        if (parsed.output == null) {
+            parsed.output = parsed.input;
+        }
+        if (parsed.password == null) {
+            parsed.password = "";
+        }
+        return parsed;
+    }
+
+    private static final class JmgArgs {
+        File input;
+        File output;
+        String password = "";
+        boolean keepMeta = false;
+        boolean keepInput = false;
     }
 }

@@ -175,11 +175,18 @@ java -jar build/libs/basefwx-java.jar pb512-dec <text> <password>
 
 java -jar build/libs/basefwx-java.jar b512file-enc <in> <out> <password>
 java -jar build/libs/basefwx-java.jar b512file-dec <in> <out> <password>
+java -jar build/libs/basefwx-java.jar pb512file-enc <in> <out> <password>
+java -jar build/libs/basefwx-java.jar pb512file-dec <in> <out> <password>
+
+java -jar build/libs/basefwx-java.jar jmge <in> <out> <password>
+java -jar build/libs/basefwx-java.jar jmgd <in> <out> <password>
 ```
 
 Notes:
 
-- AES-heavy file containers (pb512file) and jMG are not implemented in the Java module yet.
+- jMG media requires `ffmpeg` and `ffprobe` to be available on PATH.
+- `jmge` supports `--keep-meta` and `--keep-input` to preserve metadata and inputs.
+- The Java module does not include ML-KEM or Argon2 support yet.
 
 ## Java API
 
@@ -193,4 +200,7 @@ try (InputStream in = new FileInputStream("input.bin");
 
 byte[] blob = BaseFwx.b512FileEncodeBytes(data, ".bin", "password", false);
 BaseFwx.DecodedFile decoded = BaseFwx.b512FileDecodeBytes(blob, "password", false);
+
+BaseFwx.jmgEncryptFile(new File("input.mp4"), new File("out.mp4"), "password", true, false, true);
+BaseFwx.jmgDecryptFile(new File("out.mp4"), new File("plain.mp4"), "password", true);
 ```

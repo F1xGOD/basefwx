@@ -38,6 +38,7 @@ public final class Constants {
 
     public static final byte[] MASK_AAD_B512 = "b512".getBytes(StandardCharsets.US_ASCII);
     public static final byte[] MASK_AAD_PB512 = "pb512".getBytes(StandardCharsets.US_ASCII);
+    public static final byte[] MASK_AAD_JMG = "jmg".getBytes(StandardCharsets.US_ASCII);
 
     public static final byte[] B512_FILE_MASK_INFO = "basefwx.b512file.mask.v1".getBytes(StandardCharsets.US_ASCII);
     public static final byte[] B512_AEAD_INFO = "basefwx.b512file.v1".getBytes(StandardCharsets.US_ASCII);
@@ -49,6 +50,13 @@ public final class Constants {
     public static final byte[] STREAM_INFO_IV = "basefwx.stream.obf.iv.v1".getBytes(StandardCharsets.US_ASCII);
     public static final byte[] STREAM_INFO_PERM = "basefwx.stream.obf.perm.v1".getBytes(StandardCharsets.US_ASCII);
     public static final int STREAM_SALT_LEN = 16;
+
+    public static final byte[] IMAGECIPHER_STREAM_INFO = "basefwx.imagecipher.stream.v1".getBytes(StandardCharsets.US_ASCII);
+    public static final byte[] IMAGECIPHER_ARCHIVE_INFO = "basefwx.imagecipher.archive.v1".getBytes(StandardCharsets.US_ASCII);
+    public static final byte[] IMAGECIPHER_TRAILER_MAGIC = "JMG0".getBytes(StandardCharsets.US_ASCII);
+    public static final byte[] JMG_KEY_MAGIC = "JMGK".getBytes(StandardCharsets.US_ASCII);
+    public static final int JMG_KEY_VERSION = 1;
+    public static final byte[] JMG_MASK_INFO = "basefwx.jmg.mask.v1".getBytes(StandardCharsets.US_ASCII);
 
     public static final String FWX_DELIM = "\u001f\u001e";
     public static final String FWX_HEAVY_DELIM = "\u001f\u001d";

@@ -115,6 +115,16 @@ if [[ -z "$BENCH_TEXT_BYTES" ]]; then
         BENCH_TEXT_BYTES=1048576
     fi
 fi
+if [[ ! "$BENCH_TEXT_BYTES" =~ ^[0-9]+$ ]]; then
+    BENCH_TEXT_BYTES=1048576
+fi
+BENCH_TEXT_MAX_BYTES="${BENCH_TEXT_MAX_BYTES:-60000000}"
+if [[ ! "$BENCH_TEXT_MAX_BYTES" =~ ^[0-9]+$ ]]; then
+    BENCH_TEXT_MAX_BYTES=60000000
+fi
+if (( BENCH_TEXT_MAX_BYTES > 0 && BENCH_TEXT_BYTES > BENCH_TEXT_MAX_BYTES )); then
+    BENCH_TEXT_BYTES="$BENCH_TEXT_MAX_BYTES"
+fi
 if [[ -z "$BENCH_TEXT_FILE" ]]; then
     BENCH_TEXT_FILE="$ORIG_DIR/bench_text.txt"
 fi
@@ -517,6 +527,9 @@ calc_total_steps() {
         STEP_TOTAL=$((STEP_TOTAL + java_base + java_wrong))
         STEP_TOTAL=$((STEP_TOTAL + file_unit * b512_count + file_unit * pb512_count))
         STEP_TOTAL=$((STEP_TOTAL + 3))
+        if (( jmg_count > 0 )); then
+            STEP_TOTAL=$((STEP_TOTAL + jmg_count))
+        fi
     fi
     if [[ "$SKIP_CROSS" != "1" ]]; then
         if [[ "$RUN_PY_TESTS" == "1" && "$RUN_CPP_TESTS" == "1" && "$CPP_AVAILABLE" == "1" ]]; then
@@ -528,6 +541,9 @@ calc_total_steps() {
         fi
         if [[ "$RUN_PY_TESTS" == "1" && "$RUN_JAVA_TESTS" == "1" && "$JAVA_AVAILABLE" == "1" ]]; then
             STEP_TOTAL=$((STEP_TOTAL + 2 * reversible_count + 2))
+            if (( jmg_count > 0 )); then
+                STEP_TOTAL=$((STEP_TOTAL + 2 * jmg_count))
+            fi
         fi
     fi
 }
@@ -1322,6 +1338,30 @@ cpp_jmg_dec() {
     "$CPP_BIN" jmgd "$input" -p "$PW" --out "$dec"
 }
 
+java_jmg_roundtrip() {
+    local input="$1"
+    local enc="$2"
+    local dec="$3"
+    log "STEP: $JAVA_BIN -jar $JAVA_JAR jmge $input"
+    "$JAVA_BIN" -jar "$JAVA_JAR" jmge "$input" "$enc" "$PW" --no-master || return $?
+    log "STEP: $JAVA_BIN -jar $JAVA_JAR jmgd $enc"
+    "$JAVA_BIN" -jar "$JAVA_JAR" jmgd "$enc" "$dec" "$PW" --no-master
+}
+
+java_jmg_enc() {
+    local input="$1"
+    local enc="$2"
+    log "STEP: $JAVA_BIN -jar $JAVA_JAR jmge $input"
+    "$JAVA_BIN" -jar "$JAVA_JAR" jmge "$input" "$enc" "$PW" --no-master
+}
+
+java_jmg_dec() {
+    local input="$1"
+    local dec="$2"
+    log "STEP: $JAVA_BIN -jar $JAVA_JAR jmgd $input"
+    "$JAVA_BIN" -jar "$JAVA_JAR" jmgd "$input" "$dec" "$PW" --no-master
+}
+
 fwxaes_py_enc_cpp_dec() {
     local input="$1"
     local enc="$2"
@@ -1449,6 +1489,22 @@ jmg_cpp_enc_py_dec() {
     local enc="$2"
     local dec="$3"
     cpp_jmg_enc "$input" "$enc" || return $?
+    py_jmg_dec "$enc" "$dec"
+}
+
+jmg_py_enc_java_dec() {
+    local input="$1"
+    local enc="$2"
+    local dec="$3"
+    py_jmg_enc "$input" "$enc" || return $?
+    java_jmg_dec "$enc" "$dec"
+}
+
+jmg_java_enc_py_dec() {
+    local input="$1"
+    local enc="$2"
+    local dec="$3"
+    java_jmg_enc "$input" "$enc" || return $?
     py_jmg_dec "$enc" "$dec"
 }
 
@@ -2609,7 +2665,7 @@ for file_name in "${PB512FILE_CASES[@]}"; do
     fi
 done
 
-if (( ${#JMG_CASES[@]} > 0 )) && { [[ "$RUN_PY_TESTS" == "1" ]] || [[ "$RUN_PYPY_TESTS" == "1" && "$PYPY_AVAILABLE" == "1" ]] || [[ "$RUN_CPP_TESTS" == "1" && "$CPP_AVAILABLE" == "1" ]]; }; then
+if (( ${#JMG_CASES[@]} > 0 )) && { [[ "$RUN_PY_TESTS" == "1" ]] || [[ "$RUN_PYPY_TESTS" == "1" && "$PYPY_AVAILABLE" == "1" ]] || [[ "$RUN_CPP_TESTS" == "1" && "$CPP_AVAILABLE" == "1" ]] || [[ "$RUN_JAVA_TESTS" == "1" && "$JAVA_AVAILABLE" == "1" ]]; }; then
     phase "PHASE2.1: jMG media tests (${PHASE2_LABEL:-native})"
     for file_name in "${JMG_CASES[@]}"; do
         tag="$(case_tag "$file_name")"
@@ -2638,6 +2694,18 @@ if (( ${#JMG_CASES[@]} > 0 )) && { [[ "$RUN_PY_TESTS" == "1" ]] || [[ "$RUN_PYPY
                 add_verify "$ORIG_DIR/$file_name" "$jmg_cpp_dec"
             else
                 FAILURES+=("jmg_cpp_${tag} (cpp unavailable)")
+            fi
+        fi
+        if [[ "$RUN_JAVA_TESTS" == "1" ]]; then
+            jmg_java_input="$(copy_input "jmg_java_${tag}" "$file_name")"
+            jmg_java_enc="$WORK_DIR/jmg_java_${tag}/enc_${file_name}"
+            jmg_java_dec="$WORK_DIR/jmg_java_${tag}/dec_${file_name}"
+            if (( JAVA_AVAILABLE == 1 )); then
+                cooldown "jmg_cpp_to_java_${tag}"
+                time_cmd "jmg_java_${tag}" java_jmg_roundtrip "$jmg_java_input" "$jmg_java_enc" "$jmg_java_dec"
+                add_verify "$ORIG_DIR/$file_name" "$jmg_java_dec"
+            else
+                FAILURES+=("jmg_java_${tag} (java unavailable)")
             fi
         fi
     done
@@ -2874,6 +2942,23 @@ if [[ "$SKIP_CROSS" != "1" ]]; then
             time_cmd "${method}_java_enc_py_dec" text_java_enc_py_dec "$method" "$TEXT_ORIG" "$java_enc" "$jp_out"
             add_verify "$TEXT_ORIG" "$jp_out"
         done
+
+        if (( ${#JMG_CASES[@]} > 0 )); then
+            for file_name in "${JMG_CASES[@]}"; do
+                tag="$(case_tag "$file_name")"
+                jmg_pyj_input="$(copy_input "jmg_pyj_${tag}" "$file_name")"
+                jmg_pyj_enc="$WORK_DIR/jmg_pyj_${tag}/enc_${file_name}"
+                jmg_pyj_dec="$WORK_DIR/jmg_pyj_${tag}/dec_${file_name}"
+                time_cmd "jmg_py_enc_java_dec_${tag}" jmg_py_enc_java_dec "$jmg_pyj_input" "$jmg_pyj_enc" "$jmg_pyj_dec"
+                add_verify "$ORIG_DIR/$file_name" "$jmg_pyj_dec"
+
+                jmg_jp_input="$(copy_input "jmg_jp_${tag}" "$file_name")"
+                jmg_jp_enc="$WORK_DIR/jmg_jp_${tag}/enc_${file_name}"
+                jmg_jp_dec="$WORK_DIR/jmg_jp_${tag}/dec_${file_name}"
+                time_cmd "jmg_java_enc_py_dec_${tag}" jmg_java_enc_py_dec "$jmg_jp_input" "$jmg_jp_enc" "$jmg_jp_dec"
+                add_verify "$ORIG_DIR/$file_name" "$jmg_jp_dec"
+            done
+        fi
     fi
 fi
 
@@ -2902,6 +2987,15 @@ STEP_TOTAL=0
 BENCH_TEXT="$TEXT_ORIG"
 if [[ -f "$BENCH_TEXT_FILE" ]]; then
     BENCH_TEXT="$BENCH_TEXT_FILE"
+fi
+if [[ -f "$BENCH_TEXT" && "$BENCH_TEXT_MAX_BYTES" =~ ^[0-9]+$ && "$BENCH_TEXT_MAX_BYTES" -gt 0 ]]; then
+    bench_text_size="$(wc -c < "$BENCH_TEXT" | tr -d ' ')"
+    if [[ "$bench_text_size" =~ ^[0-9]+$ && "$bench_text_size" -gt "$BENCH_TEXT_MAX_BYTES" ]]; then
+        BENCH_TEXT_CAPPED="$TMP_DIR/bench_text_cap.txt"
+        head -c "$BENCH_TEXT_MAX_BYTES" "$BENCH_TEXT" >"$BENCH_TEXT_CAPPED"
+        BENCH_TEXT="$BENCH_TEXT_CAPPED"
+        log "Benchmark text capped to ${BENCH_TEXT_MAX_BYTES} bytes"
+    fi
 fi
 BENCH_BYTES_FILE=""
 if [[ -f "$ORIG_DIR/bench_bytes.bin" ]]; then
@@ -2937,6 +3031,19 @@ JAVA_BENCH_FLAGS_DEFAULT="-server -XX:+UseG1GC -XX:+AlwaysPreTouch -XX:+TieredCo
 JAVA_BENCH_FLAGS="${JAVA_BENCH_FLAGS:-$JAVA_BENCH_FLAGS_DEFAULT}"
 read -r -a JAVA_BENCH_FLAGS_ARR <<<"$JAVA_BENCH_FLAGS"
 
+BENCH_FWXAES_MODE="${BENCH_FWXAES_MODE:-par}"
+case "$BENCH_FWXAES_MODE" in
+    par|parallel)
+        BENCH_FWXAES_MODE="par"
+        ;;
+    single|serial)
+        BENCH_FWXAES_MODE="single"
+        ;;
+    *)
+        BENCH_FWXAES_MODE="par"
+        ;;
+esac
+
 BENCH_TEXT_METHODS=("b256" "b512" "pb512" "b64" "a512")
 BENCH_HASH_METHODS=("hash512" "uhash513" "bi512" "b1024")
 
@@ -2954,14 +3061,19 @@ if [[ "$RUN_JAVA_TESTS" == "1" && "$JAVA_AVAILABLE" == "1" ]]; then
     BENCH_LANGS+=("java")
 fi
 
+log "BENCH_FWXAES_MODE: $BENCH_FWXAES_MODE"
+
 for idx in "${!BENCH_LANGS[@]}"; do
     lang="${BENCH_LANGS[$idx]}"
     case "$lang" in
         py)
-            time_cmd_bench "fwxaes_py_correct" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_HEAVY" \
-                "$PYTHON_BIN" "$PY_HELPER" bench-fwxaes "$BENCH_BYTES_FILE" "$PW"
-            time_cmd_bench "fwxaes_py_par" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_HEAVY" \
-                "$PYTHON_BIN" "$PY_HELPER" bench-fwxaes-par "$BENCH_BYTES_FILE" "$PW"
+            if [[ "$BENCH_FWXAES_MODE" == "par" ]]; then
+                time_cmd_bench "fwxaes_py_par" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_HEAVY" \
+                    "$PYTHON_BIN" "$PY_HELPER" bench-fwxaes-par "$BENCH_BYTES_FILE" "$PW"
+            else
+                time_cmd_bench "fwxaes_py_correct" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_HEAVY" \
+                    "$PYTHON_BIN" "$PY_HELPER" bench-fwxaes "$BENCH_BYTES_FILE" "$PW"
+            fi
             for method in "${BENCH_TEXT_METHODS[@]}"; do
                 time_cmd_bench "${method}_py_correct" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_LIGHT" \
                     "$PYTHON_BIN" "$PY_HELPER" bench-text "$method" "$BENCH_TEXT" "$PW"
@@ -2976,10 +3088,13 @@ for idx in "${!BENCH_LANGS[@]}"; do
                 "$PYTHON_BIN" "$PY_HELPER" bench-pb512file "$BENCH_BYTES_FILE" "$PW"
             ;;
         pypy)
-            time_cmd_bench "fwxaes_pypy_correct" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_HEAVY" \
-                "$PYPY_BIN" "$PY_HELPER" bench-fwxaes "$BENCH_BYTES_FILE" "$PW"
-            time_cmd_bench "fwxaes_pypy_par" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_HEAVY" \
-                "$PYPY_BIN" "$PY_HELPER" bench-fwxaes-par "$BENCH_BYTES_FILE" "$PW"
+            if [[ "$BENCH_FWXAES_MODE" == "par" ]]; then
+                time_cmd_bench "fwxaes_pypy_par" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_HEAVY" \
+                    "$PYPY_BIN" "$PY_HELPER" bench-fwxaes-par "$BENCH_BYTES_FILE" "$PW"
+            else
+                time_cmd_bench "fwxaes_pypy_correct" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_HEAVY" \
+                    "$PYPY_BIN" "$PY_HELPER" bench-fwxaes "$BENCH_BYTES_FILE" "$PW"
+            fi
             for method in "${BENCH_TEXT_METHODS[@]}"; do
                 time_cmd_bench "${method}_pypy_correct" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_LIGHT" \
                     "$PYPY_BIN" "$PY_HELPER" bench-text "$method" "$BENCH_TEXT" "$PW"
@@ -2994,8 +3109,11 @@ for idx in "${!BENCH_LANGS[@]}"; do
                 "$PYPY_BIN" "$PY_HELPER" bench-pb512file "$BENCH_BYTES_FILE" "$PW"
             ;;
         cpp)
-            time_cmd_bench "fwxaes_cpp_correct" "$CPP_BIN" bench-fwxaes "$BENCH_BYTES_FILE" "$PW" --no-master
-            time_cmd_bench "fwxaes_cpp_par" "$CPP_BIN" bench-fwxaes-par "$BENCH_BYTES_FILE" "$PW" --no-master
+            if [[ "$BENCH_FWXAES_MODE" == "par" ]]; then
+                time_cmd_bench "fwxaes_cpp_par" "$CPP_BIN" bench-fwxaes-par "$BENCH_BYTES_FILE" "$PW" --no-master
+            else
+                time_cmd_bench "fwxaes_cpp_correct" "$CPP_BIN" bench-fwxaes "$BENCH_BYTES_FILE" "$PW" --no-master
+            fi
             for method in "${BENCH_TEXT_METHODS[@]}"; do
                 if [[ "$method" == "b512" || "$method" == "pb512" ]]; then
                     time_cmd_bench "${method}_cpp_correct" "$CPP_BIN" bench-text "$method" "$BENCH_TEXT" -p "$PW" --no-master
@@ -3010,10 +3128,13 @@ for idx in "${!BENCH_LANGS[@]}"; do
             time_cmd_bench "pb512file_cpp_total" "$CPP_BIN" bench-pb512file "$BENCH_BYTES_FILE" "$PW" --no-master
             ;;
         java)
-            time_cmd_bench "fwxaes_java_correct" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_HEAVY" \
-                "$JAVA_BIN" "${JAVA_BENCH_FLAGS_ARR[@]}" -jar "$JAVA_JAR" bench-fwxaes "$BENCH_BYTES_FILE" "$PW" --no-master
-            time_cmd_bench "fwxaes_java_par" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_HEAVY" \
-                "$JAVA_BIN" "${JAVA_BENCH_FLAGS_ARR[@]}" -jar "$JAVA_JAR" bench-fwxaes-par "$BENCH_BYTES_FILE" "$PW" --no-master
+            if [[ "$BENCH_FWXAES_MODE" == "par" ]]; then
+                time_cmd_bench "fwxaes_java_par" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_HEAVY" \
+                    "$JAVA_BIN" "${JAVA_BENCH_FLAGS_ARR[@]}" -jar "$JAVA_JAR" bench-fwxaes-par "$BENCH_BYTES_FILE" "$PW" --no-master
+            else
+                time_cmd_bench "fwxaes_java_correct" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_HEAVY" \
+                    "$JAVA_BIN" "${JAVA_BENCH_FLAGS_ARR[@]}" -jar "$JAVA_JAR" bench-fwxaes "$BENCH_BYTES_FILE" "$PW" --no-master
+            fi
             for method in "${BENCH_TEXT_METHODS[@]}"; do
                 time_cmd_bench "${method}_java_correct" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_LIGHT" \
                     "$JAVA_BIN" "${JAVA_BENCH_FLAGS_ARR[@]}" -jar "$JAVA_JAR" bench-text "$method" "$BENCH_TEXT" "$PW" --no-master
@@ -3222,8 +3343,19 @@ overall_sum_for_lang() {
     printf "%s|%s|%s" "$sum" "$count" "$base_sum"
 }
 
+FWXAES_PY_KEY="fwxaes_py_correct"
+FWXAES_PYPY_KEY="fwxaes_pypy_correct"
+FWXAES_CPP_KEY="fwxaes_cpp_correct"
+FWXAES_JAVA_KEY="fwxaes_java_correct"
+if [[ "$BENCH_FWXAES_MODE" == "par" ]]; then
+    FWXAES_PY_KEY="fwxaes_py_par"
+    FWXAES_PYPY_KEY="fwxaes_pypy_par"
+    FWXAES_CPP_KEY="fwxaes_cpp_par"
+    FWXAES_JAVA_KEY="fwxaes_java_par"
+fi
+
 BENCH_METHODS=(
-    "fwxAES|fwxaes_py_correct|fwxaes_pypy_correct|fwxaes_cpp_correct|fwxaes_java_correct"
+    "fwxAES|${FWXAES_PY_KEY}|${FWXAES_PYPY_KEY}|${FWXAES_CPP_KEY}|${FWXAES_JAVA_KEY}"
     "b256|b256_py_correct|b256_pypy_correct|b256_cpp_correct|b256_java_correct"
     "b512|b512_py_correct|b512_pypy_correct|b512_cpp_correct|b512_java_correct"
     "pb512|pb512_py_correct|pb512_pypy_correct|pb512_cpp_correct|pb512_java_correct"
@@ -3311,6 +3443,7 @@ write_bench_results() {
     BENCH_EPSILON_NS="$DELTA_EPSILON_NS" \
     BENCH_BYTES_FILE="$BENCH_BYTES_FILE" \
     BENCH_TEXT_FILE="$BENCH_TEXT" \
+    BENCH_FWXAES_MODE="$BENCH_FWXAES_MODE" \
     "$bench_python" - "$export_file" "$out_dir" "$tag" <<'PY'
 import json
 import os
@@ -3378,6 +3511,7 @@ data = {
     "bench_iters": to_int(os.getenv("BASEFWX_BENCH_ITERS", "0")) or 0,
     "bench_warmup": to_int(os.getenv("BASEFWX_BENCH_WARMUP", "0")) or 0,
     "bench_workers": to_int(os.getenv("BASEFWX_BENCH_WORKERS", "0")) or 0,
+    "bench_fwxaes_mode": os.getenv("BENCH_FWXAES_MODE", "par"),
     "baseline": "python",
     "epsilon_ns": epsilon_ns,
     "bench_files": {
@@ -3433,7 +3567,7 @@ PY
 }
 
 printf "\nTiming summary (native):\n"
-compare_speed_block "fwxAES" "fwxaes_py_correct" "fwxaes_pypy_correct" "fwxaes_cpp_correct" "fwxaes_java_correct"
+compare_speed_block "fwxAES" "$FWXAES_PY_KEY" "$FWXAES_PYPY_KEY" "$FWXAES_CPP_KEY" "$FWXAES_JAVA_KEY"
 compare_speed_block "b256" "b256_py_correct" "b256_pypy_correct" "b256_cpp_correct" "b256_java_correct"
 compare_speed_block "b512" "b512_py_correct" "b512_pypy_correct" "b512_cpp_correct" "b512_java_correct"
 compare_speed_block "pb512" "pb512_py_correct" "pb512_pypy_correct" "pb512_cpp_correct" "pb512_java_correct"

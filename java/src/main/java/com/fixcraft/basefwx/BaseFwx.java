@@ -13,7 +13,6 @@ import java.io.RandomAccessFile;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.charset.StandardCharsets;
-import java.math.BigInteger;
 import java.security.GeneralSecurityException;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -456,12 +455,13 @@ public final class BaseFwx {
         code[1] = input.charAt(input.length() - 1);
         String md = mdCode(input);
         String mdCode = mdCode(new String(code));
-        BigInteger diff = new BigInteger(md).subtract(new BigInteger(mdCode));
-        String diffStr = diff.toString();
-        if (!diffStr.isEmpty() && diffStr.charAt(0) == '-') {
-            diffStr = '0' + diffStr.substring(1);
+        String diff;
+        if (compareMagnitude(md, mdCode) >= 0) {
+            diff = subtractMagnitude(md, mdCode);
+        } else {
+            diff = "0" + subtractMagnitude(mdCode, md);
         }
-        String packed = Codec.b256Encode(diffStr).replace("=", "4G5tRA");
+        String packed = Codec.b256Encode(diff).replace("=", "4G5tRA");
         return digestHex("SHA-256", packed);
     }
 
@@ -474,12 +474,13 @@ public final class BaseFwx {
         long lenVal = mdLen;
         String code = Long.toString(lenVal * lenVal);
         String mdCode = mdCode(code);
-        BigInteger diff = new BigInteger(md).subtract(new BigInteger(mdCode));
-        String diffStr = diff.toString();
-        if (!diffStr.isEmpty() && diffStr.charAt(0) == '-') {
-            diffStr = '0' + diffStr.substring(1);
+        String diff;
+        if (compareMagnitude(md, mdCode) >= 0) {
+            diff = subtractMagnitude(md, mdCode);
+        } else {
+            diff = "0" + subtractMagnitude(mdCode, md);
         }
-        String packed = Codec.b256Encode(diffStr).replace("=", "4G5tRA");
+        String packed = Codec.b256Encode(diff).replace("=", "4G5tRA");
         return prefix + packed;
     }
 
@@ -505,11 +506,11 @@ public final class BaseFwx {
             if (!restored.isEmpty() && restored.charAt(0) == '0') {
                 restored = "-" + restored.substring(1);
             }
-            BigInteger sum = new BigInteger(restored).add(new BigInteger(mdCode));
-            if (sum.signum() < 0) {
+            String sum = addSigned(restored, mdCode);
+            if (!sum.isEmpty() && sum.charAt(0) == '-') {
                 throw new IllegalArgumentException("Negative a512 value");
             }
-            return mcode(sum.toString());
+            return mcode(sum);
         } catch (RuntimeException exc) {
             return "AN ERROR OCCURED!";
         }
@@ -2386,6 +2387,110 @@ public final class BaseFwx {
             }
         }
         return out.toString();
+    }
+
+    private static String stripLeadingZeros(String input) {
+        int idx = 0;
+        while (idx < input.length() && input.charAt(idx) == '0') {
+            idx++;
+        }
+        if (idx == input.length()) {
+            return "0";
+        }
+        return input.substring(idx);
+    }
+
+    private static int compareMagnitude(String a, String b) {
+        String aa = stripLeadingZeros(a);
+        String bb = stripLeadingZeros(b);
+        if (aa.length() != bb.length()) {
+            return aa.length() < bb.length() ? -1 : 1;
+        }
+        if (aa.equals(bb)) {
+            return 0;
+        }
+        return aa.compareTo(bb) < 0 ? -1 : 1;
+    }
+
+    private static String addMagnitude(String a, String b) {
+        int i = a.length() - 1;
+        int j = b.length() - 1;
+        int carry = 0;
+        StringBuilder out = new StringBuilder(Math.max(a.length(), b.length()) + 1);
+        while (i >= 0 || j >= 0 || carry > 0) {
+            int da = i >= 0 ? a.charAt(i) - '0' : 0;
+            int db = j >= 0 ? b.charAt(j) - '0' : 0;
+            int sum = da + db + carry;
+            out.append((char) ('0' + (sum % 10)));
+            carry = sum / 10;
+            i--;
+            j--;
+        }
+        out.reverse();
+        return stripLeadingZeros(out.toString());
+    }
+
+    private static String subtractMagnitude(String a, String b) {
+        int i = a.length() - 1;
+        int j = b.length() - 1;
+        int borrow = 0;
+        StringBuilder out = new StringBuilder(a.length());
+        while (i >= 0) {
+            int da = (a.charAt(i) - '0') - borrow;
+            int db = j >= 0 ? b.charAt(j) - '0' : 0;
+            if (da < db) {
+                da += 10;
+                borrow = 1;
+            } else {
+                borrow = 0;
+            }
+            int diff = da - db;
+            out.append((char) ('0' + diff));
+            i--;
+            j--;
+        }
+        out.reverse();
+        return stripLeadingZeros(out.toString());
+    }
+
+    private static String addSigned(String a, String b) {
+        boolean negA = false;
+        boolean negB = false;
+        String digitsA = a;
+        String digitsB = b;
+        if (!digitsA.isEmpty() && digitsA.charAt(0) == '-') {
+            negA = true;
+            digitsA = digitsA.substring(1);
+        }
+        if (!digitsB.isEmpty() && digitsB.charAt(0) == '-') {
+            negB = true;
+            digitsB = digitsB.substring(1);
+        }
+        digitsA = stripLeadingZeros(digitsA);
+        digitsB = stripLeadingZeros(digitsB);
+        if (digitsA.equals("0")) {
+            negA = false;
+        }
+        if (digitsB.equals("0")) {
+            negB = false;
+        }
+        if (negA == negB) {
+            String sum = addMagnitude(digitsA, digitsB);
+            if (sum.equals("0")) {
+                return sum;
+            }
+            return (negA ? "-" : "") + sum;
+        }
+        int cmp = compareMagnitude(digitsA, digitsB);
+        if (cmp == 0) {
+            return "0";
+        }
+        if (cmp > 0) {
+            String diff = subtractMagnitude(digitsA, digitsB);
+            return (negA ? "-" : "") + diff;
+        }
+        String diff = subtractMagnitude(digitsB, digitsA);
+        return (negB ? "-" : "") + diff;
     }
 
     private static String mcode(String input) {

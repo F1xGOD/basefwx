@@ -2258,28 +2258,43 @@ public final class BaseFwx {
                                                              byte[] streamInfo) {
         List<byte[]> parts = null;
         IllegalArgumentException firstError = null;
-        for (int attempt = 0; attempt < 2; attempt++) {
-            String candidate = attempt == 0 ? input : Codec.decode(input);
-            if (attempt == 1 && candidate.equals(input)) {
-                break;
+        boolean looksBase64 = Base64Codec.looksLikeBase64(input);
+        String primary = looksBase64 ? input : Codec.decode(input);
+        try {
+            byte[] raw = Base64Codec.decode(primary);
+            parts = Format.unpackLengthPrefixed(raw, 3);
+            byte[] payload = parts.get(2);
+            if (payload.length < 5 || payload[0] != 0x02) {
+                throw new IllegalArgumentException("Unsupported payload format");
             }
-            try {
-                byte[] raw = Base64Codec.decode(candidate);
-                parts = Format.unpackLengthPrefixed(raw, 3);
-                byte[] payload = parts.get(2);
-                if (payload.length < 5 || payload[0] != 0x02) {
-                    throw new IllegalArgumentException("Unsupported payload format");
+            int expectedLen = readU32(payload, 1);
+            if (expectedLen != payload.length - 5) {
+                throw new IllegalArgumentException("Payload length mismatch");
+            }
+        } catch (IllegalArgumentException exc) {
+            firstError = exc;
+            parts = null;
+        }
+        if (parts == null) {
+            String secondary = looksBase64 ? Codec.decode(input) : input;
+            if (!secondary.equals(primary)) {
+                try {
+                    byte[] raw = Base64Codec.decode(secondary);
+                    parts = Format.unpackLengthPrefixed(raw, 3);
+                    byte[] payload = parts.get(2);
+                    if (payload.length < 5 || payload[0] != 0x02) {
+                        throw new IllegalArgumentException("Unsupported payload format");
+                    }
+                    int expectedLen = readU32(payload, 1);
+                    if (expectedLen != payload.length - 5) {
+                        throw new IllegalArgumentException("Payload length mismatch");
+                    }
+                } catch (IllegalArgumentException exc) {
+                    if (firstError == null) {
+                        firstError = exc;
+                    }
+                    parts = null;
                 }
-                int expectedLen = readU32(payload, 1);
-                if (expectedLen != payload.length - 5) {
-                    throw new IllegalArgumentException("Payload length mismatch");
-                }
-                break;
-            } catch (IllegalArgumentException exc) {
-                if (firstError == null) {
-                    firstError = exc;
-                }
-                parts = null;
             }
         }
         if (parts == null) {

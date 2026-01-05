@@ -112,7 +112,7 @@ if [[ -z "$BENCH_TEXT_BYTES" ]]; then
     if [[ "$TEST_MODE" == "fast" || "$TEST_MODE" == "quickest" ]]; then
         BENCH_TEXT_BYTES="$BIG_FILE_BYTES"
     else
-        BENCH_TEXT_BYTES=1048576
+        BENCH_TEXT_BYTES=8388608
     fi
 fi
 if [[ ! "$BENCH_TEXT_BYTES" =~ ^[0-9]+$ ]]; then
@@ -124,6 +124,13 @@ if [[ ! "$BENCH_TEXT_MAX_BYTES" =~ ^[0-9]+$ ]]; then
 fi
 if (( BENCH_TEXT_MAX_BYTES > 0 && BENCH_TEXT_BYTES > BENCH_TEXT_MAX_BYTES )); then
     BENCH_TEXT_BYTES="$BENCH_TEXT_MAX_BYTES"
+fi
+BENCH_TEXT_SLOW_BYTES="${BENCH_TEXT_SLOW_BYTES:-1048576}"
+if [[ ! "$BENCH_TEXT_SLOW_BYTES" =~ ^[0-9]+$ ]]; then
+    BENCH_TEXT_SLOW_BYTES=1048576
+fi
+if (( BENCH_TEXT_MAX_BYTES > 0 && BENCH_TEXT_SLOW_BYTES > BENCH_TEXT_MAX_BYTES )); then
+    BENCH_TEXT_SLOW_BYTES="$BENCH_TEXT_MAX_BYTES"
 fi
 if [[ -z "$BENCH_TEXT_FILE" ]]; then
     BENCH_TEXT_FILE="$ORIG_DIR/bench_text.txt"
@@ -1343,23 +1350,23 @@ java_jmg_roundtrip() {
     local enc="$2"
     local dec="$3"
     log "STEP: $JAVA_BIN -jar $JAVA_JAR jmge $input"
-    "$JAVA_BIN" -jar "$JAVA_JAR" jmge "$input" "$enc" "$PW" --no-master || return $?
+    "$JAVA_BIN" -jar "$JAVA_JAR" jmge "$input" "$enc" "$PW" || return $?
     log "STEP: $JAVA_BIN -jar $JAVA_JAR jmgd $enc"
-    "$JAVA_BIN" -jar "$JAVA_JAR" jmgd "$enc" "$dec" "$PW" --no-master
+    "$JAVA_BIN" -jar "$JAVA_JAR" jmgd "$enc" "$dec" "$PW"
 }
 
 java_jmg_enc() {
     local input="$1"
     local enc="$2"
     log "STEP: $JAVA_BIN -jar $JAVA_JAR jmge $input"
-    "$JAVA_BIN" -jar "$JAVA_JAR" jmge "$input" "$enc" "$PW" --no-master
+    "$JAVA_BIN" -jar "$JAVA_JAR" jmge "$input" "$enc" "$PW"
 }
 
 java_jmg_dec() {
     local input="$1"
     local dec="$2"
     log "STEP: $JAVA_BIN -jar $JAVA_JAR jmgd $input"
-    "$JAVA_BIN" -jar "$JAVA_JAR" jmgd "$input" "$dec" "$PW" --no-master
+    "$JAVA_BIN" -jar "$JAVA_JAR" jmgd "$input" "$dec" "$PW"
 }
 
 fwxaes_py_enc_cpp_dec() {
@@ -2971,6 +2978,11 @@ else
             if [[ -z "$orig" || -z "$out" ]]; then
                 continue
             fi
+            if [[ ! -f "$orig" || ! -f "$out" ]]; then
+                log "VERIFY FAIL: missing output ($orig, $out)"
+                FAILURES+=("verify_missing ($out)")
+                continue
+            fi
             orig_hash="$(hash_file "$orig")"
             out_hash="$(hash_file "$out")"
             if [[ "$orig_hash" != "$out_hash" ]]; then
@@ -2997,6 +3009,45 @@ if [[ -f "$BENCH_TEXT" && "$BENCH_TEXT_MAX_BYTES" =~ ^[0-9]+$ && "$BENCH_TEXT_MA
         log "Benchmark text capped to ${BENCH_TEXT_MAX_BYTES} bytes"
     fi
 fi
+
+bench_text_for_method() {
+    local method="$1"
+    local limit="$BENCH_TEXT_BYTES"
+    case "$method" in
+        a512|bi512|b1024)
+            limit="$BENCH_TEXT_SLOW_BYTES"
+            ;;
+    esac
+    if [[ -z "$limit" || ! "$limit" =~ ^[0-9]+$ || "$limit" -le 0 ]]; then
+        printf "%s\n" "$BENCH_TEXT"
+        return 0
+    fi
+    local src="$BENCH_TEXT"
+    local size
+    size="$(wc -c < "$src" | tr -d ' ')"
+    if [[ ! "$size" =~ ^[0-9]+$ || "$size" -le "$limit" ]]; then
+        printf "%s\n" "$src"
+        return 0
+    fi
+    local cache="$TMP_DIR/bench_text_${method}_${limit}.txt"
+    if [[ ! -f "$cache" ]]; then
+        head -c "$limit" "$src" >"$cache"
+    fi
+    printf "%s\n" "$cache"
+    return 0
+}
+
+bench_iters_for_method() {
+    local method="$1"
+    case "$method" in
+        a512|bi512|b1024)
+            printf "%s\n" "$BENCH_ITERS_SLOW"
+            ;;
+        *)
+            printf "%s\n" "$BENCH_ITERS_LIGHT"
+            ;;
+    esac
+}
 BENCH_BYTES_FILE=""
 if [[ -f "$ORIG_DIR/bench_bytes.bin" ]]; then
     BENCH_BYTES_FILE="$ORIG_DIR/bench_bytes.bin"
@@ -3010,21 +3061,53 @@ fi
 
 if [[ -z "${BENCH_WARMUP_LIGHT:-}" || -z "${BENCH_WARMUP_HEAVY:-}" ]]; then
     if [[ "$TEST_MODE" == "quickest" ]]; then
-        BENCH_WARMUP_LIGHT="${BENCH_WARMUP_LIGHT:-3}"
-        BENCH_WARMUP_HEAVY="${BENCH_WARMUP_HEAVY:-5}"
+        BENCH_WARMUP_LIGHT="${BENCH_WARMUP_LIGHT:-2}"
+        BENCH_WARMUP_HEAVY="${BENCH_WARMUP_HEAVY:-3}"
         BENCH_WARMUP_FILE="${BENCH_WARMUP_FILE:-0}"
         BENCH_WARMUP_FILE_JAVA="${BENCH_WARMUP_FILE_JAVA:-1}"
     elif [[ "$TEST_MODE" == "fast" ]]; then
-        BENCH_WARMUP_LIGHT="${BENCH_WARMUP_LIGHT:-5}"
-        BENCH_WARMUP_HEAVY="${BENCH_WARMUP_HEAVY:-10}"
+        BENCH_WARMUP_LIGHT="${BENCH_WARMUP_LIGHT:-3}"
+        BENCH_WARMUP_HEAVY="${BENCH_WARMUP_HEAVY:-5}"
         BENCH_WARMUP_FILE="${BENCH_WARMUP_FILE:-1}"
         BENCH_WARMUP_FILE_JAVA="${BENCH_WARMUP_FILE_JAVA:-2}"
     else
-        BENCH_WARMUP_LIGHT="${BENCH_WARMUP_LIGHT:-10}"
-        BENCH_WARMUP_HEAVY="${BENCH_WARMUP_HEAVY:-20}"
+        BENCH_WARMUP_LIGHT="${BENCH_WARMUP_LIGHT:-5}"
+        BENCH_WARMUP_HEAVY="${BENCH_WARMUP_HEAVY:-6}"
         BENCH_WARMUP_FILE="${BENCH_WARMUP_FILE:-1}"
         BENCH_WARMUP_FILE_JAVA="${BENCH_WARMUP_FILE_JAVA:-3}"
     fi
+fi
+BENCH_ITERS_LIGHT="${BENCH_ITERS_LIGHT:-${BASEFWX_BENCH_ITERS:-50}}"
+BENCH_ITERS_SLOW="${BENCH_ITERS_SLOW:-10}"
+if [[ ! "$BENCH_ITERS_LIGHT" =~ ^[0-9]+$ || "$BENCH_ITERS_LIGHT" -lt 1 ]]; then
+    BENCH_ITERS_LIGHT=1
+fi
+if [[ ! "$BENCH_ITERS_SLOW" =~ ^[0-9]+$ || "$BENCH_ITERS_SLOW" -lt 1 ]]; then
+    BENCH_ITERS_SLOW=1
+fi
+if [[ -z "${BENCH_ITERS_HEAVY:-}" ]]; then
+    if [[ "$TEST_MODE" == "quickest" ]]; then
+        BENCH_ITERS_HEAVY=1
+    elif [[ "$TEST_MODE" == "fast" ]]; then
+        BENCH_ITERS_HEAVY=3
+    else
+        BENCH_ITERS_HEAVY=5
+    fi
+fi
+if [[ -z "${BENCH_ITERS_FILE:-}" ]]; then
+    if [[ "$TEST_MODE" == "quickest" ]]; then
+        BENCH_ITERS_FILE=1
+    elif [[ "$TEST_MODE" == "fast" ]]; then
+        BENCH_ITERS_FILE=2
+    else
+        BENCH_ITERS_FILE=3
+    fi
+fi
+if [[ ! "$BENCH_ITERS_HEAVY" =~ ^[0-9]+$ || "$BENCH_ITERS_HEAVY" -lt 1 ]]; then
+    BENCH_ITERS_HEAVY=1
+fi
+if [[ ! "$BENCH_ITERS_FILE" =~ ^[0-9]+$ || "$BENCH_ITERS_FILE" -lt 1 ]]; then
+    BENCH_ITERS_FILE=1
 fi
 
 JAVA_BENCH_FLAGS_DEFAULT="-server -XX:+UseG1GC -XX:+AlwaysPreTouch -XX:+TieredCompilation -XX:CompileThreshold=1000 -XX:+UseStringDeduplication -XX:MaxGCPauseMillis=200 -XX:InitialRAMPercentage=70 -XX:MaxRAMPercentage=95"
@@ -3062,6 +3145,13 @@ if [[ "$RUN_JAVA_TESTS" == "1" && "$JAVA_AVAILABLE" == "1" ]]; then
 fi
 
 log "BENCH_FWXAES_MODE: $BENCH_FWXAES_MODE"
+log "BENCH_ITERS_LIGHT: $BENCH_ITERS_LIGHT"
+log "BENCH_ITERS_SLOW: $BENCH_ITERS_SLOW"
+log "BENCH_ITERS_HEAVY: $BENCH_ITERS_HEAVY"
+log "BENCH_ITERS_FILE: $BENCH_ITERS_FILE"
+log "BENCH_TEXT_BYTES: $BENCH_TEXT_BYTES"
+log "BENCH_TEXT_SLOW_BYTES: $BENCH_TEXT_SLOW_BYTES"
+log "BENCH_TEXT_MAX_BYTES: $BENCH_TEXT_MAX_BYTES"
 
 for idx in "${!BENCH_LANGS[@]}"; do
     lang="${BENCH_LANGS[$idx]}"
@@ -3069,83 +3159,124 @@ for idx in "${!BENCH_LANGS[@]}"; do
         py)
             if [[ "$BENCH_FWXAES_MODE" == "par" ]]; then
                 time_cmd_bench "fwxaes_py_par" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_HEAVY" \
+                    BASEFWX_BENCH_ITERS="$BENCH_ITERS_HEAVY" \
                     "$PYTHON_BIN" "$PY_HELPER" bench-fwxaes-par "$BENCH_BYTES_FILE" "$PW"
             else
                 time_cmd_bench "fwxaes_py_correct" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_HEAVY" \
+                    BASEFWX_BENCH_ITERS="$BENCH_ITERS_HEAVY" \
                     "$PYTHON_BIN" "$PY_HELPER" bench-fwxaes "$BENCH_BYTES_FILE" "$PW"
             fi
             for method in "${BENCH_TEXT_METHODS[@]}"; do
+                text_path="$(bench_text_for_method "$method")"
+                iters="$(bench_iters_for_method "$method")"
                 time_cmd_bench "${method}_py_correct" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_LIGHT" \
-                    "$PYTHON_BIN" "$PY_HELPER" bench-text "$method" "$BENCH_TEXT" "$PW"
+                    BASEFWX_BENCH_ITERS="$iters" \
+                    "$PYTHON_BIN" "$PY_HELPER" bench-text "$method" "$text_path" "$PW"
             done
             for method in "${BENCH_HASH_METHODS[@]}"; do
+                text_path="$(bench_text_for_method "$method")"
+                iters="$(bench_iters_for_method "$method")"
                 time_cmd_bench "${method}_py_correct" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_LIGHT" \
-                    "$PYTHON_BIN" "$PY_HELPER" bench-hash "$method" "$BENCH_TEXT"
+                    BASEFWX_BENCH_ITERS="$iters" \
+                    "$PYTHON_BIN" "$PY_HELPER" bench-hash "$method" "$text_path"
             done
             time_cmd_bench "b512file_py_total" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_FILE" \
+                BASEFWX_BENCH_ITERS="$BENCH_ITERS_FILE" \
                 "$PYTHON_BIN" "$PY_HELPER" bench-b512file "$BENCH_BYTES_FILE" "$PW"
             time_cmd_bench "pb512file_py_total" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_FILE" \
+                BASEFWX_BENCH_ITERS="$BENCH_ITERS_FILE" \
                 "$PYTHON_BIN" "$PY_HELPER" bench-pb512file "$BENCH_BYTES_FILE" "$PW"
             ;;
         pypy)
             if [[ "$BENCH_FWXAES_MODE" == "par" ]]; then
                 time_cmd_bench "fwxaes_pypy_par" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_HEAVY" \
+                    BASEFWX_BENCH_ITERS="$BENCH_ITERS_HEAVY" \
                     "$PYPY_BIN" "$PY_HELPER" bench-fwxaes-par "$BENCH_BYTES_FILE" "$PW"
             else
                 time_cmd_bench "fwxaes_pypy_correct" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_HEAVY" \
+                    BASEFWX_BENCH_ITERS="$BENCH_ITERS_HEAVY" \
                     "$PYPY_BIN" "$PY_HELPER" bench-fwxaes "$BENCH_BYTES_FILE" "$PW"
             fi
             for method in "${BENCH_TEXT_METHODS[@]}"; do
+                text_path="$(bench_text_for_method "$method")"
+                iters="$(bench_iters_for_method "$method")"
                 time_cmd_bench "${method}_pypy_correct" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_LIGHT" \
-                    "$PYPY_BIN" "$PY_HELPER" bench-text "$method" "$BENCH_TEXT" "$PW"
+                    BASEFWX_BENCH_ITERS="$iters" \
+                    "$PYPY_BIN" "$PY_HELPER" bench-text "$method" "$text_path" "$PW"
             done
             for method in "${BENCH_HASH_METHODS[@]}"; do
+                text_path="$(bench_text_for_method "$method")"
+                iters="$(bench_iters_for_method "$method")"
                 time_cmd_bench "${method}_pypy_correct" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_LIGHT" \
-                    "$PYPY_BIN" "$PY_HELPER" bench-hash "$method" "$BENCH_TEXT"
+                    BASEFWX_BENCH_ITERS="$iters" \
+                    "$PYPY_BIN" "$PY_HELPER" bench-hash "$method" "$text_path"
             done
             time_cmd_bench "b512file_pypy_total" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_FILE" \
+                BASEFWX_BENCH_ITERS="$BENCH_ITERS_FILE" \
                 "$PYPY_BIN" "$PY_HELPER" bench-b512file "$BENCH_BYTES_FILE" "$PW"
             time_cmd_bench "pb512file_pypy_total" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_FILE" \
+                BASEFWX_BENCH_ITERS="$BENCH_ITERS_FILE" \
                 "$PYPY_BIN" "$PY_HELPER" bench-pb512file "$BENCH_BYTES_FILE" "$PW"
             ;;
         cpp)
             if [[ "$BENCH_FWXAES_MODE" == "par" ]]; then
-                time_cmd_bench "fwxaes_cpp_par" "$CPP_BIN" bench-fwxaes-par "$BENCH_BYTES_FILE" "$PW" --no-master
+                time_cmd_bench "fwxaes_cpp_par" env BASEFWX_BENCH_ITERS="$BENCH_ITERS_HEAVY" \
+                    "$CPP_BIN" bench-fwxaes-par "$BENCH_BYTES_FILE" "$PW" --no-master
             else
-                time_cmd_bench "fwxaes_cpp_correct" "$CPP_BIN" bench-fwxaes "$BENCH_BYTES_FILE" "$PW" --no-master
+                time_cmd_bench "fwxaes_cpp_correct" env BASEFWX_BENCH_ITERS="$BENCH_ITERS_HEAVY" \
+                    "$CPP_BIN" bench-fwxaes "$BENCH_BYTES_FILE" "$PW" --no-master
             fi
             for method in "${BENCH_TEXT_METHODS[@]}"; do
+                text_path="$(bench_text_for_method "$method")"
+                iters="$(bench_iters_for_method "$method")"
                 if [[ "$method" == "b512" || "$method" == "pb512" ]]; then
-                    time_cmd_bench "${method}_cpp_correct" "$CPP_BIN" bench-text "$method" "$BENCH_TEXT" -p "$PW" --no-master
+                    time_cmd_bench "${method}_cpp_correct" env BASEFWX_BENCH_ITERS="$iters" \
+                        "$CPP_BIN" bench-text "$method" "$text_path" -p "$PW" --no-master
                 else
-                    time_cmd_bench "${method}_cpp_correct" "$CPP_BIN" bench-text "$method" "$BENCH_TEXT"
+                    time_cmd_bench "${method}_cpp_correct" env BASEFWX_BENCH_ITERS="$iters" \
+                        "$CPP_BIN" bench-text "$method" "$text_path"
                 fi
             done
             for method in "${BENCH_HASH_METHODS[@]}"; do
-                time_cmd_bench "${method}_cpp_correct" "$CPP_BIN" bench-hash "$method" "$BENCH_TEXT"
+                text_path="$(bench_text_for_method "$method")"
+                iters="$(bench_iters_for_method "$method")"
+                time_cmd_bench "${method}_cpp_correct" env BASEFWX_BENCH_ITERS="$iters" \
+                    "$CPP_BIN" bench-hash "$method" "$text_path"
             done
-            time_cmd_bench "b512file_cpp_total" "$CPP_BIN" bench-b512file "$BENCH_BYTES_FILE" "$PW" --no-master
-            time_cmd_bench "pb512file_cpp_total" "$CPP_BIN" bench-pb512file "$BENCH_BYTES_FILE" "$PW" --no-master
+            time_cmd_bench "b512file_cpp_total" env BASEFWX_BENCH_ITERS="$BENCH_ITERS_FILE" \
+                "$CPP_BIN" bench-b512file "$BENCH_BYTES_FILE" "$PW" --no-master
+            time_cmd_bench "pb512file_cpp_total" env BASEFWX_BENCH_ITERS="$BENCH_ITERS_FILE" \
+                "$CPP_BIN" bench-pb512file "$BENCH_BYTES_FILE" "$PW" --no-master
             ;;
         java)
             if [[ "$BENCH_FWXAES_MODE" == "par" ]]; then
                 time_cmd_bench "fwxaes_java_par" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_HEAVY" \
+                    BASEFWX_BENCH_ITERS="$BENCH_ITERS_HEAVY" \
                     "$JAVA_BIN" "${JAVA_BENCH_FLAGS_ARR[@]}" -jar "$JAVA_JAR" bench-fwxaes-par "$BENCH_BYTES_FILE" "$PW" --no-master
             else
                 time_cmd_bench "fwxaes_java_correct" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_HEAVY" \
+                    BASEFWX_BENCH_ITERS="$BENCH_ITERS_HEAVY" \
                     "$JAVA_BIN" "${JAVA_BENCH_FLAGS_ARR[@]}" -jar "$JAVA_JAR" bench-fwxaes "$BENCH_BYTES_FILE" "$PW" --no-master
             fi
             for method in "${BENCH_TEXT_METHODS[@]}"; do
+                text_path="$(bench_text_for_method "$method")"
+                iters="$(bench_iters_for_method "$method")"
                 time_cmd_bench "${method}_java_correct" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_LIGHT" \
-                    "$JAVA_BIN" "${JAVA_BENCH_FLAGS_ARR[@]}" -jar "$JAVA_JAR" bench-text "$method" "$BENCH_TEXT" "$PW" --no-master
+                    BASEFWX_BENCH_ITERS="$iters" \
+                    "$JAVA_BIN" "${JAVA_BENCH_FLAGS_ARR[@]}" -jar "$JAVA_JAR" bench-text "$method" "$text_path" "$PW" --no-master
             done
             for method in "${BENCH_HASH_METHODS[@]}"; do
+                text_path="$(bench_text_for_method "$method")"
+                iters="$(bench_iters_for_method "$method")"
                 time_cmd_bench "${method}_java_correct" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_LIGHT" \
-                    "$JAVA_BIN" "${JAVA_BENCH_FLAGS_ARR[@]}" -jar "$JAVA_JAR" bench-hash "$method" "$BENCH_TEXT"
+                    BASEFWX_BENCH_ITERS="$iters" \
+                    "$JAVA_BIN" "${JAVA_BENCH_FLAGS_ARR[@]}" -jar "$JAVA_JAR" bench-hash "$method" "$text_path"
             done
             time_cmd_bench "b512file_java_total" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_FILE_JAVA" \
+                BASEFWX_BENCH_ITERS="$BENCH_ITERS_FILE" \
                 "$JAVA_BIN" "${JAVA_BENCH_FLAGS_ARR[@]}" -jar "$JAVA_JAR" bench-b512file "$BENCH_BYTES_FILE" "$PW" --no-master
             time_cmd_bench "pb512file_java_total" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_FILE_JAVA" \
+                BASEFWX_BENCH_ITERS="$BENCH_ITERS_FILE" \
                 "$JAVA_BIN" "${JAVA_BENCH_FLAGS_ARR[@]}" -jar "$JAVA_JAR" bench-pb512file "$BENCH_BYTES_FILE" "$PW" --no-master
             ;;
     esac
@@ -3444,6 +3575,17 @@ write_bench_results() {
     BENCH_BYTES_FILE="$BENCH_BYTES_FILE" \
     BENCH_TEXT_FILE="$BENCH_TEXT" \
     BENCH_FWXAES_MODE="$BENCH_FWXAES_MODE" \
+    BENCH_ITERS_LIGHT="$BENCH_ITERS_LIGHT" \
+    BENCH_ITERS_SLOW="$BENCH_ITERS_SLOW" \
+    BENCH_ITERS_HEAVY="$BENCH_ITERS_HEAVY" \
+    BENCH_ITERS_FILE="$BENCH_ITERS_FILE" \
+    BENCH_WARMUP_LIGHT="$BENCH_WARMUP_LIGHT" \
+    BENCH_WARMUP_HEAVY="$BENCH_WARMUP_HEAVY" \
+    BENCH_WARMUP_FILE="$BENCH_WARMUP_FILE" \
+    BENCH_WARMUP_FILE_JAVA="$BENCH_WARMUP_FILE_JAVA" \
+    BENCH_TEXT_BYTES="$BENCH_TEXT_BYTES" \
+    BENCH_TEXT_SLOW_BYTES="$BENCH_TEXT_SLOW_BYTES" \
+    BENCH_TEXT_MAX_BYTES="$BENCH_TEXT_MAX_BYTES" \
     "$bench_python" - "$export_file" "$out_dir" "$tag" <<'PY'
 import json
 import os
@@ -3512,11 +3654,26 @@ data = {
     "bench_warmup": to_int(os.getenv("BASEFWX_BENCH_WARMUP", "0")) or 0,
     "bench_workers": to_int(os.getenv("BASEFWX_BENCH_WORKERS", "0")) or 0,
     "bench_fwxaes_mode": os.getenv("BENCH_FWXAES_MODE", "par"),
+    "bench_iters_profile": {
+        "light": to_int(os.getenv("BENCH_ITERS_LIGHT", "0")) or 0,
+        "slow": to_int(os.getenv("BENCH_ITERS_SLOW", "0")) or 0,
+        "heavy": to_int(os.getenv("BENCH_ITERS_HEAVY", "0")) or 0,
+        "file": to_int(os.getenv("BENCH_ITERS_FILE", "0")) or 0,
+    },
+    "bench_warmup_profile": {
+        "light": to_int(os.getenv("BENCH_WARMUP_LIGHT", "0")) or 0,
+        "heavy": to_int(os.getenv("BENCH_WARMUP_HEAVY", "0")) or 0,
+        "file": to_int(os.getenv("BENCH_WARMUP_FILE", "0")) or 0,
+        "file_java": to_int(os.getenv("BENCH_WARMUP_FILE_JAVA", "0")) or 0,
+    },
     "baseline": "python",
     "epsilon_ns": epsilon_ns,
     "bench_files": {
         "bytes": os.getenv("BENCH_BYTES_FILE", ""),
-        "text": os.getenv("BENCH_TEXT_FILE", "")
+        "text": os.getenv("BENCH_TEXT_FILE", ""),
+        "text_bytes": to_int(os.getenv("BENCH_TEXT_BYTES", "0")) or 0,
+        "text_slow_bytes": to_int(os.getenv("BENCH_TEXT_SLOW_BYTES", "0")) or 0,
+        "text_max_bytes": to_int(os.getenv("BENCH_TEXT_MAX_BYTES", "0")) or 0,
     },
     "versions": versions,
     "overall": overall,

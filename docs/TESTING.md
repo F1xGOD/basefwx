@@ -19,6 +19,7 @@ Media tests require `ffmpeg` and `ffprobe`.
 - `--fast` reduces fixture sizes and skips wrong-password and cross-compat tests.
 - `--quickest` uses the smallest fixture sizes and skips extra cases.
 - `--huge` enables very large file fixtures (200MB and 1.2GB).
+- `--bench` runs only benchmark timings (skips correctness/cross-compat/verify phases).
 
 Examples:
 

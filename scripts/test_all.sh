@@ -43,6 +43,9 @@ BAD_PW="wrongpw"
 
 ENABLE_HUGE="${ENABLE_HUGE:-0}"
 BIG_FILE_BYTES="${BIG_FILE_BYTES:-37748736}"
+BENCH_FILE_BYTES="${BENCH_FILE_BYTES:-}"
+BENCH_TEXT_BYTES="${BENCH_TEXT_BYTES:-}"
+BENCH_TEXT_FILE="${BENCH_TEXT_FILE:-}"
 HUGE_200M_BYTES="${HUGE_200M_BYTES:-200000000}"
 HUGE_1P2G_BYTES="${HUGE_1P2G_BYTES:-1200000000}"
 TEST_MODE="${TEST_MODE:-default}"
@@ -96,6 +99,23 @@ done
 if [[ "$TEST_MODE" != "default" ]]; then
     ENABLE_HUGE=0
 fi
+if [[ -z "$BENCH_FILE_BYTES" ]]; then
+    if [[ "$TEST_MODE" == "fast" || "$TEST_MODE" == "quickest" ]]; then
+        BENCH_FILE_BYTES="$BIG_FILE_BYTES"
+    else
+        BENCH_FILE_BYTES=220000000
+    fi
+fi
+if [[ -z "$BENCH_TEXT_BYTES" ]]; then
+    if [[ "$TEST_MODE" == "fast" || "$TEST_MODE" == "quickest" ]]; then
+        BENCH_TEXT_BYTES="$BIG_FILE_BYTES"
+    else
+        BENCH_TEXT_BYTES=1048576
+    fi
+fi
+if [[ -z "$BENCH_TEXT_FILE" ]]; then
+    BENCH_TEXT_FILE="$ORIG_DIR/bench_text.txt"
+fi
 if (( EXPECT_BASELINE == 1 )); then
     BASELINE_LANG="py"
 fi
@@ -144,7 +164,8 @@ export BASEFWX_BENCH_WORKERS="${BASEFWX_BENCH_WORKERS:-$DEFAULT_BENCH_WORKERS}"
 if [[ -n "$TEST_KDF_ITERS" ]]; then
     export BASEFWX_TEST_KDF_ITERS="$TEST_KDF_ITERS"
 fi
-export ENABLE_HUGE BIG_FILE_BYTES HUGE_200M_BYTES HUGE_1P2G_BYTES TEST_MODE SKIP_WRONG SKIP_CROSS
+export ENABLE_HUGE BIG_FILE_BYTES BENCH_FILE_BYTES BENCH_TEXT_BYTES BENCH_TEXT_FILE HUGE_200M_BYTES HUGE_1P2G_BYTES \
+    TEST_MODE SKIP_WRONG SKIP_CROSS
 
 COOLDOWN_SECONDS="${COOLDOWN_SECONDS:-}"
 if [[ -z "$COOLDOWN_SECONDS" ]]; then
@@ -1516,6 +1537,14 @@ mode = os.getenv("TEST_MODE", "default")
 
 text = ("The quick brown fox jumps over the lazy dog. " * 40).encode("ascii")
 (root / "tiny.txt").write_bytes(text[:1024])
+bench_text_bytes = int(os.getenv("BENCH_TEXT_BYTES", "0"))
+if bench_text_bytes > 0:
+    phrase = (
+        "The quick brown fox jumps over the lazy dog 0123456789 "
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZ abcdefghijklmnopqrstuvwxyz.\n"
+    ).encode("ascii")
+    repeats = (bench_text_bytes // len(phrase)) + 1
+    (root / "bench_text.txt").write_bytes((phrase * repeats)[:bench_text_bytes])
 
 def write_png(path: Path, size: int) -> None:
     try:
@@ -1587,6 +1616,7 @@ if ffmpeg:
 
 enable_huge = os.getenv("ENABLE_HUGE", "0") == "1"
 big_bytes = int(os.getenv("BIG_FILE_BYTES", "37748736"))
+bench_bytes = int(os.getenv("BENCH_FILE_BYTES", "0"))
 large_200m = int(os.getenv("HUGE_200M_BYTES", "200000000"))
 large_1p2g = int(os.getenv("HUGE_1P2G_BYTES", "1200000000"))
 
@@ -1610,6 +1640,8 @@ if mode in ("fast", "quickest"):
     (root / "sample_payload_copy.bin").write_bytes(payload)
 else:
     write_large(root / "large_36m.bin", big_bytes, seed=4242)
+    if bench_bytes > 0:
+        write_large(root / "bench_bytes.bin", bench_bytes, seed=24680)
     if enable_huge:
         write_large(root / "large_200m.bin", large_200m, seed=12345)
         write_large(root / "huge_1p2g.bin", large_1p2g, seed=98765)
@@ -2853,8 +2885,13 @@ phase "PHASE4: benchmark timings"
 STEP_INDEX=0
 STEP_TOTAL=0
 BENCH_TEXT="$TEXT_ORIG"
+if [[ -f "$BENCH_TEXT_FILE" ]]; then
+    BENCH_TEXT="$BENCH_TEXT_FILE"
+fi
 BENCH_BYTES_FILE=""
-if [[ "$TEST_MODE" == "default" && -f "$ORIG_DIR/large_36m.bin" ]]; then
+if [[ -f "$ORIG_DIR/bench_bytes.bin" ]]; then
+    BENCH_BYTES_FILE="$ORIG_DIR/bench_bytes.bin"
+elif [[ "$TEST_MODE" == "default" && -f "$ORIG_DIR/large_36m.bin" ]]; then
     BENCH_BYTES_FILE="$ORIG_DIR/large_36m.bin"
 elif [[ -f "$ORIG_DIR/sample_payload.bin" ]]; then
     BENCH_BYTES_FILE="$ORIG_DIR/sample_payload.bin"
@@ -3148,6 +3185,7 @@ overall_sum_for_lang() {
     local sum=0
     local count=0
     local base_sum=0
+    local epsilon="${DELTA_EPSILON_NS:-0}"
     local entry label py_key pypy_key cpp_key java_key
     for entry in "${BENCH_METHODS[@]}"; do
         IFS='|' read -r label py_key pypy_key cpp_key java_key <<<"$entry"
@@ -3160,7 +3198,7 @@ overall_sum_for_lang() {
         esac
         local base_val="${TIMES[$py_key]:-}"
         local lang_val="${TIMES[$lang_key]:-}"
-        if [[ -n "$base_val" && "$base_val" -gt 0 && -n "$lang_val" && "$lang_val" -gt 0 ]]; then
+        if [[ -n "$base_val" && "$base_val" -ge "$epsilon" && -n "$lang_val" && "$lang_val" -ge "$epsilon" ]]; then
             base_sum=$((base_sum + base_val))
             sum=$((sum + lang_val))
             count=$((count + 1))
@@ -3297,6 +3335,8 @@ with open(tsv_path, "r", encoding="utf-8") as handle:
                 times[key] = val
         tests.append({"label": label, "times": times})
 
+epsilon_ns = to_int(os.getenv("BENCH_EPSILON_NS", "1000000")) or 1000000
+
 def overall_for(lang_key):
     total = 0
     base_total = 0
@@ -3304,7 +3344,7 @@ def overall_for(lang_key):
     for entry in tests:
         base = entry["times"].get("python")
         val = entry["times"].get(lang_key)
-        if base and val:
+        if base and val and base >= epsilon_ns and val >= epsilon_ns:
             base_total += base
             total += val
             count += 1
@@ -3324,7 +3364,7 @@ data = {
     "bench_warmup": to_int(os.getenv("BASEFWX_BENCH_WARMUP", "0")) or 0,
     "bench_workers": to_int(os.getenv("BASEFWX_BENCH_WORKERS", "0")) or 0,
     "baseline": "python",
-    "epsilon_ns": to_int(os.getenv("BENCH_EPSILON_NS", "1000000")) or 1000000,
+    "epsilon_ns": epsilon_ns,
     "bench_files": {
         "bytes": os.getenv("BENCH_BYTES_FILE", ""),
         "text": os.getenv("BENCH_TEXT_FILE", "")

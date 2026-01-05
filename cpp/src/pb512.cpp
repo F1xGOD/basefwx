@@ -57,11 +57,22 @@ std::string DecodeMaskedPayload(const std::string& input,
                                 std::string_view stream_info,
                                 const KdfOptions& kdf) {
     std::string prepared = input;
+    std::string fallback;
+    if (!basefwx::base64::IsLikelyBase64(prepared)) {
+        prepared = basefwx::codec::Decode(input);
+        fallback = input;
+    }
     bool ok = false;
     std::vector<std::uint8_t> raw = basefwx::base64::Decode(prepared, &ok);
     if (!ok) {
-        prepared = basefwx::codec::Decode(input);
-        raw = basefwx::base64::Decode(prepared, &ok);
+        if (fallback.empty()) {
+            std::string decoded = basefwx::codec::Decode(input);
+            if (decoded != prepared) {
+                raw = basefwx::base64::Decode(decoded, &ok);
+            }
+        } else if (fallback != prepared) {
+            raw = basefwx::base64::Decode(fallback, &ok);
+        }
     }
     if (!ok) {
         throw std::runtime_error("Invalid payload encoding");

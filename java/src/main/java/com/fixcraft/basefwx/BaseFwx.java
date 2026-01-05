@@ -23,6 +23,7 @@ import java.util.List;
 import java.util.Map;
 import javax.crypto.AEADBadTagException;
 import javax.crypto.Cipher;
+import javax.crypto.Mac;
 import javax.crypto.spec.IvParameterSpec;
 import javax.crypto.spec.GCMParameterSpec;
 import javax.crypto.spec.SecretKeySpec;
@@ -967,12 +968,9 @@ public final class BaseFwx {
                         remaining -= take;
                     }
                     byte[] tag = readExactBytes(in, Constants.AEAD_TAG_LEN, "Ciphertext payload truncated");
-                    // Allocate buffer large enough for doFinal output (which may be the entire plaintext)
-                    byte[] finalBuf = cipherBodyLen <= Constants.STREAM_CHUNK_SIZE ? outBuf 
-                        : new byte[(int) Math.min(cipherBodyLen, Integer.MAX_VALUE)];
-                    int finalLen = dec.doFinal(tag, 0, tag.length, finalBuf, 0);
+                    int finalLen = dec.doFinal(tag, 0, tag.length, outBuf, 0);
                     if (finalLen > 0) {
-                        plainOut.write(finalBuf, 0, finalLen);
+                        plainOut.write(outBuf, 0, finalLen);
                     }
                 }
             }
@@ -1284,12 +1282,9 @@ public final class BaseFwx {
                         remaining -= take;
                     }
                     byte[] tag = readExactBytes(in, Constants.AEAD_TAG_LEN, "Ciphertext payload truncated");
-                    // Allocate buffer large enough for doFinal output (which may be the entire plaintext)
-                    byte[] finalBuf = cipherBodyLen <= Constants.STREAM_CHUNK_SIZE ? outBuf 
-                        : new byte[(int) Math.min(cipherBodyLen, Integer.MAX_VALUE)];
-                    int finalLen = dec.doFinal(tag, 0, tag.length, finalBuf, 0);
+                    int finalLen = dec.doFinal(tag, 0, tag.length, outBuf, 0);
                     if (finalLen > 0) {
-                        plainOut.write(finalBuf, 0, finalLen);
+                        plainOut.write(outBuf, 0, finalLen);
                     }
                 }
             }
@@ -2088,14 +2083,13 @@ public final class BaseFwx {
 
     private static final class StreamObfuscator {
         private final Cipher ctrCipher;
-        private final byte[] permMaterial;
+        private final Mac permMac;
         private final byte[] permInfo;
         private final boolean fast;
         private long chunkIndex = 0L;
-        private byte[] scratch = new byte[0];
 
-        private StreamObfuscator(byte[] permMaterial, Cipher ctrCipher, boolean fast) {
-            this.permMaterial = permMaterial;
+        private StreamObfuscator(Mac permMac, Cipher ctrCipher, boolean fast) {
+            this.permMac = permMac;
             this.permInfo = new byte[Constants.STREAM_INFO_PERM.length + 8];
             System.arraycopy(Constants.STREAM_INFO_PERM, 0, permInfo, 0, Constants.STREAM_INFO_PERM.length);
             this.ctrCipher = ctrCipher;
@@ -2119,10 +2113,12 @@ public final class BaseFwx {
             byte[] maskKey = Crypto.hkdfSha256(base, Constants.STREAM_INFO_KEY, 32);
             byte[] iv = Crypto.hkdfSha256(base, Constants.STREAM_INFO_IV, 16);
             byte[] permMaterial = Crypto.hkdfSha256(base, Constants.STREAM_INFO_PERM, 32);
+            byte[] permPrk = Crypto.hkdfPrkSha256(permMaterial);
+            Mac permMac = Crypto.initHmac(permPrk);
             try {
                 Cipher cipher = Cipher.getInstance("AES/CTR/NoPadding");
                 cipher.init(Cipher.ENCRYPT_MODE, new SecretKeySpec(maskKey, "AES"), new IvParameterSpec(iv));
-                return new StreamObfuscator(permMaterial, cipher, fast);
+                return new StreamObfuscator(permMac, cipher, fast);
             } catch (GeneralSecurityException exc) {
                 throw new IllegalStateException("AES-CTR init failed", exc);
             }
@@ -2180,15 +2176,11 @@ public final class BaseFwx {
             if (length <= 0) {
                 return;
             }
-            if (scratch.length < length) {
-                scratch = new byte[length];
-            }
             try {
-                int outLen = ctrCipher.update(buffer, 0, length, scratch, 0);
+                int outLen = ctrCipher.update(buffer, 0, length, buffer, 0);
                 if (outLen != length) {
                     throw new IllegalStateException("AES-CTR output length mismatch");
                 }
-                System.arraycopy(scratch, 0, buffer, 0, outLen);
             } catch (GeneralSecurityException exc) {
                 throw new IllegalStateException("AES-CTR update failed", exc);
             }
@@ -2201,7 +2193,9 @@ public final class BaseFwx {
                 info[Constants.STREAM_INFO_PERM.length + i] = (byte) (idx & 0xFF);
                 idx >>>= 8;
             }
-            byte[] seedBytes = Crypto.hkdfSha256(permMaterial, info, 16);
+            permMac.update(info);
+            permMac.update((byte) 1);
+            byte[] seedBytes = permMac.doFinal();
             ChunkParams params = new ChunkParams();
             params.seed = seed64FromBytes(seedBytes);
             params.rotation = seedBytes[0] & 0x07;

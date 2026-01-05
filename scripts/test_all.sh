@@ -51,6 +51,8 @@ HUGE_1P2G_BYTES="${HUGE_1P2G_BYTES:-1200000000}"
 TEST_MODE="${TEST_MODE:-default}"
 SKIP_WRONG=0
 SKIP_CROSS=0
+SKIP_NATIVE=0
+SKIP_VERIFY=0
 TEST_KDF_ITERS=""
 BASELINE_LANG="${BASELINE_LANG:-py}"
 EXPECT_BASELINE=0
@@ -1534,6 +1536,7 @@ root = Path(sys.argv[1])
 root.mkdir(parents=True, exist_ok=True)
 
 mode = os.getenv("TEST_MODE", "default")
+bench_mode = mode == "bench"
 
 text = ("The quick brown fox jumps over the lazy dog. " * 40).encode("ascii")
 (root / "tiny.txt").write_bytes(text[:1024])
@@ -1555,64 +1558,65 @@ def write_png(path: Path, size: int) -> None:
     except Exception:
         path.write_bytes(os.urandom(size * size * 3))
 
-jmg_size = 96 if mode in ("fast", "quickest") else 192
-write_png(root / "jmg_sample.png", jmg_size)
+if not bench_mode:
+    jmg_size = 96 if mode in ("fast", "quickest") else 192
+    write_png(root / "jmg_sample.png", jmg_size)
 
-if mode not in ("fast", "quickest"):
-    (root / "small.bin").write_bytes(os.urandom(64 * 1024))
-    (root / "medium.bin").write_bytes(os.urandom(512 * 1024))
+    if mode not in ("fast", "quickest"):
+        (root / "small.bin").write_bytes(os.urandom(64 * 1024))
+        (root / "medium.bin").write_bytes(os.urandom(512 * 1024))
 
-    png_path = root / "noise.png"
-    write_png(png_path, 320)
+        png_path = root / "noise.png"
+        write_png(png_path, 320)
 
-ffmpeg = shutil.which("ffmpeg")
-if ffmpeg:
-    duration = "1.0"
-    fps = "24"
-    v_size = "128x72"
-    mp4_path = root / "jmg_sample.mp4"
-    m4a_path = root / "jmg_sample.m4a"
-    try:
-        subprocess.run(
-            [
-                ffmpeg, "-y",
-                "-f", "lavfi", "-i", f"testsrc=size={v_size}:rate={fps}",
-                "-f", "lavfi", "-i", f"sine=frequency=880:sample_rate=44100",
-                "-t", duration,
-                "-r", fps,
-                "-pix_fmt", "yuv420p",
-                "-c:v", "libx264",
-                "-preset", "ultrafast",
-                "-crf", "38",
-                "-b:v", "90k",
-                "-maxrate", "90k",
-                "-bufsize", "180k",
-                "-c:a", "aac",
-                "-b:a", "24k",
-                "-movflags", "+faststart",
-                str(mp4_path),
-            ],
-            check=True,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-    except Exception:
-        pass
-    try:
-        subprocess.run(
-            [
-                ffmpeg, "-y",
-                "-f", "lavfi", "-i", f"sine=frequency=440:duration={duration}",
-                "-c:a", "aac",
-                "-b:a", "32k",
-                str(m4a_path),
-            ],
-            check=True,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-    except Exception:
-        pass
+    ffmpeg = shutil.which("ffmpeg")
+    if ffmpeg:
+        duration = "1.0"
+        fps = "24"
+        v_size = "128x72"
+        mp4_path = root / "jmg_sample.mp4"
+        m4a_path = root / "jmg_sample.m4a"
+        try:
+            subprocess.run(
+                [
+                    ffmpeg, "-y",
+                    "-f", "lavfi", "-i", f"testsrc=size={v_size}:rate={fps}",
+                    "-f", "lavfi", "-i", f"sine=frequency=880:sample_rate=44100",
+                    "-t", duration,
+                    "-r", fps,
+                    "-pix_fmt", "yuv420p",
+                    "-c:v", "libx264",
+                    "-preset", "ultrafast",
+                    "-crf", "38",
+                    "-b:v", "90k",
+                    "-maxrate", "90k",
+                    "-bufsize", "180k",
+                    "-c:a", "aac",
+                    "-b:a", "24k",
+                    "-movflags", "+faststart",
+                    str(mp4_path),
+                ],
+                check=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        except Exception:
+            pass
+        try:
+            subprocess.run(
+                [
+                    ffmpeg, "-y",
+                    "-f", "lavfi", "-i", f"sine=frequency=440:duration={duration}",
+                    "-c:a", "aac",
+                    "-b:a", "32k",
+                    str(m4a_path),
+                ],
+                check=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        except Exception:
+            pass
 
 enable_huge = os.getenv("ENABLE_HUGE", "0") == "1"
 big_bytes = int(os.getenv("BIG_FILE_BYTES", "37748736"))
@@ -1639,12 +1643,15 @@ if mode in ("fast", "quickest"):
     (root / "sample_payload.bin").write_bytes(payload)
     (root / "sample_payload_copy.bin").write_bytes(payload)
 else:
+    if not bench_mode:
+        write_large(root / "large_36m.bin", big_bytes, seed=4242)
+        if enable_huge:
+            write_large(root / "large_200m.bin", large_200m, seed=12345)
+            write_large(root / "huge_1p2g.bin", large_1p2g, seed=98765)
+if bench_bytes > 0:
+    write_large(root / "bench_bytes.bin", bench_bytes, seed=24680)
+elif bench_mode:
     write_large(root / "large_36m.bin", big_bytes, seed=4242)
-    if bench_bytes > 0:
-        write_large(root / "bench_bytes.bin", bench_bytes, seed=24680)
-    if enable_huge:
-        write_large(root / "large_200m.bin", large_200m, seed=12345)
-        write_large(root / "huge_1p2g.bin", large_1p2g, seed=98765)
 PY
 
 log "CMD[generate_fixtures]: $PYTHON_BIN $GEN_HELPER $ORIG_DIR"
@@ -2697,17 +2704,17 @@ calc_total_steps
 # If requested, run a minimal "bench" (aka --banch) mode: skip most
 # correctness phases and only perform the benchmarks with reduced iters.
 if (( BENCH_ONLY == 1 )); then
-    log "Bench-only mode: minimizing tests"
-    # Keep Python as baseline by default and disable other language tests
-    RUN_PY_TESTS_ORIG=1
-    RUN_PYPY_TESTS_ORIG=0
-    RUN_CPP_TESTS_ORIG=0
-    RUN_JAVA_TESTS_ORIG=0
+    log "Bench-only mode: skipping correctness and verification phases"
     # Reduce benchmark iterations/warmup to keep runs short unless user overrides
     export BASEFWX_BENCH_ITERS="${BASEFWX_BENCH_ITERS:-5}"
     export BASEFWX_BENCH_WARMUP="${BASEFWX_BENCH_WARMUP:-1}"
     SKIP_WRONG=1
     SKIP_CROSS=1
+    SKIP_NATIVE=1
+    SKIP_VERIFY=1
+fi
+if (( SKIP_NATIVE == 1 )); then
+    STEP_TOTAL=0
 fi
 
 LANG_PHASES=()
@@ -2724,37 +2731,41 @@ if [[ "$RUN_JAVA_TESTS_ORIG" == "1" ]]; then
     LANG_PHASES+=("java")
 fi
 
-for idx in "${!LANG_PHASES[@]}"; do
-    lang="${LANG_PHASES[$idx]}"
-    RUN_PY_TESTS=0
-    RUN_PYPY_TESTS=0
-    RUN_CPP_TESTS=0
-    RUN_JAVA_TESTS=0
-    case "$lang" in
-        py)
-            PHASE2_LABEL="Python"
-            RUN_PY_TESTS=1
-            ;;
-        pypy)
-            PHASE2_LABEL="PyPy"
-            RUN_PYPY_TESTS=1
-            ;;
-        cpp)
-            PHASE2_LABEL="C++"
-            RUN_CPP_TESTS=1
-            ;;
-        java)
-            PHASE2_LABEL="Java"
-            RUN_JAVA_TESTS=1
-            ;;
-    esac
-    INTRA_LANG_COOLDOWN=0
-    run_native_tests_block
-    INTRA_LANG_COOLDOWN=1
-    if (( idx < ${#LANG_PHASES[@]} - 1 )); then
-        lang_cooldown "${PHASE2_LABEL}"
-    fi
-done
+if (( SKIP_NATIVE == 1 )); then
+    phase "PHASE2: run native tests (skipped - bench only)"
+else
+    for idx in "${!LANG_PHASES[@]}"; do
+        lang="${LANG_PHASES[$idx]}"
+        RUN_PY_TESTS=0
+        RUN_PYPY_TESTS=0
+        RUN_CPP_TESTS=0
+        RUN_JAVA_TESTS=0
+        case "$lang" in
+            py)
+                PHASE2_LABEL="Python"
+                RUN_PY_TESTS=1
+                ;;
+            pypy)
+                PHASE2_LABEL="PyPy"
+                RUN_PYPY_TESTS=1
+                ;;
+            cpp)
+                PHASE2_LABEL="C++"
+                RUN_CPP_TESTS=1
+                ;;
+            java)
+                PHASE2_LABEL="Java"
+                RUN_JAVA_TESTS=1
+                ;;
+        esac
+        INTRA_LANG_COOLDOWN=0
+        run_native_tests_block
+        INTRA_LANG_COOLDOWN=1
+        if (( idx < ${#LANG_PHASES[@]} - 1 )); then
+            lang_cooldown "${PHASE2_LABEL}"
+        fi
+    done
+fi
 
 RUN_PY_TESTS="$RUN_PY_TESTS_ORIG"
 RUN_PYPY_TESTS="$RUN_PYPY_TESTS_ORIG"
@@ -2866,19 +2877,23 @@ if [[ "$SKIP_CROSS" != "1" ]]; then
     fi
 fi
 
-phase "PHASE3: verify outputs"
-if [[ -f "$VERIFY_LIST" ]]; then
-    while IFS="|" read -r orig out; do
-        if [[ -z "$orig" || -z "$out" ]]; then
-            continue
-        fi
-        orig_hash="$(hash_file "$orig")"
-        out_hash="$(hash_file "$out")"
-        if [[ "$orig_hash" != "$out_hash" ]]; then
-            log "VERIFY FAIL: $orig vs $out (orig=${orig_hash} out=${out_hash})"
-            FAILURES+=("verify_mismatch ($out)")
-        fi
-    done <"$VERIFY_LIST"
+if (( SKIP_VERIFY == 1 )); then
+    phase "PHASE3: verify outputs (skipped - bench only)"
+else
+    phase "PHASE3: verify outputs"
+    if [[ -f "$VERIFY_LIST" ]]; then
+        while IFS="|" read -r orig out; do
+            if [[ -z "$orig" || -z "$out" ]]; then
+                continue
+            fi
+            orig_hash="$(hash_file "$orig")"
+            out_hash="$(hash_file "$out")"
+            if [[ "$orig_hash" != "$out_hash" ]]; then
+                log "VERIFY FAIL: $orig vs $out (orig=${orig_hash} out=${out_hash})"
+                FAILURES+=("verify_mismatch ($out)")
+            fi
+        done <"$VERIFY_LIST"
+    fi
 fi
 
 phase "PHASE4: benchmark timings"
@@ -3429,20 +3444,20 @@ compare_speed_block "uhash513" "uhash513_py_correct" "uhash513_pypy_correct" "uh
 compare_speed_block "bi512" "bi512_py_correct" "bi512_pypy_correct" "bi512_cpp_correct" "bi512_java_correct"
 compare_speed_block "b1024" "b1024_py_correct" "b1024_pypy_correct" "b1024_cpp_correct" "b1024_java_correct"
 if [[ "$RUN_PY_TESTS" == "1" && -z "${TIMES[b512file_py_total]-}" ]]; then
-    TIMES["b512file_py_total"]=$B512FILE_PY_TOTAL
-    TIMES["pb512file_py_total"]=$PB512FILE_PY_TOTAL
+    TIMES["b512file_py_total"]=${B512FILE_PY_TOTAL:-0}
+    TIMES["pb512file_py_total"]=${PB512FILE_PY_TOTAL:-0}
 fi
 if [[ "$RUN_PYPY_TESTS" == "1" && "$PYPY_AVAILABLE" == "1" && -z "${TIMES[b512file_pypy_total]-}" ]]; then
-    TIMES["b512file_pypy_total"]=$B512FILE_PYPY_TOTAL
-    TIMES["pb512file_pypy_total"]=$PB512FILE_PYPY_TOTAL
+    TIMES["b512file_pypy_total"]=${B512FILE_PYPY_TOTAL:-0}
+    TIMES["pb512file_pypy_total"]=${PB512FILE_PYPY_TOTAL:-0}
 fi
 if [[ "$RUN_CPP_TESTS" == "1" && -z "${TIMES[b512file_cpp_total]-}" ]]; then
-    TIMES["b512file_cpp_total"]=$B512FILE_CPP_TOTAL
-    TIMES["pb512file_cpp_total"]=$PB512FILE_CPP_TOTAL
+    TIMES["b512file_cpp_total"]=${B512FILE_CPP_TOTAL:-0}
+    TIMES["pb512file_cpp_total"]=${PB512FILE_CPP_TOTAL:-0}
 fi
 if [[ "$RUN_JAVA_TESTS" == "1" && -z "${TIMES[b512file_java_total]-}" ]]; then
-    TIMES["b512file_java_total"]=$B512FILE_JAVA_TOTAL
-    TIMES["pb512file_java_total"]=$PB512FILE_JAVA_TOTAL
+    TIMES["b512file_java_total"]=${B512FILE_JAVA_TOTAL:-0}
+    TIMES["pb512file_java_total"]=${PB512FILE_JAVA_TOTAL:-0}
 fi
 compare_speed_block "b512file" "b512file_py_total" "b512file_pypy_total" "b512file_cpp_total" "b512file_java_total"
 compare_speed_block "pb512file" "pb512file_py_total" "pb512file_pypy_total" "pb512file_cpp_total" "pb512file_java_total"

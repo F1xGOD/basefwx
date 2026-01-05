@@ -32,6 +32,10 @@ public final class Crypto {
         return hkdfExpandRfc(prk, info == null ? new byte[0] : info, length);
     }
 
+    static byte[] hkdfPrkSha256(byte[] keyMaterial) {
+        return hmacSha256(HKDF_ZERO_SALT, keyMaterial);
+    }
+
     /**
      * Returns RFC HKDF output for lengths up to {@link Constants#HKDF_MAX_LEN}, and a PRF stream
      * (HMAC-SHA256 with 4-byte counter) for larger lengths.
@@ -184,7 +188,7 @@ public final class Crypto {
         return mac.doFinal();
     }
 
-    private static Mac initHmac(byte[] key) {
+    static Mac initHmac(byte[] key) {
         try {
             Mac mac = Mac.getInstance("HmacSHA256");
             mac.init(new SecretKeySpec(key, "HmacSHA256"));

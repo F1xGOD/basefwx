@@ -15,7 +15,10 @@ class basefwx:
     import typing
     import json
     import struct
-    from PIL import Image
+    try:
+        from PIL import Image
+    except Exception:  # pragma: no cover - optional dependency
+        Image = None
     from io import BytesIO
     import numpy as np
     import os
@@ -213,6 +216,11 @@ class basefwx:
     _MD_CODE_TABLE: typing.ClassVar[tuple[str, ...]] = tuple(
         f"{len(str(i))}{i}" for i in range(256)
     )
+
+    @staticmethod
+    def _require_pil() -> None:
+        if basefwx.Image is None:
+            raise RuntimeError("Pillow is required for image operations (pip install Pillow)")
 
     class _ProgressReporter:
         """Lightweight textual progress reporter with two WinRAR-style bars."""
@@ -4216,6 +4224,7 @@ class basefwx:
 
         @staticmethod
         def _load_image(path: "basefwx.pathlib.Path", data: bytes | None = None) -> "basefwx.typing.Tuple[basefwx.np.ndarray, str, str]":
+            basefwx._require_pil()
             stream = basefwx.BytesIO(data) if data is not None else None
             with basefwx.Image.open(stream or path) as img:
                 format_name = img.format or path.suffix.lstrip('.').upper()

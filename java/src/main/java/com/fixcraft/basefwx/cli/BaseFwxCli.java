@@ -50,7 +50,19 @@ public final class BaseFwxCli {
         return readEnvInt("BASEFWX_BENCH_ITERS", 50, 1);
     }
 
+    private static boolean benchParallelEnabled() {
+        String raw = System.getenv("BASEFWX_BENCH_PARALLEL");
+        if (raw == null || raw.isEmpty()) {
+            return true;
+        }
+        String value = raw.trim().toLowerCase(Locale.ROOT);
+        return !(value.equals("0") || value.equals("false") || value.equals("off") || value.equals("no"));
+    }
+
     private static int benchWorkers() {
+        if (!benchParallelEnabled()) {
+            return 1;
+        }
         int defaultWorkers = Runtime.getRuntime().availableProcessors();
         if (defaultWorkers <= 0) {
             defaultWorkers = 1;
@@ -87,6 +99,55 @@ public final class BaseFwxCli {
             samples[i] = end - start;
         }
         return medianOf(samples);
+    }
+
+    @FunctionalInterface
+    private interface BenchWorker {
+        long run(int workerId);
+    }
+
+    private static long runParallel(ExecutorService pool, int workers, BenchWorker worker) {
+        CountDownLatch latch = new CountDownLatch(workers);
+        final long[] totalBytes = new long[1];
+        for (int i = 0; i < workers; i++) {
+            final int idx = i;
+            pool.execute(() -> {
+                try {
+                    long bytes = worker.run(idx);
+                    synchronized (totalBytes) {
+                        totalBytes[0] += bytes;
+                    }
+                } finally {
+                    latch.countDown();
+                }
+            });
+        }
+        try {
+            latch.await();
+        } catch (InterruptedException exc) {
+            Thread.currentThread().interrupt();
+            throw new RuntimeException("Parallel benchmark interrupted", exc);
+        }
+        return totalBytes[0];
+    }
+
+    private static long benchParallelMedian(int warmup, int iters, int workers, BenchWorker worker) {
+        ExecutorService pool = Executors.newFixedThreadPool(workers);
+        try {
+            for (int i = 0; i < warmup; i++) {
+                runParallel(pool, workers, worker);
+            }
+            long[] samples = new long[iters];
+            for (int i = 0; i < iters; i++) {
+                long start = System.nanoTime();
+                runParallel(pool, workers, worker);
+                long end = System.nanoTime();
+                samples[i] = end - start;
+            }
+            return medianOf(samples);
+        } finally {
+            pool.shutdown();
+        }
     }
 
     private static long benchFwxaesParallel(ExecutorService pool,
@@ -360,12 +421,17 @@ public final class BaseFwxCli {
                     final boolean useMasterFlag = useMaster;
                     int warmup = benchWarmup();
                     int iters = benchIters();
+                    int workers = benchWorkers();
                     String text = readText(textFile);
-                    long ns = benchMedian(warmup, iters, () -> {
+                    BenchWorker worker = (idx) -> {
                         String enc = encodeText(methodFinal, text, benchPassFinal, useMasterFlag);
                         String dec = decodeText(methodFinal, enc, benchPassFinal, useMasterFlag);
                         BENCH_SINK ^= dec.length();
-                    });
+                        return dec.length();
+                    };
+                    long ns = workers > 1
+                        ? benchParallelMedian(warmup, iters, workers, worker)
+                        : benchMedian(warmup, iters, () -> worker.run(0));
                     System.out.println("BENCH_NS=" + ns);
                     return;
                 }
@@ -378,11 +444,16 @@ public final class BaseFwxCli {
                     File textFile = new File(args[2]);
                     int warmup = benchWarmup();
                     int iters = benchIters();
+                    int workers = benchWorkers();
                     String text = readText(textFile);
-                    long ns = benchMedian(warmup, iters, () -> {
+                    BenchWorker worker = (idx) -> {
                         String digest = hashText(method, text);
                         BENCH_SINK ^= digest.length();
-                    });
+                        return digest.length();
+                    };
+                    long ns = workers > 1
+                        ? benchParallelMedian(warmup, iters, workers, worker)
+                        : benchMedian(warmup, iters, () -> worker.run(0));
                     System.out.println("BENCH_NS=" + ns);
                     return;
                 }
@@ -458,35 +529,58 @@ public final class BaseFwxCli {
                     final boolean useMasterFlag = useMaster;
                     int warmup = benchWarmup();
                     int iters = benchIters();
+                    int workers = benchWorkers();
                     String name = input.getName();
                     int dot = name.lastIndexOf('.');
                     String ext = dot >= 0 ? name.substring(dot) : "";
-                    File tempDir;
+                    File[] tempDirs = new File[workers];
+                    File[] inputs = new File[workers];
+                    File[] encFiles = new File[workers];
+                    File[] decFiles = new File[workers];
                     try {
-                        tempDir = Files.createTempDirectory("basefwx-bench").toFile();
-                    } catch (java.io.IOException exc) {
-                        throw new RuntimeException("Failed to create bench temp dir", exc);
-                    }
-                    File encFile = new File(tempDir, "bench.fwx");
-                    File decFile = new File(tempDir, "bench_dec" + ext);
-                    try {
-                        long ns = benchMedian(warmup, iters, () -> {
+                        for (int i = 0; i < workers; i++) {
                             try {
-                                BaseFwx.b512FileEncodeFile(input, encFile, benchPassFinal, useMasterFlag);
-                                BaseFwx.b512FileDecodeFile(encFile, decFile, benchPassFinal, useMasterFlag);
-                                BENCH_SINK ^= (int) decFile.length();
-                            } finally {
-                                // Clean up temp files between iterations
-                                encFile.delete();
-                                decFile.delete();
+                                tempDirs[i] = Files.createTempDirectory("basefwx-bench-" + i).toFile();
+                            } catch (java.io.IOException exc) {
+                                throw new RuntimeException("Failed to create bench temp dir", exc);
                             }
-                        });
+                            inputs[i] = new File(tempDirs[i], input.getName());
+                            try {
+                                Files.copy(input.toPath(), inputs[i].toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+                            } catch (java.io.IOException exc) {
+                                throw new RuntimeException("Failed to copy bench input", exc);
+                            }
+                            encFiles[i] = new File(tempDirs[i], "bench.fwx");
+                            decFiles[i] = new File(tempDirs[i], "bench_dec" + ext);
+                        }
+                        BenchWorker worker = (idx) -> {
+                            File encFile = encFiles[idx];
+                            File decFile = decFiles[idx];
+                            BaseFwx.b512FileEncodeFile(inputs[idx], encFile, benchPassFinal, useMasterFlag);
+                            BaseFwx.b512FileDecodeFile(encFile, decFile, benchPassFinal, useMasterFlag);
+                            long size = decFile.length();
+                            BENCH_SINK ^= (int) size;
+                            encFile.delete();
+                            decFile.delete();
+                            return size;
+                        };
+                        long ns = workers > 1
+                            ? benchParallelMedian(warmup, iters, workers, worker)
+                            : benchMedian(warmup, iters, () -> worker.run(0));
                         System.out.println("BENCH_NS=" + ns);
                         return;
                     } finally {
-                        encFile.delete();
-                        decFile.delete();
-                        tempDir.delete();
+                        for (int i = 0; i < workers; i++) {
+                            if (encFiles[i] != null) {
+                                encFiles[i].delete();
+                            }
+                            if (decFiles[i] != null) {
+                                decFiles[i].delete();
+                            }
+                            if (tempDirs[i] != null) {
+                                tempDirs[i].delete();
+                            }
+                        }
                     }
                 }
                 case "bench-pb512file": {
@@ -500,35 +594,58 @@ public final class BaseFwxCli {
                     final boolean useMasterFlag = useMaster;
                     int warmup = benchWarmup();
                     int iters = benchIters();
+                    int workers = benchWorkers();
                     String name = input.getName();
                     int dot = name.lastIndexOf('.');
                     String ext = dot >= 0 ? name.substring(dot) : "";
-                    File tempDir;
+                    File[] tempDirs = new File[workers];
+                    File[] inputs = new File[workers];
+                    File[] encFiles = new File[workers];
+                    File[] decFiles = new File[workers];
                     try {
-                        tempDir = Files.createTempDirectory("basefwx-bench").toFile();
-                    } catch (java.io.IOException exc) {
-                        throw new RuntimeException("Failed to create bench temp dir", exc);
-                    }
-                    File encFile = new File(tempDir, "bench.fwx");
-                    File decFile = new File(tempDir, "bench_dec" + ext);
-                    try {
-                        long ns = benchMedian(warmup, iters, () -> {
+                        for (int i = 0; i < workers; i++) {
                             try {
-                                BaseFwx.pb512FileEncodeFile(input, encFile, benchPassFinal, useMasterFlag);
-                                BaseFwx.pb512FileDecodeFile(encFile, decFile, benchPassFinal, useMasterFlag);
-                                BENCH_SINK ^= (int) decFile.length();
-                            } finally {
-                                // Clean up temp files between iterations
-                                encFile.delete();
-                                decFile.delete();
+                                tempDirs[i] = Files.createTempDirectory("basefwx-bench-" + i).toFile();
+                            } catch (java.io.IOException exc) {
+                                throw new RuntimeException("Failed to create bench temp dir", exc);
                             }
-                        });
+                            inputs[i] = new File(tempDirs[i], input.getName());
+                            try {
+                                Files.copy(input.toPath(), inputs[i].toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+                            } catch (java.io.IOException exc) {
+                                throw new RuntimeException("Failed to copy bench input", exc);
+                            }
+                            encFiles[i] = new File(tempDirs[i], "bench.fwx");
+                            decFiles[i] = new File(tempDirs[i], "bench_dec" + ext);
+                        }
+                        BenchWorker worker = (idx) -> {
+                            File encFile = encFiles[idx];
+                            File decFile = decFiles[idx];
+                            BaseFwx.pb512FileEncodeFile(inputs[idx], encFile, benchPassFinal, useMasterFlag);
+                            BaseFwx.pb512FileDecodeFile(encFile, decFile, benchPassFinal, useMasterFlag);
+                            long size = decFile.length();
+                            BENCH_SINK ^= (int) size;
+                            encFile.delete();
+                            decFile.delete();
+                            return size;
+                        };
+                        long ns = workers > 1
+                            ? benchParallelMedian(warmup, iters, workers, worker)
+                            : benchMedian(warmup, iters, () -> worker.run(0));
                         System.out.println("BENCH_NS=" + ns);
                         return;
                     } finally {
-                        encFile.delete();
-                        decFile.delete();
-                        tempDir.delete();
+                        for (int i = 0; i < workers; i++) {
+                            if (encFiles[i] != null) {
+                                encFiles[i].delete();
+                            }
+                            if (decFiles[i] != null) {
+                                decFiles[i].delete();
+                            }
+                            if (tempDirs[i] != null) {
+                                tempDirs[i].delete();
+                            }
+                        }
                     }
                 }
                 case "b256-enc":

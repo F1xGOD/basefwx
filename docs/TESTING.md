@@ -44,6 +44,11 @@ Common knobs used by the test script:
 - `BENCH_ITERS_LIGHT=50` and `BENCH_ITERS_SLOW=10` to tune benchmark iterations for text/hash methods.
 - `BENCH_ITERS_HEAVY=5` and `BENCH_ITERS_FILE=3` to tune fwxAES/file benchmark iterations.
 - `BENCH_FWXAES_MODE=par` to benchmark fwxAES with full parallelism (`par` or `single`).
+- `BASEFWX_BENCH_PARALLEL=1` to run benchmarks across all cores by default (set `0` to force single-core).
+- `BASEFWX_BENCH_ALL_CORES=1` to enforce full-core benchmarking (set `0` to allow custom workers).
+- `BASEFWX_BENCH_WORKERS=32` to override worker count when full-core enforcement is disabled.
+
+Note: Full-core mode is enforced by default; if you disable it, benchmark results are flagged as invalid.
 - `HUGE_200M_BYTES=200000000` and `HUGE_1P2G_BYTES=1200000000` to adjust huge sizes.
 - `COOLDOWN_SECONDS=2` to insert a cooldown between timed sections.
 

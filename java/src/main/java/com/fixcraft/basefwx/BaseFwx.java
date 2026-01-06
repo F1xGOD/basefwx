@@ -2184,6 +2184,7 @@ public final class BaseFwx {
             Mac permMac = Crypto.initHmac(permPrk);
             try {
                 Cipher cipher = Cipher.getInstance("AES/CTR/NoPadding");
+                // IV is derived from HKDF at line 2181 using password+salt, unique per stream
                 cipher.init(Cipher.ENCRYPT_MODE, new SecretKeySpec(maskKey, "AES"), new IvParameterSpec(iv));
                 return new StreamObfuscator(permMac, cipher, fast);
             } catch (GeneralSecurityException exc) {
@@ -2800,6 +2801,7 @@ public final class BaseFwx {
         try {
             Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
             GCMParameterSpec spec = new GCMParameterSpec(Constants.AEAD_TAG_LEN * 8, iv);
+            // IV is randomly generated at line 2768 using Crypto.randomBytes()
             cipher.init(Cipher.ENCRYPT_MODE, new SecretKeySpec(key, "AES"), spec);
             cipher.updateAAD(Constants.FWXAES_AAD);
 
@@ -2894,6 +2896,7 @@ public final class BaseFwx {
         try {
             Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
             GCMParameterSpec spec = new GCMParameterSpec(Constants.AEAD_TAG_LEN * 8, iv);
+            // lgtm[java/static-initialization-vector] - IV is read from ciphertext stream (lines 2870, 2887), not static
             cipher.init(Cipher.DECRYPT_MODE, new SecretKeySpec(key, "AES"), spec);
             cipher.updateAAD(Constants.FWXAES_AAD);
 

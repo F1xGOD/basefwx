@@ -852,20 +852,24 @@ int main(int argc, char** argv) {
                 int iters = BenchIters();
                 auto run_once = [&](std::size_t idx) -> std::size_t {
                     const auto& bench_input = bench_inputs[idx];
-                    std::string enc_path;
-                    std::string dec_path;
+                    std::filesystem::path enc_path;
+                    std::filesystem::path dec_path;
                     if (command == "bench-b512file") {
                         enc_path = basefwx::filecodec::B512EncodeFile(bench_input.string(), password, file_opts);
-                        dec_path = basefwx::filecodec::B512DecodeFile(enc_path, password, file_opts);
+                        dec_path = basefwx::filecodec::B512DecodeFile(enc_path.string(), password, file_opts);
                     } else {
                         enc_path = basefwx::filecodec::Pb512EncodeFile(bench_input.string(), password, file_opts);
-                        dec_path = basefwx::filecodec::Pb512DecodeFile(enc_path, password, file_opts);
+                        dec_path = basefwx::filecodec::Pb512DecodeFile(enc_path.string(), password, file_opts);
                     }
                     std::error_code size_ec;
                     auto dec_size = std::filesystem::file_size(dec_path, size_ec);
                     std::error_code cleanup_ec;
-                    std::filesystem::remove(enc_path, cleanup_ec);
-                    std::filesystem::remove(dec_path, cleanup_ec);
+                    if (!enc_path.empty()) {
+                        std::filesystem::remove(enc_path, cleanup_ec);
+                    }
+                    if (!dec_path.empty() && dec_path != bench_input) {
+                        std::filesystem::remove(dec_path, cleanup_ec);
+                    }
                     if (!size_ec) {
                         g_bench_sink.fetch_xor(static_cast<std::size_t>(dec_size), std::memory_order_relaxed);
                         return static_cast<std::size_t>(dec_size);

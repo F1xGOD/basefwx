@@ -64,6 +64,17 @@ public final class BaseFwx {
             throw new IllegalArgumentException("fwxAES_encrypt_raw expects bytes");
         }
         byte[] pw = resolvePasswordBytes(password, useMaster);
+        return fwxAesEncryptRawBytes(plaintext, pw, useMaster);
+    }
+
+    public static byte[] fwxAesEncryptRawBytes(byte[] plaintext, byte[] passwordBytes, boolean useMaster) {
+        if (plaintext == null) {
+            throw new IllegalArgumentException("fwxAES_encrypt_raw expects bytes");
+        }
+        byte[] pw = passwordBytes == null ? new byte[0] : passwordBytes;
+        if (!useMaster && pw.length == 0) {
+            throw new IllegalArgumentException("Password required when master key usage is disabled");
+        }
         boolean hasPassword = pw.length > 0;
         boolean useWrap = false;
         byte[] keyHeader = new byte[0];
@@ -165,6 +176,17 @@ public final class BaseFwx {
             throw new IllegalArgumentException("fwxAES_decrypt_raw expects bytes");
         }
         byte[] pw = resolvePasswordBytes(password, useMaster);
+        return fwxAesDecryptRawBytes(blob, pw, useMaster);
+    }
+
+    public static byte[] fwxAesDecryptRawBytes(byte[] blob, byte[] passwordBytes, boolean useMaster) {
+        if (blob == null) {
+            throw new IllegalArgumentException("fwxAES_decrypt_raw expects bytes");
+        }
+        byte[] pw = passwordBytes == null ? new byte[0] : passwordBytes;
+        if (!useMaster && pw.length == 0) {
+            throw new IllegalArgumentException("Password required when master key usage is disabled");
+        }
         if (blob.length < 16) {
             throw new IllegalArgumentException("fwxAES blob too short");
         }

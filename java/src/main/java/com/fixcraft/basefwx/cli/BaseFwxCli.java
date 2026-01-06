@@ -153,7 +153,7 @@ public final class BaseFwxCli {
     private static long benchFwxaesParallel(ExecutorService pool,
                                             int workers,
                                             byte[] data,
-                                            String password,
+                                            byte[] password,
                                             boolean useMaster) {
         CountDownLatch latch = new CountDownLatch(workers);
         // Use a simple AtomicLong instead of LongAdder for low contention scenarios
@@ -161,8 +161,8 @@ public final class BaseFwxCli {
         for (int i = 0; i < workers; i++) {
             pool.execute(() -> {
                 try {
-                    byte[] blob = BaseFwx.fwxAesEncryptRaw(data, password, useMaster);
-                    byte[] plain = BaseFwx.fwxAesDecryptRaw(blob, password, useMaster);
+                    byte[] blob = BaseFwx.fwxAesEncryptRawBytes(data, password, useMaster);
+                    byte[] plain = BaseFwx.fwxAesDecryptRawBytes(blob, password, useMaster);
                     BENCH_SINK ^= plain.length;
                     synchronized (totalBytes) {
                         totalBytes[0] += plain.length;
@@ -485,9 +485,10 @@ public final class BaseFwxCli {
                     int warmup = benchWarmup();
                     int iters = benchIters();
                     byte[] data = readAllBytes(input);
+                    byte[] benchPassBytes = BaseFwx.resolvePasswordBytes(benchPassFinal, useMasterFlag);
                     long ns = benchMedian(warmup, iters, () -> {
-                        byte[] blob = BaseFwx.fwxAesEncryptRaw(data, benchPassFinal, useMasterFlag);
-                        byte[] plain = BaseFwx.fwxAesDecryptRaw(blob, benchPassFinal, useMasterFlag);
+                        byte[] blob = BaseFwx.fwxAesEncryptRawBytes(data, benchPassBytes, useMasterFlag);
+                        byte[] plain = BaseFwx.fwxAesDecryptRawBytes(blob, benchPassBytes, useMasterFlag);
                         BENCH_SINK ^= plain.length;
                     });
                     System.out.println("BENCH_NS=" + ns);
@@ -506,16 +507,17 @@ public final class BaseFwxCli {
                     int iters = benchIters();
                     int workers = benchWorkers();
                     byte[] data = readAllBytes(input);
+                    byte[] benchPassBytes = BaseFwx.resolvePasswordBytes(benchPassFinal, useMasterFlag);
                     ExecutorService pool = Executors.newFixedThreadPool(workers);
                     try {
                         for (int i = 0; i < warmup; i++) {
-                            benchFwxaesParallel(pool, workers, data, benchPassFinal, useMasterFlag);
+                            benchFwxaesParallel(pool, workers, data, benchPassBytes, useMasterFlag);
                         }
                         long[] samples = new long[iters];
                         long bytesPerRun = 0;
                         for (int i = 0; i < iters; i++) {
                             long start = System.nanoTime();
-                            bytesPerRun = benchFwxaesParallel(pool, workers, data, benchPassFinal, useMasterFlag);
+                            bytesPerRun = benchFwxaesParallel(pool, workers, data, benchPassBytes, useMasterFlag);
                             long end = System.nanoTime();
                             samples[i] = end - start;
                         }

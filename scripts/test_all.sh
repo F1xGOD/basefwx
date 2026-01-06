@@ -3451,7 +3451,7 @@ if [[ ! "$BENCH_ITERS_FILE" =~ ^[0-9]+$ || "$BENCH_ITERS_FILE" -lt 1 ]]; then
     BENCH_ITERS_FILE=1
 fi
 
-JAVA_BENCH_FLAGS_DEFAULT="-server -XX:+UseG1GC -XX:+AlwaysPreTouch -XX:+TieredCompilation -XX:CompileThreshold=1000 -XX:+UseStringDeduplication -XX:MaxGCPauseMillis=200 -XX:InitialRAMPercentage=70 -XX:MaxRAMPercentage=95 -XX:+UseAES -XX:+UseAESIntrinsics -XX:+UseAESCTRIntrinsics -XX:+UseGHASHIntrinsics"
+JAVA_BENCH_FLAGS_DEFAULT="-server -XX:+UseG1GC -XX:+AlwaysPreTouch -XX:+TieredCompilation -XX:CompileThreshold=1000 -XX:+UseStringDeduplication -XX:MaxGCPauseMillis=200 -XX:InitialRAMPercentage=70 -XX:MaxRAMPercentage=95 -XX:+UseAES -XX:+UnlockDiagnosticVMOptions -XX:+UseAESIntrinsics -XX:+UseAESCTRIntrinsics -XX:+UseGHASHIntrinsics"
 JAVA_BENCH_FLAGS="${JAVA_BENCH_FLAGS:-$JAVA_BENCH_FLAGS_DEFAULT}"
 read -r -a JAVA_BENCH_FLAGS_ARR <<<"$JAVA_BENCH_FLAGS"
 
@@ -4020,10 +4020,13 @@ versions = {
 tests = []
 with open(tsv_path, "r", encoding="utf-8") as handle:
     for line in handle:
-        line = line.strip()
+        line = line.rstrip("\n")
         if not line:
             continue
-        label, py, pypy, cpp, java = line.split("\t")
+        parts = line.split("\t")
+        if len(parts) < 5:
+            parts += [""] * (5 - len(parts))
+        label, py, pypy, cpp, java = parts[:5]
         times = {}
         values = [py, pypy, cpp, java]
         for key, raw in zip(languages, values):

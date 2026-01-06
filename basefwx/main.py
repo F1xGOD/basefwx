@@ -162,7 +162,11 @@ class basefwx:
         HEAVY_PBKDF2_ITERATIONS = _TEST_KDF_ITERS
     _WARNED_ARGON2_MISSING = False
     _MASTER_PUBKEY_OVERRIDE: typing.ClassVar[typing.Optional[bytes]] = None
-    _CPU_COUNT = max(1, os.cpu_count() or 1)
+    _CPU_COUNT_OVERRIDE = _os_module.getenv("BASEFWX_MAX_THREADS")
+    if _CPU_COUNT_OVERRIDE and _CPU_COUNT_OVERRIDE.strip().isdigit():
+        _CPU_COUNT = max(1, int(_CPU_COUNT_OVERRIDE.strip()))
+    else:
+        _CPU_COUNT = max(1, os.cpu_count() or 1)
     _PARALLEL_CHUNK_SIZE = 1 << 20  # 1 MiB chunks when fan-out encoding
     _SILENT_MODE: typing.ClassVar[bool] = False
     PQ_CIPHERTEXT_SIZE = getattr(ml_kem_768, "CIPHERTEXT_SIZE", 0)

@@ -168,6 +168,7 @@ class basefwx:
     else:
         _CPU_COUNT = max(1, os.cpu_count() or 1)
     _PARALLEL_CHUNK_SIZE = 1 << 20  # 1 MiB chunks when fan-out encoding
+    _DECIMAL_INT_LIMIT = 4096
     _SILENT_MODE: typing.ClassVar[bool] = False
     PQ_CIPHERTEXT_SIZE = getattr(ml_kem_768, "CIPHERTEXT_SIZE", 0)
     AEAD_NONCE_LEN = 12
@@ -216,6 +217,9 @@ class basefwx:
         "|".join(
             _re_module.escape(token) for token in sorted(_DECODE_MAP, key=len, reverse=True)
         )
+    )
+    _CODE_TABLE: typing.ClassVar[tuple[str | None, ...]] = tuple(
+        _CODE_MAP.get(chr(i)) for i in range(256)
     )
     _MD_CODE_TABLE: typing.ClassVar[tuple[str, ...]] = tuple(
         f"{len(str(i))}{i}" for i in range(256)
@@ -7172,19 +7176,23 @@ class basefwx:
 
     @classmethod
     def _code_chunk(cls, chunk: str) -> str:
-        return ''.join(cls._CODE_MAP.get(ch, ch) for ch in chunk)
+        table = cls._CODE_TABLE
+        out: list[str] = []
+        append = out.append
+        for ch in chunk:
+            codepoint = ord(ch)
+            if codepoint < 256:
+                mapped = table[codepoint]
+                append(mapped if mapped is not None else ch)
+            else:
+                append(ch)
+        return ''.join(out)
 
     @classmethod
     def code(cls, string: str) -> str:
         if not string:
             return string
-        if len(string) <= cls._PARALLEL_CHUNK_SIZE or cls._CPU_COUNT == 1:
-            return cls._code_chunk(string)
-        chunk_size = cls._PARALLEL_CHUNK_SIZE
-        slices = [string[i:i + chunk_size] for i in range(0, len(string), chunk_size)]
-        with cls.concurrent.futures.ThreadPoolExecutor(max_workers=cls._CPU_COUNT) as executor:
-            parts = executor.map(cls._code_chunk, slices)
-            return ''.join(parts)
+        return cls._code_chunk(string)
 
     @classmethod
     def fwx256bin(cls, string: str) -> str:
@@ -7196,10 +7204,8 @@ class basefwx:
     def _strip_leading_zeros(number: str) -> str:
         if not number:
             return "0"
-        idx = 0
-        while idx < len(number) and number[idx] == "0":
-            idx += 1
-        return number[idx:] or "0"
+        stripped = number.lstrip("0")
+        return stripped if stripped else "0"
 
     @staticmethod
     def _compare_magnitude(a: str, b: str) -> int:
@@ -7212,39 +7218,73 @@ class basefwx:
         return -1 if aa < bb else 1
 
     @staticmethod
+    def _decimal_diff(a: str, b: str) -> str:
+        limit = basefwx._DECIMAL_INT_LIMIT
+        if len(a) <= limit and len(b) <= limit:
+            try:
+                ai = int(a)
+                bi = int(b)
+            except (ValueError, OverflowError, MemoryError):
+                pass
+            else:
+                if ai >= bi:
+                    return str(ai - bi)
+                return "0" + str(bi - ai)
+        cmp = basefwx._compare_magnitude(a, b)
+        if cmp >= 0:
+            return basefwx._subtract_magnitude(a, b)
+        return "0" + basefwx._subtract_magnitude(b, a)
+
+    @staticmethod
     def _add_magnitude(a: str, b: str) -> str:
         ia = len(a) - 1
         ib = len(b) - 1
         carry = 0
-        out = []
+        out = bytearray()
         while ia >= 0 or ib >= 0 or carry:
-            da = int(a[ia]) if ia >= 0 else 0
-            db = int(b[ib]) if ib >= 0 else 0
+            da = ord(a[ia]) - 48 if ia >= 0 else 0
+            db = ord(b[ib]) - 48 if ib >= 0 else 0
             total = da + db + carry
-            out.append(str(total % 10))
+            out.append(48 + (total % 10))
             carry = total // 10
             ia -= 1
             ib -= 1
-        return basefwx._strip_leading_zeros("".join(reversed(out)))
+        out.reverse()
+        idx = 0
+        while idx < len(out) and out[idx] == 48:
+            idx += 1
+        if idx == len(out):
+            return "0"
+        if idx:
+            del out[:idx]
+        return out.decode("ascii")
 
     @staticmethod
     def _subtract_magnitude(a: str, b: str) -> str:
         ia = len(a) - 1
         ib = len(b) - 1
         borrow = 0
-        out = []
+        out = bytearray()
         while ia >= 0:
-            da = int(a[ia]) - borrow
-            db = int(b[ib]) if ib >= 0 else 0
+            da = ord(a[ia]) - 48 - borrow
+            db = ord(b[ib]) - 48 if ib >= 0 else 0
             if da < db:
                 da += 10
                 borrow = 1
             else:
                 borrow = 0
-            out.append(str(da - db))
+            out.append(48 + (da - db))
             ia -= 1
             ib -= 1
-        return basefwx._strip_leading_zeros("".join(reversed(out)))
+        out.reverse()
+        idx = 0
+        while idx < len(out) and out[idx] == 48:
+            idx += 1
+        if idx == len(out):
+            return "0"
+        if idx:
+            del out[:idx]
+        return out.decode("ascii")
 
     @staticmethod
     def _add_signed(a: str, b: str) -> str:
@@ -7482,19 +7522,7 @@ class basefwx:
         code = string[0] + string[len(string) - 1]
         left = basefwx._mdcode_ascii(string)
         right = basefwx._mdcode_ascii(code)
-        diff = None
-        try:
-            left_int = int(left)
-            right_int = int(right)
-            if left_int >= right_int:
-                diff = str(left_int - right_int)
-            else:
-                diff = "0" + str(right_int - left_int)
-        except (ValueError, OverflowError, MemoryError):
-            if basefwx._compare_magnitude(left, right) >= 0:
-                diff = basefwx._subtract_magnitude(left, right)
-            else:
-                diff = "0" + basefwx._subtract_magnitude(right, left)
+        diff = basefwx._decimal_diff(left, right)
         packed = basefwx.fwx256bin(diff).replace("=", "4G5tRA")
         return str(basefwx.hashlib.sha256(packed.encode('utf-8')).hexdigest()).replace("-", "0")
 
@@ -7505,19 +7533,7 @@ class basefwx:
         md_len = len(left)
         code = str(md_len * md_len)
         right = basefwx._mdcode_ascii(code)
-        diff = None
-        try:
-            left_int = int(left)
-            right_int = int(right)
-            if left_int >= right_int:
-                diff = str(left_int - right_int)
-            else:
-                diff = "0" + str(right_int - left_int)
-        except (ValueError, OverflowError, MemoryError):
-            if basefwx._compare_magnitude(left, right) >= 0:
-                diff = basefwx._subtract_magnitude(left, right)
-            else:
-                diff = "0" + basefwx._subtract_magnitude(right, left)
+        diff = basefwx._decimal_diff(left, right)
         prefix = str(len(str(md_len))) + str(md_len)
         return prefix + basefwx.fwx256bin(diff).replace("=", "4G5tRA")
 
@@ -7538,9 +7554,12 @@ class basefwx:
                 if string3 and string3[0] == "0":
                     string3 = "-" + string3[1:]
                 md_code = basefwx._mdcode_ascii(code)
-                try:
-                    total = str(int(string3) + int(md_code))
-                except (ValueError, OverflowError, MemoryError):
+                if len(string3) <= basefwx._DECIMAL_INT_LIMIT and len(md_code) <= basefwx._DECIMAL_INT_LIMIT:
+                    try:
+                        total = str(int(string3) + int(md_code))
+                    except (ValueError, OverflowError, MemoryError):
+                        total = basefwx._add_signed(string3, md_code)
+                else:
                     total = basefwx._add_signed(string3, md_code)
                 if total.startswith("-"):
                     return "AN ERROR OCCURED!"

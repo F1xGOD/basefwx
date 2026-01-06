@@ -314,49 +314,17 @@ Bytes AesGcmEncryptWithIv(const Bytes& key, const Bytes& iv, const Bytes& plaint
     if (iv.empty()) {
         throw std::runtime_error("AES-GCM IV is required");
     }
-    Bytes ciphertext(plaintext.size());
-    Bytes tag(constants::kAeadTagLen);
-
-    EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();
-    if (!ctx) {
-        throw std::runtime_error("AES-GCM context allocation failed");
-    }
-    int out_len = 0;
-    int total_len = 0;
-
-    try {
-        Ensure(EVP_EncryptInit_ex(ctx, EVP_aes_256_gcm(), nullptr, nullptr, nullptr) == 1,
-               "AES-GCM init failed");
-        Ensure(EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_IVLEN, static_cast<int>(iv.size()), nullptr) == 1,
-               "AES-GCM set iv length failed");
-        Ensure(EVP_EncryptInit_ex(ctx, nullptr, nullptr, key.data(), iv.data()) == 1,
-               "AES-GCM set key failed");
-        if (!aad.empty()) {
-            Ensure(EVP_EncryptUpdate(ctx, nullptr, &out_len, aad.data(), static_cast<int>(aad.size())) == 1,
-                   "AES-GCM aad failed");
-        }
-        if (!plaintext.empty()) {
-            Ensure(EVP_EncryptUpdate(ctx, ciphertext.data(), &out_len, plaintext.data(),
-                                     static_cast<int>(plaintext.size())) == 1,
-                   "AES-GCM encrypt failed");
-            total_len += out_len;
-        }
-        Ensure(EVP_EncryptFinal_ex(ctx, ciphertext.data() + total_len, &out_len) == 1,
-               "AES-GCM final failed");
-        total_len += out_len;
-        Ensure(EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_GET_TAG, static_cast<int>(tag.size()), tag.data()) == 1,
-               "AES-GCM get tag failed");
-    } catch (...) {
-        EVP_CIPHER_CTX_free(ctx);
-        throw;
-    }
-
-    EVP_CIPHER_CTX_free(ctx);
-    ciphertext.resize(static_cast<std::size_t>(total_len));
-    Bytes out;
-    out.reserve(ciphertext.size() + tag.size());
-    out.insert(out.end(), ciphertext.begin(), ciphertext.end());
-    out.insert(out.end(), tag.begin(), tag.end());
+    Bytes out(plaintext.size() + constants::kAeadTagLen);
+    std::size_t written = AesGcmEncryptWithIvInto(
+        key,
+        iv,
+        plaintext.data(),
+        plaintext.size(),
+        aad,
+        out.data(),
+        out.size()
+    );
+    out.resize(written);
     return out;
 }
 
@@ -421,17 +389,102 @@ Bytes AesGcmDecryptWithIv(const Bytes& key, const Bytes& iv, const Bytes& blob, 
     if (blob.size() < constants::kAeadTagLen) {
         throw std::runtime_error("AES-GCM blob too short");
     }
-    Bytes ciphertext(blob.begin(), blob.end() - constants::kAeadTagLen);
-    Bytes tag(blob.end() - constants::kAeadTagLen, blob.end());
+    Bytes plaintext(blob.size() - constants::kAeadTagLen);
+    std::size_t written = AesGcmDecryptWithIvInto(
+        key,
+        iv,
+        blob.data(),
+        blob.size(),
+        aad,
+        plaintext.data(),
+        plaintext.size()
+    );
+    plaintext.resize(written);
+    return plaintext;
+}
 
-    Bytes plaintext(ciphertext.size());
+std::size_t AesGcmEncryptWithIvInto(const Bytes& key,
+                                    const Bytes& iv,
+                                    const std::uint8_t* plaintext,
+                                    std::size_t plaintext_len,
+                                    const Bytes& aad,
+                                    std::uint8_t* out,
+                                    std::size_t out_len) {
+    if (key.size() != 32) {
+        throw std::runtime_error("AES-GCM expects 32-byte key");
+    }
+    if (iv.empty()) {
+        throw std::runtime_error("AES-GCM IV is required");
+    }
+    if (out_len < plaintext_len + constants::kAeadTagLen) {
+        throw std::runtime_error("AES-GCM output buffer too small");
+    }
     EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();
     if (!ctx) {
         throw std::runtime_error("AES-GCM context allocation failed");
     }
-    int out_len = 0;
+    int out_len_int = 0;
     int total_len = 0;
+    try {
+        Ensure(EVP_EncryptInit_ex(ctx, EVP_aes_256_gcm(), nullptr, nullptr, nullptr) == 1,
+               "AES-GCM init failed");
+        Ensure(EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_IVLEN, static_cast<int>(iv.size()), nullptr) == 1,
+               "AES-GCM set iv length failed");
+        Ensure(EVP_EncryptInit_ex(ctx, nullptr, nullptr, key.data(), iv.data()) == 1,
+               "AES-GCM set key failed");
+        if (!aad.empty()) {
+            Ensure(EVP_EncryptUpdate(ctx, nullptr, &out_len_int, aad.data(), static_cast<int>(aad.size())) == 1,
+                   "AES-GCM aad failed");
+        }
+        if (plaintext_len > 0) {
+            Ensure(EVP_EncryptUpdate(ctx, out, &out_len_int, plaintext,
+                                     static_cast<int>(plaintext_len)) == 1,
+                   "AES-GCM encrypt failed");
+            total_len += out_len_int;
+        }
+        Ensure(EVP_EncryptFinal_ex(ctx, out + total_len, &out_len_int) == 1,
+               "AES-GCM final failed");
+        total_len += out_len_int;
+        Ensure(EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_GET_TAG,
+                                   static_cast<int>(constants::kAeadTagLen),
+                                   out + total_len) == 1,
+               "AES-GCM get tag failed");
+        total_len += static_cast<int>(constants::kAeadTagLen);
+    } catch (...) {
+        EVP_CIPHER_CTX_free(ctx);
+        throw;
+    }
+    EVP_CIPHER_CTX_free(ctx);
+    return static_cast<std::size_t>(total_len);
+}
 
+std::size_t AesGcmDecryptWithIvInto(const Bytes& key,
+                                    const Bytes& iv,
+                                    const std::uint8_t* blob,
+                                    std::size_t blob_len,
+                                    const Bytes& aad,
+                                    std::uint8_t* out,
+                                    std::size_t out_len) {
+    if (key.size() != 32) {
+        throw std::runtime_error("AES-GCM expects 32-byte key");
+    }
+    if (iv.empty()) {
+        throw std::runtime_error("AES-GCM IV is required");
+    }
+    if (blob_len < constants::kAeadTagLen) {
+        throw std::runtime_error("AES-GCM blob too short");
+    }
+    std::size_t ct_len = blob_len - constants::kAeadTagLen;
+    if (out_len < ct_len) {
+        throw std::runtime_error("AES-GCM output buffer too small");
+    }
+    const std::uint8_t* tag = blob + ct_len;
+    EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();
+    if (!ctx) {
+        throw std::runtime_error("AES-GCM context allocation failed");
+    }
+    int out_len_int = 0;
+    int total_len = 0;
     try {
         Ensure(EVP_DecryptInit_ex(ctx, EVP_aes_256_gcm(), nullptr, nullptr, nullptr) == 1,
                "AES-GCM init failed");
@@ -440,29 +493,28 @@ Bytes AesGcmDecryptWithIv(const Bytes& key, const Bytes& iv, const Bytes& blob, 
         Ensure(EVP_DecryptInit_ex(ctx, nullptr, nullptr, key.data(), iv.data()) == 1,
                "AES-GCM set key failed");
         if (!aad.empty()) {
-            Ensure(EVP_DecryptUpdate(ctx, nullptr, &out_len, aad.data(), static_cast<int>(aad.size())) == 1,
+            Ensure(EVP_DecryptUpdate(ctx, nullptr, &out_len_int, aad.data(), static_cast<int>(aad.size())) == 1,
                    "AES-GCM aad failed");
         }
-        if (!ciphertext.empty()) {
-            Ensure(EVP_DecryptUpdate(ctx, plaintext.data(), &out_len, ciphertext.data(),
-                                     static_cast<int>(ciphertext.size())) == 1,
+        if (ct_len > 0) {
+            Ensure(EVP_DecryptUpdate(ctx, out, &out_len_int, blob,
+                                     static_cast<int>(ct_len)) == 1,
                    "AES-GCM decrypt failed");
-            total_len += out_len;
+            total_len += out_len_int;
         }
-        Ensure(EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_TAG, static_cast<int>(tag.size()),
-                                   const_cast<unsigned char*>(tag.data())) == 1,
+        Ensure(EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_TAG,
+                                   static_cast<int>(constants::kAeadTagLen),
+                                   const_cast<unsigned char*>(tag)) == 1,
                "AES-GCM set tag failed");
-        Ensure(EVP_DecryptFinal_ex(ctx, plaintext.data() + total_len, &out_len) == 1,
+        Ensure(EVP_DecryptFinal_ex(ctx, out + total_len, &out_len_int) == 1,
                "AES-GCM auth failed");
-        total_len += out_len;
+        total_len += out_len_int;
     } catch (...) {
         EVP_CIPHER_CTX_free(ctx);
         throw;
     }
-
     EVP_CIPHER_CTX_free(ctx);
-    plaintext.resize(static_cast<std::size_t>(total_len));
-    return plaintext;
+    return static_cast<std::size_t>(total_len);
 }
 
 Bytes AeadEncrypt(const Bytes& key, const Bytes& plaintext, const Bytes& aad) {

@@ -3301,7 +3301,9 @@ fi
 
 BENCH_WORKERS_SLOW="${BENCH_WORKERS_SLOW:-}"
 if [[ -z "$BENCH_WORKERS_SLOW" ]]; then
-    if (( BENCH_ONLY == 1 )); then
+    if (( FBENCH == 1 )); then
+        BENCH_WORKERS_SLOW="$BASEFWX_BENCH_WORKERS"
+    elif (( BENCH_ONLY == 1 )); then
         BENCH_WORKERS_SLOW=1
     else
         BENCH_WORKERS_SLOW="$BASEFWX_BENCH_WORKERS"
@@ -3665,7 +3667,7 @@ format_delta() {
         printf "🔵 Same (±0.00%%)"
         return
     fi
-    local pct is_faster is_extreme
+    local pct is_faster
     if (( other_ns < base_ns )); then
         is_faster=1
         pct=$(awk -v base="$base_ns" -v other="$other_ns" 'BEGIN { if (other<=0) { print "0"; } else { printf "%.6f", (base/other - 1) * 100 } }')
@@ -3673,24 +3675,12 @@ format_delta() {
         is_faster=0
         pct=$(awk -v base="$base_ns" -v other="$other_ns" 'BEGIN { printf "%.6f", (other/base - 1) * 100 }')
     fi
-    is_extreme=$(awk -v p="$pct" 'BEGIN { print (p >= 100) ? 1 : 0 }')
-    if (( is_extreme == 1 )); then
-        local mult
-        if (( is_faster == 1 )); then
-            mult=$(awk -v base="$base_ns" -v other="$other_ns" 'BEGIN { if (other<=0) { print "∞"; } else { printf "%.2f", base/other } }')
-            printf "%s Faster (%s×)" "$EMOJI_FAST" "$mult"
-        else
-            mult=$(awk -v base="$base_ns" -v other="$other_ns" 'BEGIN { printf "%.2f", other/base }')
-            printf "%s Slower (%s×)" "$EMOJI_SLOW" "$mult"
-        fi
+    local pct_abs
+    pct_abs=$(awk -v p="$pct" 'BEGIN { v=p; if (v<0) v=-v; printf "%.2f", v }')
+    if (( is_faster == 1 )); then
+        printf "%s Faster (+%s%%)" "$EMOJI_FAST" "$pct_abs"
     else
-        local pct_abs
-        pct_abs=$(awk -v p="$pct" 'BEGIN { v=p; if (v<0) v=-v; printf "%.2f", v }')
-        if (( is_faster == 1 )); then
-            printf "%s Faster (+%s%%)" "$EMOJI_FAST" "$pct_abs"
-        else
-            printf "%s Slower (−%s%%)" "$EMOJI_SLOW" "$pct_abs"
-        fi
+        printf "%s Slower (−%s%%)" "$EMOJI_SLOW" "$pct_abs"
     fi
 }
 

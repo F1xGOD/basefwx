@@ -29,6 +29,8 @@ jobs:
             build-mode: manual
           - language: python
             build-mode: none
+          - language: java
+            build-mode: manual
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -50,6 +52,21 @@ jobs:
         run: |
           cmake -S cpp -B cpp/build -DCMAKE_BUILD_TYPE=Release -DBASEFWX_REQUIRE_ARGON2=OFF -DBASEFWX_REQUIRE_OQS=OFF
           cmake --build cpp/build
+
+      - name: Set up Java
+        if: matrix.language == 'java'
+        uses: actions/setup-java@v4
+        with:
+          distribution: "temurin"
+          java-version: "17"
+
+      - name: Build Java (manual)
+        if: matrix.language == 'java'
+        run: |
+          mkdir -p java/build/classes java/build/libs
+          find java/src/main/java -type f -name "*.java" > java_sources.txt
+          javac -source 8 -target 8 -d java/build/classes @java_sources.txt
+          jar cfe java/build/libs/basefwx-java.jar com.fixcraft.basefwx.cli.BaseFwxCli -C java/build/classes .
 
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@v4

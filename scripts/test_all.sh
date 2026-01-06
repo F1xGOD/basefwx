@@ -57,6 +57,7 @@ TEST_KDF_ITERS=""
 BASELINE_LANG="${BASELINE_LANG:-py}"
 EXPECT_BASELINE=0
 BENCH_ONLY=0
+FBENCH=0
 
 for arg in "$@"; do
     if (( EXPECT_BASELINE == 1 )); then
@@ -96,8 +97,49 @@ for arg in "$@"; do
             SKIP_WRONG=1
             SKIP_CROSS=1
             ;;
+        --fbench)
+            BENCH_ONLY=1
+            FBENCH=1
+            TEST_MODE="bench"
+            SKIP_WRONG=1
+            SKIP_CROSS=1
+            ;;
     esac
 done
+FBENCH_TEXT_MAX_BYTES=$((760 * 1024))
+FBENCH_FILE_MAX_BYTES=$((25 * 1024 * 1024))
+if (( FBENCH == 1 )); then
+    bench_text_max="${BENCH_TEXT_MAX_BYTES:-}"
+    if [[ -z "$bench_text_max" || ! "$bench_text_max" =~ ^[0-9]+$ || "$bench_text_max" -gt "$FBENCH_TEXT_MAX_BYTES" ]]; then
+        bench_text_max="$FBENCH_TEXT_MAX_BYTES"
+    fi
+    BENCH_TEXT_MAX_BYTES="$bench_text_max"
+
+    bench_text_bytes="${BENCH_TEXT_BYTES:-}"
+    if [[ -z "$bench_text_bytes" || ! "$bench_text_bytes" =~ ^[0-9]+$ || "$bench_text_bytes" -gt "$BENCH_TEXT_MAX_BYTES" ]]; then
+        bench_text_bytes="$BENCH_TEXT_MAX_BYTES"
+    fi
+    BENCH_TEXT_BYTES="$bench_text_bytes"
+
+    bench_text_slow_bytes="${BENCH_TEXT_SLOW_BYTES:-}"
+    if [[ -z "$bench_text_slow_bytes" || ! "$bench_text_slow_bytes" =~ ^[0-9]+$ || "$bench_text_slow_bytes" -gt "$BENCH_TEXT_MAX_BYTES" ]]; then
+        bench_text_slow_bytes="$BENCH_TEXT_MAX_BYTES"
+    fi
+    BENCH_TEXT_SLOW_BYTES="$bench_text_slow_bytes"
+
+    bench_file_bytes="${BENCH_FILE_BYTES:-}"
+    if [[ -z "$bench_file_bytes" || ! "$bench_file_bytes" =~ ^[0-9]+$ || "$bench_file_bytes" -gt "$FBENCH_FILE_MAX_BYTES" ]]; then
+        bench_file_bytes="$FBENCH_FILE_MAX_BYTES"
+    fi
+    BENCH_FILE_BYTES="$bench_file_bytes"
+
+    BASEFWX_BENCH_ITERS="${BASEFWX_BENCH_ITERS:-2}"
+    BASEFWX_BENCH_WARMUP="${BASEFWX_BENCH_WARMUP:-1}"
+    BENCH_ITERS_LIGHT="${BENCH_ITERS_LIGHT:-2}"
+    BENCH_ITERS_SLOW="${BENCH_ITERS_SLOW:-2}"
+    BENCH_ITERS_HEAVY="${BENCH_ITERS_HEAVY:-2}"
+    BENCH_ITERS_FILE="${BENCH_ITERS_FILE:-2}"
+fi
 if [[ "$TEST_MODE" != "default" ]]; then
     ENABLE_HUGE=0
 fi

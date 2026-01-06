@@ -3666,9 +3666,14 @@ format_delta() {
         return
     fi
     local pct is_faster is_extreme
-    pct=$(awk -v base="$base_ns" -v other="$other_ns" 'BEGIN { printf "%.6f", (base-other)/base*100 }')
-    is_faster=$(awk -v p="$pct" 'BEGIN { print (p > 0) ? 1 : 0 }')
-    is_extreme=$(awk -v p="$pct" 'BEGIN { print (p >= 100 || p <= -100) ? 1 : 0 }')
+    if (( other_ns < base_ns )); then
+        is_faster=1
+        pct=$(awk -v base="$base_ns" -v other="$other_ns" 'BEGIN { if (other<=0) { print "0"; } else { printf "%.6f", (base/other - 1) * 100 } }')
+    else
+        is_faster=0
+        pct=$(awk -v base="$base_ns" -v other="$other_ns" 'BEGIN { printf "%.6f", (other/base - 1) * 100 }')
+    fi
+    is_extreme=$(awk -v p="$pct" 'BEGIN { print (p >= 100) ? 1 : 0 }')
     if (( is_extreme == 1 )); then
         local mult
         if (( is_faster == 1 )); then

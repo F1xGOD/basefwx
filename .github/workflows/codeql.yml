@@ -1,0 +1,57 @@
+name: "CodeQL Advanced"
+
+on:
+  push:
+    branches:
+      - "main"
+      - "results/**"
+  pull_request:
+    branches: [ "main" ]
+  schedule:
+    - cron: "19 10 * * 0"
+
+jobs:
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    runs-on: ${{ (matrix.language == 'swift' && 'macos-latest') || 'ubuntu-latest' }}
+    permissions:
+      security-events: write
+      packages: read
+      actions: read
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - language: actions
+            build-mode: none
+          - language: c-cpp
+            build-mode: manual
+          - language: python
+            build-mode: none
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v4
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
+
+      - name: Install C++ deps
+        if: matrix.language == 'c-cpp'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake g++ make libssl-dev zlib1g-dev
+
+      - name: Build C++ (manual)
+        if: matrix.language == 'c-cpp'
+        run: |
+          cmake -S cpp -B cpp/build -DCMAKE_BUILD_TYPE=Release -DBASEFWX_REQUIRE_ARGON2=OFF -DBASEFWX_REQUIRE_OQS=OFF
+          cmake --build cpp/build
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v4
+        with:
+          category: "/language:${{matrix.language}}"

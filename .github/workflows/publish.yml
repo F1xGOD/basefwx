@@ -1,0 +1,517 @@
+name: Release
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  light-tests:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install system deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake build-essential libssl-dev zlib1g-dev ffmpeg
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Run light test suite
+        env:
+          BASEFWX_OBFUSCATE: "1"
+          ALLOW_BAKED_PUB: "0"
+          BASEFWX_BENCH_RESULTS_DIR: results
+          BASEFWX_RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          chmod +x scripts/test_all.sh
+          ./scripts/test_all.sh
+
+      - name: Upload benchmark results
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-results
+          path: |
+            results/benchmarks-*.json
+            results/benchmarks-*.txt
+          if-no-files-found: error
+
+  build-cli-linux:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install system deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake build-essential libssl-dev zlib1g-dev
+
+      - name: Configure
+        run: |
+          cmake -S cpp -B cpp/build -DCMAKE_BUILD_TYPE=Release -DBASEFWX_REQUIRE_ARGON2=OFF -DBASEFWX_REQUIRE_OQS=OFF
+
+      - name: Build
+        run: cmake --build cpp/build --config Release
+
+      - name: Strip
+        run: |
+          mkdir -p dist
+          cp cpp/build/basefwx_cpp dist/basefwx-linux
+          strip dist/basefwx-linux
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: basefwx-linux
+          path: dist/basefwx-linux
+          if-no-files-found: error
+
+  build-cli-windows:
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Cache vcpkg binaries
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}\\vcpkg_binary_cache
+          key: ${{ runner.os }}-vcpkg-${{ hashFiles('cpp/vcpkg.json', 'cpp/vcpkg-configuration.json') }}
+          restore-keys: |
+            ${{ runner.os }}-vcpkg-
+
+      - name: Prepare vcpkg cache dir
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force "${{ github.workspace }}\\vcpkg_binary_cache" | Out-Null
+
+      - name: Setup vcpkg
+        uses: lukka/run-vcpkg@v11
+        with:
+          vcpkgDirectory: ${{ github.workspace }}\\vcpkg
+          runVcpkgInstall: true
+          vcpkgJsonGlob: "cpp/vcpkg.json"
+          vcpkgConfigurationJsonGlob: "cpp/vcpkg-configuration.json"
+          binaryCachePath: ${{ github.workspace }}\\vcpkg_binary_cache
+
+      - name: Configure
+        run: |
+          cmake -S cpp -B cpp/build -DCMAKE_TOOLCHAIN_FILE="${{ github.workspace }}\\vcpkg\\scripts\\buildsystems\\vcpkg.cmake" -DVCPKG_TARGET_TRIPLET=x64-windows -DBASEFWX_REQUIRE_ARGON2=OFF -DBASEFWX_REQUIRE_OQS=OFF
+
+      - name: Build
+        run: cmake --build cpp/build --config Release --parallel
+
+      - name: Prepare binary
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          $bin = "cpp/build/Release/basefwx_cpp.exe"
+          if (!(Test-Path $bin)) { $bin = "cpp/build/basefwx_cpp.exe" }
+          if (!(Test-Path $bin)) { throw "basefwx_cpp.exe not found" }
+          Copy-Item $bin dist/basefwx-windows.exe
+          $strip = Get-Command llvm-strip -ErrorAction SilentlyContinue
+          if ($strip) { & $strip.Path dist\\basefwx-windows.exe }
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: basefwx-windows
+          path: dist/basefwx-windows.exe
+          if-no-files-found: error
+
+  build-cli-macos:
+    runs-on: macos-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install system deps
+        run: |
+          brew update
+          brew install openssl@3
+
+      - name: Configure
+        run: |
+          cmake -S cpp -B cpp/build -DCMAKE_BUILD_TYPE=Release -DBASEFWX_REQUIRE_ARGON2=OFF -DBASEFWX_REQUIRE_OQS=OFF -DOPENSSL_ROOT_DIR="$(brew --prefix openssl@3)"
+
+      - name: Build
+        run: cmake --build cpp/build --config Release
+
+      - name: Strip
+        run: |
+          mkdir -p dist
+          cp cpp/build/basefwx_cpp dist/basefwx-mac
+          strip -x dist/basefwx-mac
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: basefwx-mac
+          path: dist/basefwx-mac
+          if-no-files-found: error
+
+  publish-benchmarks:
+    runs-on: ubuntu-latest
+    needs: [light-tests]
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download benchmark results
+        uses: actions/download-artifact@v4
+        with:
+          name: benchmark-results
+          path: bench-results
+
+      - name: Publish results branch
+        run: |
+          set -euo pipefail
+          tag="${{ github.ref_name }}"
+          branch="results/${tag}"
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+          if git show-ref --verify --quiet "refs/remotes/origin/${branch}"; then
+            git checkout -B "${branch}" "origin/${branch}"
+          else
+            git checkout -B "${branch}"
+          fi
+          rm -rf results
+          mkdir -p results
+          cp bench-results/benchmarks-*.json results/
+          cp bench-results/benchmarks-*.txt results/
+          git add results
+          if git diff --cached --quiet; then
+            echo "No benchmark updates to publish."
+            exit 0
+          fi
+          git commit -m "Add benchmark results for ${tag}"
+          git push origin "${branch}"
+
+  sign-release:
+    runs-on: ubuntu-latest
+    needs: [light-tests, build-cli-linux, build-cli-windows, build-cli-macos]
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: Collect binaries
+        run: |
+          mkdir -p dist_out
+          mv dist/basefwx-linux/basefwx-linux dist_out/basefwx-linux
+          mv dist/basefwx-windows/basefwx-windows.exe dist_out/basefwx-windows.exe
+          mv dist/basefwx-mac/basefwx-mac dist_out/basefwx-mac
+          chmod +x dist_out/basefwx-linux dist_out/basefwx-mac
+
+      - name: Generate hashes
+        run: |
+          cd dist_out
+          sha256sum basefwx-linux > basefwx-linux.sha256
+          md5sum basefwx-linux > basefwx-linux.md5
+          sha256sum basefwx-windows.exe > basefwx-windows.exe.sha256
+          md5sum basefwx-windows.exe > basefwx-windows.exe.md5
+          sha256sum basefwx-mac > basefwx-mac.sha256
+          md5sum basefwx-mac > basefwx-mac.md5
+
+      - name: Import GPG key
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+        run: |
+          keyfile="$(mktemp)"
+          printf '%s' "$GPG_PRIVATE_KEY" > "$keyfile"
+          gpg --batch --import "$keyfile"
+          rm -f "$keyfile"
+
+      - name: Sign binaries
+        env:
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+        run: |
+          gpg --batch --yes --pinentry-mode loopback --passphrase "$GPG_PASSPHRASE" \
+            --detach-sign -o dist_out/basefwx-linux.sig dist_out/basefwx-linux
+          gpg --batch --yes --pinentry-mode loopback --passphrase "$GPG_PASSPHRASE" \
+            --detach-sign -o dist_out/basefwx-windows.exe.sig dist_out/basefwx-windows.exe
+          gpg --batch --yes --pinentry-mode loopback --passphrase "$GPG_PASSPHRASE" \
+            --detach-sign -o dist_out/basefwx-mac.sig dist_out/basefwx-mac
+
+      - name: Verify signatures + hashes
+        run: |
+          gpg --batch --verify dist_out/basefwx-linux.sig dist_out/basefwx-linux
+          gpg --batch --verify dist_out/basefwx-windows.exe.sig dist_out/basefwx-windows.exe
+          gpg --batch --verify dist_out/basefwx-mac.sig dist_out/basefwx-mac
+          cd dist_out
+          sha256sum -c basefwx-linux.sha256
+          sha256sum -c basefwx-windows.exe.sha256
+          sha256sum -c basefwx-mac.sha256
+          md5sum -c basefwx-linux.md5
+          md5sum -c basefwx-windows.exe.md5
+          md5sum -c basefwx-mac.md5
+
+      - name: Upload release assets
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist_out/basefwx-linux
+            dist_out/basefwx-linux.sha256
+            dist_out/basefwx-linux.md5
+            dist_out/basefwx-linux.sig
+            dist_out/basefwx-windows.exe
+            dist_out/basefwx-windows.exe.sha256
+            dist_out/basefwx-windows.exe.md5
+            dist_out/basefwx-windows.exe.sig
+            dist_out/basefwx-mac
+            dist_out/basefwx-mac.sha256
+            dist_out/basefwx-mac.md5
+            dist_out/basefwx-mac.sig
+
+      - name: VirusTotal scan
+        env:
+          VIRUSTOTAL_API_KEY: ${{ secrets.VIRUSTOTAL_API_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${VIRUSTOTAL_API_KEY:-}" ]; then
+            echo "VIRUSTOTAL_API_KEY is not set"
+            exit 1
+          fi
+
+          rate_limit_sec=20
+          last_ts=0
+          vt_request() {
+            local method="$1"
+            local url="$2"
+            shift 2
+            local now elapsed sleep_for response http_code body
+
+            now=$(date +%s)
+            if [ "$last_ts" -ne 0 ]; then
+              elapsed=$((now - last_ts))
+              if [ "$elapsed" -lt "$rate_limit_sec" ]; then
+                sleep_for=$((rate_limit_sec - elapsed))
+                sleep "$sleep_for"
+              fi
+            fi
+            last_ts=$(date +%s)
+
+            response=$(curl -sS -w "\n%{http_code}" --request "$method" "$url" "$@")
+            http_code=$(printf '%s' "$response" | tail -n1)
+            body=$(printf '%s' "$response" | sed '$d')
+
+            if [ "$http_code" = "429" ]; then
+              sleep 60
+              response=$(curl -sS -w "\n%{http_code}" --request "$method" "$url" "$@")
+              http_code=$(printf '%s' "$response" | tail -n1)
+              body=$(printf '%s' "$response" | sed '$d')
+            fi
+
+            if [ "$http_code" -lt 200 ] || [ "$http_code" -ge 300 ]; then
+              echo "VirusTotal request failed ($http_code): $body" >&2
+              return 1
+            fi
+
+            printf '%s' "$body"
+          }
+
+          tag="${GITHUB_REF_NAME}"
+          repo="${GITHUB_REPOSITORY}"
+          generated_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          json=$(jq -n --arg generated_at "$generated_at" --arg release_tag "$tag" --arg repo "$repo" \
+            '{generated_at:$generated_at, release_tag:$release_tag, repo:$repo, files:[]}')
+
+          files=(dist_out/basefwx-linux dist_out/basefwx-windows.exe dist_out/basefwx-mac)
+          names=()
+          ids=()
+          statuses=()
+          analyses=()
+
+          for file in "${files[@]}"; do
+            name="$(basename "$file")"
+            echo "Submitting $name to VirusTotal..."
+            submit=$(vt_request POST "https://www.virustotal.com/api/v3/files" \
+              --header "accept: application/json" \
+              --header "x-apikey: ${VIRUSTOTAL_API_KEY}" \
+              --form file="@$file")
+            analysis_id=$(echo "$submit" | jq -r '.data.id // empty')
+            if [ -z "$analysis_id" ]; then
+              echo "VirusTotal upload failed for $name: $submit"
+              exit 1
+            fi
+            names+=("$name")
+            ids+=("$analysis_id")
+            statuses+=("queued")
+            analyses+=("")
+          done
+
+          sleep 60
+
+          for attempt in 1 2; do
+            pending=0
+            for idx in "${!ids[@]}"; do
+              if [ "${statuses[$idx]}" = "completed" ]; then
+                continue
+              fi
+              analysis=$(vt_request GET "https://www.virustotal.com/api/v3/analyses/${ids[$idx]}" \
+                --header "accept: application/json" \
+                --header "x-apikey: ${VIRUSTOTAL_API_KEY}")
+              status=$(echo "$analysis" | jq -r '.data.attributes.status // empty')
+              analyses[$idx]="$analysis"
+              statuses[$idx]="$status"
+              if [ "$status" != "completed" ]; then
+                pending=1
+              fi
+            done
+            if [ "$pending" -eq 0 ]; then
+              break
+            fi
+            sleep 60
+          done
+
+          for idx in "${!names[@]}"; do
+            name="${names[$idx]}"
+            analysis="${analyses[$idx]}"
+            status="${statuses[$idx]}"
+            if [ -z "$analysis" ]; then
+              analysis="{}"
+            fi
+
+            stats=$(echo "$analysis" | jq '.data.attributes.stats // {}')
+            analysis_url=$(echo "$analysis" | jq -r '.data.links.self // empty')
+            item_url=$(echo "$analysis" | jq -r '.data.links.item // empty')
+            sha256=$(echo "$analysis" | jq -r '.meta.file_info.sha256 // empty')
+            md5=$(echo "$analysis" | jq -r '.meta.file_info.md5 // empty')
+            sha1=$(echo "$analysis" | jq -r '.meta.file_info.sha1 // empty')
+
+            json=$(jq \
+              --arg name "$name" \
+              --arg analysis_id "${ids[$idx]}" \
+              --arg analysis_url "$analysis_url" \
+              --arg item_url "$item_url" \
+              --arg sha256 "$sha256" \
+              --arg md5 "$md5" \
+              --arg sha1 "$sha1" \
+              --arg status "$status" \
+              --argjson stats "$stats" \
+              '.files += [{
+                name: $name,
+                analysis_id: $analysis_id,
+                analysis_url: $analysis_url,
+                item_url: $item_url,
+                sha256: $sha256,
+                md5: $md5,
+                sha1: $sha1,
+                status: $status,
+                stats: $stats
+              }]' <<< "$json")
+          done
+
+          echo "$json" > dist_out/virustotal-results.json
+          python scripts/format_vt_results.py dist_out/virustotal-results.json dist_out/virustotal-results.txt
+          cp dist_out/virustotal-results.txt dist_out/results.txt
+
+      - name: Upload VirusTotal results
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist_out/virustotal-results.json
+            dist_out/virustotal-results.txt
+            dist_out/results.txt
+
+      - name: Store VirusTotal results in repo
+        continue-on-error: true
+        env:
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          mkdir -p results
+          cp dist_out/virustotal-results.json "results/virustotal-${tag}.json"
+          cp dist_out/virustotal-results.txt "results/virustotal-${tag}.txt"
+          cp dist_out/virustotal-results.json results/virustotal-latest.json
+          cp dist_out/virustotal-results.txt results/virustotal-latest.txt
+          cp dist_out/basefwx-linux.sha256 results/basefwx-linux.sha256
+          cp dist_out/basefwx-linux.md5 results/basefwx-linux.md5
+          cp dist_out/basefwx-windows.exe.sha256 results/basefwx-windows.exe.sha256
+          cp dist_out/basefwx-windows.exe.md5 results/basefwx-windows.exe.md5
+          cp dist_out/basefwx-mac.sha256 results/basefwx-mac.sha256
+          cp dist_out/basefwx-mac.md5 results/basefwx-mac.md5
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          key_id="$(gpg --list-secret-keys --with-colons | awk -F: '/^sec:/ {print $5; exit}')"
+          if [ -z "$key_id" ]; then
+            echo "No GPG signing key available"
+            exit 1
+          fi
+          git config user.signingkey "$key_id"
+          git config commit.gpgsign true
+          cat > gpg-wrapper.sh <<'EOF'
+          #!/usr/bin/env bash
+          exec gpg --batch --yes --pinentry-mode loopback --passphrase "$GPG_PASSPHRASE" "$@"
+          EOF
+          chmod +x gpg-wrapper.sh
+          git config gpg.program "$PWD/gpg-wrapper.sh"
+          branch="results/${tag}"
+          git checkout -B "$branch"
+          git add results/
+          if git diff --cached --quiet; then
+            echo "No results changes"
+            exit 0
+          fi
+          git commit -m "chore: add VirusTotal results for ${tag}"
+          git push origin "$branch"
+
+  publish-pypi:
+    runs-on: ubuntu-latest
+    needs: [sign-release]
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+          pip install build cryptography pqcrypto numpy pillow argon2-cffi
+
+      - name: Build package
+        run: python -m build
+
+      - name: Publish package
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          user: __token__
+          password: ${{ secrets.PYPI_API_TOKEN }}

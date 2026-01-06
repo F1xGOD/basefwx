@@ -177,9 +177,36 @@ if command -v nproc >/dev/null 2>&1; then
 else
     DEFAULT_BENCH_WORKERS="$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 1)"
 fi
+BENCH_PARALLEL="${BASEFWX_BENCH_PARALLEL:-1}"
+BENCH_ALL_CORES="${BASEFWX_BENCH_ALL_CORES:-1}"
 export BASEFWX_BENCH_ITERS="${BASEFWX_BENCH_ITERS:-50}"
 export BASEFWX_BENCH_WARMUP="${BASEFWX_BENCH_WARMUP:-2}"
-export BASEFWX_BENCH_WORKERS="${BASEFWX_BENCH_WORKERS:-$DEFAULT_BENCH_WORKERS}"
+export BASEFWX_BENCH_PARALLEL="$BENCH_PARALLEL"
+export BASEFWX_BENCH_ALL_CORES="$BENCH_ALL_CORES"
+if [[ "$BENCH_PARALLEL" != "1" ]]; then
+    export BASEFWX_BENCH_WORKERS="${BASEFWX_BENCH_WORKERS:-1}"
+else
+    if [[ "$BENCH_ALL_CORES" == "1" ]]; then
+        export BASEFWX_BENCH_WORKERS="$DEFAULT_BENCH_WORKERS"
+    else
+        export BASEFWX_BENCH_WORKERS="${BASEFWX_BENCH_WORKERS:-$DEFAULT_BENCH_WORKERS}"
+    fi
+fi
+BENCH_VALID=1
+if [[ "$BENCH_PARALLEL" != "1" || "$BENCH_ALL_CORES" != "1" ]]; then
+    BENCH_VALID=0
+fi
+export BASEFWX_BENCH_VALID="$BENCH_VALID"
+if [[ "$BENCH_ALL_CORES" == "1" && "$BENCH_PARALLEL" != "1" && "$DEFAULT_BENCH_WORKERS" -gt 1 ]]; then
+    echo "Benchmark invalid: BASEFWX_BENCH_PARALLEL=0 disables full-core mode (set BASEFWX_BENCH_ALL_CORES=0 to allow)." >&2
+    exit 1
+fi
+if [[ "$BENCH_ALL_CORES" == "1" && "$BENCH_PARALLEL" == "1" && "$DEFAULT_BENCH_WORKERS" -gt 1 ]]; then
+    if [[ "$BASEFWX_BENCH_WORKERS" -lt "$DEFAULT_BENCH_WORKERS" ]]; then
+        echo "Benchmark invalid: BASEFWX_BENCH_WORKERS < CPU count while BASEFWX_BENCH_ALL_CORES=1 (set BASEFWX_BENCH_ALL_CORES=0 to allow)." >&2
+        exit 1
+    fi
+fi
 if [[ -n "$TEST_KDF_ITERS" ]]; then
     export BASEFWX_TEST_KDF_ITERS="$TEST_KDF_ITERS"
 fi
@@ -1739,6 +1766,7 @@ import time
 import tempfile
 import os
 import itertools
+import shutil
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 import basefwx as basefwx_mod
@@ -1956,7 +1984,13 @@ def _iters_env(default: int = 50) -> int:
         return default
     return parsed if parsed > 0 else default
 
+def _bench_parallel_enabled() -> bool:
+    value = os.getenv("BASEFWX_BENCH_PARALLEL", "1").strip().lower()
+    return value in ("1", "true", "yes", "on", "")
+
 def _workers_env() -> int:
+    if not _bench_parallel_enabled():
+        return 1
     value = os.getenv("BASEFWX_BENCH_WORKERS")
     if value:
         try:
@@ -1978,31 +2012,154 @@ def _bench_fwxaes_worker(inp: str, pw: str) -> int:
     plain = basefwx.fwxAES_decrypt_raw(blob, pw, use_master=False)
     return len(plain)
 
+_BENCH_TEXT_METHOD = None
+_BENCH_TEXT_PW = None
+_BENCH_TEXT_VALUE = None
+
+def _bench_text_init(method: str, text_path: str, pw: str) -> None:
+    global _BENCH_TEXT_METHOD, _BENCH_TEXT_PW, _BENCH_TEXT_VALUE
+    _BENCH_TEXT_METHOD = method
+    _BENCH_TEXT_PW = pw
+    _BENCH_TEXT_VALUE = read_text(text_path)
+
+def _bench_text_worker(_: int) -> int:
+    enc = text_encode(_BENCH_TEXT_METHOD, _BENCH_TEXT_VALUE, _BENCH_TEXT_PW)
+    dec = text_decode(_BENCH_TEXT_METHOD, enc, _BENCH_TEXT_PW)
+    return len(dec)
+
+_BENCH_HASH_METHOD = None
+_BENCH_HASH_VALUE = None
+
+def _bench_hash_init(method: str, text_path: str) -> None:
+    global _BENCH_HASH_METHOD, _BENCH_HASH_VALUE
+    _BENCH_HASH_METHOD = method
+    _BENCH_HASH_VALUE = read_text(text_path)
+
+def _bench_hash_worker(_: int) -> int:
+    digest = text_hash(_BENCH_HASH_METHOD, _BENCH_HASH_VALUE)
+    return len(digest)
+
+_BENCH_FILE_METHOD = None
+_BENCH_FILE_PW = None
+_BENCH_FILE_TEMP = None
+_BENCH_FILE_INPUT = None
+
+def _bench_file_init(method: str, input_path: str, pw: str) -> None:
+    global _BENCH_FILE_METHOD, _BENCH_FILE_PW, _BENCH_FILE_TEMP, _BENCH_FILE_INPUT
+    _BENCH_FILE_METHOD = method
+    _BENCH_FILE_PW = pw
+    tmp = tempfile.TemporaryDirectory(prefix="basefwx-bench-")
+    _BENCH_FILE_TEMP = tmp
+    src = Path(input_path)
+    local_input = Path(tmp.name) / src.name
+    shutil.copyfile(src, local_input)
+    _BENCH_FILE_INPUT = local_input
+
+def _bench_file_worker(_: int) -> int:
+    enc_path = Path(_BENCH_FILE_TEMP.name) / "bench.fwx"
+    if _BENCH_FILE_METHOD == "b512":
+        basefwx._b512_encode_path(
+            _BENCH_FILE_INPUT,
+            _BENCH_FILE_PW,
+            use_master=False,
+            output_path=enc_path,
+            keep_input=True,
+        )
+        decoded_path, _size = basefwx._b512_decode_path(
+            enc_path,
+            _BENCH_FILE_PW,
+            strip_metadata=False,
+            use_master=False,
+        )
+    else:
+        basefwx._aes_heavy_encode_path(
+            _BENCH_FILE_INPUT,
+            _BENCH_FILE_PW,
+            use_master=False,
+            output_path=enc_path,
+            keep_input=True,
+        )
+        decoded_path, _size = basefwx._aes_heavy_decode_path(
+            enc_path,
+            _BENCH_FILE_PW,
+            strip_metadata=False,
+            use_master=False,
+        )
+    size = decoded_path.stat().st_size
+    try:
+        enc_path.unlink()
+    except FileNotFoundError:
+        pass
+    try:
+        decoded_path.unlink()
+    except FileNotFoundError:
+        pass
+    return size
+
+def _bench_parallel(warmup: int, iters: int, workers: int, worker, *, initializer=None, initargs=()) -> None:
+    if warmup < 0:
+        warmup = 0
+    if iters < 1:
+        iters = 1
+    samples: list[int] = []
+    with ProcessPoolExecutor(max_workers=workers, initializer=initializer, initargs=initargs) as executor:
+        for _ in range(warmup):
+            list(executor.map(worker, range(workers)))
+        for _ in range(iters):
+            start = time.perf_counter_ns()
+            list(executor.map(worker, range(workers)))
+            end = time.perf_counter_ns()
+            samples.append(end - start)
+    median = _median_ns(samples)
+    print(f"BENCH_NS={median}")
+
 def cmd_bench_text(args: list[str]) -> int:
     if len(args) < 3:
         return 2
     method, text_path, pw = args[:3]
-    text = read_text(text_path)
     warmup = _warmup_env()
     iters = _iters_env()
-    def run() -> int:
-        enc = text_encode(method, text, pw)
-        dec = text_decode(method, enc, pw)
-        return len(dec)
-    _bench(warmup, iters, run)
+    workers = _workers_env()
+    if workers > 1:
+        _bench_parallel(
+            warmup,
+            iters,
+            workers,
+            _bench_text_worker,
+            initializer=_bench_text_init,
+            initargs=(method, text_path, pw),
+        )
+    else:
+        text = read_text(text_path)
+        def run() -> int:
+            enc = text_encode(method, text, pw)
+            dec = text_decode(method, enc, pw)
+            return len(dec)
+        _bench(warmup, iters, run)
     return 0
 
 def cmd_bench_hash(args: list[str]) -> int:
     if len(args) < 2:
         return 2
     method, text_path = args[:2]
-    text = read_text(text_path)
     warmup = _warmup_env()
     iters = _iters_env()
-    def run() -> int:
-        digest = text_hash(method, text)
-        return len(digest)
-    _bench(warmup, iters, run)
+    workers = _workers_env()
+    if workers > 1:
+        _bench_parallel(
+            warmup,
+            iters,
+            workers,
+            _bench_hash_worker,
+            initializer=_bench_hash_init,
+            initargs=(method, text_path),
+        )
+    else:
+        text = read_text(text_path)
+        def run() -> int:
+            digest = text_hash(method, text)
+            return len(digest)
+        _bench(warmup, iters, run)
     return 0
 
 def cmd_bench_fwxaes(args: list[str]) -> int:
@@ -2058,26 +2215,37 @@ def cmd_bench_b512file(args: list[str]) -> int:
     inp, pw = args[:2]
     warmup = _warmup_env()
     iters = _iters_env()
-    source = Path(inp)
-    with tempfile.TemporaryDirectory(prefix="basefwx-bench-") as tmpdir:
-        tmp = Path(tmpdir)
-        enc_path = tmp / "bench.fwx"
-        def run() -> int:
-            basefwx._b512_encode_path(
-                source,
-                pw,
-                use_master=False,
-                output_path=enc_path,
-                keep_input=True,
-            )
-            decoded_path, _size = basefwx._b512_decode_path(
-                enc_path,
-                pw,
-                strip_metadata=False,
-                use_master=False,
-            )
-            return decoded_path.stat().st_size
-        _bench(warmup, iters, run)
+    workers = _workers_env()
+    if workers > 1:
+        _bench_parallel(
+            warmup,
+            iters,
+            workers,
+            _bench_file_worker,
+            initializer=_bench_file_init,
+            initargs=("b512", inp, pw),
+        )
+    else:
+        source = Path(inp)
+        with tempfile.TemporaryDirectory(prefix="basefwx-bench-") as tmpdir:
+            tmp = Path(tmpdir)
+            enc_path = tmp / "bench.fwx"
+            def run() -> int:
+                basefwx._b512_encode_path(
+                    source,
+                    pw,
+                    use_master=False,
+                    output_path=enc_path,
+                    keep_input=True,
+                )
+                decoded_path, _size = basefwx._b512_decode_path(
+                    enc_path,
+                    pw,
+                    strip_metadata=False,
+                    use_master=False,
+                )
+                return decoded_path.stat().st_size
+            _bench(warmup, iters, run)
     return 0
 
 def cmd_bench_pb512file(args: list[str]) -> int:
@@ -2086,26 +2254,37 @@ def cmd_bench_pb512file(args: list[str]) -> int:
     inp, pw = args[:2]
     warmup = _warmup_env()
     iters = _iters_env()
-    source = Path(inp)
-    with tempfile.TemporaryDirectory(prefix="basefwx-bench-") as tmpdir:
-        tmp = Path(tmpdir)
-        enc_path = tmp / "bench.fwx"
-        def run() -> int:
-            basefwx._aes_heavy_encode_path(
-                source,
-                pw,
-                use_master=False,
-                output_path=enc_path,
-                keep_input=True,
-            )
-            decoded_path, _size = basefwx._aes_heavy_decode_path(
-                enc_path,
-                pw,
-                strip_metadata=False,
-                use_master=False,
-            )
-            return decoded_path.stat().st_size
-        _bench(warmup, iters, run)
+    workers = _workers_env()
+    if workers > 1:
+        _bench_parallel(
+            warmup,
+            iters,
+            workers,
+            _bench_file_worker,
+            initializer=_bench_file_init,
+            initargs=("pb512", inp, pw),
+        )
+    else:
+        source = Path(inp)
+        with tempfile.TemporaryDirectory(prefix="basefwx-bench-") as tmpdir:
+            tmp = Path(tmpdir)
+            enc_path = tmp / "bench.fwx"
+            def run() -> int:
+                basefwx._aes_heavy_encode_path(
+                    source,
+                    pw,
+                    use_master=False,
+                    output_path=enc_path,
+                    keep_input=True,
+                )
+                decoded_path, _size = basefwx._aes_heavy_decode_path(
+                    enc_path,
+                    pw,
+                    strip_metadata=False,
+                    use_master=False,
+                )
+                return decoded_path.stat().st_size
+            _bench(warmup, iters, run)
     return 0
 
 def main() -> int:
@@ -3145,6 +3324,10 @@ if [[ "$RUN_JAVA_TESTS" == "1" && "$JAVA_AVAILABLE" == "1" ]]; then
 fi
 
 log "BENCH_FWXAES_MODE: $BENCH_FWXAES_MODE"
+log "BENCH_PARALLEL: $BENCH_PARALLEL"
+log "BENCH_ALL_CORES: $BENCH_ALL_CORES"
+log "BENCH_WORKERS: $BASEFWX_BENCH_WORKERS"
+log "BENCH_VALID: $BENCH_VALID"
 log "BENCH_ITERS_LIGHT: $BENCH_ITERS_LIGHT"
 log "BENCH_ITERS_SLOW: $BENCH_ITERS_SLOW"
 log "BENCH_ITERS_HEAVY: $BENCH_ITERS_HEAVY"
@@ -3653,6 +3836,9 @@ data = {
     "bench_iters": to_int(os.getenv("BASEFWX_BENCH_ITERS", "0")) or 0,
     "bench_warmup": to_int(os.getenv("BASEFWX_BENCH_WARMUP", "0")) or 0,
     "bench_workers": to_int(os.getenv("BASEFWX_BENCH_WORKERS", "0")) or 0,
+    "bench_parallel": os.getenv("BASEFWX_BENCH_PARALLEL", "1"),
+    "bench_all_cores": os.getenv("BASEFWX_BENCH_ALL_CORES", "1"),
+    "bench_valid": os.getenv("BASEFWX_BENCH_VALID", "1"),
     "bench_fwxaes_mode": os.getenv("BENCH_FWXAES_MODE", "par"),
     "bench_iters_profile": {
         "light": to_int(os.getenv("BENCH_ITERS_LIGHT", "0")) or 0,

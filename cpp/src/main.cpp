@@ -7,8 +7,10 @@
 #include <cctype>
 #include <cstdlib>
 #include <condition_variable>
+#include <exception>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <iomanip>
 #include <iostream>
 #include <limits>
@@ -116,7 +118,7 @@ void ApplyMasterPubPath(const std::string& path) {
 #endif
 }
 
-volatile std::size_t g_bench_sink = 0;
+std::atomic<std::size_t> g_bench_sink{0};
 
 std::string ReadTextFile(const std::string& path) {
     auto data = basefwx::ReadFile(path);
@@ -154,7 +156,18 @@ int BenchIters() {
     return ReadEnvInt("BASEFWX_BENCH_ITERS", 50, 1);
 }
 
+bool BenchParallelEnabled() {
+    std::string raw = ToLower(basefwx::env::Get("BASEFWX_BENCH_PARALLEL"));
+    if (raw.empty()) {
+        return true;
+    }
+    return !(raw == "0" || raw == "false" || raw == "off" || raw == "no");
+}
+
 int BenchWorkers() {
+    if (!BenchParallelEnabled()) {
+        return 1;
+    }
     unsigned int hw = std::thread::hardware_concurrency();
     int default_workers = hw == 0 ? 1 : static_cast<int>(hw);
     return ReadEnvInt("BASEFWX_BENCH_WORKERS", default_workers, 1);
@@ -210,7 +223,7 @@ std::size_t RunFwxaesParallel(const std::vector<std::uint8_t>& data,
         threads.emplace_back([&]() {
             auto blob = basefwx::fwxaes::EncryptRaw(data, password, opts);
             auto plain = basefwx::fwxaes::DecryptRaw(blob, password, use_master);
-            g_bench_sink ^= plain.size();
+            g_bench_sink.fetch_xor(plain.size(), std::memory_order_relaxed);
             total.fetch_add(plain.size(), std::memory_order_relaxed);
         });
     }
@@ -218,6 +231,36 @@ std::size_t RunFwxaesParallel(const std::vector<std::uint8_t>& data,
         if (t.joinable()) {
             t.join();
         }
+    }
+    return total.load(std::memory_order_relaxed);
+}
+
+template <typename Fn>
+std::size_t RunParallel(std::size_t workers, Fn fn) {
+    std::atomic<std::size_t> total{0};
+    std::vector<std::thread> threads;
+    threads.reserve(workers);
+    std::exception_ptr first_exc = nullptr;
+    std::mutex exc_mutex;
+    for (std::size_t i = 0; i < workers; ++i) {
+        threads.emplace_back([&, i]() {
+            try {
+                total.fetch_add(fn(i), std::memory_order_relaxed);
+            } catch (...) {
+                std::lock_guard<std::mutex> lock(exc_mutex);
+                if (!first_exc) {
+                    first_exc = std::current_exception();
+                }
+            }
+        });
+    }
+    for (auto& t : threads) {
+        if (t.joinable()) {
+            t.join();
+        }
+    }
+    if (first_exc) {
+        std::rethrow_exception(first_exc);
     }
     return total.load(std::memory_order_relaxed);
 }
@@ -559,30 +602,55 @@ int main(int argc, char** argv) {
             }
             int warmup = BenchWarmup();
             int iters = BenchIters();
-            auto run = [&]() {
-                if (method == "b64") {
+            std::size_t workers = static_cast<std::size_t>(BenchWorkers());
+            if (workers == 0) {
+                workers = 1;
+            }
+            std::function<std::size_t()> op;
+            if (method == "b64") {
+                op = [&]() {
                     std::string enc = basefwx::B64Encode(text);
                     std::string dec = basefwx::B64Decode(enc);
-                    g_bench_sink ^= dec.size();
-                } else if (method == "b256") {
+                    g_bench_sink.fetch_xor(dec.size(), std::memory_order_relaxed);
+                    return dec.size();
+                };
+            } else if (method == "b256") {
+                op = [&]() {
                     std::string enc = basefwx::B256Encode(text);
                     std::string dec = basefwx::B256Decode(enc);
-                    g_bench_sink ^= dec.size();
-                } else if (method == "a512") {
+                    g_bench_sink.fetch_xor(dec.size(), std::memory_order_relaxed);
+                    return dec.size();
+                };
+            } else if (method == "a512") {
+                op = [&]() {
                     std::string enc = basefwx::A512Encode(text);
                     std::string dec = basefwx::A512Decode(enc);
-                    g_bench_sink ^= dec.size();
-                } else if (method == "b512") {
+                    g_bench_sink.fetch_xor(dec.size(), std::memory_order_relaxed);
+                    return dec.size();
+                };
+            } else if (method == "b512") {
+                op = [&]() {
                     std::string enc = basefwx::B512Encode(text, opts.password, opts.use_master, opts.kdf);
                     std::string dec = basefwx::B512Decode(enc, opts.password, opts.use_master, opts.kdf);
-                    g_bench_sink ^= dec.size();
-                } else if (method == "pb512") {
+                    g_bench_sink.fetch_xor(dec.size(), std::memory_order_relaxed);
+                    return dec.size();
+                };
+            } else if (method == "pb512") {
+                op = [&]() {
                     std::string enc = basefwx::Pb512Encode(text, opts.password, opts.use_master, opts.kdf);
                     std::string dec = basefwx::Pb512Decode(enc, opts.password, opts.use_master, opts.kdf);
-                    g_bench_sink ^= dec.size();
-                } else {
-                    throw std::runtime_error("Unsupported benchmark method: " + method);
+                    g_bench_sink.fetch_xor(dec.size(), std::memory_order_relaxed);
+                    return dec.size();
+                };
+            } else {
+                throw std::runtime_error("Unsupported benchmark method: " + method);
+            }
+            auto run = [&]() {
+                if (workers > 1) {
+                    RunParallel(workers, [&](std::size_t) { return op(); });
+                    return;
                 }
+                op();
             };
             auto ns = BenchMedian(warmup, iters, run);
             std::cout << "BENCH_NS=" << ns << "\n";
@@ -597,22 +665,44 @@ int main(int argc, char** argv) {
             std::string text = ReadTextFile(argv[3]);
             int warmup = BenchWarmup();
             int iters = BenchIters();
-            auto run = [&]() {
-                if (method == "hash512") {
+            std::size_t workers = static_cast<std::size_t>(BenchWorkers());
+            if (workers == 0) {
+                workers = 1;
+            }
+            std::function<std::size_t()> op;
+            if (method == "hash512") {
+                op = [&]() {
                     std::string digest = basefwx::Hash512(text);
-                    g_bench_sink ^= digest.size();
-                } else if (method == "uhash513") {
+                    g_bench_sink.fetch_xor(digest.size(), std::memory_order_relaxed);
+                    return digest.size();
+                };
+            } else if (method == "uhash513") {
+                op = [&]() {
                     std::string digest = basefwx::Uhash513(text);
-                    g_bench_sink ^= digest.size();
-                } else if (method == "bi512") {
+                    g_bench_sink.fetch_xor(digest.size(), std::memory_order_relaxed);
+                    return digest.size();
+                };
+            } else if (method == "bi512") {
+                op = [&]() {
                     std::string digest = basefwx::Bi512Encode(text);
-                    g_bench_sink ^= digest.size();
-                } else if (method == "b1024") {
+                    g_bench_sink.fetch_xor(digest.size(), std::memory_order_relaxed);
+                    return digest.size();
+                };
+            } else if (method == "b1024") {
+                op = [&]() {
                     std::string digest = basefwx::B1024Encode(text);
-                    g_bench_sink ^= digest.size();
-                } else {
-                    throw std::runtime_error("Unsupported hash benchmark method: " + method);
+                    g_bench_sink.fetch_xor(digest.size(), std::memory_order_relaxed);
+                    return digest.size();
+                };
+            } else {
+                throw std::runtime_error("Unsupported hash benchmark method: " + method);
+            }
+            auto run = [&]() {
+                if (workers > 1) {
+                    RunParallel(workers, [&](std::size_t) { return op(); });
+                    return;
                 }
+                op();
             };
             auto ns = BenchMedian(warmup, iters, run);
             std::cout << "BENCH_NS=" << ns << "\n";
@@ -648,7 +738,7 @@ int main(int argc, char** argv) {
             auto run = [&]() {
                 auto blob = basefwx::fwxaes::EncryptRaw(data, password, opts);
                 auto plain = basefwx::fwxaes::DecryptRaw(blob, password, use_master);
-                g_bench_sink ^= plain.size();
+                g_bench_sink.fetch_xor(plain.size(), std::memory_order_relaxed);
             };
             auto ns = BenchMedian(warmup, iters, run);
             std::cout << "BENCH_NS=" << ns << "\n";
@@ -739,15 +829,29 @@ int main(int argc, char** argv) {
             file_opts.keep_input = true;
             try {
                 std::filesystem::path src_path(input);
-                std::filesystem::path temp_dir = std::filesystem::temp_directory_path()
-                    / ("basefwx-bench-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
-                std::filesystem::create_directories(temp_dir);
-                std::filesystem::path bench_input = temp_dir / src_path.filename();
-                std::filesystem::copy_file(src_path, bench_input, std::filesystem::copy_options::overwrite_existing);
+                std::size_t workers = static_cast<std::size_t>(BenchWorkers());
+                if (workers == 0) {
+                    workers = 1;
+                }
+                std::vector<std::filesystem::path> temp_dirs;
+                std::vector<std::filesystem::path> bench_inputs;
+                temp_dirs.reserve(workers);
+                bench_inputs.reserve(workers);
+                auto stamp = std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
+                for (std::size_t i = 0; i < workers; ++i) {
+                    std::filesystem::path temp_dir = std::filesystem::temp_directory_path()
+                        / ("basefwx-bench-" + stamp + "-" + std::to_string(i));
+                    std::filesystem::create_directories(temp_dir);
+                    std::filesystem::path bench_input = temp_dir / src_path.filename();
+                    std::filesystem::copy_file(src_path, bench_input, std::filesystem::copy_options::overwrite_existing);
+                    temp_dirs.push_back(temp_dir);
+                    bench_inputs.push_back(bench_input);
+                }
 
                 int warmup = BenchWarmup();
                 int iters = BenchIters();
-                auto run_once = [&]() {
+                auto run_once = [&](std::size_t idx) -> std::size_t {
+                    const auto& bench_input = bench_inputs[idx];
                     std::string enc_path;
                     std::string dec_path;
                     if (command == "bench-b512file") {
@@ -759,15 +863,29 @@ int main(int argc, char** argv) {
                     }
                     std::error_code size_ec;
                     auto dec_size = std::filesystem::file_size(dec_path, size_ec);
+                    std::error_code cleanup_ec;
+                    std::filesystem::remove(enc_path, cleanup_ec);
+                    std::filesystem::remove(dec_path, cleanup_ec);
                     if (!size_ec) {
-                        g_bench_sink ^= static_cast<std::size_t>(dec_size);
+                        g_bench_sink.fetch_xor(static_cast<std::size_t>(dec_size), std::memory_order_relaxed);
+                        return static_cast<std::size_t>(dec_size);
                     }
+                    return 0;
+                };
+                auto run = [&]() {
+                    if (workers > 1) {
+                        RunParallel(workers, run_once);
+                        return;
+                    }
+                    run_once(0);
                 };
 
-                long long ns = BenchMedian(warmup, iters, run_once);
+                long long ns = BenchMedian(warmup, iters, run);
                 std::cout << "BENCH_NS=" << ns << "\n";
-                std::error_code ec;
-                std::filesystem::remove_all(temp_dir, ec);
+                for (const auto& dir : temp_dirs) {
+                    std::error_code ec;
+                    std::filesystem::remove_all(dir, ec);
+                }
                 return 0;
             } catch (const std::exception& exc) {
                 throw;

@@ -106,8 +106,8 @@ for arg in "$@"; do
             ;;
     esac
 done
-FBENCH_TEXT_MAX_BYTES=$((760 * 1024))
-FBENCH_FILE_MAX_BYTES=$((25 * 1024 * 1024))
+FBENCH_TEXT_MAX_BYTES=$((2 * 1024 * 1024))
+FBENCH_FILE_MAX_BYTES=$((70 * 1024 * 1024))
 if (( FBENCH == 1 )); then
     bench_text_max="${BENCH_TEXT_MAX_BYTES:-}"
     if [[ -z "$bench_text_max" || ! "$bench_text_max" =~ ^[0-9]+$ || "$bench_text_max" -gt "$FBENCH_TEXT_MAX_BYTES" ]]; then
@@ -133,12 +133,12 @@ if (( FBENCH == 1 )); then
     fi
     BENCH_FILE_BYTES="$bench_file_bytes"
 
-    BASEFWX_BENCH_ITERS="${BASEFWX_BENCH_ITERS:-2}"
+    BASEFWX_BENCH_ITERS="${BASEFWX_BENCH_ITERS:-3}"
     BASEFWX_BENCH_WARMUP="${BASEFWX_BENCH_WARMUP:-1}"
-    BENCH_ITERS_LIGHT="${BENCH_ITERS_LIGHT:-2}"
-    BENCH_ITERS_SLOW="${BENCH_ITERS_SLOW:-2}"
-    BENCH_ITERS_HEAVY="${BENCH_ITERS_HEAVY:-2}"
-    BENCH_ITERS_FILE="${BENCH_ITERS_FILE:-2}"
+    BENCH_ITERS_LIGHT="${BENCH_ITERS_LIGHT:-3}"
+    BENCH_ITERS_SLOW="${BENCH_ITERS_SLOW:-3}"
+    BENCH_ITERS_HEAVY="${BENCH_ITERS_HEAVY:-3}"
+    BENCH_ITERS_FILE="${BENCH_ITERS_FILE:-3}"
 fi
 if [[ "$TEST_MODE" != "default" ]]; then
     ENABLE_HUGE=0
@@ -3338,6 +3338,11 @@ if [[ -z "$BENCH_FILE_WORKERS" || ! "$BENCH_FILE_WORKERS" =~ ^[0-9]+$ || "$BENCH
     BENCH_FILE_WORKERS=1
 fi
 
+FWXAES_LIGHT_KDF_ITERS="${FWXAES_LIGHT_KDF_ITERS:-32768}"
+if [[ ! "$FWXAES_LIGHT_KDF_ITERS" =~ ^[0-9]+$ || "$FWXAES_LIGHT_KDF_ITERS" -lt 1 ]]; then
+    FWXAES_LIGHT_KDF_ITERS=32768
+fi
+
 if [[ -z "${BENCH_WARMUP_LIGHT:-}" || -z "${BENCH_WARMUP_HEAVY:-}" ]]; then
     if [[ "$TEST_MODE" == "quickest" ]]; then
         BENCH_WARMUP_LIGHT="${BENCH_WARMUP_LIGHT:-2}"
@@ -3429,6 +3434,7 @@ log "BENCH_ALL_CORES: $BENCH_ALL_CORES"
 log "BENCH_WORKERS: $BASEFWX_BENCH_WORKERS"
 log "BENCH_WORKERS_SLOW: $BENCH_WORKERS_SLOW"
 log "BENCH_FILE_WORKERS: $BENCH_FILE_WORKERS"
+log "FWXAES_LIGHT_KDF_ITERS: $FWXAES_LIGHT_KDF_ITERS"
 if [[ -n "${BENCH_FILE_TMP_BUDGET_BYTES:-}" ]]; then
     log "BENCH_FILE_TMP_BUDGET_BYTES: $BENCH_FILE_TMP_BUDGET_BYTES"
 fi
@@ -3449,10 +3455,18 @@ for idx in "${!BENCH_LANGS[@]}"; do
     case "$lang" in
         py)
             if [[ "$BENCH_FWXAES_MODE" == "par" ]]; then
+                time_cmd_bench "fwxaes_py_par_light" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_HEAVY" \
+                    BASEFWX_BENCH_ITERS="$BENCH_ITERS_HEAVY" \
+                    BASEFWX_TEST_KDF_ITERS="$FWXAES_LIGHT_KDF_ITERS" \
+                    "$PYTHON_BIN" "$PY_HELPER" bench-fwxaes-par "$BENCH_BYTES_FILE" "$PW"
                 time_cmd_bench "fwxaes_py_par" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_HEAVY" \
                     BASEFWX_BENCH_ITERS="$BENCH_ITERS_HEAVY" \
                     "$PYTHON_BIN" "$PY_HELPER" bench-fwxaes-par "$BENCH_BYTES_FILE" "$PW"
             else
+                time_cmd_bench "fwxaes_py_correct_light" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_HEAVY" \
+                    BASEFWX_BENCH_ITERS="$BENCH_ITERS_HEAVY" \
+                    BASEFWX_TEST_KDF_ITERS="$FWXAES_LIGHT_KDF_ITERS" \
+                    "$PYTHON_BIN" "$PY_HELPER" bench-fwxaes "$BENCH_BYTES_FILE" "$PW"
                 time_cmd_bench "fwxaes_py_correct" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_HEAVY" \
                     BASEFWX_BENCH_ITERS="$BENCH_ITERS_HEAVY" \
                     "$PYTHON_BIN" "$PY_HELPER" bench-fwxaes "$BENCH_BYTES_FILE" "$PW"
@@ -3484,10 +3498,18 @@ for idx in "${!BENCH_LANGS[@]}"; do
             ;;
         pypy)
             if [[ "$BENCH_FWXAES_MODE" == "par" ]]; then
+                time_cmd_bench "fwxaes_pypy_par_light" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_HEAVY" \
+                    BASEFWX_BENCH_ITERS="$BENCH_ITERS_HEAVY" \
+                    BASEFWX_TEST_KDF_ITERS="$FWXAES_LIGHT_KDF_ITERS" \
+                    "$PYPY_BIN" "$PY_HELPER" bench-fwxaes-par "$BENCH_BYTES_FILE" "$PW"
                 time_cmd_bench "fwxaes_pypy_par" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_HEAVY" \
                     BASEFWX_BENCH_ITERS="$BENCH_ITERS_HEAVY" \
                     "$PYPY_BIN" "$PY_HELPER" bench-fwxaes-par "$BENCH_BYTES_FILE" "$PW"
             else
+                time_cmd_bench "fwxaes_pypy_correct_light" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_HEAVY" \
+                    BASEFWX_BENCH_ITERS="$BENCH_ITERS_HEAVY" \
+                    BASEFWX_TEST_KDF_ITERS="$FWXAES_LIGHT_KDF_ITERS" \
+                    "$PYPY_BIN" "$PY_HELPER" bench-fwxaes "$BENCH_BYTES_FILE" "$PW"
                 time_cmd_bench "fwxaes_pypy_correct" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_HEAVY" \
                     BASEFWX_BENCH_ITERS="$BENCH_ITERS_HEAVY" \
                     "$PYPY_BIN" "$PY_HELPER" bench-fwxaes "$BENCH_BYTES_FILE" "$PW"
@@ -3519,9 +3541,15 @@ for idx in "${!BENCH_LANGS[@]}"; do
             ;;
         cpp)
             if [[ "$BENCH_FWXAES_MODE" == "par" ]]; then
+                time_cmd_bench "fwxaes_cpp_par_light" env BASEFWX_BENCH_ITERS="$BENCH_ITERS_HEAVY" \
+                    BASEFWX_TEST_KDF_ITERS="$FWXAES_LIGHT_KDF_ITERS" \
+                    "$CPP_BIN" bench-fwxaes-par "$BENCH_BYTES_FILE" "$PW" --no-master
                 time_cmd_bench "fwxaes_cpp_par" env BASEFWX_BENCH_ITERS="$BENCH_ITERS_HEAVY" \
                     "$CPP_BIN" bench-fwxaes-par "$BENCH_BYTES_FILE" "$PW" --no-master
             else
+                time_cmd_bench "fwxaes_cpp_correct_light" env BASEFWX_BENCH_ITERS="$BENCH_ITERS_HEAVY" \
+                    BASEFWX_TEST_KDF_ITERS="$FWXAES_LIGHT_KDF_ITERS" \
+                    "$CPP_BIN" bench-fwxaes "$BENCH_BYTES_FILE" "$PW" --no-master
                 time_cmd_bench "fwxaes_cpp_correct" env BASEFWX_BENCH_ITERS="$BENCH_ITERS_HEAVY" \
                     "$CPP_BIN" bench-fwxaes "$BENCH_BYTES_FILE" "$PW" --no-master
             fi
@@ -3554,10 +3582,18 @@ for idx in "${!BENCH_LANGS[@]}"; do
             ;;
         java)
             if [[ "$BENCH_FWXAES_MODE" == "par" ]]; then
+                time_cmd_bench "fwxaes_java_par_light" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_HEAVY" \
+                    BASEFWX_BENCH_ITERS="$BENCH_ITERS_HEAVY" \
+                    BASEFWX_TEST_KDF_ITERS="$FWXAES_LIGHT_KDF_ITERS" \
+                    "$JAVA_BIN" "${JAVA_BENCH_FLAGS_ARR[@]}" -jar "$JAVA_JAR" bench-fwxaes-par "$BENCH_BYTES_FILE" "$PW" --no-master
                 time_cmd_bench "fwxaes_java_par" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_HEAVY" \
                     BASEFWX_BENCH_ITERS="$BENCH_ITERS_HEAVY" \
                     "$JAVA_BIN" "${JAVA_BENCH_FLAGS_ARR[@]}" -jar "$JAVA_JAR" bench-fwxaes-par "$BENCH_BYTES_FILE" "$PW" --no-master
             else
+                time_cmd_bench "fwxaes_java_correct_light" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_HEAVY" \
+                    BASEFWX_BENCH_ITERS="$BENCH_ITERS_HEAVY" \
+                    BASEFWX_TEST_KDF_ITERS="$FWXAES_LIGHT_KDF_ITERS" \
+                    "$JAVA_BIN" "${JAVA_BENCH_FLAGS_ARR[@]}" -jar "$JAVA_JAR" bench-fwxaes "$BENCH_BYTES_FILE" "$PW" --no-master
                 time_cmd_bench "fwxaes_java_correct" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_HEAVY" \
                     BASEFWX_BENCH_ITERS="$BENCH_ITERS_HEAVY" \
                     "$JAVA_BIN" "${JAVA_BENCH_FLAGS_ARR[@]}" -jar "$JAVA_JAR" bench-fwxaes "$BENCH_BYTES_FILE" "$PW" --no-master
@@ -3782,11 +3818,19 @@ overall_sum_for_lang() {
     printf "%s|%s|%s" "$sum" "$count" "$base_sum"
 }
 
+FWXAES_LIGHT_PY_KEY="fwxaes_py_correct_light"
+FWXAES_LIGHT_PYPY_KEY="fwxaes_pypy_correct_light"
+FWXAES_LIGHT_CPP_KEY="fwxaes_cpp_correct_light"
+FWXAES_LIGHT_JAVA_KEY="fwxaes_java_correct_light"
 FWXAES_PY_KEY="fwxaes_py_correct"
 FWXAES_PYPY_KEY="fwxaes_pypy_correct"
 FWXAES_CPP_KEY="fwxaes_cpp_correct"
 FWXAES_JAVA_KEY="fwxaes_java_correct"
 if [[ "$BENCH_FWXAES_MODE" == "par" ]]; then
+    FWXAES_LIGHT_PY_KEY="fwxaes_py_par_light"
+    FWXAES_LIGHT_PYPY_KEY="fwxaes_pypy_par_light"
+    FWXAES_LIGHT_CPP_KEY="fwxaes_cpp_par_light"
+    FWXAES_LIGHT_JAVA_KEY="fwxaes_java_par_light"
     FWXAES_PY_KEY="fwxaes_py_par"
     FWXAES_PYPY_KEY="fwxaes_pypy_par"
     FWXAES_CPP_KEY="fwxaes_cpp_par"
@@ -3794,6 +3838,7 @@ if [[ "$BENCH_FWXAES_MODE" == "par" ]]; then
 fi
 
 BENCH_METHODS=(
+    "fwxAES-light|${FWXAES_LIGHT_PY_KEY}|${FWXAES_LIGHT_PYPY_KEY}|${FWXAES_LIGHT_CPP_KEY}|${FWXAES_LIGHT_JAVA_KEY}"
     "fwxAES|${FWXAES_PY_KEY}|${FWXAES_PYPY_KEY}|${FWXAES_CPP_KEY}|${FWXAES_JAVA_KEY}"
     "b256|b256_py_correct|b256_pypy_correct|b256_cpp_correct|b256_java_correct"
     "b512|b512_py_correct|b512_pypy_correct|b512_cpp_correct|b512_java_correct"
@@ -4035,6 +4080,7 @@ PY
 }
 
 printf "\nTiming summary (native):\n"
+compare_speed_block "fwxAES-light" "$FWXAES_LIGHT_PY_KEY" "$FWXAES_LIGHT_PYPY_KEY" "$FWXAES_LIGHT_CPP_KEY" "$FWXAES_LIGHT_JAVA_KEY"
 compare_speed_block "fwxAES" "$FWXAES_PY_KEY" "$FWXAES_PYPY_KEY" "$FWXAES_CPP_KEY" "$FWXAES_JAVA_KEY"
 compare_speed_block "b256" "b256_py_correct" "b256_pypy_correct" "b256_cpp_correct" "b256_java_correct"
 compare_speed_block "b512" "b512_py_correct" "b512_pypy_correct" "b512_cpp_correct" "b512_java_correct"

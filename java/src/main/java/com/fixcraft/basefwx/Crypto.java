@@ -302,6 +302,23 @@ public final class Crypto {
     }
 
     public static byte[] aesGcmEncryptWithIv(byte[] key, byte[] iv, byte[] plaintext, byte[] aad) {
+        int outLen = plaintext.length + Constants.AEAD_TAG_LEN;
+        byte[] out = new byte[outLen];
+        int written = aesGcmEncryptWithIvInto(key, iv, plaintext, 0, plaintext.length, out, 0, aad);
+        if (written == outLen) {
+            return out;
+        }
+        return Arrays.copyOf(out, Math.max(0, written));
+    }
+
+    public static int aesGcmEncryptWithIvInto(byte[] key,
+                                              byte[] iv,
+                                              byte[] plaintext,
+                                              int plainOff,
+                                              int plainLen,
+                                              byte[] out,
+                                              int outOff,
+                                              byte[] aad) {
         try {
             Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
             GCMParameterSpec spec = new GCMParameterSpec(Constants.AEAD_TAG_LEN * 8, iv);
@@ -309,7 +326,7 @@ public final class Crypto {
             if (aad != null && aad.length > 0) {
                 cipher.updateAAD(aad);
             }
-            return cipher.doFinal(plaintext);
+            return cipher.doFinal(plaintext, plainOff, plainLen, out, outOff);
         } catch (GeneralSecurityException exc) {
             throw new IllegalStateException("AES-GCM encrypt failed", exc);
         }
@@ -327,6 +344,26 @@ public final class Crypto {
     }
 
     public static byte[] aesGcmDecryptWithIv(byte[] key, byte[] iv, byte[] ciphertext, byte[] aad) {
+        int outLen = ciphertext.length - Constants.AEAD_TAG_LEN;
+        if (outLen < 0) {
+            throw new IllegalArgumentException("AEAD payload too short");
+        }
+        byte[] out = new byte[outLen];
+        int written = aesGcmDecryptWithIvInto(key, iv, ciphertext, 0, ciphertext.length, out, 0, aad);
+        if (written == outLen) {
+            return out;
+        }
+        return Arrays.copyOf(out, Math.max(0, written));
+    }
+
+    public static int aesGcmDecryptWithIvInto(byte[] key,
+                                              byte[] iv,
+                                              byte[] ciphertext,
+                                              int ctOff,
+                                              int ctLen,
+                                              byte[] out,
+                                              int outOff,
+                                              byte[] aad) {
         try {
             Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
             GCMParameterSpec spec = new GCMParameterSpec(Constants.AEAD_TAG_LEN * 8, iv);
@@ -334,7 +371,7 @@ public final class Crypto {
             if (aad != null && aad.length > 0) {
                 cipher.updateAAD(aad);
             }
-            return cipher.doFinal(ciphertext);
+            return cipher.doFinal(ciphertext, ctOff, ctLen, out, outOff);
         } catch (GeneralSecurityException exc) {
             throw new IllegalArgumentException("Bad password or corrupted payload", exc);
         }

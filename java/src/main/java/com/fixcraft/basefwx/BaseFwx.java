@@ -95,31 +95,69 @@ public final class BaseFwx {
         byte[] iv = Crypto.randomBytes(Constants.FWXAES_IV_LEN);
         if (useWrap) {
             byte[] key = Crypto.hkdfSha256(maskKey, Constants.FWXAES_KEY_INFO, Constants.FWXAES_KEY_LEN);
-            byte[] ct = Crypto.aesGcmEncryptWithIv(key, iv, plaintext, Constants.FWXAES_AAD);
-            byte[] header = new byte[16];
-            System.arraycopy(Constants.FWXAES_MAGIC, 0, header, 0, Constants.FWXAES_MAGIC.length);
-            header[4] = (byte) Constants.FWXAES_ALGO;
-            header[5] = (byte) Constants.FWXAES_KDF_WRAP;
-            header[6] = 0;
-            header[7] = (byte) Constants.FWXAES_IV_LEN;
-            writeU32(header, 8, keyHeader.length);
-            writeU32(header, 12, ct.length);
-            return concat(header, keyHeader, iv, ct);
+            int ctLen = plaintext.length + Constants.AEAD_TAG_LEN;
+            byte[] out = new byte[16 + keyHeader.length + iv.length + ctLen];
+            System.arraycopy(Constants.FWXAES_MAGIC, 0, out, 0, Constants.FWXAES_MAGIC.length);
+            out[4] = (byte) Constants.FWXAES_ALGO;
+            out[5] = (byte) Constants.FWXAES_KDF_WRAP;
+            out[6] = 0;
+            out[7] = (byte) Constants.FWXAES_IV_LEN;
+            writeU32(out, 8, keyHeader.length);
+            writeU32(out, 12, ctLen);
+            int offset = 16;
+            if (keyHeader.length > 0) {
+                System.arraycopy(keyHeader, 0, out, offset, keyHeader.length);
+                offset += keyHeader.length;
+            }
+            System.arraycopy(iv, 0, out, offset, iv.length);
+            offset += iv.length;
+            int written = Crypto.aesGcmEncryptWithIvInto(
+                key,
+                iv,
+                plaintext,
+                0,
+                plaintext.length,
+                out,
+                offset,
+                Constants.FWXAES_AAD
+            );
+            if (written != ctLen) {
+                throw new IllegalStateException("fwxAES encrypt length mismatch");
+            }
+            return out;
         }
 
         byte[] salt = Crypto.randomBytes(Constants.FWXAES_SALT_LEN);
         int iters = fwxaesIterations(pw);
         byte[] key = Crypto.pbkdf2HmacSha256(pw, salt, iters, Constants.FWXAES_KEY_LEN);
-        byte[] ct = Crypto.aesGcmEncryptWithIv(key, iv, plaintext, Constants.FWXAES_AAD);
-        byte[] header = new byte[16];
-        System.arraycopy(Constants.FWXAES_MAGIC, 0, header, 0, Constants.FWXAES_MAGIC.length);
-        header[4] = (byte) Constants.FWXAES_ALGO;
-        header[5] = (byte) Constants.FWXAES_KDF_PBKDF2;
-        header[6] = (byte) Constants.FWXAES_SALT_LEN;
-        header[7] = (byte) Constants.FWXAES_IV_LEN;
-        writeU32(header, 8, iters);
-        writeU32(header, 12, ct.length);
-        return concat(header, salt, iv, ct);
+        int ctLen = plaintext.length + Constants.AEAD_TAG_LEN;
+        byte[] out = new byte[16 + salt.length + iv.length + ctLen];
+        System.arraycopy(Constants.FWXAES_MAGIC, 0, out, 0, Constants.FWXAES_MAGIC.length);
+        out[4] = (byte) Constants.FWXAES_ALGO;
+        out[5] = (byte) Constants.FWXAES_KDF_PBKDF2;
+        out[6] = (byte) Constants.FWXAES_SALT_LEN;
+        out[7] = (byte) Constants.FWXAES_IV_LEN;
+        writeU32(out, 8, iters);
+        writeU32(out, 12, ctLen);
+        int offset = 16;
+        System.arraycopy(salt, 0, out, offset, salt.length);
+        offset += salt.length;
+        System.arraycopy(iv, 0, out, offset, iv.length);
+        offset += iv.length;
+        int written = Crypto.aesGcmEncryptWithIvInto(
+            key,
+            iv,
+            plaintext,
+            0,
+            plaintext.length,
+            out,
+            offset,
+            Constants.FWXAES_AAD
+        );
+        if (written != ctLen) {
+            throw new IllegalStateException("fwxAES encrypt length mismatch");
+        }
+        return out;
     }
 
     public static byte[] fwxAesDecryptRaw(byte[] blob, String password, boolean useMaster) {
@@ -155,7 +193,6 @@ public final class BaseFwx {
             offset += headerLen;
             byte[] iv = Arrays.copyOfRange(blob, offset, offset + ivLen);
             offset += ivLen;
-            byte[] ct = Arrays.copyOfRange(blob, offset, offset + ctLen);
             List<byte[]> parts = Format.unpackLengthPrefixed(header, 2);
             byte[] maskKey = KeyWrap.recoverMaskKey(
                 parts.get(0),
@@ -167,7 +204,24 @@ public final class BaseFwx {
                 new KeyWrap.KdfOptions("pbkdf2", Constants.USER_KDF_ITERATIONS)
             );
             byte[] key = Crypto.hkdfSha256(maskKey, Constants.FWXAES_KEY_INFO, Constants.FWXAES_KEY_LEN);
-            return Crypto.aesGcmDecryptWithIv(key, iv, ct, Constants.FWXAES_AAD);
+            if (ctLen < Constants.AEAD_TAG_LEN) {
+                throw new IllegalArgumentException("fwxAES ciphertext too short");
+            }
+            byte[] plain = new byte[ctLen - Constants.AEAD_TAG_LEN];
+            int written = Crypto.aesGcmDecryptWithIvInto(
+                key,
+                iv,
+                blob,
+                offset,
+                ctLen,
+                plain,
+                0,
+                Constants.FWXAES_AAD
+            );
+            if (written != plain.length) {
+                return Arrays.copyOf(plain, Math.max(0, written));
+            }
+            return plain;
         }
         if (blob.length < offset + saltLen + ivLen + ctLen) {
             throw new IllegalArgumentException("fwxAES blob truncated");
@@ -176,12 +230,28 @@ public final class BaseFwx {
         offset += saltLen;
         byte[] iv = Arrays.copyOfRange(blob, offset, offset + ivLen);
         offset += ivLen;
-        byte[] ct = Arrays.copyOfRange(blob, offset, offset + ctLen);
         if (pw.length == 0) {
             throw new IllegalArgumentException("fwxAES password required for PBKDF2 payload");
         }
         byte[] key = Crypto.pbkdf2HmacSha256(pw, salt, iters, Constants.FWXAES_KEY_LEN);
-        return Crypto.aesGcmDecryptWithIv(key, iv, ct, Constants.FWXAES_AAD);
+        if (ctLen < Constants.AEAD_TAG_LEN) {
+            throw new IllegalArgumentException("fwxAES ciphertext too short");
+        }
+        byte[] plain = new byte[ctLen - Constants.AEAD_TAG_LEN];
+        int written = Crypto.aesGcmDecryptWithIvInto(
+            key,
+            iv,
+            blob,
+            offset,
+            ctLen,
+            plain,
+            0,
+            Constants.FWXAES_AAD
+        );
+        if (written != plain.length) {
+            return Arrays.copyOf(plain, Math.max(0, written));
+        }
+        return plain;
     }
 
     public static long fwxAesEncryptStream(InputStream input,
@@ -379,72 +449,47 @@ public final class BaseFwx {
     }
 
     public static String hash512(String input) {
-        return digestHex("SHA-512", input);
+        return hash512Bytes(input.getBytes(StandardCharsets.UTF_8));
     }
 
     public static String uhash513(String input) {
-        try {
-            byte[] inputBytes = input.getBytes(StandardCharsets.UTF_8);
-            
-            // h1 = SHA-256(input)
-            MessageDigest md256 = MessageDigest.getInstance("SHA-256");
-            byte[] h1Bytes = md256.digest(inputBytes);
-            
-            // Convert h1 to hex bytes (not string)
-            byte[] h1Hex = new byte[h1Bytes.length * 2];
-            for (int i = 0; i < h1Bytes.length; i++) {
-                int v = h1Bytes[i] & 0xFF;
-                h1Hex[i * 2] = (byte) HEX_CHARS[v >>> 4];
-                h1Hex[i * 2 + 1] = (byte) HEX_CHARS[v & 0x0F];
-            }
-            
-            // h2 = SHA-1(h1)
-            MessageDigest md1 = MessageDigest.getInstance("SHA-1");
-            byte[] h2Bytes = md1.digest(h1Hex);
-            
-            // Convert h2 to hex bytes
-            byte[] h2Hex = new byte[h2Bytes.length * 2];
-            for (int i = 0; i < h2Bytes.length; i++) {
-                int v = h2Bytes[i] & 0xFF;
-                h2Hex[i * 2] = (byte) HEX_CHARS[v >>> 4];
-                h2Hex[i * 2 + 1] = (byte) HEX_CHARS[v & 0x0F];
-            }
-            
-            // h3 = SHA-512(h2)
-            MessageDigest md512a = MessageDigest.getInstance("SHA-512");
-            byte[] h3Bytes = md512a.digest(h2Hex);
-            
-            // h4 = SHA-512(input)
-            MessageDigest md512b = MessageDigest.getInstance("SHA-512");
-            byte[] h4Bytes = md512b.digest(inputBytes);
-            
-            // Concatenate h3 and h4 hex bytes
-            byte[] h3h4Hex = new byte[(h3Bytes.length + h4Bytes.length) * 2];
-            int pos = 0;
-            for (int i = 0; i < h3Bytes.length; i++) {
-                int v = h3Bytes[i] & 0xFF;
-                h3h4Hex[pos++] = (byte) HEX_CHARS[v >>> 4];
-                h3h4Hex[pos++] = (byte) HEX_CHARS[v & 0x0F];
-            }
-            for (int i = 0; i < h4Bytes.length; i++) {
-                int v = h4Bytes[i] & 0xFF;
-                h3h4Hex[pos++] = (byte) HEX_CHARS[v >>> 4];
-                h3h4Hex[pos++] = (byte) HEX_CHARS[v & 0x0F];
-            }
-            
-            // Final SHA-256
-            md256.reset();
-            byte[] finalDigest = md256.digest(h3h4Hex);
-            char[] out = new char[finalDigest.length * 2];
-            for (int i = 0; i < finalDigest.length; i++) {
-                int v = finalDigest[i] & 0xFF;
-                out[i * 2] = HEX_CHARS[v >>> 4];
-                out[i * 2 + 1] = HEX_CHARS[v & 0x0F];
-            }
-            return new String(out);
-        } catch (NoSuchAlgorithmException exc) {
-            throw new IllegalStateException("Digest unavailable", exc);
+        return uhash513Bytes(input.getBytes(StandardCharsets.UTF_8));
+    }
+
+    public static String hash512Bytes(byte[] input) {
+        if (input == null) {
+            throw new IllegalArgumentException("hash512 expects bytes");
         }
+        return digestHex(SHA512_DIGEST.get(), input);
+    }
+
+    public static String uhash513Bytes(byte[] inputBytes) {
+        if (inputBytes == null) {
+            throw new IllegalArgumentException("uhash513 expects bytes");
+        }
+        MessageDigest md256 = SHA256_DIGEST.get();
+        MessageDigest md1 = SHA1_DIGEST.get();
+        MessageDigest md512 = SHA512_DIGEST.get();
+
+        byte[] h1Bytes = digestBytes(md256, inputBytes);
+        byte[] h1Hex = new byte[h1Bytes.length * 2];
+        hexToBytes(h1Bytes, h1Hex);
+
+        byte[] h2Bytes = digestBytes(md1, h1Hex);
+        byte[] h2Hex = new byte[h2Bytes.length * 2];
+        hexToBytes(h2Bytes, h2Hex);
+
+        byte[] h3Bytes = digestBytes(md512, h2Hex);
+        byte[] h4Bytes = digestBytes(md512, inputBytes);
+
+        md256.reset();
+        byte[] hexBuf = new byte[h3Bytes.length * 2];
+        hexToBytes(h3Bytes, hexBuf);
+        md256.update(hexBuf, 0, hexBuf.length);
+        hexToBytes(h4Bytes, hexBuf);
+        md256.update(hexBuf, 0, hexBuf.length);
+        byte[] finalDigest = md256.digest();
+        return hexToString(finalDigest);
     }
 
     public static String bi512Encode(String input) {
@@ -2349,21 +2394,83 @@ public final class BaseFwx {
     }
 
     private static final char[] HEX_CHARS = "0123456789abcdef".toCharArray();
-    
-    private static String digestHex(String algorithm, String input) {
+    private static final byte[] HEX_BYTES = buildHexBytes();
+    private static final ThreadLocal<MessageDigest> SHA256_DIGEST = threadLocalDigest("SHA-256");
+    private static final ThreadLocal<MessageDigest> SHA1_DIGEST = threadLocalDigest("SHA-1");
+    private static final ThreadLocal<MessageDigest> SHA512_DIGEST = threadLocalDigest("SHA-512");
+
+    private static byte[] buildHexBytes() {
+        byte[] out = new byte[512];
+        for (int i = 0; i < 256; i++) {
+            out[i * 2] = (byte) HEX_CHARS[i >>> 4];
+            out[i * 2 + 1] = (byte) HEX_CHARS[i & 0x0F];
+        }
+        return out;
+    }
+
+    private static ThreadLocal<MessageDigest> threadLocalDigest(String algorithm) {
+        return ThreadLocal.withInitial(() -> newDigest(algorithm));
+    }
+
+    private static MessageDigest newDigest(String algorithm) {
         try {
-            MessageDigest md = MessageDigest.getInstance(algorithm);
-            byte[] digest = md.digest(input.getBytes(StandardCharsets.UTF_8));
-            char[] out = new char[digest.length * 2];
-            for (int i = 0; i < digest.length; i++) {
-                int v = digest[i] & 0xFF;
-                out[i * 2] = HEX_CHARS[v >>> 4];
-                out[i * 2 + 1] = HEX_CHARS[v & 0x0F];
-            }
-            return new String(out);
+            return MessageDigest.getInstance(algorithm);
         } catch (NoSuchAlgorithmException exc) {
             throw new IllegalStateException("Digest unavailable: " + algorithm, exc);
         }
+    }
+
+    private static MessageDigest digestFor(String algorithm) {
+        if ("SHA-256".equalsIgnoreCase(algorithm)) {
+            return SHA256_DIGEST.get();
+        }
+        if ("SHA-1".equalsIgnoreCase(algorithm)) {
+            return SHA1_DIGEST.get();
+        }
+        if ("SHA-512".equalsIgnoreCase(algorithm)) {
+            return SHA512_DIGEST.get();
+        }
+        return null;
+    }
+
+    private static byte[] digestBytes(MessageDigest md, byte[] input) {
+        md.reset();
+        md.update(input);
+        return md.digest();
+    }
+
+    private static void hexToBytes(byte[] input, byte[] out) {
+        if (out.length < input.length * 2) {
+            throw new IllegalArgumentException("hex output buffer too small");
+        }
+        for (int i = 0; i < input.length; i++) {
+            int v = input[i] & 0xFF;
+            int idx = v << 1;
+            out[i * 2] = HEX_BYTES[idx];
+            out[i * 2 + 1] = HEX_BYTES[idx + 1];
+        }
+    }
+
+    private static String hexToString(byte[] input) {
+        char[] out = new char[input.length * 2];
+        for (int i = 0; i < input.length; i++) {
+            int v = input[i] & 0xFF;
+            out[i * 2] = HEX_CHARS[v >>> 4];
+            out[i * 2 + 1] = HEX_CHARS[v & 0x0F];
+        }
+        return new String(out);
+    }
+
+    private static String digestHex(MessageDigest md, byte[] input) {
+        return hexToString(digestBytes(md, input));
+    }
+
+    private static String digestHex(String algorithm, String input) {
+        MessageDigest md = digestFor(algorithm);
+        if (md == null) {
+            md = newDigest(algorithm);
+        }
+        return digestHex(md, input.getBytes(StandardCharsets.UTF_8));
     }
 
     private static String mdCode(String input) {

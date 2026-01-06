@@ -48,7 +48,7 @@ jobs:
             echo "BASEFWX_RELEASE_TAG=$BASEFWX_RELEASE_TAG" >> "$GITHUB_ENV"
           fi
           chmod +x scripts/test_all.sh
-          ./scripts/test_all.sh
+          ./scripts/test_all.sh --fbench
 
       - name: Publish benchmark results to main
         run: |

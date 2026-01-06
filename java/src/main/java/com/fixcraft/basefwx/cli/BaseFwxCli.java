@@ -446,11 +446,27 @@ public final class BaseFwxCli {
                     int iters = benchIters();
                     int workers = benchWorkers();
                     String text = readText(textFile);
-                    BenchWorker worker = (idx) -> {
-                        String digest = hashText(method, text);
-                        BENCH_SINK ^= digest.length();
-                        return digest.length();
-                    };
+                    byte[] textBytes = text.getBytes(StandardCharsets.UTF_8);
+                    BenchWorker worker;
+                    if (method.equals("hash512")) {
+                        worker = (idx) -> {
+                            String digest = BaseFwx.hash512Bytes(textBytes);
+                            BENCH_SINK ^= digest.length();
+                            return digest.length();
+                        };
+                    } else if (method.equals("uhash513")) {
+                        worker = (idx) -> {
+                            String digest = BaseFwx.uhash513Bytes(textBytes);
+                            BENCH_SINK ^= digest.length();
+                            return digest.length();
+                        };
+                    } else {
+                        worker = (idx) -> {
+                            String digest = hashText(method, text);
+                            BENCH_SINK ^= digest.length();
+                            return digest.length();
+                        };
+                    }
                     long ns = workers > 1
                         ? benchParallelMedian(warmup, iters, workers, worker)
                         : benchMedian(warmup, iters, () -> worker.run(0));

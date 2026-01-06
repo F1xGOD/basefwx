@@ -10,6 +10,7 @@
 
 #include <array>
 #include <chrono>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <limits>
@@ -28,6 +29,7 @@ const std::uint8_t kAlgo = 0x01;
 const std::uint8_t kKdfPbkdf2 = 0x01;
 const std::uint8_t kKdfWrap = 0x02;
 const std::uint8_t kAadBytes[] = {'f', 'w', 'x', 'A', 'E', 'S'};
+const Bytes kAadVec(kAadBytes, kAadBytes + sizeof(kAadBytes));
 const std::uint8_t kPackMagic[] = {'F', 'W', 'X', 'P', 'K', '1'};
 constexpr std::size_t kPackHeaderLen = sizeof(kPackMagic) + 1 + 8;
 constexpr std::size_t kMaxKeyHeaderLen = 4 * 1024 * 1024;
@@ -98,6 +100,13 @@ void PutU32Be(std::vector<std::uint8_t>& out, std::uint32_t value) {
     out.push_back(static_cast<std::uint8_t>((value >> 16) & 0xFF));
     out.push_back(static_cast<std::uint8_t>((value >> 8) & 0xFF));
     out.push_back(static_cast<std::uint8_t>(value & 0xFF));
+}
+
+void WriteU32Be(std::uint8_t* out, std::uint32_t value) {
+    out[0] = static_cast<std::uint8_t>((value >> 24) & 0xFF);
+    out[1] = static_cast<std::uint8_t>((value >> 16) & 0xFF);
+    out[2] = static_cast<std::uint8_t>((value >> 8) & 0xFF);
+    out[3] = static_cast<std::uint8_t>(value & 0xFF);
 }
 
 std::uint32_t GetU32Be(const std::uint8_t* ptr) {
@@ -250,46 +259,80 @@ Bytes EncryptRaw(const Bytes& plaintext, const std::string& password, const Opti
     }
 
     Bytes iv = basefwx::crypto::RandomBytes(effective.iv_len);
-    Bytes aad(kAadBytes, kAadBytes + sizeof(kAadBytes));
     Bytes key;
     if (use_wrap) {
         key = basefwx::crypto::HkdfSha256(mask_key.mask_key, basefwx::constants::kFwxAesKeyInfo, 32);
     } else {
         Bytes salt = basefwx::crypto::RandomBytes(effective.salt_len);
         key = basefwx::crypto::Pbkdf2HmacSha256(resolved, salt, effective.pbkdf2_iters, 32);
-        Bytes ct = basefwx::crypto::AesGcmEncryptWithIv(key, iv, plaintext, aad);
-
-        Bytes blob;
-        blob.reserve(16 + salt.size() + iv.size() + ct.size());
-        blob.insert(blob.end(), kMagic, kMagic + 4);
-        blob.push_back(kAlgo);
-        blob.push_back(kKdfPbkdf2);
-        blob.push_back(effective.salt_len);
-        blob.push_back(effective.iv_len);
-        PutU32Be(blob, effective.pbkdf2_iters);
-        PutU32Be(blob, static_cast<std::uint32_t>(ct.size()));
-        blob.insert(blob.end(), salt.begin(), salt.end());
-        blob.insert(blob.end(), iv.begin(), iv.end());
-        blob.insert(blob.end(), ct.begin(), ct.end());
+        std::size_t ct_len = plaintext.size() + basefwx::constants::kAeadTagLen;
+        if (ct_len > std::numeric_limits<std::uint32_t>::max()) {
+            throw std::runtime_error("fwxAES ciphertext too large");
+        }
+        Bytes blob(16 + salt.size() + iv.size() + ct_len);
+        std::uint8_t* out = blob.data();
+        std::memcpy(out, kMagic, 4);
+        out[4] = kAlgo;
+        out[5] = kKdfPbkdf2;
+        out[6] = effective.salt_len;
+        out[7] = effective.iv_len;
+        WriteU32Be(out + 8, effective.pbkdf2_iters);
+        WriteU32Be(out + 12, static_cast<std::uint32_t>(ct_len));
+        std::size_t offset = 16;
+        std::memcpy(out + offset, salt.data(), salt.size());
+        offset += salt.size();
+        std::memcpy(out + offset, iv.data(), iv.size());
+        offset += iv.size();
+        std::size_t written = basefwx::crypto::AesGcmEncryptWithIvInto(
+            key,
+            iv,
+            plaintext.data(),
+            plaintext.size(),
+            kAadVec,
+            out + offset,
+            blob.size() - offset
+        );
+        if (written != ct_len) {
+            throw std::runtime_error("fwxAES encrypt length mismatch");
+        }
         return blob;
     }
 
-    Bytes ct = basefwx::crypto::AesGcmEncryptWithIv(key, iv, plaintext, aad);
     if (key_header.size() > std::numeric_limits<std::uint32_t>::max()) {
         throw std::runtime_error("fwxAES key header too large");
     }
-    Bytes blob;
-    blob.reserve(16 + key_header.size() + iv.size() + ct.size());
-    blob.insert(blob.end(), kMagic, kMagic + 4);
-    blob.push_back(kAlgo);
-    blob.push_back(kKdfWrap);
-    blob.push_back(0);
-    blob.push_back(effective.iv_len);
-    PutU32Be(blob, static_cast<std::uint32_t>(key_header.size()));
-    PutU32Be(blob, static_cast<std::uint32_t>(ct.size()));
-    blob.insert(blob.end(), key_header.begin(), key_header.end());
-    blob.insert(blob.end(), iv.begin(), iv.end());
-    blob.insert(blob.end(), ct.begin(), ct.end());
+    std::size_t ct_len = plaintext.size() + basefwx::constants::kAeadTagLen;
+    if (ct_len > std::numeric_limits<std::uint32_t>::max()) {
+        throw std::runtime_error("fwxAES ciphertext too large");
+    }
+    Bytes blob(16 + key_header.size() + iv.size() + ct_len);
+    std::uint8_t* out = blob.data();
+    std::memcpy(out, kMagic, 4);
+    out[4] = kAlgo;
+    out[5] = kKdfWrap;
+    out[6] = 0;
+    out[7] = effective.iv_len;
+    WriteU32Be(out + 8, static_cast<std::uint32_t>(key_header.size()));
+    WriteU32Be(out + 12, static_cast<std::uint32_t>(ct_len));
+    std::size_t offset = 16;
+    if (!key_header.empty()) {
+        std::memcpy(out + offset, key_header.data(), key_header.size());
+        offset += key_header.size();
+    }
+    std::memcpy(out + offset, iv.data(), iv.size());
+    offset += iv.size();
+    std::size_t written = basefwx::crypto::AesGcmEncryptWithIvInto(
+        key,
+        iv,
+        plaintext.data(),
+        plaintext.size(),
+        kAadVec,
+        out + offset,
+        blob.size() - offset
+    );
+    if (written != ct_len) {
+        throw std::runtime_error("fwxAES encrypt length mismatch");
+    }
     return blob;
 }
 
@@ -311,6 +354,9 @@ Bytes DecryptRaw(const Bytes& blob, const std::string& password, bool use_master
     }
     std::uint32_t iters = GetU32Be(&blob[8]);
     std::uint32_t ct_len = GetU32Be(&blob[12]);
+    if (ct_len < basefwx::constants::kAeadTagLen) {
+        throw std::runtime_error("fwxAES ciphertext too short");
+    }
 
     std::size_t offset = header_len;
     if (kdf == kKdfWrap) {
@@ -331,8 +377,6 @@ Bytes DecryptRaw(const Bytes& blob, const std::string& password, bool use_master
         Bytes iv(blob.begin() + static_cast<std::ptrdiff_t>(offset),
                  blob.begin() + static_cast<std::ptrdiff_t>(offset + iv_len));
         offset += iv_len;
-        Bytes ct(blob.begin() + static_cast<std::ptrdiff_t>(offset),
-                 blob.begin() + static_cast<std::ptrdiff_t>(offset + ct_len));
         auto parts = basefwx::format::UnpackLengthPrefixed(header, 2);
         basefwx::pb512::KdfOptions kdf_opts;
         Bytes mask_key = basefwx::keywrap::RecoverMaskKey(
@@ -345,8 +389,18 @@ Bytes DecryptRaw(const Bytes& blob, const std::string& password, bool use_master
             kdf_opts
         );
         Bytes key = basefwx::crypto::HkdfSha256(mask_key, basefwx::constants::kFwxAesKeyInfo, 32);
-        Bytes aad(kAadBytes, kAadBytes + sizeof(kAadBytes));
-        return basefwx::crypto::AesGcmDecryptWithIv(key, iv, ct, aad);
+        Bytes plaintext(ct_len - basefwx::constants::kAeadTagLen);
+        std::size_t written = basefwx::crypto::AesGcmDecryptWithIvInto(
+            key,
+            iv,
+            blob.data() + offset,
+            ct_len,
+            kAadVec,
+            plaintext.data(),
+            plaintext.size()
+        );
+        plaintext.resize(written);
+        return plaintext;
     }
     if (blob.size() < offset + salt_len + iv_len + ct_len) {
         throw std::runtime_error("fwxAES blob truncated");
@@ -358,11 +412,19 @@ Bytes DecryptRaw(const Bytes& blob, const std::string& password, bool use_master
     offset += salt_len;
     Bytes iv(blob.begin() + offset, blob.begin() + offset + iv_len);
     offset += iv_len;
-    Bytes ct(blob.begin() + offset, blob.begin() + offset + ct_len);
-
     Bytes key = basefwx::crypto::Pbkdf2HmacSha256(resolved, salt, iters, 32);
-    Bytes aad(kAadBytes, kAadBytes + sizeof(kAadBytes));
-    return basefwx::crypto::AesGcmDecryptWithIv(key, iv, ct, aad);
+    Bytes plaintext(ct_len - basefwx::constants::kAeadTagLen);
+    std::size_t written = basefwx::crypto::AesGcmDecryptWithIvInto(
+        key,
+        iv,
+        blob.data() + offset,
+        ct_len,
+        kAadVec,
+        plaintext.data(),
+        plaintext.size()
+    );
+    plaintext.resize(written);
+    return plaintext;
 }
 
 std::uint64_t EncryptStream(std::istream& source,

@@ -29,6 +29,20 @@ Bytes AesGcmEncrypt(const Bytes& key, const Bytes& plaintext, const Bytes& aad);
 Bytes AesGcmDecrypt(const Bytes& key, const Bytes& blob, const Bytes& aad);
 Bytes AesGcmEncryptWithIv(const Bytes& key, const Bytes& iv, const Bytes& plaintext, const Bytes& aad);
 Bytes AesGcmDecryptWithIv(const Bytes& key, const Bytes& iv, const Bytes& blob, const Bytes& aad);
+std::size_t AesGcmEncryptWithIvInto(const Bytes& key,
+                                    const Bytes& iv,
+                                    const std::uint8_t* plaintext,
+                                    std::size_t plaintext_len,
+                                    const Bytes& aad,
+                                    std::uint8_t* out,
+                                    std::size_t out_len);
+std::size_t AesGcmDecryptWithIvInto(const Bytes& key,
+                                    const Bytes& iv,
+                                    const std::uint8_t* blob,
+                                    std::size_t blob_len,
+                                    const Bytes& aad,
+                                    std::uint8_t* out,
+                                    std::size_t out_len);
 Bytes AesCtrTransform(const Bytes& key, const Bytes& iv, const Bytes& data);
 Bytes Sha3_512(const Bytes& data);
 

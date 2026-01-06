@@ -16,6 +16,10 @@ public final class Crypto {
     private static final byte[] HKDF_ZERO_SALT = new byte[32];
     private static final boolean PBKDF2_NATIVE_ENABLED = resolvePbkdf2Native();
     private static final boolean PBKDF2_JCE_COMPAT = PBKDF2_NATIVE_ENABLED && detectPbkdf2Compat();
+    private static final ThreadLocal<Cipher> AES_GCM_ENC = ThreadLocal.withInitial(Crypto::initAesGcmCipher);
+    private static final ThreadLocal<Cipher> AES_GCM_DEC = ThreadLocal.withInitial(Crypto::initAesGcmCipher);
+    private static final ThreadLocal<Mac> HMAC_SHA256 = ThreadLocal.withInitial(Crypto::initHmacInstance);
+    private static final ThreadLocal<SecretKeyFactory> PBKDF2_FACTORY = ThreadLocal.withInitial(Crypto::initPbkdf2Factory);
 
     private Crypto() {}
 
@@ -190,7 +194,7 @@ public final class Crypto {
 
     static Mac initHmac(byte[] key) {
         try {
-            Mac mac = Mac.getInstance("HmacSHA256");
+            Mac mac = HMAC_SHA256.get();
             mac.init(new SecretKeySpec(key, "HmacSHA256"));
             return mac;
         } catch (GeneralSecurityException exc) {
@@ -226,7 +230,10 @@ public final class Crypto {
         char[] chars = pwStr.toCharArray();
         try {
             PBEKeySpec spec = new PBEKeySpec(chars, salt, iterations, length * 8);
-            SecretKeyFactory factory = SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256");
+            SecretKeyFactory factory = PBKDF2_FACTORY.get();
+            if (factory == null) {
+                return null;
+            }
             byte[] out = factory.generateSecret(spec).getEncoded();
             spec.clearPassword();
             return out;
@@ -320,7 +327,7 @@ public final class Crypto {
                                               int outOff,
                                               byte[] aad) {
         try {
-            Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
+            Cipher cipher = AES_GCM_ENC.get();
             GCMParameterSpec spec = new GCMParameterSpec(Constants.AEAD_TAG_LEN * 8, iv);
             cipher.init(Cipher.ENCRYPT_MODE, new SecretKeySpec(key, "AES"), spec);
             if (aad != null && aad.length > 0) {
@@ -365,7 +372,7 @@ public final class Crypto {
                                               int outOff,
                                               byte[] aad) {
         try {
-            Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
+            Cipher cipher = AES_GCM_DEC.get();
             GCMParameterSpec spec = new GCMParameterSpec(Constants.AEAD_TAG_LEN * 8, iv);
             cipher.init(Cipher.DECRYPT_MODE, new SecretKeySpec(key, "AES"), spec);
             if (aad != null && aad.length > 0) {
@@ -374,6 +381,30 @@ public final class Crypto {
             return cipher.doFinal(ciphertext, ctOff, ctLen, out, outOff);
         } catch (GeneralSecurityException exc) {
             throw new IllegalArgumentException("Bad password or corrupted payload", exc);
+        }
+    }
+
+    private static Cipher initAesGcmCipher() {
+        try {
+            return Cipher.getInstance("AES/GCM/NoPadding");
+        } catch (GeneralSecurityException exc) {
+            throw new IllegalStateException("AES-GCM unavailable", exc);
+        }
+    }
+
+    private static Mac initHmacInstance() {
+        try {
+            return Mac.getInstance("HmacSHA256");
+        } catch (GeneralSecurityException exc) {
+            throw new IllegalStateException("HMAC unavailable", exc);
+        }
+    }
+
+    private static SecretKeyFactory initPbkdf2Factory() {
+        try {
+            return SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256");
+        } catch (GeneralSecurityException exc) {
+            return null;
         }
     }
 

@@ -219,7 +219,7 @@ class basefwx:
         )
     )
     _CODE_TABLE: typing.ClassVar[tuple[str | None, ...]] = tuple(
-        _CODE_MAP.get(chr(i)) for i in range(256)
+        map(_CODE_MAP.get, map(chr, range(256)))
     )
     _MD_CODE_TABLE: typing.ClassVar[tuple[str, ...]] = tuple(
         f"{len(str(i))}{i}" for i in range(256)

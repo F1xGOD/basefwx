@@ -37,7 +37,7 @@ jobs:
           BASEFWX_RELEASE_TAG: ${{ github.ref_name }}
         run: |
           chmod +x scripts/test_all.sh
-          ./scripts/test_all.sh
+          ./scripts/test_all.sh --fbench
 
       - name: Upload benchmark results
         uses: actions/upload-artifact@v4

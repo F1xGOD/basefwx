@@ -146,29 +146,22 @@ const formatNs = (ns, epsilon) => {
 };
 
 const deltaInfo = (baseNs, otherNs, epsilon) => {
-  if (!Number.isFinite(baseNs) || !Number.isFinite(otherNs)) {
-    return { label: "n/a", className: "delta-na" };
+  if (!Number.isFinite(baseNs) || !Number.isFinite(otherNs) || baseNs <= 0 || otherNs <= 0) {
+    return { label: "❓ Not measurable (below timer resolution)", className: "delta-na" };
   }
   if (baseNs < epsilon || otherNs < epsilon) {
-    return { label: "❓ Not measurable", className: "delta-na" };
+    return { label: "❓ Not measurable (below timer resolution)", className: "delta-na" };
   }
-  const pct = ((baseNs - otherNs) / baseNs) * 100;
-  const absPct = Math.abs(pct);
-  if (absPct < 0.005) {
+  const absDiff = Math.abs(otherNs - baseNs);
+  if (absDiff < epsilon) {
     return { label: "🔵 Same (±0.00%)", className: "delta-same" };
   }
-  if (absPct >= 100) {
-    const ratio = pct > 0 ? baseNs / otherNs : otherNs / baseNs;
-    const ratioLabel = Number.isFinite(ratio) ? ratio.toFixed(2) : "∞";
-    return {
-      label: pct > 0 ? `⚡ Faster (${ratioLabel}×)` : `🐌 Slower (${ratioLabel}×)`,
-      className: pct > 0 ? "delta-fast" : "delta-slow"
-    };
-  }
-  const pctLabel = absPct.toFixed(2);
+  const isFaster = otherNs < baseNs;
+  const pct = isFaster ? (baseNs / otherNs - 1) * 100 : (otherNs / baseNs - 1) * 100;
+  const pctLabel = Math.abs(pct).toFixed(2);
   return {
-    label: pct > 0 ? `⚡ Faster (+${pctLabel}%)` : `🐌 Slower (−${pctLabel}%)`,
-    className: pct > 0 ? "delta-fast" : "delta-slow"
+    label: isFaster ? `⚡ Faster (+${pctLabel}%)` : `🐌 Slower (−${pctLabel}%)`,
+    className: isFaster ? "delta-fast" : "delta-slow"
   };
 };
 

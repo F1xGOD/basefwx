@@ -180,7 +180,7 @@ fi
 BENCH_PARALLEL="${BASEFWX_BENCH_PARALLEL:-1}"
 BENCH_ALL_CORES="${BASEFWX_BENCH_ALL_CORES:-1}"
 BENCH_MAX_THREADS="${BASEFWX_MAX_THREADS:-}"
-export BASEFWX_BENCH_ITERS="${BASEFWX_BENCH_ITERS:-50}"
+export BASEFWX_BENCH_ITERS="${BASEFWX_BENCH_ITERS:-5}"
 export BASEFWX_BENCH_WARMUP="${BASEFWX_BENCH_WARMUP:-2}"
 export BASEFWX_BENCH_PARALLEL="$BENCH_PARALLEL"
 export BASEFWX_BENCH_ALL_CORES="$BENCH_ALL_CORES"
@@ -2967,7 +2967,7 @@ calc_total_steps
 if (( BENCH_ONLY == 1 )); then
     log "Bench-only mode: skipping correctness and verification phases"
     # Reduce benchmark iterations/warmup to keep runs short unless user overrides
-    export BASEFWX_BENCH_ITERS="${BASEFWX_BENCH_ITERS:-5}"
+    export BASEFWX_BENCH_ITERS="${BASEFWX_BENCH_ITERS:-4}"
     export BASEFWX_BENCH_WARMUP="${BASEFWX_BENCH_WARMUP:-1}"
     SKIP_WRONG=1
     SKIP_CROSS=1
@@ -3264,7 +3264,7 @@ if [[ -z "${BENCH_WARMUP_LIGHT:-}" || -z "${BENCH_WARMUP_HEAVY:-}" ]]; then
     fi
 fi
 BENCH_ITERS_LIGHT="${BENCH_ITERS_LIGHT:-${BASEFWX_BENCH_ITERS:-50}}"
-BENCH_ITERS_SLOW="${BENCH_ITERS_SLOW:-10}"
+BENCH_ITERS_SLOW="${BENCH_ITERS_SLOW:-4}"
 if [[ ! "$BENCH_ITERS_LIGHT" =~ ^[0-9]+$ || "$BENCH_ITERS_LIGHT" -lt 1 ]]; then
     BENCH_ITERS_LIGHT=1
 fi
@@ -3277,7 +3277,7 @@ if [[ -z "${BENCH_ITERS_HEAVY:-}" ]]; then
     elif [[ "$TEST_MODE" == "fast" ]]; then
         BENCH_ITERS_HEAVY=3
     else
-        BENCH_ITERS_HEAVY=5
+        BENCH_ITERS_HEAVY=4
     fi
 fi
 if [[ -z "${BENCH_ITERS_FILE:-}" ]]; then
@@ -3286,7 +3286,7 @@ if [[ -z "${BENCH_ITERS_FILE:-}" ]]; then
     elif [[ "$TEST_MODE" == "fast" ]]; then
         BENCH_ITERS_FILE=2
     else
-        BENCH_ITERS_FILE=3
+        BENCH_ITERS_FILE=4
     fi
 fi
 if [[ ! "$BENCH_ITERS_HEAVY" =~ ^[0-9]+$ || "$BENCH_ITERS_HEAVY" -lt 1 ]]; then

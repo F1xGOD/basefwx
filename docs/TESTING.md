@@ -41,8 +41,8 @@ Common knobs used by the test script:
 - `BENCH_TEXT_FILE=/path` to override the benchmark text input file.
 - `BENCH_TEXT_MAX_BYTES=60000000` to cap benchmark text size (defaults to 60MB).
 - `BENCH_TEXT_SLOW_BYTES=1048576` to cap slow text methods (a512/bi512/b1024) separately (defaults to 1MB).
-- `BENCH_ITERS_LIGHT=50` and `BENCH_ITERS_SLOW=10` to tune benchmark iterations for text/hash methods.
-- `BENCH_ITERS_HEAVY=5` and `BENCH_ITERS_FILE=3` to tune fwxAES/file benchmark iterations.
+- `BENCH_ITERS_LIGHT=5` and `BENCH_ITERS_SLOW=4` to tune benchmark iterations for text/hash methods.
+- `BENCH_ITERS_HEAVY=4` and `BENCH_ITERS_FILE=4` to tune fwxAES/file benchmark iterations.
 - `BENCH_FWXAES_MODE=par` to benchmark fwxAES with full parallelism (`par` or `single`).
 - `BASEFWX_BENCH_PARALLEL=1` to run benchmarks across all cores by default (set `0` to force single-core).
 - `BASEFWX_BENCH_ALL_CORES=1` to enforce full-core benchmarking (set `0` to allow custom workers).

@@ -3234,6 +3234,18 @@ bench_iters_for_method() {
             ;;
     esac
 }
+
+bench_workers_for_method() {
+    local method="$1"
+    case "$method" in
+        a512|bi512|b1024)
+            printf "%s\n" "$BENCH_WORKERS_SLOW"
+            ;;
+        *)
+            printf "%s\n" "$BASEFWX_BENCH_WORKERS"
+            ;;
+    esac
+}
 BENCH_BYTES_FILE=""
 if [[ -f "$ORIG_DIR/bench_bytes.bin" ]]; then
     BENCH_BYTES_FILE="$ORIG_DIR/bench_bytes.bin"
@@ -3243,6 +3255,45 @@ elif [[ -f "$ORIG_DIR/sample_payload.bin" ]]; then
     BENCH_BYTES_FILE="$ORIG_DIR/sample_payload.bin"
 else
     BENCH_BYTES_FILE="$ORIG_DIR/$FWXAES_FILE"
+fi
+
+BENCH_WORKERS_SLOW="${BENCH_WORKERS_SLOW:-}"
+if [[ -z "$BENCH_WORKERS_SLOW" ]]; then
+    if (( BENCH_ONLY == 1 )); then
+        BENCH_WORKERS_SLOW=1
+    else
+        BENCH_WORKERS_SLOW="$BASEFWX_BENCH_WORKERS"
+    fi
+fi
+if [[ -z "$BENCH_WORKERS_SLOW" || ! "$BENCH_WORKERS_SLOW" =~ ^[0-9]+$ || "$BENCH_WORKERS_SLOW" -lt 1 ]]; then
+    BENCH_WORKERS_SLOW=1
+fi
+
+BENCH_FILE_WORKERS="${BENCH_FILE_WORKERS:-}"
+if [[ -z "$BENCH_FILE_WORKERS" ]]; then
+    BENCH_FILE_WORKERS="$BASEFWX_BENCH_WORKERS"
+    if [[ -f "$BENCH_BYTES_FILE" ]]; then
+        bench_file_size="$(wc -c < "$BENCH_BYTES_FILE" | tr -d ' ')"
+        if [[ "$bench_file_size" =~ ^[0-9]+$ && "$bench_file_size" -gt 0 ]]; then
+            BENCH_FILE_TMP_BUDGET_BYTES="${BENCH_FILE_TMP_BUDGET_BYTES:-2147483648}"
+            if [[ ! "$BENCH_FILE_TMP_BUDGET_BYTES" =~ ^[0-9]+$ || "$BENCH_FILE_TMP_BUDGET_BYTES" -lt 1 ]]; then
+                BENCH_FILE_TMP_BUDGET_BYTES=2147483648
+            fi
+            per_worker=$((bench_file_size * 3))
+            if (( per_worker > 0 )); then
+                max_workers=$((BENCH_FILE_TMP_BUDGET_BYTES / per_worker))
+                if (( max_workers < 1 )); then
+                    max_workers=1
+                fi
+                if (( BENCH_FILE_WORKERS > max_workers )); then
+                    BENCH_FILE_WORKERS=$max_workers
+                fi
+            fi
+        fi
+    fi
+fi
+if [[ -z "$BENCH_FILE_WORKERS" || ! "$BENCH_FILE_WORKERS" =~ ^[0-9]+$ || "$BENCH_FILE_WORKERS" -lt 1 ]]; then
+    BENCH_FILE_WORKERS=1
 fi
 
 if [[ -z "${BENCH_WARMUP_LIGHT:-}" || -z "${BENCH_WARMUP_HEAVY:-}" ]]; then
@@ -3334,6 +3385,11 @@ log "BENCH_FWXAES_MODE: $BENCH_FWXAES_MODE"
 log "BENCH_PARALLEL: $BENCH_PARALLEL"
 log "BENCH_ALL_CORES: $BENCH_ALL_CORES"
 log "BENCH_WORKERS: $BASEFWX_BENCH_WORKERS"
+log "BENCH_WORKERS_SLOW: $BENCH_WORKERS_SLOW"
+log "BENCH_FILE_WORKERS: $BENCH_FILE_WORKERS"
+if [[ -n "${BENCH_FILE_TMP_BUDGET_BYTES:-}" ]]; then
+    log "BENCH_FILE_TMP_BUDGET_BYTES: $BENCH_FILE_TMP_BUDGET_BYTES"
+fi
 if [[ -n "${BASEFWX_MAX_THREADS:-}" ]]; then
     log "BENCH_MAX_THREADS: $BASEFWX_MAX_THREADS"
 fi
@@ -3364,6 +3420,7 @@ for idx in "${!BENCH_LANGS[@]}"; do
                 iters="$(bench_iters_for_method "$method")"
                 time_cmd_bench "${method}_py_correct" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_LIGHT" \
                     BASEFWX_BENCH_ITERS="$iters" \
+                    BASEFWX_BENCH_WORKERS="$(bench_workers_for_method "$method")" \
                     "$PYTHON_BIN" "$PY_HELPER" bench-text "$method" "$text_path" "$PW"
             done
             for method in "${BENCH_HASH_METHODS[@]}"; do
@@ -3371,13 +3428,16 @@ for idx in "${!BENCH_LANGS[@]}"; do
                 iters="$(bench_iters_for_method "$method")"
                 time_cmd_bench "${method}_py_correct" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_LIGHT" \
                     BASEFWX_BENCH_ITERS="$iters" \
+                    BASEFWX_BENCH_WORKERS="$(bench_workers_for_method "$method")" \
                     "$PYTHON_BIN" "$PY_HELPER" bench-hash "$method" "$text_path"
             done
             time_cmd_bench "b512file_py_total" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_FILE" \
                 BASEFWX_BENCH_ITERS="$BENCH_ITERS_FILE" \
+                BASEFWX_BENCH_WORKERS="$BENCH_FILE_WORKERS" \
                 "$PYTHON_BIN" "$PY_HELPER" bench-b512file "$BENCH_BYTES_FILE" "$PW"
             time_cmd_bench "pb512file_py_total" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_FILE" \
                 BASEFWX_BENCH_ITERS="$BENCH_ITERS_FILE" \
+                BASEFWX_BENCH_WORKERS="$BENCH_FILE_WORKERS" \
                 "$PYTHON_BIN" "$PY_HELPER" bench-pb512file "$BENCH_BYTES_FILE" "$PW"
             ;;
         pypy)
@@ -3395,6 +3455,7 @@ for idx in "${!BENCH_LANGS[@]}"; do
                 iters="$(bench_iters_for_method "$method")"
                 time_cmd_bench "${method}_pypy_correct" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_LIGHT" \
                     BASEFWX_BENCH_ITERS="$iters" \
+                    BASEFWX_BENCH_WORKERS="$(bench_workers_for_method "$method")" \
                     "$PYPY_BIN" "$PY_HELPER" bench-text "$method" "$text_path" "$PW"
             done
             for method in "${BENCH_HASH_METHODS[@]}"; do
@@ -3402,13 +3463,16 @@ for idx in "${!BENCH_LANGS[@]}"; do
                 iters="$(bench_iters_for_method "$method")"
                 time_cmd_bench "${method}_pypy_correct" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_LIGHT" \
                     BASEFWX_BENCH_ITERS="$iters" \
+                    BASEFWX_BENCH_WORKERS="$(bench_workers_for_method "$method")" \
                     "$PYPY_BIN" "$PY_HELPER" bench-hash "$method" "$text_path"
             done
             time_cmd_bench "b512file_pypy_total" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_FILE" \
                 BASEFWX_BENCH_ITERS="$BENCH_ITERS_FILE" \
+                BASEFWX_BENCH_WORKERS="$BENCH_FILE_WORKERS" \
                 "$PYPY_BIN" "$PY_HELPER" bench-b512file "$BENCH_BYTES_FILE" "$PW"
             time_cmd_bench "pb512file_pypy_total" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_FILE" \
                 BASEFWX_BENCH_ITERS="$BENCH_ITERS_FILE" \
+                BASEFWX_BENCH_WORKERS="$BENCH_FILE_WORKERS" \
                 "$PYPY_BIN" "$PY_HELPER" bench-pb512file "$BENCH_BYTES_FILE" "$PW"
             ;;
         cpp)
@@ -3424,9 +3488,11 @@ for idx in "${!BENCH_LANGS[@]}"; do
                 iters="$(bench_iters_for_method "$method")"
                 if [[ "$method" == "b512" || "$method" == "pb512" ]]; then
                     time_cmd_bench "${method}_cpp_correct" env BASEFWX_BENCH_ITERS="$iters" \
+                        BASEFWX_BENCH_WORKERS="$(bench_workers_for_method "$method")" \
                         "$CPP_BIN" bench-text "$method" "$text_path" -p "$PW" --no-master
                 else
                     time_cmd_bench "${method}_cpp_correct" env BASEFWX_BENCH_ITERS="$iters" \
+                        BASEFWX_BENCH_WORKERS="$(bench_workers_for_method "$method")" \
                         "$CPP_BIN" bench-text "$method" "$text_path"
                 fi
             done
@@ -3434,11 +3500,14 @@ for idx in "${!BENCH_LANGS[@]}"; do
                 text_path="$(bench_text_for_method "$method")"
                 iters="$(bench_iters_for_method "$method")"
                 time_cmd_bench "${method}_cpp_correct" env BASEFWX_BENCH_ITERS="$iters" \
+                    BASEFWX_BENCH_WORKERS="$(bench_workers_for_method "$method")" \
                     "$CPP_BIN" bench-hash "$method" "$text_path"
             done
             time_cmd_bench "b512file_cpp_total" env BASEFWX_BENCH_ITERS="$BENCH_ITERS_FILE" \
+                BASEFWX_BENCH_WORKERS="$BENCH_FILE_WORKERS" \
                 "$CPP_BIN" bench-b512file "$BENCH_BYTES_FILE" "$PW" --no-master
             time_cmd_bench "pb512file_cpp_total" env BASEFWX_BENCH_ITERS="$BENCH_ITERS_FILE" \
+                BASEFWX_BENCH_WORKERS="$BENCH_FILE_WORKERS" \
                 "$CPP_BIN" bench-pb512file "$BENCH_BYTES_FILE" "$PW" --no-master
             ;;
         java)
@@ -3456,6 +3525,7 @@ for idx in "${!BENCH_LANGS[@]}"; do
                 iters="$(bench_iters_for_method "$method")"
                 time_cmd_bench "${method}_java_correct" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_LIGHT" \
                     BASEFWX_BENCH_ITERS="$iters" \
+                    BASEFWX_BENCH_WORKERS="$(bench_workers_for_method "$method")" \
                     "$JAVA_BIN" "${JAVA_BENCH_FLAGS_ARR[@]}" -jar "$JAVA_JAR" bench-text "$method" "$text_path" "$PW" --no-master
             done
             for method in "${BENCH_HASH_METHODS[@]}"; do
@@ -3463,13 +3533,16 @@ for idx in "${!BENCH_LANGS[@]}"; do
                 iters="$(bench_iters_for_method "$method")"
                 time_cmd_bench "${method}_java_correct" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_LIGHT" \
                     BASEFWX_BENCH_ITERS="$iters" \
+                    BASEFWX_BENCH_WORKERS="$(bench_workers_for_method "$method")" \
                     "$JAVA_BIN" "${JAVA_BENCH_FLAGS_ARR[@]}" -jar "$JAVA_JAR" bench-hash "$method" "$text_path"
             done
             time_cmd_bench "b512file_java_total" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_FILE_JAVA" \
                 BASEFWX_BENCH_ITERS="$BENCH_ITERS_FILE" \
+                BASEFWX_BENCH_WORKERS="$BENCH_FILE_WORKERS" \
                 "$JAVA_BIN" "${JAVA_BENCH_FLAGS_ARR[@]}" -jar "$JAVA_JAR" bench-b512file "$BENCH_BYTES_FILE" "$PW" --no-master
             time_cmd_bench "pb512file_java_total" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_FILE_JAVA" \
                 BASEFWX_BENCH_ITERS="$BENCH_ITERS_FILE" \
+                BASEFWX_BENCH_WORKERS="$BENCH_FILE_WORKERS" \
                 "$JAVA_BIN" "${JAVA_BENCH_FLAGS_ARR[@]}" -jar "$JAVA_JAR" bench-pb512file "$BENCH_BYTES_FILE" "$PW" --no-master
             ;;
     esac

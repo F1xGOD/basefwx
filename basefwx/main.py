@@ -215,6 +215,9 @@ class basefwx:
     _CODE_TRANSLATION: typing.ClassVar[dict[int, str]] = {}
     for _code_key, _code_value in _CODE_MAP.items():
         _CODE_TRANSLATION[ord(_code_key)] = _code_value
+    _CODE_TRANSLATION_TABLE: typing.ClassVar[tuple[str, ...]] = tuple(
+        _CODE_TRANSLATION.get(i, chr(i)) for i in range(256)
+    )
     _DECODE_MAP: typing.ClassVar[dict[str, str]] = {v: k for k, v in _CODE_MAP.items()}
     _DECODE_PATTERN = _re_module.compile(
         "|".join(
@@ -224,7 +227,6 @@ class basefwx:
     _MD_CODE_TABLE: typing.ClassVar[tuple[str, ...]] = tuple(
         f"{len(str(i))}{i}" for i in range(256)
     )
-    _MD_CODE_TRANSLATION: typing.ClassVar[dict[int, str]] = dict(enumerate(_MD_CODE_TABLE))
 
     @staticmethod
     def _require_pil() -> None:
@@ -1367,8 +1369,9 @@ class basefwx:
 
     @staticmethod
     def _mdcode_ascii(text: str) -> str:
-        text.encode("ascii")
-        return text.translate(basefwx._MD_CODE_TRANSLATION)
+        if not text.isascii():
+            text.encode("ascii")
+        return text.translate(basefwx._MD_CODE_TABLE)
 
     @staticmethod
     def _mcode_digits(encoded: str) -> str:
@@ -7177,6 +7180,8 @@ class basefwx:
 
     @classmethod
     def _code_chunk(cls, chunk: str) -> str:
+        if chunk.isascii():
+            return chunk.translate(cls._CODE_TRANSLATION_TABLE)
         return chunk.translate(cls._CODE_TRANSLATION)
 
     @classmethod
@@ -7187,9 +7192,36 @@ class basefwx:
 
     @classmethod
     def fwx256bin(cls, string: str) -> str:
-        encoded = cls.base64.b32hexencode(cls.code(string).encode('utf-8')).decode('utf-8')
-        padding_count = encoded.count("=")
-        return encoded.rstrip("=") + str(padding_count)
+        raw = cls.code(string).encode('utf-8')
+        padding_count = cls._b32_padding_count(len(raw))
+        encoded = cls.base64.b32hexencode(raw)
+        if padding_count:
+            encoded = encoded[:-padding_count]
+        return encoded.decode('utf-8') + str(padding_count)
+
+    @classmethod
+    def _fwx256bin_bytes(cls, string: str) -> bytes:
+        raw = cls.code(string).encode('utf-8')
+        padding_count = cls._b32_padding_count(len(raw))
+        encoded = cls.base64.b32hexencode(raw)
+        if padding_count:
+            encoded = encoded[:-padding_count]
+        return encoded + str(padding_count).encode('ascii')
+
+    @staticmethod
+    def _b32_padding_count(length: int) -> int:
+        if length <= 0:
+            return 0
+        rem = length % 5
+        if rem == 0:
+            return 0
+        if rem == 1:
+            return 6
+        if rem == 2:
+            return 4
+        if rem == 3:
+            return 3
+        return 1
 
     @staticmethod
     def _strip_leading_zeros(number: str) -> str:
@@ -7514,8 +7546,8 @@ class basefwx:
         left = basefwx._mdcode_ascii(string)
         right = basefwx._mdcode_ascii(code)
         diff = basefwx._decimal_diff(left, right)
-        packed = basefwx.fwx256bin(diff).replace("=", "4G5tRA")
-        return str(basefwx.hashlib.sha256(packed.encode('utf-8')).hexdigest()).replace("-", "0")
+        packed = basefwx._fwx256bin_bytes(diff)
+        return str(basefwx.hashlib.sha256(packed).hexdigest()).replace("-", "0")
 
     # CODELESS ENCODE - SECURITY: ❙
     @staticmethod
@@ -7526,7 +7558,7 @@ class basefwx:
         right = basefwx._mdcode_ascii(code)
         diff = basefwx._decimal_diff(left, right)
         prefix = str(len(str(md_len))) + str(md_len)
-        return prefix + basefwx.fwx256bin(diff).replace("=", "4G5tRA")
+        return prefix + basefwx.fwx256bin(diff)
 
     @staticmethod
     def a512decode(string: str):

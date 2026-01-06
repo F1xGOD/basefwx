@@ -239,6 +239,7 @@ std::vector<std::uint8_t> Decode(const std::string& input, bool* ok) {
     for (unsigned char c : input) {
         if (!IsSpace(c)) ++valid_count;
     }
+    bool has_space = (valid_count != input.size());
 
     if (valid_count == 0) {
         if (ok) *ok = true;

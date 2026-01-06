@@ -212,12 +212,8 @@ class basefwx:
         '2': '*HAl%', '3': '_)JHS', '4': 'IG(A', '5': '(*GFD', '6': 'IU(&V', '7': '(JH*G', '8': '*GHBA',
         '9': 'U&G*C', '"': 'I(a-s'
     }
-    _CODE_TRANSLATION: typing.ClassVar[dict[int, str]] = {}
-    for _code_key, _code_value in _CODE_MAP.items():
-        _CODE_TRANSLATION[ord(_code_key)] = _code_value
-    _CODE_TRANSLATION_TABLE: typing.ClassVar[tuple[str, ...]] = tuple(
-        _CODE_TRANSLATION.get(i, chr(i)) for i in range(256)
-    )
+    _CODE_TRANSLATION: typing.ClassVar[dict[int, str]] = (lambda m: {ord(k): v for k, v in m.items()})(_CODE_MAP)
+    _CODE_TRANSLATION_TABLE: typing.ClassVar[tuple[str, ...]] = (lambda t: tuple(t.get(i, chr(i)) for i in range(256)))(_CODE_TRANSLATION)
     _DECODE_MAP: typing.ClassVar[dict[str, str]] = {v: k for k, v in _CODE_MAP.items()}
     _DECODE_PATTERN = _re_module.compile(
         "|".join(
@@ -227,6 +223,7 @@ class basefwx:
     _MD_CODE_TABLE: typing.ClassVar[tuple[str, ...]] = tuple(
         f"{len(str(i))}{i}" for i in range(256)
     )
+    _DECIMAL_BYTES_THRESHOLD = 4096
 
     @staticmethod
     def _require_pil() -> None:
@@ -1371,26 +1368,82 @@ class basefwx:
     def _mdcode_ascii(text: str) -> str:
         if not text.isascii():
             text.encode("ascii")
-        return text.translate(basefwx._MD_CODE_TABLE)
+        data = text.encode("ascii")
+        # Max 4 bytes per input byte (1 digit for length + 3 digits for value)
+        out = bytearray(len(data) * 4)
+        idx = 0
+        for b in data:
+            if b < 10:
+                out[idx] = 49  # '1'
+                out[idx + 1] = 48 + b
+                idx += 2
+            elif b < 100:
+                out[idx] = 50  # '2'
+                out[idx + 1] = 48 + b // 10
+                out[idx + 2] = 48 + b % 10
+                idx += 3
+            else:
+                out[idx] = 51  # '3'
+                out[idx + 1] = 48 + b // 100
+                out[idx + 2] = 48 + (b // 10) % 10
+                out[idx + 3] = 48 + b % 10
+                idx += 4
+        return out[:idx].decode("ascii")
 
     @staticmethod
     def _mcode_digits(encoded: str) -> str:
         if not encoded:
             return ""
-        out = []
+        try:
+            data = encoded.encode("ascii")
+        except UnicodeEncodeError:
+            raise ValueError("Invalid mcode payload")
+        out = bytearray(len(data) // 2)
+        out_idx = 0
         idx = 0
-        total = len(encoded)
+        total = len(data)
         while idx < total:
-            ch = encoded[idx]
-            if ch < "0" or ch > "9":
+            ch = data[idx]
+            if ch < 48 or ch > 57:
                 raise ValueError("Invalid mcode payload")
-            span = ord(ch) - 48
+            span = ch - 48
             idx += 1
             if span <= 0 or idx + span > total:
                 raise ValueError("Invalid mcode payload length")
-            out.append(chr(int(encoded[idx:idx + span])))
-            idx += span
-        return "".join(out)
+            if span == 1:
+                d0 = data[idx] - 48
+                if d0 > 9:
+                    raise ValueError("Invalid mcode payload")
+                val = d0
+                idx += 1
+            elif span == 2:
+                d0 = data[idx] - 48
+                d1 = data[idx + 1] - 48
+                if d0 > 9 or d1 > 9:
+                    raise ValueError("Invalid mcode payload")
+                val = (d0 * 10) + d1
+                idx += 2
+            elif span == 3:
+                d0 = data[idx] - 48
+                d1 = data[idx + 1] - 48
+                d2 = data[idx + 2] - 48
+                if d0 > 9 or d1 > 9 or d2 > 9:
+                    raise ValueError("Invalid mcode payload")
+                val = (d0 * 100) + (d1 * 10) + d2
+                idx += 3
+            else:
+                val = 0
+                for i in range(span):
+                    d = data[idx + i] - 48
+                    if d > 9:
+                        raise ValueError("Invalid mcode payload")
+                    val = val * 10 + d
+                idx += span
+            if out_idx >= len(out):
+                out.extend(bytes(len(out) // 2 + 64))
+            out[out_idx] = val
+            out_idx += 1
+        return out[:out_idx].decode("latin-1")
 
     @staticmethod
     def _aead_encrypt(key: bytes, plaintext: bytes, aad: "basefwx.typing.Optional[bytes]") -> bytes:
@@ -7263,31 +7316,32 @@ class basefwx:
         ia = len(a) - 1
         ib = len(b) - 1
         carry = 0
-        out = bytearray()
+        max_len = max(len(a), len(b)) + 1
+        out = bytearray(max_len)
+        pos = max_len - 1
         while ia >= 0 or ib >= 0 or carry:
             da = ord(a[ia]) - 48 if ia >= 0 else 0
             db = ord(b[ib]) - 48 if ib >= 0 else 0
             total = da + db + carry
-            out.append(48 + (total % 10))
+            out[pos] = 48 + (total % 10)
             carry = total // 10
             ia -= 1
             ib -= 1
-        out.reverse()
-        idx = 0
-        while idx < len(out) and out[idx] == 48:
+            pos -= 1
+        idx = pos + 1
+        while idx < max_len and out[idx] == 48:
             idx += 1
-        if idx == len(out):
+        if idx == max_len:
             return "0"
-        if idx:
-            del out[:idx]
-        return out.decode("ascii")
+        return out[idx:].decode('ascii')
 
     @staticmethod
     def _subtract_magnitude(a: str, b: str) -> str:
         ia = len(a) - 1
         ib = len(b) - 1
         borrow = 0
-        out = bytearray()
+        out = bytearray(len(a))
+        pos = len(a) - 1
         while ia >= 0:
             da = ord(a[ia]) - 48 - borrow
             db = ord(b[ib]) - 48 if ib >= 0 else 0
@@ -7296,18 +7350,16 @@ class basefwx:
                 borrow = 1
             else:
                 borrow = 0
-            out.append(48 + (da - db))
+            out[pos] = 48 + (da - db)
             ia -= 1
             ib -= 1
-        out.reverse()
+            pos -= 1
         idx = 0
-        while idx < len(out) and out[idx] == 48:
+        while idx < len(a) and out[idx] == 48:
             idx += 1
-        if idx == len(out):
+        if idx == len(a):
             return "0"
-        if idx:
-            del out[:idx]
-        return out.decode("ascii")
+        return out[idx:].decode('ascii')
 
     @staticmethod
     def _add_signed(a: str, b: str) -> str:
@@ -7554,11 +7606,13 @@ class basefwx:
     def a512encode(string: str):
         left = basefwx._mdcode_ascii(string)
         md_len = len(left)
+        md_len_str = str(md_len)
+        prefix_len = str(len(md_len_str))
         code = str(md_len * md_len)
         right = basefwx._mdcode_ascii(code)
         diff = basefwx._decimal_diff(left, right)
-        prefix = str(len(str(md_len))) + str(md_len)
-        return prefix + basefwx.fwx256bin(diff)
+        packed = basefwx.fwx256bin(diff)
+        return prefix_len + md_len_str + packed
 
     @staticmethod
     def a512decode(string: str):

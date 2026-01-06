@@ -31,7 +31,7 @@ cpp/compile_commands.json
 
 .tmp_basefwx_tests/
 diagnose.log
-
+test_a512_perf.py
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/

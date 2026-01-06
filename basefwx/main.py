@@ -212,18 +212,19 @@ class basefwx:
         '2': '*HAl%', '3': '_)JHS', '4': 'IG(A', '5': '(*GFD', '6': 'IU(&V', '7': '(JH*G', '8': '*GHBA',
         '9': 'U&G*C', '"': 'I(a-s'
     }
+    _CODE_TRANSLATION: typing.ClassVar[dict[int, str]] = {}
+    for _code_key, _code_value in _CODE_MAP.items():
+        _CODE_TRANSLATION[ord(_code_key)] = _code_value
     _DECODE_MAP: typing.ClassVar[dict[str, str]] = {v: k for k, v in _CODE_MAP.items()}
     _DECODE_PATTERN = _re_module.compile(
         "|".join(
             _re_module.escape(token) for token in sorted(_DECODE_MAP, key=len, reverse=True)
         )
     )
-    _CODE_TABLE: typing.ClassVar[tuple[str | None, ...]] = tuple(
-        map(_CODE_MAP.get, map(chr, range(256)))
-    )
     _MD_CODE_TABLE: typing.ClassVar[tuple[str, ...]] = tuple(
         f"{len(str(i))}{i}" for i in range(256)
     )
+    _MD_CODE_TRANSLATION: typing.ClassVar[dict[int, str]] = dict(enumerate(_MD_CODE_TABLE))
 
     @staticmethod
     def _require_pil() -> None:
@@ -1366,9 +1367,8 @@ class basefwx:
 
     @staticmethod
     def _mdcode_ascii(text: str) -> str:
-        data = text.encode("ascii")
-        table = basefwx._MD_CODE_TABLE
-        return "".join(table[b] for b in data)
+        text.encode("ascii")
+        return text.translate(basefwx._MD_CODE_TRANSLATION)
 
     @staticmethod
     def _mcode_digits(encoded: str) -> str:
@@ -1874,13 +1874,14 @@ class basefwx:
         if len(salt) < basefwx.USER_KDF_SALT_SIZE:
             raise ValueError("User key salt must be at least 16 bytes")
         iterations = iterations or basefwx.USER_KDF_ITERATIONS
-        kdf = basefwx.PBKDF2HMAC(
-            algorithm=basefwx.hashes.SHA256(),
-            length=length,
-            salt=salt,
-            iterations=iterations
-        )
-        return kdf.derive(basefwx._coerce_password_bytes(password)), salt
+        password_bytes = basefwx._coerce_password_bytes(password)
+        return basefwx.hashlib.pbkdf2_hmac(
+            'sha256',
+            password_bytes,
+            salt,
+            iterations,
+            dklen=length
+        ), salt
 
     @staticmethod
     def _derive_user_key(
@@ -2269,13 +2270,13 @@ class basefwx:
 
     @staticmethod
     def _kdf_pbkdf2_raw(password: bytes, salt: bytes, iters: int) -> bytes:
-        kdf = basefwx.PBKDF2HMAC(
-            algorithm=basefwx.hashes.SHA256(),
-            length=basefwx.FWXAES_KEY_LEN,
-            salt=salt,
-            iterations=iters
+        return basefwx.hashlib.pbkdf2_hmac(
+            'sha256',
+            password,
+            salt,
+            iters,
+            dklen=basefwx.FWXAES_KEY_LEN
         )
-        return kdf.derive(password)
 
     @staticmethod
     def fwxAES_encrypt_raw(
@@ -7176,17 +7177,7 @@ class basefwx:
 
     @classmethod
     def _code_chunk(cls, chunk: str) -> str:
-        table = cls._CODE_TABLE
-        out: list[str] = []
-        append = out.append
-        for ch in chunk:
-            codepoint = ord(ch)
-            if codepoint < 256:
-                mapped = table[codepoint]
-                append(mapped if mapped is not None else ch)
-            else:
-                append(ch)
-        return ''.join(out)
+        return chunk.translate(cls._CODE_TRANSLATION)
 
     @classmethod
     def code(cls, string: str) -> str:

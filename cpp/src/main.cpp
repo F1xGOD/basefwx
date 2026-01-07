@@ -173,6 +173,42 @@ int BenchWorkers() {
     return ReadEnvInt("BASEFWX_BENCH_WORKERS", default_workers, 1);
 }
 
+bool SingleThreadForced(std::size_t workers) {
+    unsigned int hw = std::thread::hardware_concurrency();
+    std::string env_workers = ToLower(basefwx::env::Get("BASEFWX_BENCH_WORKERS"));
+    bool parallel_off = !BenchParallelEnabled();
+    bool env_one = (!env_workers.empty() && env_workers == "1");
+    return (workers == 1 && hw > 1 && (parallel_off || env_one));
+}
+
+void WarnSingleThreadIfForced() {
+    static bool warned = false;
+    if (warned) {
+        return;
+    }
+    if (!SingleThreadForced(1)) {
+        return;
+    }
+    warned = true;
+    std::cerr << "\033[38;5;208mWARN: MULTI-THREAD IS DISABLED; THIS MAY CAUSE SEVERE PERFORMANCE DETERIORATION\033[0m\n";
+    std::cerr << "\033[38;5;208mWARN: SINGLE-THREAD MODE MAY REDUCE SECURITY MARGIN\033[0m\n";
+}
+
+void ConfirmSingleThreadCli(std::size_t workers) {
+    if (!SingleThreadForced(workers)) {
+        return;
+    }
+    WarnSingleThreadIfForced();
+    std::cout << "Type YES to continue with single-thread mode: ";
+    std::string line;
+    if (!std::getline(std::cin, line)) {
+        throw std::runtime_error("Aborted: multi-thread disabled by user override");
+    }
+    if (line != "YES") {
+        throw std::runtime_error("Aborted: multi-thread disabled by user override");
+    }
+}
+
 long long MedianNs(std::vector<long long>& samples) {
     if (samples.empty()) {
         return 0;
@@ -606,6 +642,7 @@ int main(int argc, char** argv) {
             if (workers == 0) {
                 workers = 1;
             }
+            ConfirmSingleThreadCli(workers);
             std::function<std::size_t()> op;
             if (method == "b64") {
                 op = [&]() {
@@ -669,6 +706,7 @@ int main(int argc, char** argv) {
             if (workers == 0) {
                 workers = 1;
             }
+            ConfirmSingleThreadCli(workers);
             std::function<std::size_t()> op;
             if (method == "hash512") {
                 op = [&]() {
@@ -773,6 +811,7 @@ int main(int argc, char** argv) {
             if (workers == 0) {
                 workers = 1;
             }
+            ConfirmSingleThreadCli(workers);
             for (int i = 0; i < warmup; ++i) {
                 RunFwxaesParallel(data, password, use_master, workers);
             }
@@ -833,6 +872,7 @@ int main(int argc, char** argv) {
                 if (workers == 0) {
                     workers = 1;
                 }
+                ConfirmSingleThreadCli(workers);
                 std::vector<std::filesystem::path> temp_dirs;
                 std::vector<std::filesystem::path> bench_inputs;
                 temp_dirs.reserve(workers);

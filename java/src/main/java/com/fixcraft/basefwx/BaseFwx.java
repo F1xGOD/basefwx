@@ -46,6 +46,21 @@ import javax.crypto.spec.SecretKeySpec;
 public final class BaseFwx {
     private BaseFwx() {}
 
+    private static final boolean SINGLE_THREAD_OVERRIDE;
+
+    static {
+        String maxThreads = System.getenv("BASEFWX_MAX_THREADS");
+        int available = Runtime.getRuntime().availableProcessors();
+        boolean override = maxThreads != null && maxThreads.trim().equals("1") && available > 1;
+        SINGLE_THREAD_OVERRIDE = override;
+        if (override) {
+            String orange = "\u001b[38;5;208m";
+            String reset = "\u001b[0m";
+            System.out.println(orange + "WARN: MULTI-THREAD DISABLED; PERFORMANCE MAY DETERIORATE. "
+                + "Using BASEFWX_MAX_THREADS=1 with " + available + " cores available." + reset);
+        }
+    }
+
     public static final class DecodedFile {
         public final byte[] data;
         public final String extension;
@@ -2178,6 +2193,7 @@ public final class BaseFwx {
             System.arraycopy(password, 0, base, 0, password.length);
             System.arraycopy(salt, 0, base, password.length, salt.length);
             byte[] maskKey = Crypto.hkdfSha256(base, Constants.STREAM_INFO_KEY, 32);
+            // lgtm[java/static-initialization-vector] - IV derived from HKDF with password+random salt, unique per stream
             byte[] iv = Crypto.hkdfSha256(base, Constants.STREAM_INFO_IV, 16);
             byte[] permMaterial = Crypto.hkdfSha256(base, Constants.STREAM_INFO_PERM, 32);
             byte[] permPrk = Crypto.hkdfPrkSha256(permMaterial);

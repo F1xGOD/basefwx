@@ -167,6 +167,27 @@ class basefwx:
         _CPU_COUNT = max(1, int(_CPU_COUNT_OVERRIDE.strip()))
     else:
         _CPU_COUNT = max(1, os.cpu_count() or 1)
+    _SINGLE_THREAD_OVERRIDE = bool(_CPU_COUNT_OVERRIDE and _CPU_COUNT == 1 and (os.cpu_count() or 1) > 1)
+    _WARNED_SINGLE_THREAD = False
+
+    def _warn_single_thread_api() -> None:
+        if basefwx._WARNED_SINGLE_THREAD:
+            return
+        if not basefwx._SINGLE_THREAD_OVERRIDE:
+            return
+        basefwx._WARNED_SINGLE_THREAD = True
+        ansi_orange = "\033[38;5;208m"
+        ansi_reset = "\033[0m"
+        msg = (
+            f"{ansi_orange}WARN: MULTI-THREAD DISABLED; PERFORMANCE MAY DETERIORATE."
+            f" Using BASEFWX_MAX_THREADS=1 with {os.cpu_count() or 1} cores available.{ansi_reset}"
+        )
+        try:
+            print(msg)
+        except Exception:
+            pass
+
+    _warn_single_thread_api()
     _PARALLEL_CHUNK_SIZE = 1 << 20  # 1 MiB chunks when fan-out encoding
     _DECIMAL_INT_LIMIT = 4096
     _SILENT_MODE: typing.ClassVar[bool] = False
@@ -2158,6 +2179,16 @@ class basefwx:
             return plaintext_str
 
         legacy_allowed = allow_legacy if allow_legacy is not None else basefwx.os.getenv("ALLOW_CBC_DECRYPT") == "1"
+
+        def _confirm_legacy_fallback(reason: str) -> None:
+            prompt = (
+                f"⚠️  {reason}.\n"
+                "Falling back to legacy CBC decryption which is unauthenticated and weaker.\n"
+                "Type YES to accept the security risk and continue: "
+            )
+            response = input(prompt)
+            if response.strip() != "YES":
+                raise ValueError("Legacy CBC fallback aborted by user")
         offset = 0
         ephemeral_enc_user, offset = read_chunk(encrypted_blob, offset)
         ephemeral_enc_master, offset = read_chunk(encrypted_blob, offset)
@@ -2167,6 +2198,7 @@ class basefwx:
 
         if len(payload_blob) < 4:
             if legacy_allowed:
+                _confirm_legacy_fallback("Ciphertext payload truncated; AEAD decode unavailable")
                 return legacy_decrypt(ephemeral_enc_user, ephemeral_enc_master, payload_blob)
             raise ValueError("Ciphertext payload truncated")
 
@@ -2174,6 +2206,7 @@ class basefwx:
         metadata_end = 4 + metadata_len
         if metadata_end > len(payload_blob):
             if legacy_allowed:
+                _confirm_legacy_fallback("Malformed payload metadata; AEAD decode unavailable")
                 return legacy_decrypt(ephemeral_enc_user, ephemeral_enc_master, payload_blob)
             raise ValueError("Malformed payload metadata header")
         metadata_bytes = payload_blob[4:metadata_end]
@@ -2232,11 +2265,12 @@ class basefwx:
                 ephemeral_key = basefwx._aead_decrypt(user_derived_key, wrapped_ephemeral, aad)
             except basefwx.InvalidTag as exc:
                 if legacy_allowed:
-                    print("⚠️  User-branch AEAD authentication failed; attempting legacy CBC decrypt.")
+                    _confirm_legacy_fallback("User-branch AEAD authentication failed; attempting legacy CBC decrypt")
                     return legacy_decrypt(ephemeral_enc_user, ephemeral_enc_master, payload_blob)
                 raise ValueError("User branch authentication failed; incorrect password or tampering") from exc
         else:
             if legacy_allowed:
+                _confirm_legacy_fallback("Ciphertext missing key transport data; AEAD decode unavailable")
                 return legacy_decrypt(ephemeral_enc_user, ephemeral_enc_master, payload_blob)
             raise ValueError("Ciphertext missing key transport data")
 
@@ -7758,6 +7792,20 @@ def cli(argv=None) -> int:
 
     theme = _CliTheme(_cli_plain_mode())
 
+    def _confirm_single_thread_cli() -> None:
+        if not basefwx._SINGLE_THREAD_OVERRIDE:
+            return
+        warning = "WARN: MULTI-THREAD IS DISABLED; THIS MAY CAUSE SEVERE PERFORMANCE DETERIORATION"
+        security = "WARN: SINGLE-THREAD MODE REDUCES SIDE-CHANNEL RESILIENCE"
+        orange = "\033[38;5;208m"
+        reset = "\033[0m"
+        decorated = f"{orange}{warning}\n{security}{reset}" if not theme.plain else f"{warning}\n{security}"
+        print(decorated)
+        prompt = "Type YES to continue with single-thread mode: "
+        response = input(prompt)
+        if response.strip() != "YES":
+            raise SystemExit(theme.err("Aborted: multi-thread disabled by user override"))
+
     parser = argparse.ArgumentParser(prog="basefwx", description="BASEFWX encryption toolkit")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
@@ -7842,6 +7890,8 @@ def cli(argv=None) -> int:
     )
 
     args = parser.parse_args(argv)
+
+    _confirm_single_thread_cli()
 
     if args.command == "cryptin":
         method = args.method.lower()

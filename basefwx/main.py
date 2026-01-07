@@ -180,7 +180,7 @@ class basefwx:
         ansi_reset = "\033[0m"
         msg = (
             f"{ansi_orange}WARN: MULTI-THREAD DISABLED; PERFORMANCE MAY DETERIORATE."
-            f" Using BASEFWX_MAX_THREADS=1 with {os.cpu_count() or 1} cores available.{ansi_reset}"
+            f" Using BASEFWX_MAX_THREADS=1 with {_os_module.cpu_count() or 1} cores available.{ansi_reset}"
         )
         try:
             print(msg)

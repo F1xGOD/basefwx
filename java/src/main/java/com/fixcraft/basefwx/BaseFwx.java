@@ -56,7 +56,7 @@ public final class BaseFwx {
         if (override) {
             String orange = "\u001b[38;5;208m";
             String reset = "\u001b[0m";
-            System.out.println(orange + "WARN: MULTI-THREAD DISABLED; PERFORMANCE MAY DETERIORATE. "
+            System.err.println(orange + "WARN: MULTI-THREAD DISABLED; PERFORMANCE MAY DETERIORATE. "
                 + "Using BASEFWX_MAX_THREADS=1 with " + available + " cores available." + reset);
         }
     }

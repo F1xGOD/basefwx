@@ -245,6 +245,8 @@ if [[ -z "$BENCH_MAX_THREADS" && "$BENCH_PARALLEL" == "1" && "$BASEFWX_BENCH_WOR
 fi
 if [[ -n "$BENCH_MAX_THREADS" ]]; then
     export BASEFWX_MAX_THREADS="$BENCH_MAX_THREADS"
+    # Bypass single-thread prompts in non-interactive CI
+    export BASEFWX_NONINTERACTIVE=1
 fi
 BENCH_VALID=1
 if [[ "$BENCH_PARALLEL" != "1" || "$BENCH_ALL_CORES" != "1" ]]; then

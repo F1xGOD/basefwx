@@ -187,7 +187,6 @@ class basefwx:
         except Exception:
             pass
 
-    _warn_single_thread_api()
     _PARALLEL_CHUNK_SIZE = 1 << 20  # 1 MiB chunks when fan-out encoding
     _DECIMAL_INT_LIMIT = 4096
     _SILENT_MODE: typing.ClassVar[bool] = False
@@ -7723,6 +7722,10 @@ class basefwx:
 # FWX256R - b256encode/b256decode V1.3 ❗❗❗ (NOT RECCOMENDED)
 
 # HOW TO USE: basefwx.ENCRYPTION-TYPE("text","password")
+
+
+# Emit a one-time warning at import if single-thread override is forced
+basefwx._warn_single_thread_api()
 
 
 def cli(argv=None) -> int:

@@ -240,9 +240,7 @@ else
         export BASEFWX_BENCH_WORKERS="${BASEFWX_BENCH_WORKERS:-$DEFAULT_BENCH_WORKERS}"
     fi
 fi
-if [[ -z "$BENCH_MAX_THREADS" && "$BENCH_PARALLEL" == "1" && "$BASEFWX_BENCH_WORKERS" -gt 1 ]]; then
-    BENCH_MAX_THREADS=1
-fi
+# Only set BASEFWX_MAX_THREADS if explicitly provided by user - never auto-set to 1
 if [[ -n "$BENCH_MAX_THREADS" ]]; then
     export BASEFWX_MAX_THREADS="$BENCH_MAX_THREADS"
     # Bypass single-thread prompts in non-interactive CI

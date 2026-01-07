@@ -17,6 +17,7 @@
 #include <mutex>
 #include <sstream>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <unordered_set>
 #include <vector>
@@ -199,6 +200,11 @@ void ConfirmSingleThreadCli(std::size_t workers) {
         return;
     }
     WarnSingleThreadIfForced();
+    const char* allow_single = std::getenv("BASEFWX_ALLOW_SINGLE_THREAD");
+    const char* noninteractive = std::getenv("BASEFWX_NONINTERACTIVE");
+    if ((allow_single && std::string_view(allow_single) == "1") || (noninteractive && std::string_view(noninteractive) == "1")) {
+        return;
+    }
     std::cout << "Type YES to continue with single-thread mode: ";
     std::string line;
     if (!std::getline(std::cin, line)) {

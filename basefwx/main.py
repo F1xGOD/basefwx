@@ -183,7 +183,7 @@ class basefwx:
             f" Using BASEFWX_MAX_THREADS=1 with {_os_module.cpu_count() or 1} cores available.{ansi_reset}"
         )
         try:
-            print(msg)
+            print(msg, file=basefwx.sys.stderr)
         except Exception:
             pass
 
@@ -7806,14 +7806,14 @@ def cli(argv=None) -> int:
             orange = "\033[38;5;208m"
             reset = "\033[0m"
             decorated = f"{orange}{warning}\n{security}{reset}" if not theme.plain else f"{warning}\n{security}"
-            print(decorated)
+            print(decorated, file=basefwx.sys.stderr)
             return
         warning = "WARN: MULTI-THREAD IS DISABLED; THIS MAY CAUSE SEVERE PERFORMANCE DETERIORATION"
         security = "WARN: SINGLE-THREAD MODE REDUCES SIDE-CHANNEL RESILIENCE"
         orange = "\033[38;5;208m"
         reset = "\033[0m"
         decorated = f"{orange}{warning}\n{security}{reset}" if not theme.plain else f"{warning}\n{security}"
-        print(decorated)
+        print(decorated, file=basefwx.sys.stderr)
         prompt = "Type YES to continue with single-thread mode: "
         response = input(prompt)
         if response.strip() != "YES":

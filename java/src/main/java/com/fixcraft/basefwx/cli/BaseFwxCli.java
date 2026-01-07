@@ -70,6 +70,24 @@ public final class BaseFwxCli {
         return readEnvInt("BASEFWX_BENCH_WORKERS", defaultWorkers, 1);
     }
 
+    private static void confirmSingleThreadCli(int workers) {
+        int available = Runtime.getRuntime().availableProcessors();
+        String envWorkers = System.getenv("BASEFWX_BENCH_WORKERS");
+        boolean parallelOff = !benchParallelEnabled();
+        boolean forcedOne = parallelOff || (envWorkers != null && envWorkers.trim().equals("1"));
+        if (workers == 1 && available > 1 && forcedOne) {
+            String orange = "\u001b[38;5;208m";
+            String reset = "\u001b[0m";
+            System.out.println(orange + "WARN: MULTI-THREAD IS DISABLED; THIS MAY CAUSE SEVERE PERFORMANCE DETERIORATION" + reset);
+            System.out.println(orange + "WARN: SINGLE-THREAD MODE MAY REDUCE SECURITY MARGIN" + reset);
+            System.out.print("Type YES to continue with single-thread mode: ");
+            String resp = new java.util.Scanner(System.in).nextLine();
+            if (!"YES".equals(resp != null ? resp.trim() : "")) {
+                throw new RuntimeException("Aborted: multi-thread disabled by user override");
+            }
+        }
+    }
+
     private static long medianOf(long[] samples) {
         Arrays.sort(samples);
         int mid = samples.length / 2;
@@ -423,6 +441,8 @@ public final class BaseFwxCli {
                     int iters = benchIters();
                     int workers = benchWorkers();
                     String text = readText(textFile);
+                    confirmSingleThreadCli((int) workers);
+
                     BenchWorker worker = (idx) -> {
                         String enc = encodeText(methodFinal, text, benchPassFinal, useMasterFlag);
                         String dec = decodeText(methodFinal, enc, benchPassFinal, useMasterFlag);
@@ -446,6 +466,7 @@ public final class BaseFwxCli {
                     int iters = benchIters();
                     int workers = benchWorkers();
                     String text = readText(textFile);
+                    confirmSingleThreadCli(workers);
                     byte[] textBytes = text.getBytes(StandardCharsets.UTF_8);
                     BenchWorker worker;
                     if (method.equals("hash512")) {
@@ -506,6 +527,7 @@ public final class BaseFwxCli {
                     int warmup = benchWarmup();
                     int iters = benchIters();
                     int workers = benchWorkers();
+                    confirmSingleThreadCli(workers);
                     byte[] data = readAllBytes(input);
                     byte[] benchPassBytes = BaseFwx.resolvePasswordBytes(benchPassFinal, useMasterFlag);
                     ExecutorService pool = Executors.newFixedThreadPool(workers);
@@ -548,6 +570,7 @@ public final class BaseFwxCli {
                     int warmup = benchWarmup();
                     int iters = benchIters();
                     int workers = benchWorkers();
+                    confirmSingleThreadCli(workers);
                     String name = input.getName();
                     int dot = name.lastIndexOf('.');
                     String ext = dot >= 0 ? name.substring(dot) : "";
@@ -613,6 +636,7 @@ public final class BaseFwxCli {
                     int warmup = benchWarmup();
                     int iters = benchIters();
                     int workers = benchWorkers();
+                    confirmSingleThreadCli(workers);
                     String name = input.getName();
                     int dot = name.lastIndexOf('.');
                     String ext = dot >= 0 ? name.substring(dot) : "";

@@ -169,6 +169,50 @@ jobs:
           path: dist/basefwx-mac
           if-no-files-found: error
 
+  build-java-jar:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install system deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gradle ffmpeg
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Build Java jar
+        working-directory: java
+        run: |
+          gradle --no-daemon clean build
+
+      - name: Collect jar
+        run: |
+          mkdir -p dist
+          jar_file="java/build/libs/basefwx-java.jar"
+          if [ ! -f "$jar_file" ]; then
+            jar_file=$(find java/build/libs -maxdepth 1 -name "*.jar" | head -n1)
+          fi
+          if [ -z "$jar_file" ] || [ ! -f "$jar_file" ]; then
+            echo "Jar not found"
+            exit 1
+          fi
+          cp "$jar_file" dist/basefwx-java.jar
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: basefwx-java
+          path: dist/basefwx-java.jar
+          if-no-files-found: error
+
   publish-benchmarks:
     runs-on: ubuntu-latest
     needs: [light-tests]
@@ -212,7 +256,7 @@ jobs:
 
   sign-release:
     runs-on: ubuntu-latest
-    needs: [light-tests, build-cli-linux, build-cli-windows, build-cli-macos]
+    needs: [light-tests, build-cli-linux, build-cli-windows, build-cli-macos, build-java-jar]
     permissions:
       contents: write
     steps:
@@ -232,6 +276,7 @@ jobs:
           mv dist/basefwx-linux/basefwx-linux dist_out/basefwx-linux
           mv dist/basefwx-windows/basefwx-windows.exe dist_out/basefwx-windows.exe
           mv dist/basefwx-mac/basefwx-mac dist_out/basefwx-mac
+          mv dist/basefwx-java/basefwx-java.jar dist_out/basefwx-java.jar
           chmod +x dist_out/basefwx-linux dist_out/basefwx-mac
 
       - name: Generate hashes
@@ -243,6 +288,8 @@ jobs:
           md5sum basefwx-windows.exe > basefwx-windows.exe.md5
           sha256sum basefwx-mac > basefwx-mac.sha256
           md5sum basefwx-mac > basefwx-mac.md5
+          sha256sum basefwx-java.jar > basefwx-java.jar.sha256
+          md5sum basefwx-java.jar > basefwx-java.jar.md5
 
       - name: Import GPG key
         env:
@@ -263,19 +310,24 @@ jobs:
             --detach-sign -o dist_out/basefwx-windows.exe.sig dist_out/basefwx-windows.exe
           gpg --batch --yes --pinentry-mode loopback --passphrase "$GPG_PASSPHRASE" \
             --detach-sign -o dist_out/basefwx-mac.sig dist_out/basefwx-mac
+          gpg --batch --yes --pinentry-mode loopback --passphrase "$GPG_PASSPHRASE" \
+            --detach-sign -o dist_out/basefwx-java.jar.sig dist_out/basefwx-java.jar
 
       - name: Verify signatures + hashes
         run: |
           gpg --batch --verify dist_out/basefwx-linux.sig dist_out/basefwx-linux
           gpg --batch --verify dist_out/basefwx-windows.exe.sig dist_out/basefwx-windows.exe
           gpg --batch --verify dist_out/basefwx-mac.sig dist_out/basefwx-mac
+          gpg --batch --verify dist_out/basefwx-java.jar.sig dist_out/basefwx-java.jar
           cd dist_out
           sha256sum -c basefwx-linux.sha256
           sha256sum -c basefwx-windows.exe.sha256
           sha256sum -c basefwx-mac.sha256
+          sha256sum -c basefwx-java.jar.sha256
           md5sum -c basefwx-linux.md5
           md5sum -c basefwx-windows.exe.md5
           md5sum -c basefwx-mac.md5
+          md5sum -c basefwx-java.jar.md5
 
       - name: Upload release assets
         uses: softprops/action-gh-release@v2
@@ -293,6 +345,10 @@ jobs:
             dist_out/basefwx-mac.sha256
             dist_out/basefwx-mac.md5
             dist_out/basefwx-mac.sig
+            dist_out/basefwx-java.jar
+            dist_out/basefwx-java.jar.sha256
+            dist_out/basefwx-java.jar.md5
+            dist_out/basefwx-java.jar.sig
 
       - name: VirusTotal scan
         env:
@@ -304,7 +360,7 @@ jobs:
             exit 1
           fi
 
-          rate_limit_sec=20
+          rate_limit_sec=15
           last_ts=0
           vt_request() {
             local method="$1"
@@ -347,7 +403,7 @@ jobs:
           json=$(jq -n --arg generated_at "$generated_at" --arg release_tag "$tag" --arg repo "$repo" \
             '{generated_at:$generated_at, release_tag:$release_tag, repo:$repo, files:[]}')
 
-          files=(dist_out/basefwx-linux dist_out/basefwx-windows.exe dist_out/basefwx-mac)
+          files=(dist_out/basefwx-linux dist_out/basefwx-windows.exe dist_out/basefwx-mac dist_out/basefwx-java.jar)
           names=()
           ids=()
           statuses=()
@@ -462,6 +518,8 @@ jobs:
           cp dist_out/basefwx-windows.exe.md5 results/basefwx-windows.exe.md5
           cp dist_out/basefwx-mac.sha256 results/basefwx-mac.sha256
           cp dist_out/basefwx-mac.md5 results/basefwx-mac.md5
+          cp dist_out/basefwx-java.jar.sha256 results/basefwx-java.jar.sha256
+          cp dist_out/basefwx-java.jar.md5 results/basefwx-java.jar.md5
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           key_id="$(gpg --list-secret-keys --with-colons | awk -F: '/^sec:/ {print $5; exit}')"
@@ -489,7 +547,7 @@ jobs:
 
   publish-pypi:
     runs-on: ubuntu-latest
-    needs: [sign-release]
+    needs: [sign-release, publish-benchmarks]
     permissions:
       contents: read
     steps:

@@ -7,7 +7,7 @@ __pycache__/
 venv/
 .env
 .envrc
-
+.vscode
 .gradle/
 **/.gradle/
 .idea/

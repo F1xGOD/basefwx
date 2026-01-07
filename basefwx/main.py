@@ -1919,7 +1919,7 @@ class basefwx:
         length: int = 32,
         time_cost: int = 3,
         memory_cost: int = 2 ** 15,
-        parallelism: int = 4
+        parallelism: int | None = None
     ) -> "basefwx.typing.Tuple[bytes, bytes]":
         if salt is None:
             salt = basefwx.os.urandom(basefwx.USER_KDF_SALT_SIZE)
@@ -1927,6 +1927,7 @@ class basefwx:
             raise ValueError("User key salt must be at least 16 bytes")
         if basefwx.hash_secret_raw is None:
             raise RuntimeError("Argon2 backend unavailable")
+        parallelism = parallelism or basefwx._CPU_COUNT
         password_bytes = basefwx._coerce_password_bytes(password)
         key = basefwx.hash_secret_raw(
             password_bytes,
@@ -7797,6 +7798,15 @@ def cli(argv=None) -> int:
 
     def _confirm_single_thread_cli() -> None:
         if not basefwx._SINGLE_THREAD_OVERRIDE:
+            return
+        if _os_module.getenv("BASEFWX_ALLOW_SINGLE_THREAD") == "1" or _os_module.getenv("BASEFWX_NONINTERACTIVE") == "1":
+            # Non-interactive bypass: warn but do not prompt
+            warning = "WARN: MULTI-THREAD IS DISABLED; THIS MAY CAUSE SEVERE PERFORMANCE DETERIORATION"
+            security = "WARN: SINGLE-THREAD MODE REDUCES SIDE-CHANNEL RESILIENCE"
+            orange = "\033[38;5;208m"
+            reset = "\033[0m"
+            decorated = f"{orange}{warning}\n{security}{reset}" if not theme.plain else f"{warning}\n{security}"
+            print(decorated)
             return
         warning = "WARN: MULTI-THREAD IS DISABLED; THIS MAY CAUSE SEVERE PERFORMANCE DETERIORATION"
         security = "WARN: SINGLE-THREAD MODE REDUCES SIDE-CHANNEL RESILIENCE"

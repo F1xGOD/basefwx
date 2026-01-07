@@ -175,11 +175,10 @@ int BenchWorkers() {
 }
 
 bool SingleThreadForced(std::size_t workers) {
+    // Single-thread mode only triggers with explicit BASEFWX_FORCE_SINGLE_THREAD=1
+    std::string force_single = basefwx::env::Get("BASEFWX_FORCE_SINGLE_THREAD");
     unsigned int hw = std::thread::hardware_concurrency();
-    std::string env_workers = ToLower(basefwx::env::Get("BASEFWX_BENCH_WORKERS"));
-    bool parallel_off = !BenchParallelEnabled();
-    bool env_one = (!env_workers.empty() && env_workers == "1");
-    return (workers == 1 && hw > 1 && (parallel_off || env_one));
+    return (force_single == "1" && hw > 1);
 }
 
 void WarnSingleThreadIfForced() {

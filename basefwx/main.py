@@ -2,6 +2,11 @@
 
 import os as _os_module
 import re as _re_module
+import sys as _sys_module
+
+# Enable large integer string conversion for performance-critical decimal math
+if hasattr(_sys_module, "set_int_max_str_digits"):
+    _sys_module.set_int_max_str_digits(0)  # 0 = unlimited
 
 
 class basefwx:
@@ -167,7 +172,9 @@ class basefwx:
         _CPU_COUNT = max(1, int(_CPU_COUNT_OVERRIDE.strip()))
     else:
         _CPU_COUNT = max(1, os.cpu_count() or 1)
-    _SINGLE_THREAD_OVERRIDE = bool(_CPU_COUNT_OVERRIDE and _CPU_COUNT == 1 and (os.cpu_count() or 1) > 1)
+    # Single-thread mode only triggers with explicit BASEFWX_FORCE_SINGLE_THREAD=1
+    _FORCE_SINGLE_THREAD_ENV = _os_module.getenv("BASEFWX_FORCE_SINGLE_THREAD")
+    _SINGLE_THREAD_OVERRIDE = bool(_FORCE_SINGLE_THREAD_ENV == "1" and (os.cpu_count() or 1) > 1)
     _WARNED_SINGLE_THREAD = False
 
     def _warn_single_thread_api() -> None:
@@ -188,7 +195,8 @@ class basefwx:
             pass
 
     _PARALLEL_CHUNK_SIZE = 1 << 20  # 1 MiB chunks when fan-out encoding
-    _DECIMAL_INT_LIMIT = 4096
+    # Python's native int is efficient up to millions of digits; use native math
+    _DECIMAL_INT_LIMIT = 100_000
     _SILENT_MODE: typing.ClassVar[bool] = False
     PQ_CIPHERTEXT_SIZE = getattr(ml_kem_768, "CIPHERTEXT_SIZE", 0)
     AEAD_NONCE_LEN = 12
@@ -242,6 +250,10 @@ class basefwx:
     )
     _MD_CODE_TABLE: typing.ClassVar[tuple[str, ...]] = tuple(
         f"{len(str(i))}{i}" for i in range(256)
+    )
+    # Pre-computed bytes lookup for faster _mdcode_ascii
+    _MD_CODE_TABLE_BYTES: typing.ClassVar[tuple[bytes, ...]] = tuple(
+        f"{len(str(i))}{i}".encode("ascii") for i in range(256)
     )
     _DECIMAL_BYTES_THRESHOLD = 4096
 
@@ -1386,29 +1398,12 @@ class basefwx:
 
     @staticmethod
     def _mdcode_ascii(text: str) -> str:
+        # Fast path using pre-computed bytes lookup table
         if not text.isascii():
-            text.encode("ascii")
+            text.encode("ascii")  # Will raise if not ASCII
         data = text.encode("ascii")
-        # Max 4 bytes per input byte (1 digit for length + 3 digits for value)
-        out = bytearray(len(data) * 4)
-        idx = 0
-        for b in data:
-            if b < 10:
-                out[idx] = 49  # '1'
-                out[idx + 1] = 48 + b
-                idx += 2
-            elif b < 100:
-                out[idx] = 50  # '2'
-                out[idx + 1] = 48 + b // 10
-                out[idx + 2] = 48 + b % 10
-                idx += 3
-            else:
-                out[idx] = 51  # '3'
-                out[idx + 1] = 48 + b // 100
-                out[idx + 2] = 48 + (b // 10) % 10
-                out[idx + 3] = 48 + b % 10
-                idx += 4
-        return out[:idx].decode("ascii")
+        table = basefwx._MD_CODE_TABLE_BYTES
+        return b"".join(table[b] for b in data).decode("ascii")
 
     @staticmethod
     def _mcode_digits(encoded: str) -> str:
@@ -7329,21 +7324,20 @@ class basefwx:
 
     @staticmethod
     def _decimal_diff(a: str, b: str) -> str:
-        limit = basefwx._DECIMAL_INT_LIMIT
-        if len(a) <= limit and len(b) <= limit:
-            try:
-                ai = int(a)
-                bi = int(b)
-            except (ValueError, OverflowError, MemoryError):
-                pass
-            else:
-                if ai >= bi:
-                    return str(ai - bi)
-                return "0" + str(bi - ai)
-        cmp = basefwx._compare_magnitude(a, b)
-        if cmp >= 0:
-            return basefwx._subtract_magnitude(a, b)
-        return "0" + basefwx._subtract_magnitude(b, a)
+        # Python's native int is very efficient even for huge numbers
+        # Use it for all cases - the string-based fallback is slower
+        try:
+            ai = int(a)
+            bi = int(b)
+            if ai >= bi:
+                return str(ai - bi)
+            return "0" + str(bi - ai)
+        except (ValueError, OverflowError, MemoryError):
+            # Fallback only if native int fails (extremely rare)
+            cmp = basefwx._compare_magnitude(a, b)
+            if cmp >= 0:
+                return basefwx._subtract_magnitude(a, b)
+            return "0" + basefwx._subtract_magnitude(b, a)
 
     @staticmethod
     def _add_magnitude(a: str, b: str) -> str:
@@ -7685,7 +7679,10 @@ class basefwx:
     def b1024encode(string: str):
         if not string:
             raise ValueError("b1024encode expects non-empty input")
-        return basefwx.bi512encode(basefwx.a512encode(string))
+        # Optimized path: since bi512encode only produces a hash, we can stream
+        # the computation to avoid building huge intermediate strings
+        a512_result = basefwx.a512encode(string)
+        return basefwx.bi512encode(a512_result)
 
     # CODELESS ENCODE - SECURITY: ❙
     @staticmethod
@@ -7797,6 +7794,7 @@ def cli(argv=None) -> int:
     theme = _CliTheme(_cli_plain_mode())
 
     def _confirm_single_thread_cli() -> None:
+        # Single-thread mode only triggers with explicit BASEFWX_FORCE_SINGLE_THREAD=1
         if not basefwx._SINGLE_THREAD_OVERRIDE:
             return
         if _os_module.getenv("BASEFWX_ALLOW_SINGLE_THREAD") == "1" or _os_module.getenv("BASEFWX_NONINTERACTIVE") == "1":

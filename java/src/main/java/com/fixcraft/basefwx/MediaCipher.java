@@ -57,10 +57,12 @@ public final class MediaCipher {
         ".png", ".jpg", ".jpeg", ".bmp", ".tga", ".gif", ".webp",
         ".tif", ".tiff", ".heic", ".heif", ".avif", ".ico"
     );
+    @SuppressWarnings("unused")  // Reserved for future API use
     private static final Set<String> VIDEO_EXTS = buildSet(
         ".mp4", ".mkv", ".mov", ".avi", ".webm", ".m4v", ".flv", ".wmv",
         ".mpg", ".mpeg", ".3gp", ".3g2", ".ts", ".m2ts"
     );
+    @SuppressWarnings("unused")  // Reserved for future API use
     private static final Set<String> AUDIO_EXTS = buildSet(
         ".mp3", ".wav", ".flac", ".aac", ".m4a", ".ogg", ".opus", ".wma", ".aiff", ".alac"
     );

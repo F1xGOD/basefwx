@@ -71,13 +71,13 @@ public final class BaseFwxCli {
     }
 
     private static void confirmSingleThreadCli(int workers) {
+        // Single-thread mode only triggers with explicit BASEFWX_FORCE_SINGLE_THREAD=1
+        String forceSingle = System.getenv("BASEFWX_FORCE_SINGLE_THREAD");
         int available = Runtime.getRuntime().availableProcessors();
-        String envWorkers = System.getenv("BASEFWX_BENCH_WORKERS");
-        boolean parallelOff = !benchParallelEnabled();
-        boolean forcedOne = parallelOff || (envWorkers != null && envWorkers.trim().equals("1"));
+        boolean forced = "1".equals(forceSingle) && available > 1;
         boolean nonInteractive = "1".equals(System.getenv("BASEFWX_ALLOW_SINGLE_THREAD"))
                 || "1".equals(System.getenv("BASEFWX_NONINTERACTIVE"));
-        if (workers == 1 && available > 1 && forcedOne) {
+        if (forced) {
             String orange = "\u001b[38;5;208m";
             String reset = "\u001b[0m";
             System.err.println(orange + "WARN: MULTI-THREAD IS DISABLED; THIS MAY CAUSE SEVERE PERFORMANCE DETERIORATION" + reset);
@@ -86,7 +86,10 @@ public final class BaseFwxCli {
                 return;
             }
             System.err.print("Type YES to continue with single-thread mode: ");
-            String resp = new java.util.Scanner(System.in).nextLine();
+            String resp;
+            try (java.util.Scanner scanner = new java.util.Scanner(System.in)) {
+                resp = scanner.nextLine();
+            }
             if (!"YES".equals(resp != null ? resp.trim() : "")) {
                 throw new RuntimeException("Aborted: multi-thread disabled by user override");
             }

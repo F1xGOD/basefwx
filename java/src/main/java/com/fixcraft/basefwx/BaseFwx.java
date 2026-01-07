@@ -9,7 +9,6 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
-import java.io.RandomAccessFile;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.charset.StandardCharsets;
@@ -43,21 +42,23 @@ import javax.crypto.spec.SecretKeySpec;
  * - Reuse of byte arrays in hot paths
  * - Java's garbage collector handles automatic memory cleanup
  */
+@SuppressWarnings("unused")
 public final class BaseFwx {
     private BaseFwx() {}
 
     private static final boolean SINGLE_THREAD_OVERRIDE;
 
     static {
-        String maxThreads = System.getenv("BASEFWX_MAX_THREADS");
+        // Single-thread mode only triggers with explicit BASEFWX_FORCE_SINGLE_THREAD=1
+        String forceSingle = System.getenv("BASEFWX_FORCE_SINGLE_THREAD");
         int available = Runtime.getRuntime().availableProcessors();
-        boolean override = maxThreads != null && maxThreads.trim().equals("1") && available > 1;
+        boolean override = "1".equals(forceSingle) && available > 1;
         SINGLE_THREAD_OVERRIDE = override;
         if (override) {
             String orange = "\u001b[38;5;208m";
             String reset = "\u001b[0m";
             System.err.println(orange + "WARN: MULTI-THREAD DISABLED; PERFORMANCE MAY DETERIORATE. "
-                + "Using BASEFWX_MAX_THREADS=1 with " + available + " cores available." + reset);
+                + "Using BASEFWX_FORCE_SINGLE_THREAD=1 with " + available + " cores available." + reset);
         }
     }
 
@@ -1544,8 +1545,10 @@ public final class BaseFwx {
     }
 
     public static void fwxAesEncryptFileNio(File input, File output, String password, boolean useMaster) {
-        try (FileChannel in = new FileInputStream(input).getChannel();
-             FileChannel out = new FileOutputStream(output).getChannel()) {
+        try (FileInputStream fis = new FileInputStream(input);
+             FileOutputStream fos = new FileOutputStream(output);
+             FileChannel in = fis.getChannel();
+             FileChannel out = fos.getChannel()) {
             long ctLen = fwxAesEncryptChannel(in, out, password, useMaster);
             patchCtLen(out, ctLen);
         } catch (IOException exc) {
@@ -1554,8 +1557,10 @@ public final class BaseFwx {
     }
 
     public static void fwxAesDecryptFileNio(File input, File output, String password, boolean useMaster) {
-        try (FileChannel in = new FileInputStream(input).getChannel();
-             FileChannel out = new FileOutputStream(output).getChannel()) {
+        try (FileInputStream fis = new FileInputStream(input);
+             FileOutputStream fos = new FileOutputStream(output);
+             FileChannel in = fis.getChannel();
+             FileChannel out = fos.getChannel()) {
             fwxAesDecryptChannel(in, out, password, useMaster);
         } catch (IOException exc) {
             throw new IllegalStateException("fwxAES file decrypt failed", exc);

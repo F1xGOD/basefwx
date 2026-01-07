@@ -125,7 +125,7 @@ class BaseFWXUnitTests(unittest.TestCase):
     def test_hash_functions(self):
         data = "basefwx"
         h512 = basefwx.hash512(data)
-        self.assertEqual(len(h512), 64)
+        self.assertEqual(len(h512), 128)  # SHA-512 hex digest is 128 chars
         uhash = basefwx.uhash513(data)
         self.assertEqual(len(uhash), 64)
         self.assertNotEqual(h512, uhash)

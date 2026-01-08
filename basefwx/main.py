@@ -1456,6 +1456,7 @@ class basefwx:
 
     @staticmethod
     def _hkdf_stream_sha256(key_material: bytes, info: bytes, length: int) -> bytes:
+        """HKDF-Expand for arbitrary length output (optimized with memoryview)."""
         if length <= 0:
             return b""
         info_bytes = info or b""
@@ -1466,6 +1467,7 @@ class basefwx:
             basefwx.hashlib.sha256
         ).digest()
         out = bytearray(length)
+        mv = memoryview(out)
         prev = b""
         offset = 0
         counter = 1
@@ -1475,13 +1477,12 @@ class basefwx:
             h = base_hmac.copy()
             if prev:
                 h.update(prev)
-            if info_bytes:
-                h.update(info_bytes)
+            h.update(info_bytes)
             basefwx.struct.pack_into(">I", counter_bytes, 0, counter)
             h.update(counter_bytes)
             block = h.digest()
-            take = min(len(block), length - offset)
-            out[offset:offset + take] = block[:take]
+            take = min(32, length - offset)
+            mv[offset:offset + take] = block[:take]
             offset += take
             prev = block
             counter += 1
@@ -7840,14 +7841,23 @@ class basefwx:
     def b256decode(cls, string: str) -> str:
         padding_count = int(string[-1])
         base32text = string[:-1] + ("=" * padding_count)
-        decoded = cls.base64.b32hexdecode(base32text.encode('utf-8')).decode('utf-8')
+        data = base32text.encode('utf-8')
+        # Use fast NumPy decoder for large data
+        if cls.np is not None and len(data) >= cls._B32_FAST_THRESHOLD:
+            decoded = cls._fast_b32hexdecode(data).decode('utf-8')
+        else:
+            decoded = cls.base64.b32hexdecode(data).decode('utf-8')
         return cls.decode(decoded)
 
     @classmethod
     def b256encode(cls, data: "basefwx.typing.Union[str, bytes, bytearray, memoryview]") -> str:
         text = cls._coerce_text(data)
         raw = cls.code(text).encode('utf-8')
-        encoded = cls.base64.b32hexencode(raw).decode('utf-8')
+        # Use fast NumPy encoder for large data
+        if cls.np is not None and len(raw) >= cls._B32_FAST_THRESHOLD:
+            encoded = cls._fast_b32hexencode(raw).decode('utf-8')
+        else:
+            encoded = cls.base64.b32hexencode(raw).decode('utf-8')
         padding_count = encoded.count("=")
         return encoded.rstrip("=") + str(padding_count)
 

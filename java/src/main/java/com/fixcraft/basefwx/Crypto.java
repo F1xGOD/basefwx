@@ -422,9 +422,8 @@ public final class Crypto {
             }
             
             // GCM decryption: Must process ALL ciphertext before plaintext (authentication)
-            // DirectByteBuffer optimization applies only when output fits in pooled buffer
-            int plaintextLen = ctLen - 16; // GCM tag is 16 bytes
-            if (plaintextLen <= DIRECT_BUF_SIZE) {
+            // DirectByteBuffer optimization applies only when ciphertext fits in pooled buffer
+            if (ctLen <= DIRECT_BUF_SIZE) {
                 // Fits in pooled DirectByteBuffer - ~16x faster
                 ByteBuffer inBuf = DIRECT_IN.get();
                 ByteBuffer outBuf = DIRECT_OUT.get();

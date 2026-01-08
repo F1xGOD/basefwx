@@ -14,12 +14,14 @@ import javax.crypto.spec.SecretKeySpec;
 public final class Crypto {
     private static final SecureRandom RNG = new SecureRandom();
     private static final byte[] HKDF_ZERO_SALT = new byte[32];
-    private static final boolean PBKDF2_NATIVE_ENABLED = resolvePbkdf2Native();
-    private static final boolean PBKDF2_JCE_COMPAT = PBKDF2_NATIVE_ENABLED && detectPbkdf2Compat();
+    // ThreadLocals must be initialized before detectPbkdf2Compat() to avoid init-order bug
     private static final ThreadLocal<Cipher> AES_GCM_ENC = ThreadLocal.withInitial(Crypto::initAesGcmCipher);
     private static final ThreadLocal<Cipher> AES_GCM_DEC = ThreadLocal.withInitial(Crypto::initAesGcmCipher);
     private static final ThreadLocal<Mac> HMAC_SHA256 = ThreadLocal.withInitial(Crypto::initHmacInstance);
     private static final ThreadLocal<SecretKeyFactory> PBKDF2_FACTORY = ThreadLocal.withInitial(Crypto::initPbkdf2Factory);
+    // PBKDF2 compat detection must come after HMAC_SHA256 is initialized
+    private static final boolean PBKDF2_NATIVE_ENABLED = resolvePbkdf2Native();
+    private static final boolean PBKDF2_JCE_COMPAT = PBKDF2_NATIVE_ENABLED && detectPbkdf2Compat();
 
     private Crypto() {}
 

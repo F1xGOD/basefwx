@@ -3602,27 +3602,33 @@ for idx in "${!BENCH_LANGS[@]}"; do
             ;;
         cpp)
             if [[ "$BENCH_FWXAES_MODE" == "par" ]]; then
-                time_cmd_bench "fwxaes_cpp_par_light" env BASEFWX_BENCH_ITERS="$BENCH_ITERS_HEAVY" \
+                time_cmd_bench "fwxaes_cpp_par_light" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_HEAVY" \
+                    BASEFWX_BENCH_ITERS="$BENCH_ITERS_HEAVY" \
                     BASEFWX_TEST_KDF_ITERS="$FWXAES_LIGHT_KDF_ITERS" \
                     "$CPP_BIN" bench-fwxaes-par "$BENCH_BYTES_FILE" "$PW" --no-master
-                time_cmd_bench "fwxaes_cpp_par" env BASEFWX_BENCH_ITERS="$BENCH_ITERS_HEAVY" \
+                time_cmd_bench "fwxaes_cpp_par" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_HEAVY" \
+                    BASEFWX_BENCH_ITERS="$BENCH_ITERS_HEAVY" \
                     "$CPP_BIN" bench-fwxaes-par "$BENCH_BYTES_FILE" "$PW" --no-master
             else
-                time_cmd_bench "fwxaes_cpp_correct_light" env BASEFWX_BENCH_ITERS="$BENCH_ITERS_HEAVY" \
+                time_cmd_bench "fwxaes_cpp_correct_light" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_HEAVY" \
+                    BASEFWX_BENCH_ITERS="$BENCH_ITERS_HEAVY" \
                     BASEFWX_TEST_KDF_ITERS="$FWXAES_LIGHT_KDF_ITERS" \
                     "$CPP_BIN" bench-fwxaes "$BENCH_BYTES_FILE" "$PW" --no-master
-                time_cmd_bench "fwxaes_cpp_correct" env BASEFWX_BENCH_ITERS="$BENCH_ITERS_HEAVY" \
+                time_cmd_bench "fwxaes_cpp_correct" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_HEAVY" \
+                    BASEFWX_BENCH_ITERS="$BENCH_ITERS_HEAVY" \
                     "$CPP_BIN" bench-fwxaes "$BENCH_BYTES_FILE" "$PW" --no-master
             fi
             for method in "${BENCH_TEXT_METHODS[@]}"; do
                 text_path="$(bench_text_for_method "$method")"
                 iters="$(bench_iters_for_method "$method")"
                 if [[ "$method" == "b512" || "$method" == "pb512" ]]; then
-                    time_cmd_bench "${method}_cpp_correct" env BASEFWX_BENCH_ITERS="$iters" \
+                    time_cmd_bench "${method}_cpp_correct" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_LIGHT" \
+                        BASEFWX_BENCH_ITERS="$iters" \
                         BASEFWX_BENCH_WORKERS="$(bench_workers_for_method "$method" "cpp")" \
                         "$CPP_BIN" bench-text "$method" "$text_path" -p "$PW" --no-master
                 else
-                    time_cmd_bench "${method}_cpp_correct" env BASEFWX_BENCH_ITERS="$iters" \
+                    time_cmd_bench "${method}_cpp_correct" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_LIGHT" \
+                        BASEFWX_BENCH_ITERS="$iters" \
                         BASEFWX_BENCH_WORKERS="$(bench_workers_for_method "$method" "cpp")" \
                         "$CPP_BIN" bench-text "$method" "$text_path"
                 fi
@@ -3630,14 +3636,17 @@ for idx in "${!BENCH_LANGS[@]}"; do
             for method in "${BENCH_HASH_METHODS[@]}"; do
                 text_path="$(bench_text_for_method "$method")"
                 iters="$(bench_iters_for_method "$method")"
-                time_cmd_bench "${method}_cpp_correct" env BASEFWX_BENCH_ITERS="$iters" \
+                time_cmd_bench "${method}_cpp_correct" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_LIGHT" \
+                    BASEFWX_BENCH_ITERS="$iters" \
                     BASEFWX_BENCH_WORKERS="$(bench_workers_for_method "$method" "cpp")" \
                     "$CPP_BIN" bench-hash "$method" "$text_path"
             done
-            time_cmd_bench "b512file_cpp_total" env BASEFWX_BENCH_ITERS="$BENCH_ITERS_FILE" \
+            time_cmd_bench "b512file_cpp_total" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_FILE" \
+                BASEFWX_BENCH_ITERS="$BENCH_ITERS_FILE" \
                 BASEFWX_BENCH_WORKERS="$BENCH_FILE_WORKERS" \
                 "$CPP_BIN" bench-b512file "$BENCH_BYTES_FILE" "$PW" --no-master
-            time_cmd_bench "pb512file_cpp_total" env BASEFWX_BENCH_ITERS="$BENCH_ITERS_FILE" \
+            time_cmd_bench "pb512file_cpp_total" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_FILE" \
+                BASEFWX_BENCH_ITERS="$BENCH_ITERS_FILE" \
                 BASEFWX_BENCH_WORKERS="$BENCH_FILE_WORKERS" \
                 "$CPP_BIN" bench-pb512file "$BENCH_BYTES_FILE" "$PW" --no-master
             ;;

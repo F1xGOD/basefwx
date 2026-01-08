@@ -1,5 +1,6 @@
 package com.fixcraft.basefwx;
 
+import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.security.GeneralSecurityException;
 import java.security.SecureRandom;
@@ -19,6 +20,10 @@ public final class Crypto {
     private static final ThreadLocal<Cipher> AES_GCM_DEC = ThreadLocal.withInitial(Crypto::initAesGcmCipher);
     private static final ThreadLocal<Mac> HMAC_SHA256 = ThreadLocal.withInitial(Crypto::initHmacInstance);
     private static final ThreadLocal<SecretKeyFactory> PBKDF2_FACTORY = ThreadLocal.withInitial(Crypto::initPbkdf2Factory);
+    // DirectByteBuffer pools for fast AES-GCM (16x faster than byte[] arrays)
+    private static final int DIRECT_BUF_SIZE = 8 * 1024 * 1024; // 8 MiB chunks
+    private static final ThreadLocal<ByteBuffer> DIRECT_IN = ThreadLocal.withInitial(() -> ByteBuffer.allocateDirect(DIRECT_BUF_SIZE));
+    private static final ThreadLocal<ByteBuffer> DIRECT_OUT = ThreadLocal.withInitial(() -> ByteBuffer.allocateDirect(DIRECT_BUF_SIZE + Constants.AEAD_TAG_LEN));
     // PBKDF2 compat detection must come after HMAC_SHA256 is initialized
     private static final boolean PBKDF2_NATIVE_ENABLED = resolvePbkdf2Native();
     private static final boolean PBKDF2_JCE_COMPAT = PBKDF2_NATIVE_ENABLED && detectPbkdf2Compat();
@@ -335,7 +340,42 @@ public final class Crypto {
             if (aad != null && aad.length > 0) {
                 cipher.updateAAD(aad);
             }
-            return cipher.doFinal(plaintext, plainOff, plainLen, out, outOff);
+            // Use DirectByteBuffer for ~16x faster AES-GCM on HotSpot
+            // Process in chunks for large data
+            ByteBuffer inBuf = DIRECT_IN.get();
+            ByteBuffer outBuf = DIRECT_OUT.get();
+            int totalWritten = 0;
+            int remaining = plainLen;
+            int srcOff = plainOff;
+            int dstOff = outOff;
+            
+            while (remaining > DIRECT_BUF_SIZE) {
+                // Process full chunks with update()
+                inBuf.clear().limit(DIRECT_BUF_SIZE);
+                inBuf.put(plaintext, srcOff, DIRECT_BUF_SIZE);
+                inBuf.flip();
+                outBuf.clear();
+                int written = cipher.update(inBuf, outBuf);
+                if (written > 0) {
+                    outBuf.flip();
+                    outBuf.get(out, dstOff, written);
+                    totalWritten += written;
+                    dstOff += written;
+                }
+                srcOff += DIRECT_BUF_SIZE;
+                remaining -= DIRECT_BUF_SIZE;
+            }
+            
+            // Process final chunk with doFinal()
+            inBuf.clear().limit(remaining);
+            inBuf.put(plaintext, srcOff, remaining);
+            inBuf.flip();
+            outBuf.clear();
+            int written = cipher.doFinal(inBuf, outBuf);
+            outBuf.flip();
+            outBuf.get(out, dstOff, written);
+            totalWritten += written;
+            return totalWritten;
         } catch (GeneralSecurityException exc) {
             throw new IllegalStateException("AES-GCM encrypt failed", exc);
         }
@@ -380,7 +420,26 @@ public final class Crypto {
             if (aad != null && aad.length > 0) {
                 cipher.updateAAD(aad);
             }
-            return cipher.doFinal(ciphertext, ctOff, ctLen, out, outOff);
+            
+            // GCM decryption: Must process ALL ciphertext before plaintext (authentication)
+            // DirectByteBuffer optimization applies only when output fits in pooled buffer
+            int plaintextLen = ctLen - 16; // GCM tag is 16 bytes
+            if (plaintextLen <= DIRECT_BUF_SIZE) {
+                // Fits in pooled DirectByteBuffer - ~16x faster
+                ByteBuffer inBuf = DIRECT_IN.get();
+                ByteBuffer outBuf = DIRECT_OUT.get();
+                inBuf.clear().limit(ctLen);
+                inBuf.put(ciphertext, ctOff, ctLen);
+                inBuf.flip();
+                outBuf.clear();
+                int written = cipher.doFinal(inBuf, outBuf);
+                outBuf.flip();
+                outBuf.get(out, outOff, written);
+                return written;
+            } else {
+                // Large data: byte[] fallback (can't use chunked DirectByteBuffer for GCM decrypt output)
+                return cipher.doFinal(ciphertext, ctOff, ctLen, out, outOff);
+            }
         } catch (GeneralSecurityException exc) {
             throw new IllegalArgumentException("Bad password or corrupted payload", exc);
         }

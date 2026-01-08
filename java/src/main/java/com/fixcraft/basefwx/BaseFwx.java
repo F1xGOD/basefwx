@@ -377,25 +377,27 @@ public final class BaseFwx {
             try (CryptoBackend.AeadDecryptor dec = backend.newGcmDecryptor(key, iv, Constants.FWXAES_AAD)) {
                 long remaining = (long) ctLen - Constants.AEAD_TAG_LEN;
                 byte[] buf = new byte[STREAM_CHUNK];
-                byte[] outBuf = new byte[STREAM_CHUNK];
+                // GCM decryption buffers all data until doFinal for tag verification
+                // So we need a buffer large enough for all plaintext
+                int plaintextLen = ctLen - Constants.AEAD_TAG_LEN;
+                byte[] outBuf = new byte[Math.max(STREAM_CHUNK, plaintextLen)];
                 long written = 0;
+                int outBufOffset = 0;
                 while (remaining > 0) {
                     int toRead = (int) Math.min(buf.length, remaining);
                     readExact(input, buf, toRead, "fwxAES blob truncated");
-                    int outLen = dec.update(buf, 0, toRead, outBuf, 0);
-                    if (outLen > 0) {
-                        output.write(outBuf, 0, outLen);
-                        written += outLen;
-                    }
+                    int outLen = dec.update(buf, 0, toRead, outBuf, outBufOffset);
+                    outBufOffset += outLen;
                     remaining -= toRead;
                 }
                 byte[] tag = new byte[Constants.AEAD_TAG_LEN];
                 readExact(input, tag, tag.length, "fwxAES blob truncated");
                 try {
-                    int finalLen = dec.doFinal(tag, 0, tag.length, outBuf, 0);
-                    if (finalLen > 0) {
-                        output.write(outBuf, 0, finalLen);
-                        written += finalLen;
+                    int finalLen = dec.doFinal(tag, 0, tag.length, outBuf, outBufOffset);
+                    int totalOut = outBufOffset + finalLen;
+                    if (totalOut > 0) {
+                        output.write(outBuf, 0, totalOut);
+                        written = totalOut;
                     }
                 } catch (AEADBadTagException exc) {
                     throw new IllegalArgumentException("AES-GCM auth failed");

@@ -36,6 +36,14 @@ constexpr std::uint64_t kPcgMultiplierHigh = 2549297995355413924ULL;
 constexpr std::uint64_t kPcgMultiplierLow = 4865540595714422341ULL;
 
 #if defined(_MSC_VER) && !defined(__clang__)
+#define BASEFWX_HAS_INT128 1
+#elif defined(__SIZEOF_INT128__)
+#define BASEFWX_HAS_INT128 1
+#else
+#define BASEFWX_HAS_INT128 0
+#endif
+
+#if defined(_MSC_VER) && !defined(__clang__)
 struct UInt128 {
     std::uint64_t hi;
     std::uint64_t lo;
@@ -173,6 +181,7 @@ std::array<std::uint64_t, 4> SeedSequenceState(std::uint64_t entropy) {
     return state64;
 }
 
+#if BASEFWX_HAS_INT128
 class Pcg64Rng {
 public:
     explicit Pcg64Rng(std::uint64_t seed) {
@@ -282,6 +291,57 @@ private:
     bool has_uint32_{false};
     std::uint32_t uinteger_{0};
 };
+#else
+class Pcg64Rng {
+public:
+    explicit Pcg64Rng(std::uint64_t seed) : state_(seed) {}
+
+    std::uint64_t Next64() {
+        return SplitMix64(state_);
+    }
+
+    std::uint32_t Next32() {
+        if (has_uint32_) {
+            has_uint32_ = false;
+            return uinteger_;
+        }
+        std::uint64_t next = Next64();
+        has_uint32_ = true;
+        uinteger_ = static_cast<std::uint32_t>(next >> 32);
+        return static_cast<std::uint32_t>(next & 0xFFFFFFFFu);
+    }
+
+    std::uint64_t RandomInterval(std::uint64_t max) {
+        if (max == 0) {
+            return 0;
+        }
+        std::uint64_t mask = max;
+        mask |= mask >> 1;
+        mask |= mask >> 2;
+        mask |= mask >> 4;
+        mask |= mask >> 8;
+        mask |= mask >> 16;
+        mask |= mask >> 32;
+        if (max <= 0xFFFFFFFFu) {
+            std::uint64_t value = 0;
+            do {
+                value = static_cast<std::uint64_t>(Next32()) & mask;
+            } while (value > max);
+            return value;
+        }
+        std::uint64_t value = 0;
+        do {
+            value = Next64() & mask;
+        } while (value > max);
+        return value;
+    }
+
+private:
+    std::uint64_t state_{0};
+    bool has_uint32_{false};
+    std::uint32_t uinteger_{0};
+};
+#endif
 
 std::uint64_t Seed64FromBytes(const Bytes& seed_bytes) {
     if (seed_bytes.size() < 8) {

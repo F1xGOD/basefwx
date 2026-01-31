@@ -35,6 +35,12 @@ endif()
 find_package(OpenSSL REQUIRED)
 find_package(ZLIB REQUIRED)
 find_package(PkgConfig QUIET)
+if(CMAKE_CROSSCOMPILING)
+    set(PkgConfig_FOUND FALSE)
+    set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)
+    set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY)
+    set(CMAKE_FIND_ROOT_PATH_MODE_PACKAGE ONLY)
+endif()
 
 set(BASEFWX_HAS_ARGON2 0)
 set(BASEFWX_HAS_OQS 0)
@@ -125,6 +131,14 @@ target_include_directories(basefwxcpp
         ${CMAKE_CURRENT_SOURCE_DIR}/third_party
 )
 target_link_libraries(basefwxcpp PUBLIC OpenSSL::Crypto ZLIB::ZLIB)
+
+if(CMAKE_CROSSCOMPILING)
+    get_target_property(_basefwx_includes basefwxcpp INCLUDE_DIRECTORIES)
+    if(_basefwx_includes)
+        list(REMOVE_ITEM _basefwx_includes "/usr/include" "/usr/include/")
+        set_target_properties(basefwxcpp PROPERTIES INCLUDE_DIRECTORIES "${_basefwx_includes}")
+    endif()
+endif()
 
 if(ARGON2_FOUND)
     target_include_directories(basefwxcpp PUBLIC ${ARGON2_INCLUDE_DIRS})

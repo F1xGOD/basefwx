@@ -5,6 +5,7 @@ option(BASEFWX_BUILD_CLI "Build basefwx_cpp CLI" ON)
 option(BASEFWX_REQUIRE_ARGON2 "Require libargon2 for Argon2id support" OFF)
 option(BASEFWX_REQUIRE_OQS "Require liboqs for ML-KEM-768 support" OFF)
 option(BASEFWX_REQUIRE_LZMA "Require liblzma for xz support" OFF)
+option(BASEFWX_NATIVE_OPT "Enable -march/-mtune native optimizations" ON)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -17,12 +18,14 @@ if(BASEFWX_IPO_SUPPORTED)
 endif()
 
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    add_compile_options(
-        $<$<CONFIG:Release>:-O3>
-        $<$<CONFIG:Release>:-march=native>
-        $<$<CONFIG:Release>:-mtune=native>
-        $<$<CONFIG:Release>:-flto>
-    )
+    add_compile_options($<$<CONFIG:Release>:-O3>)
+    if(BASEFWX_NATIVE_OPT AND NOT CMAKE_CROSSCOMPILING AND CMAKE_SYSTEM_PROCESSOR STREQUAL CMAKE_HOST_SYSTEM_PROCESSOR)
+        add_compile_options(
+            $<$<CONFIG:Release>:-march=native>
+            $<$<CONFIG:Release>:-mtune=native>
+        )
+    endif()
+    add_compile_options($<$<CONFIG:Release>:-flto>)
     add_link_options($<$<CONFIG:Release>:-flto>)
 elseif(MSVC)
     add_compile_options($<$<CONFIG:Release>:/O2 /GL>)

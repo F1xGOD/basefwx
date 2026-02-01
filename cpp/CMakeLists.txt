@@ -66,6 +66,18 @@ endif()
 if(NOT OQS_FOUND)
     find_path(OQS_INCLUDE_DIR NAMES oqs/oqs.h)
     find_library(OQS_LIBRARY NAMES oqs)
+    if(OQS_INCLUDE_DIR AND NOT OQS_LIBRARY)
+        get_filename_component(_oqs_prefix "${OQS_INCLUDE_DIR}" DIRECTORY)
+        set(_oqs_lib_dir "${_oqs_prefix}/lib")
+        file(GLOB _oqs_libs
+            "${_oqs_lib_dir}/liboqs.so*"
+            "${_oqs_lib_dir}/liboqs.a"
+        )
+        list(LENGTH _oqs_libs _oqs_libs_len)
+        if(_oqs_libs_len GREATER 0)
+            list(GET _oqs_libs 0 OQS_LIBRARY)
+        endif()
+    endif()
     if(OQS_INCLUDE_DIR AND OQS_LIBRARY)
         set(OQS_FOUND TRUE)
         set(OQS_INCLUDE_DIRS ${OQS_INCLUDE_DIR})

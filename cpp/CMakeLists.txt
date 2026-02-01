@@ -96,6 +96,18 @@ if(NOT OQS_FOUND)
     endif()
 endif()
 
+# If explicit OQS paths were provided, force-enable PQ support.
+if(OQS_INCLUDE_DIR AND OQS_LIBRARY)
+    set(OQS_FOUND TRUE)
+    if(NOT OQS_INCLUDE_DIRS)
+        set(OQS_INCLUDE_DIRS ${OQS_INCLUDE_DIR})
+    endif()
+    if(NOT OQS_LIBRARIES)
+        set(OQS_LIBRARIES ${OQS_LIBRARY})
+    endif()
+    set(BASEFWX_HAS_OQS 1)
+endif()
+
 if(OQS_FOUND AND BASEFWX_OQS_STATIC)
     if(OQS_LIBRARY MATCHES "\\.a$")
         set(OQS_LIBRARY_STATIC ${OQS_LIBRARY})

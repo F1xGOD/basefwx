@@ -47,9 +47,20 @@ set(BASEFWX_HAS_ARGON2 0)
 set(BASEFWX_HAS_OQS 0)
 set(BASEFWX_HAS_LZMA 0)
 
+# Prefer explicit OQS paths when provided to avoid pkg-config picking a different install.
+if(OQS_LIBRARY OR OQS_INCLUDE_DIR)
+    if(OQS_LIBRARY AND OQS_INCLUDE_DIR)
+        set(OQS_FOUND TRUE)
+        set(OQS_INCLUDE_DIRS ${OQS_INCLUDE_DIR})
+        set(OQS_LIBRARIES ${OQS_LIBRARY})
+    endif()
+endif()
+
 if(PkgConfig_FOUND)
     pkg_check_modules(ARGON2 QUIET libargon2)
-    pkg_check_modules(OQS QUIET liboqs)
+    if(NOT OQS_FOUND)
+        pkg_check_modules(OQS QUIET liboqs)
+    endif()
     pkg_check_modules(LZMA QUIET liblzma)
 endif()
 

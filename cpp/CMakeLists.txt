@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.16)
 project(basefwx_cpp LANGUAGES CXX)
 
 option(BASEFWX_BUILD_CLI "Build basefwx_cpp CLI" ON)
-option(BASEFWX_REQUIRE_ARGON2 "Require libargon2 for Argon2id support" OFF)
+option(BASEFWX_REQUIRE_ARGON2 "Require libargon2 for Argon2id support" ON)
 option(BASEFWX_REQUIRE_OQS "Require liboqs for ML-KEM-768 support" OFF)
 option(BASEFWX_OQS_STATIC "Prefer static liboqs when available" OFF)
 option(BASEFWX_REQUIRE_LZMA "Require liblzma for xz support" OFF)

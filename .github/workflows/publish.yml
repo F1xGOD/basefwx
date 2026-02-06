@@ -16,7 +16,7 @@ jobs:
       - name: Install system deps
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake build-essential libssl-dev zlib1g-dev ffmpeg
+          sudo apt-get install -y cmake build-essential libssl-dev zlib1g-dev libargon2-dev liboqs-dev liblzma-dev ffmpeg
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -59,11 +59,11 @@ jobs:
       - name: Install system deps
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake build-essential libssl-dev zlib1g-dev
+          sudo apt-get install -y cmake build-essential libssl-dev zlib1g-dev libargon2-dev liboqs-dev liblzma-dev
 
       - name: Configure
         run: |
-          cmake -S cpp -B cpp/build -DCMAKE_BUILD_TYPE=Release -DBASEFWX_REQUIRE_ARGON2=OFF -DBASEFWX_REQUIRE_OQS=OFF
+          cmake -S cpp -B cpp/build -DCMAKE_BUILD_TYPE=Release -DBASEFWX_REQUIRE_ARGON2=ON -DBASEFWX_REQUIRE_OQS=ON
 
       - name: Build
         run: cmake --build cpp/build --config Release
@@ -113,7 +113,7 @@ jobs:
 
       - name: Configure
         run: |
-          cmake -S cpp -B cpp/build -DCMAKE_TOOLCHAIN_FILE="${{ github.workspace }}\\vcpkg\\scripts\\buildsystems\\vcpkg.cmake" -DVCPKG_TARGET_TRIPLET=x64-windows -DBASEFWX_REQUIRE_ARGON2=OFF -DBASEFWX_REQUIRE_OQS=OFF
+          cmake -S cpp -B cpp/build -DCMAKE_TOOLCHAIN_FILE="${{ github.workspace }}\\vcpkg\\scripts\\buildsystems\\vcpkg.cmake" -DVCPKG_TARGET_TRIPLET=x64-windows -DBASEFWX_REQUIRE_ARGON2=ON -DBASEFWX_REQUIRE_OQS=ON
 
       - name: Build
         run: cmake --build cpp/build --config Release --parallel
@@ -147,11 +147,11 @@ jobs:
       - name: Install system deps
         run: |
           brew update
-          brew install openssl@3
+          brew install openssl@3 argon2 liboqs
 
       - name: Configure
         run: |
-          cmake -S cpp -B cpp/build -DCMAKE_BUILD_TYPE=Release -DBASEFWX_REQUIRE_ARGON2=OFF -DBASEFWX_REQUIRE_OQS=OFF -DOPENSSL_ROOT_DIR="$(brew --prefix openssl@3)"
+          cmake -S cpp -B cpp/build -DCMAKE_BUILD_TYPE=Release -DBASEFWX_REQUIRE_ARGON2=ON -DBASEFWX_REQUIRE_OQS=ON -DOPENSSL_ROOT_DIR="$(brew --prefix openssl@3)"
 
       - name: Build
         run: cmake --build cpp/build --config Release

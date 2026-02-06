@@ -44,6 +44,12 @@
 
 #if defined(_WIN32)
 #include <windows.h>
+#ifdef EncryptFile
+#undef EncryptFile
+#endif
+#ifdef DecryptFile
+#undef DecryptFile
+#endif
 #else
 #include <errno.h>
 #include <sys/types.h>
@@ -1243,7 +1249,7 @@ int RunProcess(const std::vector<std::string>& args, std::string* output) {
     if (output && read_pipe) {
         std::array<char, 4096> buffer{};
         DWORD read = 0;
-        while (ReadFile(read_pipe, buffer.data(),
+        while (::ReadFile(read_pipe, buffer.data(),
                         static_cast<DWORD>(buffer.size()), &read, nullptr)
                && read > 0) {
             output->append(buffer.data(), buffer.data() + read);

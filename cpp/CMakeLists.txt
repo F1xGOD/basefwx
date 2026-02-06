@@ -304,14 +304,6 @@ target_include_directories(basefwxcpp
 )
 target_link_libraries(basefwxcpp PUBLIC OpenSSL::Crypto ZLIB::ZLIB)
 
-if(CMAKE_CROSSCOMPILING)
-    get_target_property(_basefwx_includes basefwxcpp INCLUDE_DIRECTORIES)
-    if(_basefwx_includes)
-        list(REMOVE_ITEM _basefwx_includes "/usr/include" "/usr/include/")
-        set_target_properties(basefwxcpp PROPERTIES INCLUDE_DIRECTORIES "${_basefwx_includes}")
-    endif()
-endif()
-
 if(ARGON2_FOUND)
     target_include_directories(basefwxcpp PUBLIC ${ARGON2_INCLUDE_DIRS})
     target_link_libraries(basefwxcpp PUBLIC ${ARGON2_LIBRARIES})
@@ -325,6 +317,15 @@ endif()
 if(LZMA_FOUND)
     target_include_directories(basefwxcpp PUBLIC ${LZMA_INCLUDE_DIRS})
     target_link_libraries(basefwxcpp PUBLIC ${LZMA_LIBRARIES})
+endif()
+
+if(CMAKE_CROSSCOMPILING)
+    get_target_property(_basefwx_includes basefwxcpp INCLUDE_DIRECTORIES)
+    if(_basefwx_includes)
+        list(REMOVE_ITEM _basefwx_includes "/usr/include" "/usr/include/")
+        list(REMOVE_DUPLICATES _basefwx_includes)
+        set_target_properties(basefwxcpp PROPERTIES INCLUDE_DIRECTORIES "${_basefwx_includes}")
+    endif()
 endif()
 
 target_compile_definitions(basefwxcpp PUBLIC

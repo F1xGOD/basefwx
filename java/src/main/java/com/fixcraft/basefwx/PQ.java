@@ -2,11 +2,11 @@ package com.fixcraft.basefwx;
 
 import org.bouncycastle.crypto.SecretWithEncapsulation;
 import org.bouncycastle.jce.provider.BouncyCastleProvider;
-import org.bouncycastle.pqc.crypto.mlkem.MLKEMExtractor;
-import org.bouncycastle.pqc.crypto.mlkem.MLKEMGenerator;
-import org.bouncycastle.pqc.crypto.mlkem.MLKEMParameters;
-import org.bouncycastle.pqc.crypto.mlkem.MLKEMPrivateKeyParameters;
-import org.bouncycastle.pqc.crypto.mlkem.MLKEMPublicKeyParameters;
+import org.bouncycastle.pqc.crypto.crystals.kyber.KyberKEMExtractor;
+import org.bouncycastle.pqc.crypto.crystals.kyber.KyberKEMGenerator;
+import org.bouncycastle.pqc.crypto.crystals.kyber.KyberParameters;
+import org.bouncycastle.pqc.crypto.crystals.kyber.KyberPrivateKeyParameters;
+import org.bouncycastle.pqc.crypto.crystals.kyber.KyberPublicKeyParameters;
 import org.bouncycastle.pqc.jcajce.provider.BouncyCastlePQCProvider;
 
 import java.io.ByteArrayInputStream;
@@ -140,7 +140,7 @@ public final class PQ {
     }
 
     /**
-     * Perform KEM encapsulation using ML-KEM-768.
+     * Perform KEM encapsulation using ML-KEM-768 (Kyber768).
      * This matches the behavior of pqcrypto.kem.ml_kem_768.encrypt() in Python
      * and OQS_KEM_encaps() in C++.
      */
@@ -149,13 +149,13 @@ public final class PQ {
             throw new IllegalArgumentException("Only ml-kem-768 is supported");
         }
 
-        // Use raw Bouncy Castle KEM API for ML-KEM-768
-        // Note: Bouncy Castle's ML-KEM expects raw key bytes, not X.509 encoded
-        MLKEMParameters params = MLKEMParameters.ml_kem_768;
-        MLKEMPublicKeyParameters pubKey = 
-            new MLKEMPublicKeyParameters(params, publicKeyBytes);
+        // Use Bouncy Castle Kyber API for ML-KEM-768 (Kyber768)
+        // Note: ML-KEM-768 is the NIST standardized version of Kyber768
+        KyberParameters params = KyberParameters.kyber768;
+        KyberPublicKeyParameters pubKey = 
+            new KyberPublicKeyParameters(params, publicKeyBytes);
         
-        MLKEMGenerator kemGen = new MLKEMGenerator(new SecureRandom());
+        KyberKEMGenerator kemGen = new KyberKEMGenerator(new SecureRandom());
         SecretWithEncapsulation secretEnc = kemGen.generateEncapsulated(pubKey);
         
         byte[] ciphertext = secretEnc.getEncapsulation();
@@ -165,7 +165,7 @@ public final class PQ {
     }
 
     /**
-     * Perform KEM decapsulation using ML-KEM-768.
+     * Perform KEM decapsulation using ML-KEM-768 (Kyber768).
      * This matches the behavior of pqcrypto.kem.ml_kem_768.decrypt() in Python
      * and OQS_KEM_decaps() in C++.
      */
@@ -174,12 +174,12 @@ public final class PQ {
             throw new IllegalArgumentException("Only ml-kem-768 is supported");
         }
 
-        // Use raw Bouncy Castle KEM API for ML-KEM-768
-        MLKEMParameters params = MLKEMParameters.ml_kem_768;
-        MLKEMPrivateKeyParameters privKey = 
-            new MLKEMPrivateKeyParameters(params, privateKeyBytes);
+        // Use Bouncy Castle Kyber API for ML-KEM-768 (Kyber768)
+        KyberParameters params = KyberParameters.kyber768;
+        KyberPrivateKeyParameters privKey = 
+            new KyberPrivateKeyParameters(params, privateKeyBytes);
         
-        MLKEMExtractor kemExt = new MLKEMExtractor(privKey);
+        KyberKEMExtractor kemExt = new KyberKEMExtractor(privKey);
         byte[] sharedSecret = kemExt.extractSecret(ciphertext);
 
         return sharedSecret;

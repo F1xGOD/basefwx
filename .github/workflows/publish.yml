@@ -13,10 +13,22 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Cache liboqs
+        id: cache-liboqs
+        uses: actions/cache@v4
+        with:
+          path: /usr/local
+          key: liboqs-0.11.0-${{ runner.os }}-${{ runner.arch }}
+
       - name: Install system deps
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake build-essential libssl-dev zlib1g-dev libargon2-dev liboqs-dev liblzma-dev ffmpeg
+          sudo apt-get install -y cmake build-essential libssl-dev zlib1g-dev libargon2-dev liblzma-dev ffmpeg
+
+      - name: Install liboqs
+        run: |
+          chmod +x .github/scripts/install-liboqs.sh
+          .github/scripts/install-liboqs.sh
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -56,14 +68,32 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Cache liboqs
+        id: cache-liboqs
+        uses: actions/cache@v4
+        with:
+          path: /usr/local
+          key: liboqs-0.11.0-${{ runner.os }}-${{ runner.arch }}
+
       - name: Install system deps
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake build-essential libssl-dev zlib1g-dev libargon2-dev liboqs-dev liblzma-dev
+          sudo apt-get install -y cmake build-essential libssl-dev zlib1g-dev libargon2-dev liblzma-dev
+
+      - name: Install liboqs
+        run: |
+          chmod +x .github/scripts/install-liboqs.sh
+          .github/scripts/install-liboqs.sh
 
       - name: Configure
         run: |
-          cmake -S cpp -B cpp/build -DCMAKE_BUILD_TYPE=Release -DBASEFWX_REQUIRE_ARGON2=ON -DBASEFWX_REQUIRE_OQS=ON
+          cmake -S cpp -B cpp/build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBASEFWX_REQUIRE_ARGON2=ON \
+            -DBASEFWX_REQUIRE_OQS=ON \
+            -DBASEFWX_OQS_STATIC=ON \
+            -DBASEFWX_NATIVE_OPT=OFF \
+            -DCMAKE_CXX_FLAGS="-Wno-deprecated-declarations"
 
       - name: Build
         run: cmake --build cpp/build --config Release
@@ -151,7 +181,13 @@ jobs:
 
       - name: Configure
         run: |
-          cmake -S cpp -B cpp/build -DCMAKE_BUILD_TYPE=Release -DBASEFWX_REQUIRE_ARGON2=ON -DBASEFWX_REQUIRE_OQS=ON -DOPENSSL_ROOT_DIR="$(brew --prefix openssl@3)"
+          cmake -S cpp -B cpp/build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBASEFWX_REQUIRE_ARGON2=ON \
+            -DBASEFWX_REQUIRE_OQS=ON \
+            -DBASEFWX_NATIVE_OPT=OFF \
+            -DCMAKE_CXX_FLAGS="-Wno-deprecated-declarations" \
+            -DOPENSSL_ROOT_DIR="$(brew --prefix openssl@3)"
 
       - name: Build
         run: cmake --build cpp/build --config Release

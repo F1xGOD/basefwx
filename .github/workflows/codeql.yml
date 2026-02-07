@@ -45,12 +45,12 @@ jobs:
         if: matrix.language == 'c-cpp'
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake g++ make libssl-dev zlib1g-dev
+          sudo apt-get install -y cmake g++ make libssl-dev zlib1g-dev libargon2-dev liboqs-dev liblzma-dev
 
       - name: Build C++ (manual)
         if: matrix.language == 'c-cpp'
         run: |
-          cmake -S cpp -B cpp/build -DCMAKE_BUILD_TYPE=Release -DBASEFWX_REQUIRE_ARGON2=OFF -DBASEFWX_REQUIRE_OQS=OFF
+          cmake -S cpp -B cpp/build -DCMAKE_BUILD_TYPE=Release -DBASEFWX_REQUIRE_ARGON2=ON -DBASEFWX_REQUIRE_OQS=ON
           cmake --build cpp/build
 
       - name: Set up Java

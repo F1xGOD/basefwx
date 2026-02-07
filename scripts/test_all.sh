@@ -732,6 +732,12 @@ ensure_java() {
         FAILURES+=("java_build (java tools missing)")
         return 1
     fi
+    
+    # Pre-download dependencies using gradle if available
+    if command -v gradle &> /dev/null; then
+        gradle -p "$JAVA_DIR" dependencies --offline 2>/dev/null || gradle -p "$JAVA_DIR" dependencies 2>/dev/null || true
+    fi
+    
     local sources
     sources=()
     while IFS= read -r -d '' file; do
@@ -755,15 +761,53 @@ ensure_java() {
     fi
     if (( needs_build == 1 )); then
         mkdir -p "$JAVA_BUILD_DIR/classes" "$JAVA_BUILD_DIR/libs"
-        if ! time_cmd_no_fail "java_build" "$JAVAC_BIN" -source 8 -target 8 -d "$JAVA_BUILD_DIR/classes" "${sources[@]}"; then
-            JAVA_AVAILABLE=0
-            FAILURES+=("java_build (compile failed)")
-            return 1
-        fi
-        if ! time_cmd_no_fail "java_jar" "$JAR_BIN" cfe "$JAVA_JAR" com.fixcraft.basefwx.cli.BaseFwxCli -C "$JAVA_BUILD_DIR/classes" .; then
-            JAVA_AVAILABLE=0
-            FAILURES+=("java_build (jar failed)")
-            return 1
+        # Try to use gradle if available, otherwise fall back to manual javac compilation
+        if command -v gradle &> /dev/null; then
+            if ! time_cmd_no_fail "java_build" gradle -p "$JAVA_DIR" build --no-daemon; then
+                JAVA_AVAILABLE=0
+                FAILURES+=("java_build (gradle build failed)")
+                return 1
+            fi
+            # Copy the built jar to the expected location
+            if [[ -f "$JAVA_DIR/build/libs/basefwx-java.jar" ]]; then
+                cp "$JAVA_DIR/build/libs/basefwx-java.jar" "$JAVA_JAR"
+            fi
+        else
+            # Fallback: Compile with javac and manually resolve dependencies
+            # First, try to find BouncyCastle JARs in gradle cache or system
+            local cp_arg=""
+            local gradle_cache_dir="$HOME/.gradle/caches/modules-2/files-2.1/org.bouncycastle"
+            if [[ -d "$gradle_cache_dir" ]]; then
+                # Search for bouncycastle jars
+                for jar in $(find "$gradle_cache_dir" -name "bcprov-jdk*.jar" -o -name "bcpkix-jdk*.jar" 2>/dev/null | head -10); do
+                    if [[ -n "$cp_arg" ]]; then
+                        cp_arg="$cp_arg:$jar"
+                    else
+                        cp_arg="$jar"
+                    fi
+                done
+            fi
+            
+            if [[ -n "$cp_arg" ]]; then
+                if ! time_cmd_no_fail "java_build" "$JAVAC_BIN" -source 8 -target 8 -cp "$cp_arg" -d "$JAVA_BUILD_DIR/classes" "${sources[@]}"; then
+                    JAVA_AVAILABLE=0
+                    FAILURES+=("java_build (compile failed)")
+                    return 1
+                fi
+            else
+                # Try without classpath as fallback
+                if ! time_cmd_no_fail "java_build" "$JAVAC_BIN" -source 8 -target 8 -d "$JAVA_BUILD_DIR/classes" "${sources[@]}"; then
+                    JAVA_AVAILABLE=0
+                    FAILURES+=("java_build (compile failed - missing BouncyCastle dependencies)")
+                    return 1
+                fi
+            fi
+            
+            if ! time_cmd_no_fail "java_jar" "$JAR_BIN" cfe "$JAVA_JAR" com.fixcraft.basefwx.cli.BaseFwxCli -C "$JAVA_BUILD_DIR/classes" .; then
+                JAVA_AVAILABLE=0
+                FAILURES+=("java_build (jar failed)")
+                return 1
+            fi
         fi
     fi
     if [[ ! -f "$JAVA_JAR" ]]; then

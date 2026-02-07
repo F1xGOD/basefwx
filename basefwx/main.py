@@ -2016,15 +2016,35 @@ class basefwx:
             raise RuntimeError("Argon2 backend unavailable")
         parallelism = parallelism or basefwx._CPU_COUNT
         password_bytes = basefwx._coerce_password_bytes(password)
-        key = basefwx.hash_secret_raw(
-            password_bytes,
-            salt,
-            time_cost=time_cost,
-            memory_cost=memory_cost,
-            parallelism=parallelism,
-            hash_len=length,
-            type=basefwx.Argon2Type.ID
-        )
+        
+        # Calculate memory requirement (in bytes)
+        required_memory_mb = (memory_cost * 1024) // 1024  # Convert KiB to MiB
+        
+        try:
+            key = basefwx.hash_secret_raw(
+                password_bytes,
+                salt,
+                time_cost=time_cost,
+                memory_cost=memory_cost,
+                parallelism=parallelism,
+                hash_len=length,
+                type=basefwx.Argon2Type.ID
+            )
+        except MemoryError:
+            raise RuntimeError(
+                f"Insufficient memory for Argon2id key derivation. "
+                f"Required: ~{required_memory_mb} MiB, "
+                f"Consider using PBKDF2 instead (set BASEFWX_USER_KDF=pbkdf2)"
+            )
+        except Exception as e:
+            # Catch other Argon2 errors and provide helpful message
+            if "memory" in str(e).lower():
+                raise RuntimeError(
+                    f"Memory allocation failed for Argon2id (requires ~{required_memory_mb} MiB). "
+                    f"Use BASEFWX_USER_KDF=pbkdf2 as a fallback."
+                ) from e
+            raise
+        
         return key, salt
 
     @staticmethod

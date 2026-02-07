@@ -63,6 +63,8 @@ public final class PQ {
 
         String allowBaked = System.getenv("ALLOW_BAKED_PUB");
         if (allowBaked != null && (allowBaked.equals("1") || allowBaked.equalsIgnoreCase("true"))) {
+            // The baked key is stored as base64-encoded, zlib-compressed bytes
+            // decodeKeyBytes() will handle the base64 decode and zlib decompression
             byte[] baked = Constants.MASTER_PQ_PUBLIC_B64.getBytes(StandardCharsets.UTF_8);
             return decodeKeyBytes(baked);
         }

@@ -51,7 +51,6 @@ Documentation
 - [CLI and usage](https://basefwx.fixcraft.jp/docs/CLI.html)
 - [Security model](https://basefwx.fixcraft.jp/docs/SECURITY_MODEL.html)
 - [Testing and benchmarks](https://basefwx.fixcraft.jp/docs/TESTING.html)
-- [Release & signing](https://basefwx.fixcraft.jp/docs/RELEASE.html)
 - [Contributing and code of conduct](https://basefwx.fixcraft.jp/docs/CONTRIBUTING.html)
 - [Java module](https://basefwx.fixcraft.jp/docs/CLI.html#java-cli)
 

@@ -41,11 +41,25 @@ jobs:
           languages: ${{ matrix.language }}
           build-mode: ${{ matrix.build-mode }}
 
+      - name: Cache liboqs
+        if: matrix.language == 'c-cpp'
+        id: cache-liboqs
+        uses: actions/cache@v4
+        with:
+          path: /usr/local
+          key: liboqs-0.11.0-${{ runner.os }}-${{ runner.arch }}
+
       - name: Install C++ deps
         if: matrix.language == 'c-cpp'
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake g++ make libssl-dev zlib1g-dev libargon2-dev liboqs-dev liblzma-dev
+          sudo apt-get install -y cmake g++ make libssl-dev zlib1g-dev libargon2-dev liblzma-dev
+
+      - name: Install liboqs
+        if: matrix.language == 'c-cpp'
+        run: |
+          chmod +x .github/scripts/install-liboqs.sh
+          .github/scripts/install-liboqs.sh
 
       - name: Build C++ (manual)
         if: matrix.language == 'c-cpp'

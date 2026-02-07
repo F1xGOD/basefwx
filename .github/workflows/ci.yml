@@ -19,7 +19,12 @@ jobs:
       - name: Install system deps
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake build-essential libssl-dev zlib1g-dev ffmpeg
+          sudo apt-get install -y cmake build-essential libssl-dev zlib1g-dev libargon2-dev liboqs-dev liblzma-dev ffmpeg
+
+      - name: Build C++ core with Argon2 + liboqs
+        run: |
+          cmake -S cpp -B cpp/build-ci -DCMAKE_BUILD_TYPE=Release -DBASEFWX_REQUIRE_ARGON2=ON -DBASEFWX_REQUIRE_OQS=ON
+          cmake --build cpp/build-ci --config Release
 
       - name: Set up Python
         uses: actions/setup-python@v5

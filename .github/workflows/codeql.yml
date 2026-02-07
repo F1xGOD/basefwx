@@ -41,11 +41,25 @@ jobs:
           languages: ${{ matrix.language }}
           build-mode: ${{ matrix.build-mode }}
 
+      - name: Cache liboqs
+        if: matrix.language == 'c-cpp'
+        id: cache-liboqs
+        uses: actions/cache@v4
+        with:
+          path: /usr/local
+          key: liboqs-0.11.0-${{ runner.os }}-${{ runner.arch }}
+
       - name: Install C++ deps
         if: matrix.language == 'c-cpp'
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake g++ make libssl-dev zlib1g-dev libargon2-dev liboqs-dev liblzma-dev
+          sudo apt-get install -y cmake g++ make libssl-dev zlib1g-dev libargon2-dev liblzma-dev
+
+      - name: Install liboqs
+        if: matrix.language == 'c-cpp'
+        run: |
+          chmod +x .github/scripts/install-liboqs.sh
+          .github/scripts/install-liboqs.sh
 
       - name: Build C++ (manual)
         if: matrix.language == 'c-cpp'
@@ -60,13 +74,11 @@ jobs:
           distribution: "temurin"
           java-version: "17"
 
-      - name: Build Java (manual)
+      - name: Build Java with Gradle
         if: matrix.language == 'java'
+        working-directory: java
         run: |
-          mkdir -p java/build/classes java/build/libs
-          find java/src/main/java -type f -name "*.java" > java_sources.txt
-          javac -source 8 -target 8 -d java/build/classes @java_sources.txt
-          jar cfe java/build/libs/basefwx-java.jar com.fixcraft.basefwx.cli.BaseFwxCli -C java/build/classes .
+          gradle --no-daemon clean build -x test
 
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@v4

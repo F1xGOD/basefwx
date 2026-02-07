@@ -26,6 +26,8 @@ endif()
 
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     add_compile_options($<$<CONFIG:Release>:-O3>)
+    # Suppress OpenSSL 3.0 deprecation warnings for EC key functions
+    add_compile_options(-Wno-deprecated-declarations)
     if(BASEFWX_NATIVE_OPT AND NOT CMAKE_CROSSCOMPILING AND CMAKE_SYSTEM_PROCESSOR STREQUAL CMAKE_HOST_SYSTEM_PROCESSOR)
         add_compile_options(
             $<$<CONFIG:Release>:-march=native>

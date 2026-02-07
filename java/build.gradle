@@ -17,6 +17,8 @@ repositories {
 
 dependencies {
     // Bouncy Castle for ML-KEM-768 (Post-Quantum) support
+    // bcprov-jdk18on: Core cryptographic provider including Kyber/ML-KEM implementation
+    // bcpkix-jdk18on: PKI support for key management (may be used by other parts of the system)
     implementation 'org.bouncycastle:bcprov-jdk18on:1.78.1'
     implementation 'org.bouncycastle:bcpkix-jdk18on:1.78.1'
 }

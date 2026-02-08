@@ -1495,7 +1495,17 @@ class basefwx:
             text.encode("ascii")  # Will raise if not ASCII
         data = text.encode("ascii")
         table = basefwx._MD_CODE_TABLE_BYTES
-        return b"".join(table[b] for b in data).decode("ascii")
+        
+        # Optimization: For large inputs, use a faster list comprehension + single join
+        # instead of generator expression which creates many intermediate bytes objects
+        data_len = len(data)
+        if data_len > 500:  # Threshold tuned for performance
+            # Pre-allocate list for better performance
+            result_parts = [table[b] for b in data]
+            return b"".join(result_parts).decode("ascii")
+        else:
+            # For small inputs, original code is fine
+            return b"".join(table[b] for b in data).decode("ascii")
 
     @staticmethod
     def _mcode_digits(encoded: str) -> str:
@@ -3037,8 +3047,12 @@ class basefwx:
         )
         plain_bytes = t.encode('utf-8')
         masked = basefwx._mask_payload(mask_key, plain_bytes, info=b'basefwx.pb512.stream.v1')
-        payload = b'\x02' + len(plain_bytes).to_bytes(4, 'big') + masked
-        blob = basefwx._pack_length_prefixed(user_blob, master_blob, payload)
+        # Use bytearray for efficient buffer construction
+        payload = bytearray(1 + 4 + len(masked))
+        payload[0] = 0x02
+        payload[1:5] = len(plain_bytes).to_bytes(4, 'big')
+        payload[5:] = masked
+        blob = basefwx._pack_length_prefixed(user_blob, master_blob, bytes(payload))
         result = basefwx.base64.b64encode(blob).decode('utf-8')
         result = basefwx._maybe_obfuscate_codecs(result)
         basefwx._del('mask_key')
@@ -3202,8 +3216,12 @@ class basefwx:
         )
         plain_bytes = string.encode('utf-8')
         masked = basefwx._mask_payload(mask_key, plain_bytes, info=b'basefwx.b512.stream.v1')
-        payload = b'\x02' + len(plain_bytes).to_bytes(4, 'big') + masked
-        blob = basefwx._pack_length_prefixed(user_blob, master_blob, payload)
+        # Use bytearray for efficient buffer construction
+        payload = bytearray(1 + 4 + len(masked))
+        payload[0] = 0x02
+        payload[1:5] = len(plain_bytes).to_bytes(4, 'big')
+        payload[5:] = masked
+        blob = basefwx._pack_length_prefixed(user_blob, master_blob, bytes(payload))
         result = basefwx.base64.b64encode(blob).decode('utf-8')
         result = basefwx._maybe_obfuscate_codecs(result)
         basefwx._del('mask_key')

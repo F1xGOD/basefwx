@@ -1500,8 +1500,9 @@ class basefwx:
         table = basefwx._MD_CODE_TABLE_BYTES
         
         # Optimization: For large inputs, use list comprehension to reduce
-        # intermediate object creation overhead (20-30% faster for large strings)
-        # For small inputs, generator expression is memory-efficient
+        # intermediate object creation overhead (20-30% faster for large strings).
+        # For small inputs, generator expression is memory-efficient.
+        # Note: b"".join() accepts any iterable, so list vs generator is transparent
         result_parts = (
             [table[b] for b in data]
             if len(data) > basefwx._MDCODE_ASCII_THRESHOLD
@@ -3050,8 +3051,9 @@ class basefwx:
         plain_bytes = t.encode('utf-8')
         masked = basefwx._mask_payload(mask_key, plain_bytes, info=b'basefwx.pb512.stream.v1')
         # Use bytearray for efficient buffer construction
+        # Payload format: [version(1)] [length(4)] [masked_data(n)]
         payload = bytearray(1 + 4 + len(masked))
-        payload[0] = 0x02
+        payload[0] = 0x02  # Version 2 format with length prefix
         payload[1:5] = len(plain_bytes).to_bytes(4, 'big')
         payload[5:] = masked
         blob = basefwx._pack_length_prefixed(user_blob, master_blob, bytes(payload))
@@ -3219,8 +3221,9 @@ class basefwx:
         plain_bytes = string.encode('utf-8')
         masked = basefwx._mask_payload(mask_key, plain_bytes, info=b'basefwx.b512.stream.v1')
         # Use bytearray for efficient buffer construction
+        # Payload format: [version(1)] [length(4)] [masked_data(n)]
         payload = bytearray(1 + 4 + len(masked))
-        payload[0] = 0x02
+        payload[0] = 0x02  # Version 2 format with length prefix
         payload[1:5] = len(plain_bytes).to_bytes(4, 'big')
         payload[5:] = masked
         blob = basefwx._pack_length_prefixed(user_blob, master_blob, bytes(payload))

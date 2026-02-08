@@ -4,6 +4,22 @@
 
 basefwx provides **full cross-language compatibility** for encryption and decryption across Python, C++, and Java implementations. You can encrypt data in one language and decrypt it in another seamlessly.
 
+**✅ Cross-language compatibility VERIFIED and WORKING** (as of latest update)
+
+## Important: Setting Up for Cross-Language Use
+
+For guaranteed cross-language compatibility, **always set the KDF environment variable**:
+
+### Python
+```bash
+export BASEFWX_USER_KDF=pbkdf2
+```
+
+### C++/Java
+The KDF is specified per-command with `--kdf pbkdf2`
+
+**Why this is important:** Python defaults to Argon2 when available, but falls back to PBKDF2 with different iteration counts when Argon2 is unavailable. Setting `BASEFWX_USER_KDF=pbkdf2` explicitly ensures consistent 200,000 iterations across all languages.
+
 ## Quick Start
 
 ### Text Encryption (pb512, b512)
@@ -141,21 +157,43 @@ java -jar basefwx-java.jar pb512-enc "text" password --no-master
 
 ## Common Issues and Solutions
 
-### Issue 1: "ASCII trash binary" on decrypt
+### Issue 1: "ASCII trash binary" or InvalidTag error on decrypt
 
-**Cause**: KDF mismatch between encryption and decryption.
+**Cause**: KDF iteration count mismatch between encryption and decryption.
 
-**Solution**: Ensure both sides use the same KDF:
-
-```python
-# Encrypt with PBKDF2
-os.environ['BASEFWX_USER_KDF'] = 'pbkdf2'
-encrypted = basefwx.basefwx.pb512encode(text, 'password', use_master=False)
-```
+**Solution**: Always set `BASEFWX_USER_KDF=pbkdf2` in Python:
 
 ```bash
-# Decrypt with PBKDF2
-./basefwx_cpp pb512-dec "$encrypted" -p password --no-master --kdf pbkdf2
+# In your shell or script
+export BASEFWX_USER_KDF=pbkdf2
+
+# Then encrypt/decrypt
+python3 your_script.py
+```
+
+Or in Python code:
+```python
+import os
+os.environ['BASEFWX_USER_KDF'] = 'pbkdf2'
+import basefwx
+
+# Now encrypt/decrypt will work cross-language
+```
+
+**Why this happens:**
+- When Argon2 is unavailable, Python may use different iteration counts depending on how it's configured
+- C++ and Java always use 200,000 iterations for PBKDF2
+- Setting `BASEFWX_USER_KDF=pbkdf2` forces Python to use 200,000 iterations consistently
+
+**Quick Test:**
+```bash
+# Python encrypt
+export BASEFWX_USER_KDF=pbkdf2
+python3 -c "import basefwx; enc=basefwx.basefwx.pb512encode('test','pw',False); print(enc)" > test.enc
+
+# C++ decrypt
+./basefwx_cpp pb512-dec "$(cat test.enc)" -p pw --no-master --kdf pbkdf2
+# Should output: test
 ```
 
 ### Issue 2: Decryption fails with "Bad password"

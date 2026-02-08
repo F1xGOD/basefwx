@@ -8,7 +8,7 @@
 [![Release](https://img.shields.io/github/actions/workflow/status/F1xGOD/basefwx/publish.yml?label=Release)](https://github.com/F1xGOD/basefwx/actions/workflows/publish.yml)
 [![CodeQL](https://img.shields.io/github/actions/workflow/status/F1xGOD/basefwx/codeql.yml?label=CodeQL)](https://github.com/F1xGOD/basefwx/actions/workflows/codeql.yml)
 [![License](https://img.shields.io/github/license/F1xGOD/basefwx?style=flat)](https://github.com/F1xGOD/basefwx/blob/main/LICENCE)
-[![Discord](https://img.shields.io/discord/1130897522051788821?color=7289da&label=Discord&logo=discord&logoColor=ffffff)](https://discord.gg/3eRHYkjgk8)
+[![Discord](https://img.shields.io/discord/1130897522051788821?color=7289da&label=Discord&logo=discord&logoColor=ffffff)](https://discord.gg/6d3QxXnzbV)
 
 BASEFWX is a hybrid post-quantum + AEAD encryption toolkit for files and media, with cross-compatible Python and C++ implementations.
 

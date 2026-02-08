@@ -137,7 +137,7 @@ std::string Decode(const std::string& input) {
         // Traverse the trie to find the longest match
         std::size_t scan = idx + 1;
         const TrieNode* current = node;
-        char match_char = '\0';
+        char match_char = '\0';  // Only used when match_len > 0
         std::size_t match_len = 0;
         
         if (current->terminal) {

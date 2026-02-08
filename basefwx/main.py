@@ -3119,7 +3119,12 @@ class basefwx:
     @staticmethod
     def pb512encode(t, p, use_master: bool = True):
         """
-        Reversible obfuscation helper with URL-safe base64 encoding.
+        Password-based reversible encoding with URL-safe base64.
+        
+        Output is URL-safe (no + or /) when BASEFWX_OBFUSCATE_CODECS=0.
+        With obfuscation enabled (default), output may contain special characters
+        but provides additional security through character substitution.
+        
         Confidentiality comes from AEAD layers, not this routine.
         """
         p = basefwx._resolve_password(p, use_master=use_master)

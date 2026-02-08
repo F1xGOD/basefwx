@@ -152,7 +152,9 @@ class basefwx:
     _ARGON2_AVAILABLE = hash_secret_raw is not None
     USER_KDF_DEFAULT = "argon2id" if _ARGON2_AVAILABLE else "pbkdf2"
     USER_KDF = os.getenv("BASEFWX_USER_KDF", USER_KDF_DEFAULT).lower()
-    if not _ARGON2_AVAILABLE:
+    # Only reduce iterations if Argon2 is unavailable AND user didn't explicitly set KDF
+    # This maintains cross-language compatibility when explicitly using PBKDF2
+    if not _ARGON2_AVAILABLE and os.getenv("BASEFWX_USER_KDF") is None:
         USER_KDF_ITERATIONS = 32_768
     _TEST_KDF_ITERS = _env_int("BASEFWX_TEST_KDF_ITERS")
     _USER_KDF_ITERS_ENV = _env_int("BASEFWX_USER_KDF_ITERS")

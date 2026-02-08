@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <memory>
 #include <stdexcept>
 
 namespace basefwx::codec {
@@ -61,19 +62,37 @@ std::array<const char*, 256> BuildCodeLookupTable() {
 
 const std::array<const char*, 256> kCodeLookupTable = BuildCodeLookupTable();
 
-// Build sorted tokens for decoding (build once at startup)
-std::vector<std::pair<std::string, char>> BuildSortedTokens() {
-    std::vector<std::pair<std::string, char>> tokens;
-    tokens.reserve(sizeof(kCodeMap) / sizeof(kCodeMap[0]));
+// Trie node for efficient token decoding (matches Java implementation)
+struct TrieNode {
+    std::array<std::unique_ptr<TrieNode>, 256> children{};
+    char value = '\0';
+    bool terminal = false;
+};
+
+// Build Trie for token decoding (much faster than linear search)
+std::unique_ptr<TrieNode> BuildTokenTrie() {
+    auto root = std::make_unique<TrieNode>();
     for (const auto& entry : kCodeMap) {
-        tokens.emplace_back(entry.token, entry.ch);
+        const char* token = entry.token;
+        TrieNode* node = root.get();
+        for (const char* p = token; *p != '\0'; ++p) {
+            unsigned char idx = static_cast<unsigned char>(*p);
+            if (!node->children[idx]) {
+                node->children[idx] = std::make_unique<TrieNode>();
+            }
+            node = node->children[idx].get();
+        }
+        node->terminal = true;
+        node->value = entry.ch;
     }
-    std::sort(tokens.begin(), tokens.end(),
-              [](const auto& a, const auto& b) { return a.first.size() > b.first.size(); });
-    return tokens;
+    return root;
 }
 
-const std::vector<std::pair<std::string, char>> kSortedTokens = BuildSortedTokens();
+// Meyer's singleton pattern to avoid static initialization order issues
+const TrieNode* GetTokenTrie() {
+    static const std::unique_ptr<TrieNode> trie = BuildTokenTrie();
+    return trie.get();
+}
 
 }  // namespace
 
@@ -102,21 +121,48 @@ std::string Decode(const std::string& input) {
     std::string out;
     out.reserve(input.size());
     std::size_t idx = 0;
+    const TrieNode* root = GetTokenTrie();
+    
     while (idx < input.size()) {
-        bool matched = false;
-        for (const auto& token : kSortedTokens) {
-            if (token.first.size() == 0) {
-                continue;
-            }
-            if (idx + token.first.size() <= input.size()
-                && input.compare(idx, token.first.size(), token.first) == 0) {
-                out.push_back(token.second);
-                idx += token.first.size();
-                matched = true;
+        unsigned char ch = static_cast<unsigned char>(input[idx]);
+        const TrieNode* node = root->children[ch].get();
+        
+        if (!node) {
+            // No token starts with this character, output as-is
+            out.push_back(input[idx]);
+            ++idx;
+            continue;
+        }
+        
+        // Traverse the trie to find the longest match
+        std::size_t scan = idx + 1;
+        const TrieNode* current = node;
+        char match_char = '\0';  // Only used when match_len > 0
+        std::size_t match_len = 0;
+        
+        if (current->terminal) {
+            match_char = current->value;
+            match_len = 1;
+        }
+        
+        while (scan < input.size()) {
+            unsigned char next = static_cast<unsigned char>(input[scan]);
+            const TrieNode* next_node = current->children[next].get();
+            if (!next_node) {
                 break;
             }
+            current = next_node;
+            ++scan;
+            if (current->terminal) {
+                match_char = current->value;
+                match_len = scan - idx;
+            }
         }
-        if (!matched) {
+        
+        if (match_len > 0) {
+            out.push_back(match_char);
+            idx += match_len;
+        } else {
             out.push_back(input[idx]);
             ++idx;
         }

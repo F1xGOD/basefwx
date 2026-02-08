@@ -88,7 +88,11 @@ std::unique_ptr<TrieNode> BuildTokenTrie() {
     return root;
 }
 
-const std::unique_ptr<TrieNode> kTokenTrie = BuildTokenTrie();
+// Meyer's singleton pattern to avoid static initialization order issues
+const TrieNode* GetTokenTrie() {
+    static const std::unique_ptr<TrieNode> trie = BuildTokenTrie();
+    return trie.get();
+}
 
 }  // namespace
 
@@ -117,7 +121,7 @@ std::string Decode(const std::string& input) {
     std::string out;
     out.reserve(input.size());
     std::size_t idx = 0;
-    const TrieNode* root = kTokenTrie.get();
+    const TrieNode* root = GetTokenTrie();
     
     while (idx < input.size()) {
         unsigned char ch = static_cast<unsigned char>(input[idx]);

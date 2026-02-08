@@ -85,6 +85,58 @@ class basefwx:
     def _use_fast_obfuscation(length: int) -> bool:
         return basefwx._perf_mode_enabled() and length >= basefwx.PERF_OBFUSCATION_THRESHOLD
 
+    @staticmethod
+    def _get_available_ram_mib():
+        """
+        Get available RAM in MiB. Returns None if unable to determine.
+        """
+        try:
+            # Try psutil first (most reliable)
+            import psutil
+            return psutil.virtual_memory().available / (1024 * 1024)
+        except ImportError:
+            pass
+        
+        try:
+            # Linux: Read /proc/meminfo
+            if basefwx.os.path.exists('/proc/meminfo'):
+                with open('/proc/meminfo', 'r') as f:
+                    for line in f:
+                        if line.startswith('MemAvailable:'):
+                            # Value is in kB
+                            kb = int(line.split()[1])
+                            return kb / 1024
+            
+            # macOS: Use sysctl
+            import subprocess
+            result = subprocess.run(['sysctl', '-n', 'vm.stats.vm.v_free_count'], 
+                                  capture_output=True, text=True, timeout=1)
+            if result.returncode == 0:
+                page_count = int(result.stdout.strip())
+                # Get page size
+                page_size_result = subprocess.run(['sysctl', '-n', 'hw.pagesize'],
+                                                 capture_output=True, text=True, timeout=1)
+                if page_size_result.returncode == 0:
+                    page_size = int(page_size_result.stdout.strip())
+                    return (page_count * page_size) / (1024 * 1024)
+        except Exception:
+            pass
+        
+        # Could not determine RAM
+        return None
+    
+    @staticmethod
+    def _check_ram_for_argon2():
+        """
+        Check if system has sufficient RAM for Argon2 (at least 128 MiB available).
+        Returns True if sufficient, False otherwise.
+        """
+        ram_mib = basefwx._get_available_ram_mib()
+        if ram_mib is None:
+            # Unable to determine, assume sufficient RAM
+            return True
+        return ram_mib >= 128.0
+
     MAX_INPUT_BYTES = 20 * 1024 * 1024 * 1024  # allow up to ~20 GiB per file
     PROGRESS_BAR_WIDTH = 30
     FWX_DELIM = "\x1f\x1e"
@@ -97,7 +149,7 @@ class basefwx:
     PACK_TAR_XZ = "x"
     PACK_SUFFIX_GZ = ".tgz"
     PACK_SUFFIX_XZ = ".txz"
-    ENGINE_VERSION = "3.6.1"
+    ENGINE_VERSION = "3.6.0"
     MASTER_PQ_ALG = "ml-kem-768"
     MASTER_PQ_PUBLIC = b"eJwBoARf+/rkrYxhXn0CNFqTkzQUrIYloydzGrqpIuWXi+qnLO/XRnspzQBDwwTKLW3Ku6Zwii1AfriFM5t8PtugqMNFt/5HoHxIZLGkytTWKP3IKoP7EH2HFu14b5bagh+KIFTWoW12qZqLRNjJLBHZmzxasEIsN7AnsOiokMHxt4XwoLk5fscIhXSANBZpHUVEO+NkBhg5UnvzWkzAqPm6rEvCfE+CHxgFg1SjBJeFfVMyzpKpsUi6iCGXSl6nZuTkr10btfi8RHCEfxDrfhcJk0bsKMWEI6wVY23KQXXlmcJ4VydGZ/ZbjWhVbX6bo0DKqG5IlwpTDPJIwlumRpxbBog8JG10p8PTaRJEAKfiVo7jiD1Aki7hYqmyyBn2Q0RFy03Bm/Rpy1zlK3DahaaoMj1mJrJ5ff2FYYVsBQbrywcDUcdHUkIpUqwrrRyqdEIHq1T6AiKHmf2KHTXQnLuZpJ3Ih59bkH1GC2UzbEIWzFSImvQDkswCBW9cF0tFYCNnReiReb57XAjaW3smdOg1o9oyk2IbyptJtNe1teHoPsMJkBGin/ugUeFmEOa0f8lTEmK4u1/GxHrQxD65kxm2IHT4NPM8Z5oqQ9z0WthUE5MouNrZLK8EltZQzAcZJ/g7CesRi40qFecyD14hDPBcr6cEV6yqOXXrcDRQVCUhuYRyUNqrFe4JPks2kZlxXjABHMD1PHVzfJpsAtsTDJa2EdpoAkKRvfg2QOK6CpYix6zIyB1yGwdCG8L2QS9DQefDQntXDlwSIieqRrwmiWcba4mSgwfxsoH2SIbQPZKbtEA4XNGqen1CcldAw1w2mnO3otspreJEBZJjVSihGcoyVjWap9dWc0pLffeDC5mUyOTzWUQ3XBAxX817G9rIbFyMQ+4AdeP2zL/nk9s2wYuZT2MEbwTHW/6UJQXbRf+svg9Kq//ryl/YRiaxdK2xRkP7oaBBVbyyXxYUJEhXOD7cUar8HsGZlXmiDSxzCBZSJG+4ooAgOKfEx6liOvqHBQKrsG4ylg3JQqmKBUdXcf6cMImRqS4MFM23vQkSPqIckxGgkrJGDKLGg8DKsuOqUvkzexAWviAIJQZsJsqjUl2stBgnltsyysE2cdI5Poh7KgOFV27bfi4iCpFSXc46Aa2jjN0WFYAgfhcRXgvIanJ3L8/sPrR7QKvpTtPFSfdcBipqp8vRdYImF5HceU1TU+QwtOcmCKDmaDTBGtJLZDXYJ3/2VQAEr8Mhk1WxGQsWUikZBi9pHTTbh93gvl9gLaGlxlRCjwzSqcJVXF80UiVMA06hfDnzi9MFpIGZL0czax+1zwdLFsnnHLGLzm/YpgrUBIk0gTgMVhqiu0+JyagxwrXCsDmGbhj8PzJGUeR8xhoxzOtTMgtaFwekbEAss+JGzuZJeakDxhMJEvvbKabIFDeQLsImO4eaAslqXyNoSg7AtnDlHfzTTFvwk2/UppeXNmcEC9n1UyfyWNW6qAZRJe5zQkijzLfkGKWsR/ksjmUQwMHwOOWVQ8qqUapYxsmbZkosPBXRDNBhY6PNjfciD2hRoIqrd/pnkJ6cZd1FQyxge6FA3PMpHw=="
     MASTER_EC_MAGIC = b"EC1"
@@ -150,7 +202,20 @@ class basefwx:
         Argon2Type = _Argon2Type
     hash_secret_raw = _argon2_hash_secret_raw
     _ARGON2_AVAILABLE = hash_secret_raw is not None
-    USER_KDF_DEFAULT = "argon2id" if _ARGON2_AVAILABLE else "pbkdf2"
+    # Use Argon2 by default if available AND sufficient RAM (>= 128 MiB)
+    # This follows Google's recommendation: "Argon2 (specifically Argon2id) is superior to PBKDF2"
+    _HAS_SUFFICIENT_RAM = _check_ram_for_argon2() if _ARGON2_AVAILABLE else True
+    if _ARGON2_AVAILABLE and _HAS_SUFFICIENT_RAM:
+        USER_KDF_DEFAULT = "argon2id"
+    else:
+        USER_KDF_DEFAULT = "pbkdf2"
+        if _ARGON2_AVAILABLE and not _HAS_SUFFICIENT_RAM:
+            import warnings
+            warnings.warn(
+                "Insufficient RAM for Argon2 (< 128 MiB available). Using PBKDF2. "
+                "Set BASEFWX_USER_KDF=argon2 to override.",
+                ResourceWarning
+            )
     USER_KDF = os.getenv("BASEFWX_USER_KDF", USER_KDF_DEFAULT).lower()
     # Only reduce iterations if Argon2 is unavailable AND user didn't explicitly set KDF
     # This maintains cross-language compatibility when explicitly using PBKDF2
@@ -2112,17 +2177,31 @@ class basefwx:
                 if kdf is not None:
                     raise RuntimeError("Argon2 KDF requested but argon2 backend is unavailable")
                 if not basefwx._WARNED_ARGON2_MISSING:
-                    print("Warning: argon2 backend unavailable, falling back to PBKDF2.")
+                    print("⚠️  Warning: argon2 backend unavailable, falling back to PBKDF2.")
                     basefwx._WARNED_ARGON2_MISSING = True
                 requested_kdf = "pbkdf2"
             else:
-                return basefwx._derive_user_key_argon2id(
-                    password,
-                    salt,
-                    time_cost=argon2_time_cost,
-                    memory_cost=argon2_memory_cost,
-                    parallelism=argon2_parallelism
-                )
+                try:
+                    return basefwx._derive_user_key_argon2id(
+                        password,
+                        salt,
+                        time_cost=argon2_time_cost,
+                        memory_cost=argon2_memory_cost,
+                        parallelism=argon2_parallelism
+                    )
+                except MemoryError as e:
+                    # Argon2 failed with OOM - print warning and fall back to PBKDF2
+                    print(f"⚠️  USING PBKDF2, ARGON2 FAILED! CAUSE: {e}")
+                    print(f"⚠️  Insufficient memory for Argon2. Falling back to PBKDF2.")
+                    requested_kdf = "pbkdf2"
+                except RuntimeError as e:
+                    if "memory" in str(e).lower() or "insufficient" in str(e).lower():
+                        # Memory-related error - print warning and fall back
+                        print(f"⚠️  USING PBKDF2, ARGON2 FAILED! CAUSE: {e}")
+                        requested_kdf = "pbkdf2"
+                    else:
+                        # Other runtime error - re-raise
+                        raise
         return basefwx._derive_user_key_pbkdf2(password, salt, iterations=iterations)
 
     @staticmethod
@@ -3040,7 +3119,8 @@ class basefwx:
     @staticmethod
     def pb512encode(t, p, use_master: bool = True):
         """
-        Reversible obfuscation helper; confidentiality comes from AEAD layers, not this routine.
+        Reversible obfuscation helper with URL-safe base64 encoding.
+        Confidentiality comes from AEAD layers, not this routine.
         """
         p = basefwx._resolve_password(p, use_master=use_master)
         mask_key, user_blob, master_blob, _ = basefwx._prepare_mask_key(
@@ -3059,7 +3139,8 @@ class basefwx:
         payload[1:5] = len(plain_bytes).to_bytes(4, 'big')
         payload[5:] = masked
         blob = basefwx._pack_length_prefixed(user_blob, master_blob, bytes(payload))
-        result = basefwx.base64.b64encode(blob).decode('utf-8')
+        # Use URL-safe base64 encoding (replaces + with - and / with _)
+        result = basefwx.base64.urlsafe_b64encode(blob).decode('utf-8')
         result = basefwx._maybe_obfuscate_codecs(result)
         basefwx._del('mask_key')
         basefwx._del('plain_bytes')
@@ -3073,12 +3154,17 @@ class basefwx:
             raise ValueError("Password required when PQ master key wrapping is disabled")
         try:
             digs = basefwx._maybe_deobfuscate_codecs(digs)
-            raw = basefwx.base64.b64decode(digs)
+            # Support both URL-safe and standard base64 for backward compatibility
+            raw = basefwx.base64.urlsafe_b64decode(digs)
         except Exception as exc:
-            if basefwx.os.getenv("BASEFWX_ALLOW_LEGACY_CODECS") == "1":
-                print("⚠️  Falling back to legacy pb512 decoder (BASEFWX_ALLOW_LEGACY_CODECS=1).")
-                return basefwx._pb512decode_legacy(digs, key, use_master)
-            raise ValueError("Invalid pb512 payload encoding") from exc
+            # Try standard base64 for backward compatibility with old pb512 format
+            try:
+                raw = basefwx.base64.b64decode(digs)
+            except Exception:
+                if basefwx.os.getenv("BASEFWX_ALLOW_LEGACY_CODECS") == "1":
+                    print("⚠️  Falling back to legacy pb512 decoder (BASEFWX_ALLOW_LEGACY_CODECS=1).")
+                    return basefwx._pb512decode_legacy(digs, key, use_master)
+                raise ValueError("Invalid pb512 payload encoding") from exc
         try:
             user_blob, master_blob, payload = basefwx._unpack_length_prefixed(raw, 3)
         except ValueError:

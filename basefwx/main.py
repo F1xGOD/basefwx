@@ -265,6 +265,9 @@ class basefwx:
         list(range(10, 32)) + [255] * 153
     )
     _B32_FAST_THRESHOLD = 1024  # Use NumPy for data >= this size
+    # Threshold for _mdcode_ascii optimization (tuned via microbenchmarks)
+    # List comprehension is faster than generator for inputs > 500 chars
+    _MDCODE_ASCII_THRESHOLD = 500
 
     @staticmethod
     def _fast_b32hexencode(data: bytes) -> bytes:
@@ -1488,10 +1491,6 @@ class basefwx:
             counter += 1
         return bytes(out)
 
-    # Threshold for _mdcode_ascii optimization (tuned via microbenchmarks)
-    # List comprehension is faster than generator for inputs > 500 chars
-    _MDCODE_ASCII_THRESHOLD = 500
-    
     @staticmethod
     def _mdcode_ascii(text: str) -> str:
         # Fast path using pre-computed bytes lookup table
@@ -1502,10 +1501,12 @@ class basefwx:
         
         # Optimization: For large inputs, use list comprehension to reduce
         # intermediate object creation overhead (20-30% faster for large strings)
-        if len(data) > basefwx._MDCODE_ASCII_THRESHOLD:
-            result_parts = [table[b] for b in data]
-        else:
-            result_parts = (table[b] for b in data)
+        # For small inputs, generator expression is memory-efficient
+        result_parts = (
+            [table[b] for b in data]
+            if len(data) > basefwx._MDCODE_ASCII_THRESHOLD
+            else (table[b] for b in data)
+        )
         return b"".join(result_parts).decode("ascii")
 
     @staticmethod

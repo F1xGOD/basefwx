@@ -1049,7 +1049,7 @@ int main(int argc, char** argv) {
                     std::filesystem::path enc_path = temp_dir / enc_name;
                     std::filesystem::path dec_path = temp_dir / dec_name;
                     
-                    basefwx::Jmge(src_path.string(), password, enc_path.string());
+                    basefwx::Jmge(src_path.string(), password, enc_path.string(), false, true);
                     basefwx::Jmgd(enc_path.string(), password, dec_path.string());
                     
                     std::error_code size_ec;

@@ -743,7 +743,7 @@ public final class BaseFwxCli {
                             File encFile = encFiles[idx];
                             File decFile = decFiles[idx];
                             // Encrypt
-                            BaseFwx.jmgEncryptFile(mediaFile, encFile, benchPassFinal, useMasterFlag, false, false);
+                            BaseFwx.jmgEncryptFile(mediaFile, encFile, benchPassFinal, useMasterFlag, false, true);
                             // Decrypt
                             BaseFwx.jmgDecryptFile(encFile, decFile, benchPassFinal, useMasterFlag);
                             long size = decFile.length();

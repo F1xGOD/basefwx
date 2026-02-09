@@ -1,5 +1,5 @@
 #include "basefwx/crypto.hpp"
-
+#include "basefwx/crypto_utils.hpp"
 #include "basefwx/constants.hpp"
 
 #include <openssl/evp.h>
@@ -15,6 +15,7 @@
 #endif
 
 #include <algorithm>
+#include <array>
 #include <cstring>
 #include <memory>
 #include <stdexcept>
@@ -41,30 +42,25 @@ Bytes RandomBytes(std::size_t size) {
 }
 
 Bytes HkdfSha256(const Bytes& key_material, std::string_view info, std::size_t length) {
-    EVP_PKEY_CTX* pctx = EVP_PKEY_CTX_new_id(EVP_PKEY_HKDF, nullptr);
+    using detail::UniquePKEYCtx;
+    UniquePKEYCtx pctx(EVP_PKEY_CTX_new_id(EVP_PKEY_HKDF, nullptr));
     if (!pctx) {
         throw std::runtime_error("HKDF context allocation failed");
     }
     Bytes out(length);
     std::size_t out_len = out.size();
 
-    try {
-        Ensure(EVP_PKEY_derive_init(pctx) == 1, "HKDF init failed");
-        Ensure(EVP_PKEY_CTX_set_hkdf_md(pctx, EVP_sha256()) == 1, "HKDF set md failed");
-        Ensure(EVP_PKEY_CTX_set1_hkdf_key(pctx, key_material.data(), static_cast<int>(key_material.size())) == 1,
-               "HKDF set key failed");
-        if (!info.empty()) {
-            Ensure(EVP_PKEY_CTX_add1_hkdf_info(pctx, reinterpret_cast<const unsigned char*>(info.data()),
-                                               static_cast<int>(info.size())) == 1,
-                   "HKDF set info failed");
-        }
-        Ensure(EVP_PKEY_derive(pctx, out.data(), &out_len) == 1, "HKDF derive failed");
-        out.resize(out_len);
-    } catch (...) {
-        EVP_PKEY_CTX_free(pctx);
-        throw;
+    Ensure(EVP_PKEY_derive_init(pctx.get()) == 1, "HKDF init failed");
+    Ensure(EVP_PKEY_CTX_set_hkdf_md(pctx.get(), EVP_sha256()) == 1, "HKDF set md failed");
+    Ensure(EVP_PKEY_CTX_set1_hkdf_key(pctx.get(), key_material.data(), static_cast<int>(key_material.size())) == 1,
+           "HKDF set key failed");
+    if (!info.empty()) {
+        Ensure(EVP_PKEY_CTX_add1_hkdf_info(pctx.get(), reinterpret_cast<const unsigned char*>(info.data()),
+                                           static_cast<int>(info.size())) == 1,
+               "HKDF set info failed");
     }
-    EVP_PKEY_CTX_free(pctx);
+    Ensure(EVP_PKEY_derive(pctx.get(), out.data(), &out_len) == 1, "HKDF derive failed");
+    out.resize(out_len);
     return out;
 }
 
@@ -76,15 +72,20 @@ Bytes HkdfSha256Stream(const Bytes& key_material, std::string_view info, std::si
     if (length == 0) {
         return {};
     }
-    static const Bytes zero_salt(32, 0);
-    Bytes prk = HmacSha256(zero_salt, key_material);
+    // Use stack buffer for zero salt instead of heap
+    static constexpr std::array<std::uint8_t, 32> zero_salt{};
+    Bytes prk = HmacSha256({zero_salt.begin(), zero_salt.end()}, key_material);
     Bytes out(length);
-    Bytes prev;
+    // Stack buffer for prev digest (max SHA256 = 32 bytes)
+    std::array<std::uint8_t, 32> prev{};
+    std::size_t prev_len = 0;
     std::size_t offset = 0;
     std::uint32_t counter = 1;
-    unsigned char counter_bytes[4];
+    std::array<std::uint8_t, 4> counter_bytes{};
 
-    EVP_MAC* mac = EVP_MAC_fetch(nullptr, "HMAC", nullptr);
+    using detail::UniqueMac;
+    using detail::UniqueMacCtx;
+    UniqueMac mac(EVP_MAC_fetch(nullptr, "HMAC", nullptr));
     if (!mac) {
         throw std::runtime_error("HMAC fetch failed");
     }
@@ -92,43 +93,43 @@ Bytes HkdfSha256Stream(const Bytes& key_material, std::string_view info, std::si
     params[0] = OSSL_PARAM_construct_utf8_string(OSSL_MAC_PARAM_DIGEST, const_cast<char*>("SHA256"), 0);
     params[1] = OSSL_PARAM_construct_end();
 
-    EVP_MAC_CTX* ctx = EVP_MAC_CTX_new(mac);
+    UniqueMacCtx ctx(EVP_MAC_CTX_new(mac.get()));
     if (!ctx) {
-        EVP_MAC_free(mac);
         throw std::runtime_error("HMAC context allocation failed");
     }
 
     while (offset < length) {
-        Ensure(EVP_MAC_init(ctx, prk.data(), prk.size(), params) == 1, "HKDF stream init failed");
-        if (!prev.empty()) {
-            Ensure(EVP_MAC_update(ctx, prev.data(), prev.size()) == 1, "HKDF stream update failed");
+        Ensure(EVP_MAC_init(ctx.get(), prk.data(), prk.size(), params) == 1, "HKDF stream init failed");
+        if (prev_len > 0) {
+            Ensure(EVP_MAC_update(ctx.get(), prev.data(), prev_len) == 1, "HKDF stream update failed");
         }
         if (!info.empty()) {
-            Ensure(EVP_MAC_update(ctx, reinterpret_cast<const unsigned char*>(info.data()), info.size()) == 1,
+            Ensure(EVP_MAC_update(ctx.get(), reinterpret_cast<const unsigned char*>(info.data()), info.size()) == 1,
                    "HKDF stream update failed");
         }
-        counter_bytes[0] = static_cast<unsigned char>((counter >> 24) & 0xFF);
-        counter_bytes[1] = static_cast<unsigned char>((counter >> 16) & 0xFF);
-        counter_bytes[2] = static_cast<unsigned char>((counter >> 8) & 0xFF);
-        counter_bytes[3] = static_cast<unsigned char>(counter & 0xFF);
-        Ensure(EVP_MAC_update(ctx, counter_bytes, sizeof(counter_bytes)) == 1, "HKDF stream update failed");
-        unsigned char digest[EVP_MAX_MD_SIZE];
-        size_t digest_len = sizeof(digest);
-        Ensure(EVP_MAC_final(ctx, digest, &digest_len, sizeof(digest)) == 1, "HKDF stream final failed");
-        prev.assign(digest, digest + digest_len);
+        counter_bytes[0] = static_cast<std::uint8_t>((counter >> 24) & 0xFF);
+        counter_bytes[1] = static_cast<std::uint8_t>((counter >> 16) & 0xFF);
+        counter_bytes[2] = static_cast<std::uint8_t>((counter >> 8) & 0xFF);
+        counter_bytes[3] = static_cast<std::uint8_t>(counter & 0xFF);
+        Ensure(EVP_MAC_update(ctx.get(), counter_bytes.data(), counter_bytes.size()) == 1, "HKDF stream update failed");
+        
+        std::size_t digest_len = prev.size();
+        Ensure(EVP_MAC_final(ctx.get(), prev.data(), &digest_len, prev.size()) == 1, "HKDF stream final failed");
+        prev_len = digest_len;
+        
         std::size_t take = std::min<std::size_t>(digest_len, length - offset);
         std::memcpy(out.data() + offset, prev.data(), take);
         offset += take;
         counter++;
     }
-
-    EVP_MAC_CTX_free(ctx);
-    EVP_MAC_free(mac);
     return out;
 }
 
 Bytes HmacSha256(const Bytes& key, const Bytes& data) {
-    EVP_MAC* mac = EVP_MAC_fetch(nullptr, "HMAC", nullptr);
+    using detail::UniqueMac;
+    using detail::UniqueMacCtx;
+    
+    UniqueMac mac(EVP_MAC_fetch(nullptr, "HMAC", nullptr));
     if (!mac) {
         throw std::runtime_error("HMAC fetch failed");
     }
@@ -136,31 +137,22 @@ Bytes HmacSha256(const Bytes& key, const Bytes& data) {
     params[0] = OSSL_PARAM_construct_utf8_string(OSSL_MAC_PARAM_DIGEST, const_cast<char*>("SHA256"), 0);
     params[1] = OSSL_PARAM_construct_end();
 
-    EVP_MAC_CTX* ctx = EVP_MAC_CTX_new(mac);
+    UniqueMacCtx ctx(EVP_MAC_CTX_new(mac.get()));
     if (!ctx) {
-        EVP_MAC_free(mac);
         throw std::runtime_error("HMAC context allocation failed");
     }
 
-    Bytes out(EVP_MD_size(EVP_sha256()));
-    size_t out_len = out.size();
+    // Use stack buffer for output (SHA256 = 32 bytes)
+    std::array<std::uint8_t, 32> out{};
+    std::size_t out_len = out.size();
 
-    try {
-        Ensure(EVP_MAC_init(ctx, key.data(), key.size(), params) == 1, "HMAC init failed");
-        if (!data.empty()) {
-            Ensure(EVP_MAC_update(ctx, data.data(), data.size()) == 1, "HMAC update failed");
-        }
-        Ensure(EVP_MAC_final(ctx, out.data(), &out_len, out.size()) == 1, "HMAC final failed");
-        out.resize(out_len);
-    } catch (...) {
-        EVP_MAC_CTX_free(ctx);
-        EVP_MAC_free(mac);
-        throw;
+    Ensure(EVP_MAC_init(ctx.get(), key.data(), key.size(), params) == 1, "HMAC init failed");
+    if (!data.empty()) {
+        Ensure(EVP_MAC_update(ctx.get(), data.data(), data.size()) == 1, "HMAC update failed");
     }
-
-    EVP_MAC_CTX_free(ctx);
-    EVP_MAC_free(mac);
-    return out;
+    Ensure(EVP_MAC_final(ctx.get(), out.data(), &out_len, out.size()) == 1, "HMAC final failed");
+    
+    return Bytes(out.data(), out.data() + out_len);
 }
 
 #else // legacy OpenSSL: use HMAC_* APIs
@@ -260,50 +252,48 @@ Bytes AesGcmEncrypt(const Bytes& key, const Bytes& plaintext, const Bytes& aad) 
         throw std::runtime_error("AES-GCM expects 32-byte key");
     }
     Bytes nonce = RandomBytes(constants::kAeadNonceLen);
-    Bytes ciphertext(plaintext.size());
-    Bytes tag(constants::kAeadTagLen);
-
-    EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();
+    
+    using detail::UniqueCipherCtx;
+    UniqueCipherCtx ctx(EVP_CIPHER_CTX_new());
     if (!ctx) {
         throw std::runtime_error("AES-GCM context allocation failed");
     }
+    
+    // Pre-allocate output with exact size needed
+    Bytes out;
+    out.reserve(nonce.size() + plaintext.size() + constants::kAeadTagLen);
+    out.insert(out.end(), nonce.begin(), nonce.end());
+    
+    std::size_t ct_offset = out.size();
+    out.resize(ct_offset + plaintext.size() + constants::kAeadTagLen);
+    
     int out_len = 0;
     int total_len = 0;
 
-    try {
-        Ensure(EVP_EncryptInit_ex(ctx, EVP_aes_256_gcm(), nullptr, nullptr, nullptr) == 1,
-               "AES-GCM init failed");
-        Ensure(EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_IVLEN, static_cast<int>(nonce.size()), nullptr) == 1,
-               "AES-GCM set iv length failed");
-        Ensure(EVP_EncryptInit_ex(ctx, nullptr, nullptr, key.data(), nonce.data()) == 1,
-               "AES-GCM set key failed");
-        if (!aad.empty()) {
-            Ensure(EVP_EncryptUpdate(ctx, nullptr, &out_len, aad.data(), static_cast<int>(aad.size())) == 1,
-                   "AES-GCM aad failed");
-        }
-        if (!plaintext.empty()) {
-            Ensure(EVP_EncryptUpdate(ctx, ciphertext.data(), &out_len, plaintext.data(),
-                                     static_cast<int>(plaintext.size())) == 1,
-                   "AES-GCM encrypt failed");
-            total_len += out_len;
-        }
-        Ensure(EVP_EncryptFinal_ex(ctx, ciphertext.data() + total_len, &out_len) == 1,
-               "AES-GCM final failed");
-        total_len += out_len;
-        Ensure(EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_GET_TAG, static_cast<int>(tag.size()), tag.data()) == 1,
-               "AES-GCM get tag failed");
-    } catch (...) {
-        EVP_CIPHER_CTX_free(ctx);
-        throw;
+    Ensure(EVP_EncryptInit_ex(ctx.get(), EVP_aes_256_gcm(), nullptr, nullptr, nullptr) == 1,
+           "AES-GCM init failed");
+    Ensure(EVP_CIPHER_CTX_ctrl(ctx.get(), EVP_CTRL_GCM_SET_IVLEN, static_cast<int>(nonce.size()), nullptr) == 1,
+           "AES-GCM set iv length failed");
+    Ensure(EVP_EncryptInit_ex(ctx.get(), nullptr, nullptr, key.data(), nonce.data()) == 1,
+           "AES-GCM set key failed");
+    if (!aad.empty()) {
+        Ensure(EVP_EncryptUpdate(ctx.get(), nullptr, &out_len, aad.data(), static_cast<int>(aad.size())) == 1,
+               "AES-GCM aad failed");
     }
-
-    EVP_CIPHER_CTX_free(ctx);
-    ciphertext.resize(static_cast<std::size_t>(total_len));
-    Bytes out;
-    out.reserve(nonce.size() + ciphertext.size() + tag.size());
-    out.insert(out.end(), nonce.begin(), nonce.end());
-    out.insert(out.end(), ciphertext.begin(), ciphertext.end());
-    out.insert(out.end(), tag.begin(), tag.end());
+    if (!plaintext.empty()) {
+        Ensure(EVP_EncryptUpdate(ctx.get(), out.data() + ct_offset, &out_len, plaintext.data(),
+                                 static_cast<int>(plaintext.size())) == 1,
+               "AES-GCM encrypt failed");
+        total_len += out_len;
+    }
+    Ensure(EVP_EncryptFinal_ex(ctx.get(), out.data() + ct_offset + total_len, &out_len) == 1,
+           "AES-GCM final failed");
+    total_len += out_len;
+    Ensure(EVP_CIPHER_CTX_ctrl(ctx.get(), EVP_CTRL_GCM_GET_TAG, static_cast<int>(constants::kAeadTagLen),
+                               out.data() + ct_offset + total_len) == 1,
+           "AES-GCM get tag failed");
+    
+    out.resize(nonce.size() + total_len + constants::kAeadTagLen);
     return out;
 }
 
@@ -335,46 +325,45 @@ Bytes AesGcmDecrypt(const Bytes& key, const Bytes& blob, const Bytes& aad) {
     if (blob.size() < constants::kAeadNonceLen + constants::kAeadTagLen) {
         throw std::runtime_error("AES-GCM blob too short");
     }
-    Bytes nonce(blob.begin(), blob.begin() + constants::kAeadNonceLen);
-    Bytes tag(blob.end() - constants::kAeadTagLen, blob.end());
-    Bytes ciphertext(blob.begin() + constants::kAeadNonceLen, blob.end() - constants::kAeadTagLen);
+    
+    const std::uint8_t* nonce_ptr = blob.data();
+    const std::uint8_t* ct_ptr = blob.data() + constants::kAeadNonceLen;
+    std::size_t ct_len = blob.size() - constants::kAeadNonceLen - constants::kAeadTagLen;
+    const std::uint8_t* tag_ptr = blob.data() + blob.size() - constants::kAeadTagLen;
 
-    Bytes plaintext(ciphertext.size());
-    EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();
+    using detail::UniqueCipherCtx;
+    UniqueCipherCtx ctx(EVP_CIPHER_CTX_new());
     if (!ctx) {
         throw std::runtime_error("AES-GCM context allocation failed");
     }
+    
+    Bytes plaintext(ct_len);
     int out_len = 0;
     int total_len = 0;
 
-    try {
-        Ensure(EVP_DecryptInit_ex(ctx, EVP_aes_256_gcm(), nullptr, nullptr, nullptr) == 1,
-               "AES-GCM init failed");
-        Ensure(EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_IVLEN, static_cast<int>(nonce.size()), nullptr) == 1,
-               "AES-GCM set iv length failed");
-        Ensure(EVP_DecryptInit_ex(ctx, nullptr, nullptr, key.data(), nonce.data()) == 1,
-               "AES-GCM set key failed");
-        if (!aad.empty()) {
-            Ensure(EVP_DecryptUpdate(ctx, nullptr, &out_len, aad.data(), static_cast<int>(aad.size())) == 1,
-                   "AES-GCM aad failed");
-        }
-        if (!ciphertext.empty()) {
-            Ensure(EVP_DecryptUpdate(ctx, plaintext.data(), &out_len, ciphertext.data(),
-                                     static_cast<int>(ciphertext.size())) == 1,
-                   "AES-GCM decrypt failed");
-            total_len += out_len;
-        }
-        Ensure(EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_TAG, static_cast<int>(tag.size()), tag.data()) == 1,
-               "AES-GCM set tag failed");
-        Ensure(EVP_DecryptFinal_ex(ctx, plaintext.data() + total_len, &out_len) == 1,
-               "AES-GCM auth failed");
-        total_len += out_len;
-    } catch (...) {
-        EVP_CIPHER_CTX_free(ctx);
-        throw;
+    Ensure(EVP_DecryptInit_ex(ctx.get(), EVP_aes_256_gcm(), nullptr, nullptr, nullptr) == 1,
+           "AES-GCM init failed");
+    Ensure(EVP_CIPHER_CTX_ctrl(ctx.get(), EVP_CTRL_GCM_SET_IVLEN, constants::kAeadNonceLen, nullptr) == 1,
+           "AES-GCM set iv length failed");
+    Ensure(EVP_DecryptInit_ex(ctx.get(), nullptr, nullptr, key.data(), nonce_ptr) == 1,
+           "AES-GCM set key failed");
+    if (!aad.empty()) {
+        Ensure(EVP_DecryptUpdate(ctx.get(), nullptr, &out_len, aad.data(), static_cast<int>(aad.size())) == 1,
+               "AES-GCM aad failed");
     }
+    if (ct_len > 0) {
+        Ensure(EVP_DecryptUpdate(ctx.get(), plaintext.data(), &out_len, ct_ptr,
+                                 static_cast<int>(ct_len)) == 1,
+               "AES-GCM decrypt failed");
+        total_len += out_len;
+    }
+    Ensure(EVP_CIPHER_CTX_ctrl(ctx.get(), EVP_CTRL_GCM_SET_TAG, constants::kAeadTagLen,
+                               const_cast<std::uint8_t*>(tag_ptr)) == 1,
+           "AES-GCM set tag failed");
+    Ensure(EVP_DecryptFinal_ex(ctx.get(), plaintext.data() + total_len, &out_len) == 1,
+           "AES-GCM auth failed");
+    total_len += out_len;
 
-    EVP_CIPHER_CTX_free(ctx);
     plaintext.resize(static_cast<std::size_t>(total_len));
     return plaintext;
 }
@@ -419,42 +408,40 @@ std::size_t AesGcmEncryptWithIvInto(const Bytes& key,
     if (out_len < plaintext_len + constants::kAeadTagLen) {
         throw std::runtime_error("AES-GCM output buffer too small");
     }
-    EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();
+    
+    using detail::UniqueCipherCtx;
+    UniqueCipherCtx ctx(EVP_CIPHER_CTX_new());
     if (!ctx) {
         throw std::runtime_error("AES-GCM context allocation failed");
     }
     int out_len_int = 0;
     int total_len = 0;
-    try {
-        Ensure(EVP_EncryptInit_ex(ctx, EVP_aes_256_gcm(), nullptr, nullptr, nullptr) == 1,
-               "AES-GCM init failed");
-        Ensure(EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_IVLEN, static_cast<int>(iv.size()), nullptr) == 1,
-               "AES-GCM set iv length failed");
-        Ensure(EVP_EncryptInit_ex(ctx, nullptr, nullptr, key.data(), iv.data()) == 1,
-               "AES-GCM set key failed");
-        if (!aad.empty()) {
-            Ensure(EVP_EncryptUpdate(ctx, nullptr, &out_len_int, aad.data(), static_cast<int>(aad.size())) == 1,
-                   "AES-GCM aad failed");
-        }
-        if (plaintext_len > 0) {
-            Ensure(EVP_EncryptUpdate(ctx, out, &out_len_int, plaintext,
-                                     static_cast<int>(plaintext_len)) == 1,
-                   "AES-GCM encrypt failed");
-            total_len += out_len_int;
-        }
-        Ensure(EVP_EncryptFinal_ex(ctx, out + total_len, &out_len_int) == 1,
-               "AES-GCM final failed");
-        total_len += out_len_int;
-        Ensure(EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_GET_TAG,
-                                   static_cast<int>(constants::kAeadTagLen),
-                                   out + total_len) == 1,
-               "AES-GCM get tag failed");
-        total_len += static_cast<int>(constants::kAeadTagLen);
-    } catch (...) {
-        EVP_CIPHER_CTX_free(ctx);
-        throw;
+    
+    Ensure(EVP_EncryptInit_ex(ctx.get(), EVP_aes_256_gcm(), nullptr, nullptr, nullptr) == 1,
+           "AES-GCM init failed");
+    Ensure(EVP_CIPHER_CTX_ctrl(ctx.get(), EVP_CTRL_GCM_SET_IVLEN, static_cast<int>(iv.size()), nullptr) == 1,
+           "AES-GCM set iv length failed");
+    Ensure(EVP_EncryptInit_ex(ctx.get(), nullptr, nullptr, key.data(), iv.data()) == 1,
+           "AES-GCM set key failed");
+    if (!aad.empty()) {
+        Ensure(EVP_EncryptUpdate(ctx.get(), nullptr, &out_len_int, aad.data(), static_cast<int>(aad.size())) == 1,
+               "AES-GCM aad failed");
     }
-    EVP_CIPHER_CTX_free(ctx);
+    if (plaintext_len > 0) {
+        Ensure(EVP_EncryptUpdate(ctx.get(), out, &out_len_int, plaintext,
+                                 static_cast<int>(plaintext_len)) == 1,
+               "AES-GCM encrypt failed");
+        total_len += out_len_int;
+    }
+    Ensure(EVP_EncryptFinal_ex(ctx.get(), out + total_len, &out_len_int) == 1,
+           "AES-GCM final failed");
+    total_len += out_len_int;
+    Ensure(EVP_CIPHER_CTX_ctrl(ctx.get(), EVP_CTRL_GCM_GET_TAG,
+                               static_cast<int>(constants::kAeadTagLen),
+                               out + total_len) == 1,
+           "AES-GCM get tag failed");
+    total_len += static_cast<int>(constants::kAeadTagLen);
+    
     return static_cast<std::size_t>(total_len);
 }
 
@@ -479,41 +466,39 @@ std::size_t AesGcmDecryptWithIvInto(const Bytes& key,
         throw std::runtime_error("AES-GCM output buffer too small");
     }
     const std::uint8_t* tag = blob + ct_len;
-    EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();
+    
+    using detail::UniqueCipherCtx;
+    UniqueCipherCtx ctx(EVP_CIPHER_CTX_new());
     if (!ctx) {
         throw std::runtime_error("AES-GCM context allocation failed");
     }
     int out_len_int = 0;
     int total_len = 0;
-    try {
-        Ensure(EVP_DecryptInit_ex(ctx, EVP_aes_256_gcm(), nullptr, nullptr, nullptr) == 1,
-               "AES-GCM init failed");
-        Ensure(EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_IVLEN, static_cast<int>(iv.size()), nullptr) == 1,
-               "AES-GCM set iv length failed");
-        Ensure(EVP_DecryptInit_ex(ctx, nullptr, nullptr, key.data(), iv.data()) == 1,
-               "AES-GCM set key failed");
-        if (!aad.empty()) {
-            Ensure(EVP_DecryptUpdate(ctx, nullptr, &out_len_int, aad.data(), static_cast<int>(aad.size())) == 1,
-                   "AES-GCM aad failed");
-        }
-        if (ct_len > 0) {
-            Ensure(EVP_DecryptUpdate(ctx, out, &out_len_int, blob,
-                                     static_cast<int>(ct_len)) == 1,
-                   "AES-GCM decrypt failed");
-            total_len += out_len_int;
-        }
-        Ensure(EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_TAG,
-                                   static_cast<int>(constants::kAeadTagLen),
-                                   const_cast<unsigned char*>(tag)) == 1,
-               "AES-GCM set tag failed");
-        Ensure(EVP_DecryptFinal_ex(ctx, out + total_len, &out_len_int) == 1,
-               "AES-GCM auth failed");
-        total_len += out_len_int;
-    } catch (...) {
-        EVP_CIPHER_CTX_free(ctx);
-        throw;
+    
+    Ensure(EVP_DecryptInit_ex(ctx.get(), EVP_aes_256_gcm(), nullptr, nullptr, nullptr) == 1,
+           "AES-GCM init failed");
+    Ensure(EVP_CIPHER_CTX_ctrl(ctx.get(), EVP_CTRL_GCM_SET_IVLEN, static_cast<int>(iv.size()), nullptr) == 1,
+           "AES-GCM set iv length failed");
+    Ensure(EVP_DecryptInit_ex(ctx.get(), nullptr, nullptr, key.data(), iv.data()) == 1,
+           "AES-GCM set key failed");
+    if (!aad.empty()) {
+        Ensure(EVP_DecryptUpdate(ctx.get(), nullptr, &out_len_int, aad.data(), static_cast<int>(aad.size())) == 1,
+               "AES-GCM aad failed");
     }
-    EVP_CIPHER_CTX_free(ctx);
+    if (ct_len > 0) {
+        Ensure(EVP_DecryptUpdate(ctx.get(), out, &out_len_int, blob,
+                                 static_cast<int>(ct_len)) == 1,
+               "AES-GCM decrypt failed");
+        total_len += out_len_int;
+    }
+    Ensure(EVP_CIPHER_CTX_ctrl(ctx.get(), EVP_CTRL_GCM_SET_TAG,
+                               static_cast<int>(constants::kAeadTagLen),
+                               const_cast<unsigned char*>(tag)) == 1,
+           "AES-GCM set tag failed");
+    Ensure(EVP_DecryptFinal_ex(ctx.get(), out + total_len, &out_len_int) == 1,
+           "AES-GCM auth failed");
+    total_len += out_len_int;
+    
     return static_cast<std::size_t>(total_len);
 }
 
@@ -532,56 +517,50 @@ Bytes AesCtrTransform(const Bytes& key, const Bytes& iv, const Bytes& data) {
     if (iv.size() != 16) {
         throw std::runtime_error("AES-CTR expects 16-byte IV");
     }
-    Bytes out(data.size());
-    EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();
+    
+    using detail::UniqueCipherCtx;
+    UniqueCipherCtx ctx(EVP_CIPHER_CTX_new());
     if (!ctx) {
         throw std::runtime_error("AES-CTR context allocation failed");
     }
+    
+    Bytes out(data.size());
     int out_len = 0;
     int total_len = 0;
 
-    try {
-        Ensure(EVP_EncryptInit_ex(ctx, EVP_aes_256_ctr(), nullptr, key.data(), iv.data()) == 1,
-               "AES-CTR init failed");
-        if (!data.empty()) {
-            Ensure(EVP_EncryptUpdate(ctx, out.data(), &out_len, data.data(), static_cast<int>(data.size())) == 1,
-                   "AES-CTR update failed");
-            total_len += out_len;
-        }
-        Ensure(EVP_EncryptFinal_ex(ctx, out.data() + total_len, &out_len) == 1,
-               "AES-CTR final failed");
+    Ensure(EVP_EncryptInit_ex(ctx.get(), EVP_aes_256_ctr(), nullptr, key.data(), iv.data()) == 1,
+           "AES-CTR init failed");
+    if (!data.empty()) {
+        Ensure(EVP_EncryptUpdate(ctx.get(), out.data(), &out_len, data.data(), static_cast<int>(data.size())) == 1,
+               "AES-CTR update failed");
         total_len += out_len;
-    } catch (...) {
-        EVP_CIPHER_CTX_free(ctx);
-        throw;
     }
+    Ensure(EVP_EncryptFinal_ex(ctx.get(), out.data() + total_len, &out_len) == 1,
+           "AES-CTR final failed");
+    total_len += out_len;
 
-    EVP_CIPHER_CTX_free(ctx);
     out.resize(static_cast<std::size_t>(total_len));
     return out;
 }
 
 Bytes Sha3_512(const Bytes& data) {
+    using detail::UniqueMDCtx;
     const EVP_MD* md = EVP_sha3_512();
-    EVP_MD_CTX* ctx = EVP_MD_CTX_new();
+    UniqueMDCtx ctx(EVP_MD_CTX_new());
     if (!ctx) {
         throw std::runtime_error("SHA3-512 context allocation failed");
     }
+    // Use stack buffer for hash (SHA3-512 = 64 bytes)
+    std::array<std::uint8_t, 64> out{};
     unsigned int out_len = 0;
-    Bytes out(EVP_MD_size(md));
-    try {
-        Ensure(EVP_DigestInit_ex(ctx, md, nullptr) == 1, "SHA3-512 init failed");
-        if (!data.empty()) {
-            Ensure(EVP_DigestUpdate(ctx, data.data(), data.size()) == 1, "SHA3-512 update failed");
-        }
-        Ensure(EVP_DigestFinal_ex(ctx, out.data(), &out_len) == 1, "SHA3-512 final failed");
-    } catch (...) {
-        EVP_MD_CTX_free(ctx);
-        throw;
+    
+    Ensure(EVP_DigestInit_ex(ctx.get(), md, nullptr) == 1, "SHA3-512 init failed");
+    if (!data.empty()) {
+        Ensure(EVP_DigestUpdate(ctx.get(), data.data(), data.size()) == 1, "SHA3-512 update failed");
     }
-    EVP_MD_CTX_free(ctx);
-    out.resize(out_len);
-    return out;
+    Ensure(EVP_DigestFinal_ex(ctx.get(), out.data(), &out_len) == 1, "SHA3-512 final failed");
+    
+    return Bytes(out.data(), out.data() + out_len);
 }
 
 }  // namespace basefwx::crypto

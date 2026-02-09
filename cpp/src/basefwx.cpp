@@ -59,9 +59,20 @@ std::string MdCode(const std::string& input) {
     std::string out;
     out.reserve(input.size() * 3);
     for (unsigned char ch : input) {
-        std::string digits = std::to_string(static_cast<unsigned int>(ch));
-        out.append(std::to_string(digits.size()));
-        out.append(digits);
+        unsigned int val = ch;
+        if (val < 10) {
+            out.push_back('1');
+            out.push_back('0' + val);
+        } else if (val < 100) {
+            out.push_back('2');
+            out.push_back('0' + val / 10);
+            out.push_back('0' + val % 10);
+        } else {
+            out.push_back('3');
+            out.push_back('0' + val / 100);
+            out.push_back('0' + (val / 10) % 10);
+            out.push_back('0' + val % 10);
+        }
     }
     return out;
 }
@@ -188,6 +199,7 @@ std::string ReplaceAll(std::string input, const std::string& from, const std::st
 
 std::string MCode(const std::string& input) {
     std::string out;
+    out.reserve(input.size() / 2);  // Rough estimate
     std::size_t idx = 0;
     while (idx < input.size()) {
         if (input[idx] < '0' || input[idx] > '9') {
@@ -198,9 +210,20 @@ std::string MCode(const std::string& input) {
         if (idx + static_cast<std::size_t>(len) > input.size()) {
             throw std::runtime_error("Invalid mcode length");
         }
-        std::string num = input.substr(idx, static_cast<std::size_t>(len));
+        // Fast path for common lengths
+        int val = 0;
+        if (len == 1) {
+            val = input[idx] - '0';
+        } else if (len == 2) {
+            val = (input[idx] - '0') * 10 + (input[idx + 1] - '0');
+        } else if (len == 3) {
+            val = (input[idx] - '0') * 100 + (input[idx + 1] - '0') * 10 + (input[idx + 2] - '0');
+        } else {
+            // Fallback for unexpected length
+            std::string num = input.substr(idx, static_cast<std::size_t>(len));
+            val = std::stoi(num);
+        }
         idx += static_cast<std::size_t>(len);
-        int val = std::stoi(num);
         out.push_back(static_cast<char>(val));
     }
     return out;

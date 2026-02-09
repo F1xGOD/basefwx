@@ -504,8 +504,8 @@ public final class Crypto {
             RNG.nextBytes(key);
             RNG.nextBytes(iv);
             RNG.nextBytes(data);
-            byte[] ct = aesGcmEncrypt(key, iv, data, aad);
-            aesGcmDecrypt(key, ct, aad);
+            byte[] ct = aesGcmEncryptWithIv(key, iv, data, aad);
+            aesGcmDecryptWithIv(key, iv, ct, aad);
             
             // Warmup HMAC
             hmacSha256(key, data);

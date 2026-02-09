@@ -14,6 +14,27 @@ title: Testing
 The script creates a local venv by default and writes logs to `diagnose.log`.
 Media tests require `ffmpeg` and `ffprobe`.
 
+## Benchmark Fairness & JVM Startup
+
+All benchmarks use **warm-up iterations + median measurement** to ensure fair comparisons across languages:
+
+1. **Warm-up Phase** (excluded from timing):
+   - Java: JVM startup + JIT compilation warm-up
+   - C++: Binary initialization + branch prediction warm-up
+   - Python: Module import + bytecode warm-up
+   
+2. **Measurement Phase** (included in BENCH_NS):
+   - All languages: Median timing of multiple iterations
+   - **JVM startup time is NOT included** (happens during warm-up)
+   - **JIT compilation time IS included** (happens during warm-up, affects first real run in production)
+
+3. **Fair Comparison**:
+   - Java gets **more warm-up iterations** than C++/Python specifically for fwxAES to reach JIT steady state
+   - Configured via `BENCH_WARMUP_JAVA_FWXAES` (5-10 iterations depending on test mode)
+   - This accounts for Java's higher JIT overhead compared to interpreted C++/Python startup
+
+**Why this is fair**: Each language reports the time a real user would experience after initialization is complete. JVM startup is a one-time cost; the measured times represent sustained operation.
+
 ## Modes
 
 - `--fast` reduces fixture sizes and skips wrong-password and cross-compat tests.

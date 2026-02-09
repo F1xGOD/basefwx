@@ -3450,16 +3450,22 @@ if [[ -z "${BENCH_WARMUP_LIGHT:-}" || -z "${BENCH_WARMUP_HEAVY:-}" ]]; then
         BENCH_WARMUP_HEAVY="${BENCH_WARMUP_HEAVY:-3}"
         BENCH_WARMUP_FILE="${BENCH_WARMUP_FILE:-0}"
         BENCH_WARMUP_FILE_JAVA="${BENCH_WARMUP_FILE_JAVA:-1}"
+        # Java needs extra warmup to reach JIT steady state on light operations
+        BENCH_WARMUP_JAVA_FWXAES="${BENCH_WARMUP_JAVA_FWXAES:-5}"
     elif [[ "$TEST_MODE" == "fast" ]]; then
         BENCH_WARMUP_LIGHT="${BENCH_WARMUP_LIGHT:-3}"
         BENCH_WARMUP_HEAVY="${BENCH_WARMUP_HEAVY:-5}"
         BENCH_WARMUP_FILE="${BENCH_WARMUP_FILE:-1}"
         BENCH_WARMUP_FILE_JAVA="${BENCH_WARMUP_FILE_JAVA:-2}"
+        # Java needs extra warmup to reach JIT steady state on light operations
+        BENCH_WARMUP_JAVA_FWXAES="${BENCH_WARMUP_JAVA_FWXAES:-8}"
     else
         BENCH_WARMUP_LIGHT="${BENCH_WARMUP_LIGHT:-5}"
         BENCH_WARMUP_HEAVY="${BENCH_WARMUP_HEAVY:-6}"
         BENCH_WARMUP_FILE="${BENCH_WARMUP_FILE:-1}"
         BENCH_WARMUP_FILE_JAVA="${BENCH_WARMUP_FILE_JAVA:-3}"
+        # Java needs extra warmup to reach JIT steady state on light operations
+        BENCH_WARMUP_JAVA_FWXAES="${BENCH_WARMUP_JAVA_FWXAES:-10}"
     fi
 fi
 BENCH_ITERS_LIGHT="${BENCH_ITERS_LIGHT:-${BASEFWX_BENCH_ITERS:-50}}"
@@ -3495,7 +3501,7 @@ if [[ ! "$BENCH_ITERS_FILE" =~ ^[0-9]+$ || "$BENCH_ITERS_FILE" -lt 1 ]]; then
     BENCH_ITERS_FILE=1
 fi
 
-JAVA_BENCH_FLAGS_DEFAULT="-server -XX:+UseG1GC -XX:+AlwaysPreTouch -XX:+TieredCompilation -XX:CompileThreshold=1000 -XX:+UseStringDeduplication -XX:MaxGCPauseMillis=200 -XX:InitialRAMPercentage=70 -XX:MaxRAMPercentage=95 -XX:+UseAES -XX:+UnlockDiagnosticVMOptions -XX:+UseAESIntrinsics -XX:+UseAESCTRIntrinsics -XX:+UseGHASHIntrinsics"
+JAVA_BENCH_FLAGS_DEFAULT="-server -XX:+UseG1GC -XX:+AlwaysPreTouch -XX:+TieredCompilation -XX:CompileThreshold=1000 -XX:+UseStringDeduplication -XX:MaxGCPauseMillis=200 -XX:InitialRAMPercentage=70 -XX:MaxRAMPercentage=95 -XX:+UseAES -XX:+UnlockDiagnosticVMOptions -XX:+UseAESIntrinsics -XX:+UseAESCTRIntrinsics -XX:+UseGHASHIntrinsics -XX:+PrintCompilation -XX:PrintCompilationOptionFile=/dev/null"
 JAVA_BENCH_FLAGS="${JAVA_BENCH_FLAGS:-$JAVA_BENCH_FLAGS_DEFAULT}"
 read -r -a JAVA_BENCH_FLAGS_ARR <<<"$JAVA_BENCH_FLAGS"
 
@@ -3696,15 +3702,19 @@ for idx in "${!BENCH_LANGS[@]}"; do
             ;;
         java)
             if [[ "$BENCH_FWXAES_MODE" == "par" ]]; then
-                time_cmd_bench "fwxaes_java_par_light" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_HEAVY" \
+                # Use increased warmup for Java to ensure JIT compilation reaches steady state
+                # JVM startup is NOT included, but JIT warmup is (fairest comparison)
+                time_cmd_bench "fwxaes_java_par_light" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_JAVA_FWXAES" \
                     BASEFWX_BENCH_ITERS="$BENCH_ITERS_HEAVY" \
                     BASEFWX_TEST_KDF_ITERS="$FWXAES_LIGHT_KDF_ITERS" \
                     "$JAVA_BIN" "${JAVA_BENCH_FLAGS_ARR[@]}" -jar "$JAVA_JAR" bench-fwxaes-par "$BENCH_BYTES_FILE" "$PW" --no-master
-                time_cmd_bench "fwxaes_java_par" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_HEAVY" \
+                time_cmd_bench "fwxaes_java_par" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_JAVA_FWXAES" \
                     BASEFWX_BENCH_ITERS="$BENCH_ITERS_HEAVY" \
                     "$JAVA_BIN" "${JAVA_BENCH_FLAGS_ARR[@]}" -jar "$JAVA_JAR" bench-fwxaes-par "$BENCH_BYTES_FILE" "$PW" --no-master
             else
-                time_cmd_bench "fwxaes_java_correct_light" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_HEAVY" \
+                # Use increased warmup for Java to ensure JIT compilation reaches steady state
+                # JVM startup is NOT included, but JIT warmup is (fairest comparison)
+                time_cmd_bench "fwxaes_java_correct_light" env BASEFWX_BENCH_WARMUP="$BENCH_WJAVA_FWXAES_JAVA_FWXAES" \
                     BASEFWX_BENCH_ITERS="$BENCH_ITERS_HEAVY" \
                     BASEFWX_TEST_KDF_ITERS="$FWXAES_LIGHT_KDF_ITERS" \
                     "$JAVA_BIN" "${JAVA_BENCH_FLAGS_ARR[@]}" -jar "$JAVA_JAR" bench-fwxaes "$BENCH_BYTES_FILE" "$PW" --no-master

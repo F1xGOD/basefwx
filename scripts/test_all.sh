@@ -2142,6 +2142,11 @@ _BENCH_FILE_PW = None
 _BENCH_FILE_TEMP = None
 _BENCH_FILE_INPUT = None
 
+_BENCH_JMG_SRC = None
+_BENCH_JMG_PW = None
+_BENCH_JMG_SUFFIX = None
+_BENCH_JMG_TEMP = None
+
 def _bench_file_init(method: str, input_path: str, pw: str) -> None:
     global _BENCH_FILE_METHOD, _BENCH_FILE_PW, _BENCH_FILE_TEMP, _BENCH_FILE_INPUT
     _BENCH_FILE_METHOD = method
@@ -2193,6 +2198,37 @@ def _bench_file_worker(_: int) -> int:
     except FileNotFoundError:
         pass
     return size
+
+def _bench_jmg_init(media_path: str, pw: str) -> None:
+    global _BENCH_JMG_SRC, _BENCH_JMG_PW, _BENCH_JMG_SUFFIX, _BENCH_JMG_TEMP
+    _BENCH_JMG_SRC = Path(media_path)
+    _BENCH_JMG_PW = pw
+    _BENCH_JMG_SUFFIX = _BENCH_JMG_SRC.suffix
+    _BENCH_JMG_TEMP = tempfile.TemporaryDirectory(prefix="basefwx-bench-jmg-")
+
+def _bench_jmg_worker(worker_id: int) -> int:
+    tmp = Path(_BENCH_JMG_TEMP.name)
+    uid = f"{worker_id}_{os.getpid()}"
+    enc_path = tmp / f"bench_enc_{uid}{_BENCH_JMG_SUFFIX}"
+    dec_path = tmp / f"bench_dec_{uid}{_BENCH_JMG_SUFFIX}"
+    try:
+        basefwx.MediaCipher.encrypt_media(
+            str(_BENCH_JMG_SRC),
+            _BENCH_JMG_PW,
+            output=str(enc_path),
+            keep_input=True,
+        )
+        basefwx.MediaCipher.decrypt_media(str(enc_path), _BENCH_JMG_PW, output=str(dec_path))
+        return dec_path.stat().st_size
+    finally:
+        try:
+            enc_path.unlink()
+        except FileNotFoundError:
+            pass
+        try:
+            dec_path.unlink()
+        except FileNotFoundError:
+            pass
 
 def _bench_parallel(warmup: int, iters: int, workers: int, worker, *, initializer=None, initargs=()) -> None:
     if warmup < 0:
@@ -2399,43 +2435,13 @@ def cmd_bench_jmg(args: list[str]) -> int:
         return 1
     
     if workers > 1:
-        def _bench_jmg_init() -> None:
-            global _BENCH_FILE_TEMP
-            _BENCH_FILE_TEMP = tempfile.TemporaryDirectory(prefix="basefwx-bench-jmg-")
-        
-        def _bench_jmg_worker(_: int) -> int:
-            tmp = Path(_BENCH_FILE_TEMP.name)
-            import uuid
-            uid = str(uuid.uuid4())[:8]
-            enc_path = tmp / f"bench_enc_{uid}{src.suffix}"
-            dec_path = tmp / f"bench_dec_{uid}{src.suffix}"
-            try:
-                basefwx.MediaCipher.encrypt_media(
-                    str(src),
-                    pw,
-                    output=str(enc_path),
-                    keep_input=True,
-                )
-                basefwx.MediaCipher.decrypt_media(str(enc_path), pw, output=str(dec_path))
-                size = dec_path.stat().st_size
-                return size
-            finally:
-                try:
-                    enc_path.unlink()
-                except FileNotFoundError:
-                    pass
-                try:
-                    dec_path.unlink()
-                except FileNotFoundError:
-                    pass
-        
         _bench_parallel(
             warmup,
             iters,
             workers,
             _bench_jmg_worker,
             initializer=_bench_jmg_init,
-            initargs=(),
+            initargs=(media_path, pw),
         )
     else:
         with tempfile.TemporaryDirectory(prefix="basefwx-bench-jmg-") as tmpdir:
@@ -3572,7 +3578,7 @@ if [[ ! "$BENCH_ITERS_FILE" =~ ^[0-9]+$ || "$BENCH_ITERS_FILE" -lt 1 ]]; then
     BENCH_ITERS_FILE=1
 fi
 
-JAVA_BENCH_FLAGS_DEFAULT="-server -XX:+UseG1GC -XX:+AlwaysPreTouch -XX:+TieredCompilation -XX:CompileThreshold=1000 -XX:+UseStringDeduplication -XX:MaxGCPauseMillis=200 -XX:InitialRAMPercentage=70 -XX:MaxRAMPercentage=95 -XX:+UseAES -XX:+UnlockDiagnosticVMOptions -XX:+UseAESIntrinsics -XX:+UseAESCTRIntrinsics -XX:+UseGHASHIntrinsics -XX:+PrintCompilation -XX:PrintCompilationOptionFile=/dev/null"
+JAVA_BENCH_FLAGS_DEFAULT="-server -XX:+UseG1GC -XX:+AlwaysPreTouch -XX:+TieredCompilation -XX:CompileThreshold=1000 -XX:+UseStringDeduplication -XX:MaxGCPauseMillis=200 -XX:InitialRAMPercentage=70 -XX:MaxRAMPercentage=95 -XX:+UseAES -XX:+UnlockDiagnosticVMOptions -XX:+UseAESIntrinsics -XX:+UseAESCTRIntrinsics -XX:+UseGHASHIntrinsics -XX:+PrintCompilation"
 JAVA_BENCH_FLAGS="${JAVA_BENCH_FLAGS:-$JAVA_BENCH_FLAGS_DEFAULT}"
 read -r -a JAVA_BENCH_FLAGS_ARR <<<"$JAVA_BENCH_FLAGS"
 

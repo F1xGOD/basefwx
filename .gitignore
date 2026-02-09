@@ -20,6 +20,7 @@ dist/
 cpp/CMakeCache.txt
 cpp/CMakeFiles/
 cpp/Makefile
+AI_gen/
 cpp/cmake_install.cmake
 cpp/compile_commands.json
 *.o

@@ -388,6 +388,7 @@ void PrintUsage() {
     std::cout << "  basefwx_cpp bench-fwxaes-par <file> <password> [--master-pub <path>] [--no-master]\n";
     std::cout << "  basefwx_cpp bench-b512file <file> <password> [--master-pub <path>] [--no-master] [--no-aead]\n";
     std::cout << "  basefwx_cpp bench-pb512file <file> <password> [--master-pub <path>] [--no-master] [--no-aead]\n";
+    std::cout << "  basefwx_cpp bench-jmg <media> <password> [--master-pub <path>] [--no-master]\n";
 }
 
 struct ParsedOptions {
@@ -971,6 +972,93 @@ int main(int argc, char** argv) {
                         std::filesystem::remove(enc_path, cleanup_ec);
                     }
                     if (!dec_path.empty() && dec_path != bench_input) {
+                        std::filesystem::remove(dec_path, cleanup_ec);
+                    }
+                    if (!size_ec) {
+                        g_bench_sink.fetch_xor(static_cast<std::size_t>(dec_size), std::memory_order_relaxed);
+                        return static_cast<std::size_t>(dec_size);
+                    }
+                    return 0;
+                };
+                auto run = [&]() {
+                    if (workers > 1) {
+                        RunParallel(workers, run_once);
+                        return;
+                    }
+                    run_once(0);
+                };
+
+                long long ns = BenchMedian(warmup, iters, run);
+                std::cout << "BENCH_NS=" << ns << "\n";
+                for (const auto& dir : temp_dirs) {
+                    std::error_code ec;
+                    std::filesystem::remove_all(dir, ec);
+                }
+                return 0;
+            } catch (const std::exception& exc) {
+                throw;
+            }
+        }
+        if (command == "bench-jmg") {
+            if (argc < 4) {
+                PrintUsage();
+                return 2;
+            }
+            std::string media_path = argv[2];
+            std::string password = argv[3];
+            bool use_master = true;
+            for (int idx = 4; idx < argc; ++idx) {
+                std::string flag(argv[idx]);
+                if (flag == "--no-master") {
+                    use_master = false;
+                } else if (flag == "--master-pub" || flag == "--use-master-pub") {
+                    if (idx + 1 >= argc) {
+                        throw std::runtime_error("Missing master public key path");
+                    }
+                    ApplyMasterPubPath(argv[idx + 1]);
+                    idx += 1;
+                } else {
+                    throw std::runtime_error("Unknown flag: " + flag);
+                }
+            }
+            try {
+                std::filesystem::path src_path(media_path);
+                if (!std::filesystem::exists(src_path)) {
+                    throw std::runtime_error("Media file not found: " + media_path);
+                }
+                std::size_t workers = static_cast<std::size_t>(BenchWorkers());
+                if (workers == 0) {
+                    workers = 1;
+                }
+                ConfirmSingleThreadCli(workers);
+                std::vector<std::filesystem::path> temp_dirs;
+                auto stamp = std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
+                for (std::size_t i = 0; i < workers; ++i) {
+                    std::filesystem::path temp_dir = std::filesystem::temp_directory_path()
+                        / ("basefwx-bench-jmg-" + stamp + "-" + std::to_string(i));
+                    std::filesystem::create_directories(temp_dir);
+                    temp_dirs.push_back(temp_dir);
+                }
+
+                int warmup = BenchWarmup();
+                int iters = BenchIters();
+                auto run_once = [&](std::size_t idx) -> std::size_t {
+                    const auto& temp_dir = temp_dirs[idx];
+                    std::string enc_name = "bench_enc_" + std::to_string(idx) + src_path.extension().string();
+                    std::string dec_name = "bench_dec_" + std::to_string(idx) + src_path.extension().string();
+                    std::filesystem::path enc_path = temp_dir / enc_name;
+                    std::filesystem::path dec_path = temp_dir / dec_name;
+                    
+                    basefwx::Jmge(src_path.string(), password, enc_path.string());
+                    basefwx::Jmgd(enc_path.string(), password, dec_path.string());
+                    
+                    std::error_code size_ec;
+                    auto dec_size = std::filesystem::file_size(dec_path, size_ec);
+                    std::error_code cleanup_ec;
+                    if (!enc_path.empty()) {
+                        std::filesystem::remove(enc_path, cleanup_ec);
+                    }
+                    if (!dec_path.empty()) {
                         std::filesystem::remove(dec_path, cleanup_ec);
                     }
                     if (!size_ec) {

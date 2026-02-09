@@ -698,6 +698,77 @@ public final class BaseFwxCli {
                         }
                     }
                 }
+                case "bench-jmg": {
+                    if (argc < 3) {
+                        usage();
+                        return;
+                    }
+                    File mediaFile = new File(args[1]);
+                    String benchPass = args[2];
+                    final String benchPassFinal = benchPass;
+                    final boolean useMasterFlag = useMaster;
+                    int warmup = benchWarmup();
+                    int iters = benchIters();
+                    int workers = benchWorkers();
+                    
+                    if (!mediaFile.exists()) {
+                        throw new RuntimeException("Media file not found: " + mediaFile.getAbsolutePath());
+                    }
+                    
+                    confirmSingleThreadCli(workers);
+                    File[] tempDirs = new File[workers];
+                    File[] encFiles = new File[workers];
+                    File[] decFiles = new File[workers];
+                    
+                    try {
+                        // Create temporary directories for each worker
+                        String baseName = mediaFile.getName();
+                        String ext = "";
+                        int dotIdx = baseName.lastIndexOf('.');
+                        if (dotIdx > 0) {
+                            ext = baseName.substring(dotIdx);
+                        }
+                        
+                        for (int i = 0; i < workers; i++) {
+                            tempDirs[i] = Files.createTempDirectory("basefwx-bench-jmg-" + i).toFile();
+                            encFiles[i] = new File(tempDirs[i], "bench_enc" + ext);
+                            decFiles[i] = new File(tempDirs[i], "bench_dec" + ext);
+                        }
+                        
+                        BenchWorker worker = (idx) -> {
+                            File encFile = encFiles[idx];
+                            File decFile = decFiles[idx];
+                            // Encrypt
+                            BaseFwx.jmgEncryptFile(mediaFile, encFile, benchPassFinal, useMasterFlag, false, false);
+                            // Decrypt
+                            BaseFwx.jmgDecryptFile(encFile, decFile, benchPassFinal, useMasterFlag);
+                            long size = decFile.length();
+                            BENCH_SINK ^= (int) size;
+                            encFile.delete();
+                            decFile.delete();
+                            return size;
+                        };
+                        
+                        long ns = workers > 1
+                            ? benchParallelMedian(warmup, iters, workers, worker)
+                            : benchMedian(warmup, iters, () -> worker.run(0));
+                        System.out.println("BENCH_NS=" + ns);
+                        return;
+                    } finally {
+                        // Cleanup temporary files
+                        for (int i = 0; i < workers; i++) {
+                            if (encFiles[i] != null && encFiles[i].exists()) {
+                                encFiles[i].delete();
+                            }
+                            if (decFiles[i] != null && decFiles[i].exists()) {
+                                decFiles[i].delete();
+                            }
+                            if (tempDirs[i] != null && tempDirs[i].exists()) {
+                                tempDirs[i].delete();
+                            }
+                        }
+                    }
+                }
                 case "b256-enc":
                     if (argc < 2) {
                         usage();
@@ -811,6 +882,7 @@ public final class BaseFwxCli {
         System.out.println("  bench-fwxaes-par <file> <password> [--no-master]");
         System.out.println("  bench-b512file <file> <password> [--no-master]");
         System.out.println("  bench-pb512file <file> <password> [--no-master]");
+        System.out.println("  bench-jmg <media> <password> [--no-master]");
     }
 
     private static JmgArgs parseJmgArgs(String[] args, int startIndex) {

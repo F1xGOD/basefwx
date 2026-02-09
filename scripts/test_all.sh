@@ -2385,6 +2385,65 @@ def cmd_bench_pb512file(args: list[str]) -> int:
             _bench(warmup, iters, run)
     return 0
 
+def cmd_bench_jmg(args: list[str]) -> int:
+    if len(args) < 2:
+        return 2
+    media_path, pw = args[:2]
+    warmup = _warmup_env()
+    iters = _iters_env()
+    workers = _workers_env()
+    
+    src = Path(media_path)
+    if not src.exists():
+        print(f"Media file not found: {media_path}", file=sys.stderr)
+        return 1
+    
+    if workers > 1:
+        def _bench_jmg_init() -> None:
+            global _BENCH_FILE_TEMP
+            _BENCH_FILE_TEMP = tempfile.TemporaryDirectory(prefix="basefwx-bench-jmg-")
+        
+        def _bench_jmg_worker(_: int) -> int:
+            tmp = Path(_BENCH_FILE_TEMP.name)
+            import uuid
+            uid = str(uuid.uuid4())[:8]
+            enc_path = tmp / f"bench_enc_{uid}{src.suffix}"
+            dec_path = tmp / f"bench_dec_{uid}{src.suffix}"
+            try:
+                basefwx.MediaCipher.encrypt_media(str(src), pw, output=str(enc_path))
+                basefwx.MediaCipher.decrypt_media(str(enc_path), pw, output=str(dec_path))
+                size = dec_path.stat().st_size
+                return size
+            finally:
+                try:
+                    enc_path.unlink()
+                except FileNotFoundError:
+                    pass
+                try:
+                    dec_path.unlink()
+                except FileNotFoundError:
+                    pass
+        
+        _bench_parallel(
+            warmup,
+            iters,
+            workers,
+            _bench_jmg_worker,
+            initializer=_bench_jmg_init,
+            initargs=(),
+        )
+    else:
+        with tempfile.TemporaryDirectory(prefix="basefwx-bench-jmg-") as tmpdir:
+            tmp = Path(tmpdir)
+            enc_path = tmp / f"bench_enc{src.suffix}"
+            dec_path = tmp / f"bench_dec{src.suffix}"
+            def run() -> int:
+                basefwx.MediaCipher.encrypt_media(str(src), pw, output=str(enc_path))
+                basefwx.MediaCipher.decrypt_media(str(enc_path), pw, output=str(dec_path))
+                return dec_path.stat().st_size
+            _bench(warmup, iters, run)
+    return 0
+
 def main() -> int:
     if len(sys.argv) < 2:
         return 2
@@ -2434,6 +2493,8 @@ def main() -> int:
         return cmd_bench_b512file(args)
     if cmd == "bench-pb512file":
         return cmd_bench_pb512file(args)
+    if cmd == "bench-jmg":
+        return cmd_bench_jmg(args)
     return 2
 
 if __name__ == "__main__":
@@ -3606,6 +3667,12 @@ for idx in "${!BENCH_LANGS[@]}"; do
                 BASEFWX_BENCH_ITERS="$BENCH_ITERS_FILE" \
                 BASEFWX_BENCH_WORKERS="$BENCH_FILE_WORKERS" \
                 "$PYTHON_BIN" "$PY_HELPER" bench-pb512file "$BENCH_BYTES_FILE" "$PW"
+            for jmg_file in "${JMG_CASES[@]}"; do
+                time_cmd_bench "jmg_py_${jmg_file%.*}" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_FILE" \
+                    BASEFWX_BENCH_ITERS="$BENCH_ITERS_FILE" \
+                    BASEFWX_BENCH_WORKERS="$BENCH_FILE_WORKERS" \
+                    "$PYTHON_BIN" "$PY_HELPER" bench-jmg "$ORIG_DIR/$jmg_file" "$PW"
+            done
             ;;
         pypy)
             if [[ "$BENCH_FWXAES_MODE" == "par" ]]; then
@@ -3649,6 +3716,12 @@ for idx in "${!BENCH_LANGS[@]}"; do
                 BASEFWX_BENCH_ITERS="$BENCH_ITERS_FILE" \
                 BASEFWX_BENCH_WORKERS="$BENCH_FILE_WORKERS" \
                 "$PYPY_BIN" "$PY_HELPER" bench-pb512file "$BENCH_BYTES_FILE" "$PW"
+            for jmg_file in "${JMG_CASES[@]}"; do
+                time_cmd_bench "jmg_pypy_${jmg_file%.*}" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_FILE" \
+                    BASEFWX_BENCH_ITERS="$BENCH_ITERS_FILE" \
+                    BASEFWX_BENCH_WORKERS="$BENCH_FILE_WORKERS" \
+                    "$PYPY_BIN" "$PY_HELPER" bench-jmg "$ORIG_DIR/$jmg_file" "$PW"
+            done
             ;;
         cpp)
             if [[ "$BENCH_FWXAES_MODE" == "par" ]]; then
@@ -3699,6 +3772,12 @@ for idx in "${!BENCH_LANGS[@]}"; do
                 BASEFWX_BENCH_ITERS="$BENCH_ITERS_FILE" \
                 BASEFWX_BENCH_WORKERS="$BENCH_FILE_WORKERS" \
                 "$CPP_BIN" bench-pb512file "$BENCH_BYTES_FILE" "$PW" --no-master
+            for jmg_file in "${JMG_CASES[@]}"; do
+                time_cmd_bench "jmg_cpp_${jmg_file%.*}" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_FILE" \
+                    BASEFWX_BENCH_ITERS="$BENCH_ITERS_FILE" \
+                    BASEFWX_BENCH_WORKERS="$BENCH_FILE_WORKERS" \
+                    "$CPP_BIN" bench-jmg "$ORIG_DIR/$jmg_file" "$PW" --no-master
+            done
             ;;
         java)
             if [[ "$BENCH_FWXAES_MODE" == "par" ]]; then
@@ -3746,6 +3825,12 @@ for idx in "${!BENCH_LANGS[@]}"; do
                 BASEFWX_BENCH_ITERS="$BENCH_ITERS_FILE" \
                 BASEFWX_BENCH_WORKERS="$BENCH_FILE_WORKERS" \
                 "$JAVA_BIN" "${JAVA_BENCH_FLAGS_ARR[@]}" -jar "$JAVA_JAR" bench-pb512file "$BENCH_BYTES_FILE" "$PW" --no-master
+            for jmg_file in "${JMG_CASES[@]}"; do
+                time_cmd_bench "jmg_java_${jmg_file%.*}" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_FILE_JAVA" \
+                    BASEFWX_BENCH_ITERS="$BENCH_ITERS_FILE" \
+                    BASEFWX_BENCH_WORKERS="$BENCH_FILE_WORKERS" \
+                    "$JAVA_BIN" "${JAVA_BENCH_FLAGS_ARR[@]}" -jar "$JAVA_JAR" bench-jmg "$ORIG_DIR/$jmg_file" "$PW" --no-master
+            done
             ;;
     esac
     if (( idx < ${#BENCH_LANGS[@]} - 1 )); then

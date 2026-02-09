@@ -1,5 +1,7 @@
 #pragma once
 
+#include "basefwx/crypto_utils.hpp"
+
 #include <cstddef>
 #include <cstdint>
 #include <string>
@@ -36,7 +38,7 @@ private:
     Bytes perm_material_;
     std::size_t chunk_index_ = 0;
     bool fast_ = false;
-    void* ctx_ = nullptr;
+    basefwx::crypto::detail::UniqueCipherCtx ctx_holder_;
 };
 
 }  // namespace basefwx::obf

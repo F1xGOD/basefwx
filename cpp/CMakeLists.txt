@@ -34,10 +34,17 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
             $<$<CONFIG:Release>:-mtune=native>
         )
     endif()
+    # Performance optimizations
+    add_compile_options(
+        $<$<CONFIG:Release>:-ffast-math>
+        $<$<CONFIG:Release>:-funroll-loops>
+        $<$<CONFIG:Release>:-finline-functions>
+        $<$<CONFIG:Release>:-fomit-frame-pointer>
+    )
     add_compile_options($<$<CONFIG:Release>:-flto>)
     add_link_options($<$<CONFIG:Release>:-flto>)
 elseif(MSVC)
-    add_compile_options($<$<CONFIG:Release>:/O2 /GL>)
+    add_compile_options($<$<CONFIG:Release>:/O2 /GL /Oi /Ot /Oy /fp:fast>)
     add_link_options($<$<CONFIG:Release>:/LTCG>)
 endif()
 
@@ -307,6 +314,7 @@ endif()
 add_library(basefwxcpp
     src/archive.cpp
     src/base64.cpp
+    src/cli_colors.cpp
     src/format.cpp
     src/basefwx.cpp
     src/crypto.cpp
@@ -321,6 +329,7 @@ add_library(basefwxcpp
     src/obfuscation.cpp
     src/metadata.cpp
     src/filecodec.cpp
+    src/system_info.cpp
 )
 
 target_include_directories(basefwxcpp

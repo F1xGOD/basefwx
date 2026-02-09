@@ -1,5 +1,7 @@
 #include "basefwx/basefwx.hpp"
+#include "basefwx/cli_colors.hpp"
 #include "basefwx/env.hpp"
+#include "basefwx/system_info.hpp"
 
 #include <chrono>
 #include <algorithm>
@@ -23,6 +25,8 @@
 #include <vector>
 
 namespace {
+
+bool g_verbose = false;
 
 std::string ToLower(std::string value) {
     for (char& ch : value) {
@@ -106,6 +110,47 @@ bool LooksLikeMediaPath(const std::filesystem::path& path) {
         return false;
     }
     return kImageExts.count(ext) || kVideoExts.count(ext) || kAudioExts.count(ext);
+}
+
+void PrintSystemInfo() {
+    if (!g_verbose) {
+        return;
+    }
+    
+    auto sysinfo = basefwx::system::DetectSystemInfo();
+    bool plain = CliPlain();
+    
+    if (plain) {
+        basefwx::cli::SetColorsEnabled(false);
+    }
+    
+    // CPU info
+    std::cout << "CPU: "
+              << basefwx::cli::Yellow(std::to_string(sysinfo.cpu.logical_cores))
+              << " | "
+              << basefwx::cli::Blue(basefwx::system::FormatFrequency(sysinfo.cpu.max_frequency_mhz))
+              << "\n";
+    
+    // RAM info
+    std::cout << "RAM: "
+              << basefwx::cli::Yellow(basefwx::system::FormatBytes(sysinfo.memory.total_bytes))
+              << " | Used: "
+              << basefwx::cli::Yellow(basefwx::system::FormatBytes(sysinfo.memory.used_bytes))
+              << " | Free: "
+              << basefwx::cli::Yellow(basefwx::system::FormatBytes(sysinfo.memory.available_bytes));
+    
+    if (sysinfo.memory.frequency_mhz > 0) {
+        std::cout << " | " << basefwx::cli::Blue(basefwx::system::FormatFrequency(sysinfo.memory.frequency_mhz));
+    }
+    std::cout << "\n";
+    
+    // Chunk size recommendation
+    auto policy = basefwx::system::GetChunkSizePolicy(sysinfo.memory);
+    std::size_t chunk_size = basefwx::system::ChunkSizeFromPolicy(policy);
+    std::cout << "Chunk Size: "
+              << basefwx::cli::BoldGreen(basefwx::system::FormatBytes(chunk_size))
+              << " (optimized for this system)\n";
+    std::cout << "\n";
 }
 
 void ApplyMasterPubPath(const std::string& path) {
@@ -600,6 +645,19 @@ ImageArgs ParseImageArgs(int argc, char** argv, int start_index) {
 }  // namespace
 
 int main(int argc, char** argv) {
+    // Check for global flags first
+    for (int i = 1; i < argc; ++i) {
+        std::string arg(argv[i]);
+        if (arg == "--verbose" || arg == "-v") {
+            g_verbose = true;
+        } else if (arg == "--no-color") {
+            basefwx::cli::SetColorsEnabled(false);
+        }
+    }
+    
+    // Print system info if verbose
+    PrintSystemInfo();
+    
     if (argc < 2) {
         PrintUsage();
         return 2;

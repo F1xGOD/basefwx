@@ -2,6 +2,7 @@
 
 #include "basefwx/constants.hpp"
 #include "basefwx/crypto.hpp"
+#include "basefwx/crypto_utils.hpp"
 
 #include <algorithm>
 #include <array>
@@ -355,25 +356,30 @@ std::uint64_t Seed64FromBytes(const Bytes& seed_bytes) {
     return out;
 }
 
-void RotateLeftInPlace(Bytes& data, std::uint8_t rotation) {
+// Optimized in-place rotation with explicit inline hint
+inline void RotateLeftInPlace(Bytes& data, std::uint8_t rotation) {
     if (rotation == 0) {
         return;
     }
+    const std::uint8_t shift_left = rotation & 0x07;
+    const std::uint8_t shift_right = 8 - shift_left;
     for (auto& byte : data) {
-        byte = static_cast<std::uint8_t>((byte << rotation) | (byte >> (8 - rotation)));
+        byte = static_cast<std::uint8_t>((byte << shift_left) | (byte >> shift_right));
     }
 }
 
-void RotateRightInPlace(Bytes& data, std::uint8_t rotation) {
+inline void RotateRightInPlace(Bytes& data, std::uint8_t rotation) {
     if (rotation == 0) {
         return;
     }
+    const std::uint8_t shift_right = rotation & 0x07;
+    const std::uint8_t shift_left = 8 - shift_right;
     for (auto& byte : data) {
-        byte = static_cast<std::uint8_t>((byte >> rotation) | (byte << (8 - rotation)));
+        byte = static_cast<std::uint8_t>((byte >> shift_right) | (byte << shift_left));
     }
 }
 
-void SwapNibblesInPlace(Bytes& data) {
+inline void SwapNibblesInPlace(Bytes& data) {
     for (auto& byte : data) {
         byte = static_cast<std::uint8_t>((byte >> 4) | ((byte & 0x0F) << 4));
     }
@@ -507,16 +513,15 @@ ChunkParams NextParams(const Bytes& perm_material, std::size_t& chunk_index) {
     return params;
 }
 
-EVP_CIPHER_CTX* CreateAesCtrContext(const Bytes& key, const Bytes& iv) {
+basefwx::crypto::detail::UniqueCipherCtx CreateAesCtrContext(const Bytes& key, const Bytes& iv) {
     if (key.size() != 32 || iv.size() != 16) {
         throw std::runtime_error("AES-CTR requires 32-byte key and 16-byte IV");
     }
-    EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();
+    basefwx::crypto::detail::UniqueCipherCtx ctx(EVP_CIPHER_CTX_new());
     if (!ctx) {
         throw std::runtime_error("AES-CTR context allocation failed");
     }
-    if (EVP_EncryptInit_ex(ctx, EVP_aes_256_ctr(), nullptr, key.data(), iv.data()) != 1) {
-        EVP_CIPHER_CTX_free(ctx);
+    if (EVP_EncryptInit_ex(ctx.get(), EVP_aes_256_ctr(), nullptr, key.data(), iv.data()) != 1) {
         throw std::runtime_error("AES-CTR init failed");
     }
     return ctx;
@@ -536,7 +541,7 @@ Bytes ApplyAesCtr(EVP_CIPHER_CTX* ctx, const Bytes& input) {
     return output;
 }
 
-void ApplyAesCtrInPlace(EVP_CIPHER_CTX* ctx, Bytes& buffer) {
+inline void ApplyAesCtrInPlace(EVP_CIPHER_CTX* ctx, Bytes& buffer) {
     if (buffer.empty()) {
         return;
     }
@@ -585,39 +590,33 @@ Bytes DeobfuscateBytes(const Bytes& data, const Bytes& key, bool fast) {
 }
 
 StreamObfuscator::StreamObfuscator(Bytes perm_material, void* ctx, bool fast)
-    : perm_material_(std::move(perm_material)), fast_(fast), ctx_(ctx) {}
+    : perm_material_(std::move(perm_material)), fast_(fast) {
+    // Transfer ownership of context
+    ctx_holder_.reset(static_cast<EVP_CIPHER_CTX*>(ctx));
+}
 
-StreamObfuscator::StreamObfuscator(StreamObfuscator&& other) noexcept {
-    perm_material_ = std::move(other.perm_material_);
-    ctx_ = other.ctx_;
-    chunk_index_ = other.chunk_index_;
-    fast_ = other.fast_;
-    other.ctx_ = nullptr;
+StreamObfuscator::StreamObfuscator(StreamObfuscator&& other) noexcept
+    : perm_material_(std::move(other.perm_material_)),
+      ctx_holder_(std::move(other.ctx_holder_)),
+      chunk_index_(other.chunk_index_),
+      fast_(other.fast_) {
     other.chunk_index_ = 0;
     other.fast_ = false;
 }
 
 StreamObfuscator& StreamObfuscator::operator=(StreamObfuscator&& other) noexcept {
     if (this != &other) {
-        if (ctx_) {
-            EVP_CIPHER_CTX_free(static_cast<EVP_CIPHER_CTX*>(ctx_));
-        }
         perm_material_ = std::move(other.perm_material_);
-        ctx_ = other.ctx_;
+        ctx_holder_ = std::move(other.ctx_holder_);
         chunk_index_ = other.chunk_index_;
         fast_ = other.fast_;
-        other.ctx_ = nullptr;
         other.chunk_index_ = 0;
         other.fast_ = false;
     }
     return *this;
 }
 
-StreamObfuscator::~StreamObfuscator() {
-    if (ctx_) {
-        EVP_CIPHER_CTX_free(static_cast<EVP_CIPHER_CTX*>(ctx_));
-    }
-}
+StreamObfuscator::~StreamObfuscator() = default;
 
 Bytes StreamObfuscator::GenerateSalt() {
     return basefwx::crypto::RandomBytes(kSaltLen);
@@ -635,8 +634,8 @@ StreamObfuscator StreamObfuscator::ForPassword(const std::string& password, cons
     Bytes mask_key = basefwx::crypto::HkdfSha256(base_material, constants::kStreamInfoKey, 32);
     Bytes iv = basefwx::crypto::HkdfSha256(base_material, constants::kStreamInfoIv, 16);
     Bytes perm_material = basefwx::crypto::HkdfSha256(base_material, constants::kStreamInfoPerm, 32);
-    EVP_CIPHER_CTX* ctx = CreateAesCtrContext(mask_key, iv);
-    return StreamObfuscator(std::move(perm_material), ctx, fast);
+    auto ctx = CreateAesCtrContext(mask_key, iv);
+    return StreamObfuscator(std::move(perm_material), ctx.release(), fast);
 }
 
 Bytes StreamObfuscator::EncodeChunk(const Bytes& chunk) {
@@ -644,7 +643,7 @@ Bytes StreamObfuscator::EncodeChunk(const Bytes& chunk) {
         return {};
     }
     Bytes buffer = chunk;
-    ApplyAesCtrInPlace(static_cast<EVP_CIPHER_CTX*>(ctx_), buffer);
+    ApplyAesCtrInPlace(ctx_holder_.get(), buffer);
     if (fast_) {
         chunk_index_ += 1;
         return buffer;
@@ -666,7 +665,7 @@ Bytes StreamObfuscator::DecodeChunk(const Bytes& chunk) {
     }
     Bytes buffer = chunk;
     if (fast_) {
-        ApplyAesCtrInPlace(static_cast<EVP_CIPHER_CTX*>(ctx_), buffer);
+        ApplyAesCtrInPlace(ctx_holder_.get(), buffer);
         chunk_index_ += 1;
         return buffer;
     }
@@ -678,7 +677,7 @@ Bytes StreamObfuscator::DecodeChunk(const Bytes& chunk) {
     if (params.swap) {
         SwapNibblesInPlace(buffer);
     }
-    ApplyAesCtrInPlace(static_cast<EVP_CIPHER_CTX*>(ctx_), buffer);
+    ApplyAesCtrInPlace(ctx_holder_.get(), buffer);
     return buffer;
 }
 
@@ -686,7 +685,7 @@ void StreamObfuscator::EncodeChunkInPlace(Bytes& buffer) {
     if (buffer.empty()) {
         return;
     }
-    ApplyAesCtrInPlace(static_cast<EVP_CIPHER_CTX*>(ctx_), buffer);
+    ApplyAesCtrInPlace(ctx_holder_.get(), buffer);
     if (fast_) {
         chunk_index_ += 1;
         return;
@@ -706,7 +705,7 @@ void StreamObfuscator::DecodeChunkInPlace(Bytes& buffer) {
         return;
     }
     if (fast_) {
-        ApplyAesCtrInPlace(static_cast<EVP_CIPHER_CTX*>(ctx_), buffer);
+        ApplyAesCtrInPlace(ctx_holder_.get(), buffer);
         chunk_index_ += 1;
         return;
     }
@@ -718,7 +717,7 @@ void StreamObfuscator::DecodeChunkInPlace(Bytes& buffer) {
     if (params.swap) {
         SwapNibblesInPlace(buffer);
     }
-    ApplyAesCtrInPlace(static_cast<EVP_CIPHER_CTX*>(ctx_), buffer);
+    ApplyAesCtrInPlace(ctx_holder_.get(), buffer);
 }
 
 }  // namespace basefwx::obf

@@ -20,13 +20,19 @@ public final class Crypto {
     private static final ThreadLocal<Cipher> AES_GCM_DEC = ThreadLocal.withInitial(Crypto::initAesGcmCipher);
     private static final ThreadLocal<Mac> HMAC_SHA256 = ThreadLocal.withInitial(Crypto::initHmacInstance);
     private static final ThreadLocal<SecretKeyFactory> PBKDF2_FACTORY = ThreadLocal.withInitial(Crypto::initPbkdf2Factory);
-    // DirectByteBuffer pools for fast AES-GCM (16x faster than byte[] arrays)
+    // DirectByteBuffer pools for fast AES-GCM (16x faster than byte[] arrays for large data)
     private static final int DIRECT_BUF_SIZE = 8 * 1024 * 1024; // 8 MiB chunks
+    private static final int DIRECT_BUF_THRESHOLD = 256 * 1024; // Use DirectByteBuffer only for >= 256KB
     private static final ThreadLocal<ByteBuffer> DIRECT_IN = ThreadLocal.withInitial(() -> ByteBuffer.allocateDirect(DIRECT_BUF_SIZE));
     private static final ThreadLocal<ByteBuffer> DIRECT_OUT = ThreadLocal.withInitial(() -> ByteBuffer.allocateDirect(DIRECT_BUF_SIZE + Constants.AEAD_TAG_LEN));
     // PBKDF2 compat detection must come after HMAC_SHA256 is initialized
     private static final boolean PBKDF2_NATIVE_ENABLED = resolvePbkdf2Native();
     private static final boolean PBKDF2_JCE_COMPAT = PBKDF2_NATIVE_ENABLED && detectPbkdf2Compat();
+    
+    // Static warmup to pre-initialize JCE providers and reduce first-call overhead
+    static {
+        warmupCrypto();
+    }
 
     private Crypto() {}
 
@@ -340,7 +346,13 @@ public final class Crypto {
             if (aad != null && aad.length > 0) {
                 cipher.updateAAD(aad);
             }
-            // Use DirectByteBuffer for ~16x faster AES-GCM on HotSpot
+            
+            // For small data, use direct byte[] arrays to avoid DirectByteBuffer copy overhead
+            if (plainLen < DIRECT_BUF_THRESHOLD) {
+                return cipher.doFinal(plaintext, plainOff, plainLen, out, outOff);
+            }
+            
+            // Use DirectByteBuffer for ~16x faster AES-GCM on HotSpot for large data
             // Process in chunks for large data
             ByteBuffer inBuf = DIRECT_IN.get();
             ByteBuffer outBuf = DIRECT_OUT.get();
@@ -421,6 +433,11 @@ public final class Crypto {
                 cipher.updateAAD(aad);
             }
             
+            // For small data, use direct byte[] arrays to avoid DirectByteBuffer copy overhead
+            if (ctLen < DIRECT_BUF_THRESHOLD) {
+                return cipher.doFinal(ciphertext, ctOff, ctLen, out, outOff);
+            }
+            
             // GCM decryption: Must process ALL ciphertext before plaintext (authentication)
             // DirectByteBuffer optimization applies only when ciphertext fits in pooled buffer
             if (ctLen <= DIRECT_BUF_SIZE) {
@@ -475,5 +492,32 @@ public final class Crypto {
         }
         String v = raw.trim().toLowerCase();
         return v.equals("1") || v.equals("true") || v.equals("yes") || v.equals("on");
+    }
+    
+    private static void warmupCrypto() {
+        try {
+            // Warmup AES-GCM
+            byte[] key = new byte[32];
+            byte[] iv = new byte[12];
+            byte[] data = new byte[64];
+            byte[] aad = "warmup".getBytes(StandardCharsets.US_ASCII);
+            RNG.nextBytes(key);
+            RNG.nextBytes(iv);
+            RNG.nextBytes(data);
+            byte[] ct = aesGcmEncrypt(key, iv, data, aad);
+            aesGcmDecrypt(key, ct, aad);
+            
+            // Warmup HMAC
+            hmacSha256(key, data);
+            
+            // Warmup PBKDF2 (light iterations to avoid slow startup)
+            if (PBKDF2_JCE_COMPAT) {
+                byte[] salt = new byte[16];
+                RNG.nextBytes(salt);
+                pbkdf2HmacSha256("warmup".getBytes(StandardCharsets.UTF_8), salt, 1000, 32);
+            }
+        } catch (Exception e) {
+            // Ignore warmup failures
+        }
     }
 }

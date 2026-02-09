@@ -730,7 +730,11 @@ public final class BaseFwxCli {
                         }
                         
                         for (int i = 0; i < workers; i++) {
-                            tempDirs[i] = Files.createTempDirectory("basefwx-bench-jmg-" + i).toFile();
+                            try {
+                                tempDirs[i] = Files.createTempDirectory("basefwx-bench-jmg-" + i).toFile();
+                            } catch (java.io.IOException exc) {
+                                throw new RuntimeException("Failed to create temp directory for bench-jmg worker " + i, exc);
+                            }
                             encFiles[i] = new File(tempDirs[i], "bench_enc" + ext);
                             decFiles[i] = new File(tempDirs[i], "bench_dec" + ext);
                         }

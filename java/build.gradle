@@ -1,15 +1,11 @@
-plugins {
-    id 'java-library'
-    id 'application'
-}
+apply plugin: 'java'
+apply plugin: 'application'
 
 group = 'com.fixcraft'
 version = '3.6.0'
 
-java {
-    sourceCompatibility = JavaVersion.VERSION_1_8
-    targetCompatibility = JavaVersion.VERSION_1_8
-}
+sourceCompatibility = 1.8
+targetCompatibility = 1.8
 
 repositories {
     mavenCentral()
@@ -23,18 +19,16 @@ dependencies {
     implementation 'org.bouncycastle:bcpkix-jdk18on:1.78.1'
 }
 
-application {
-    mainClass = 'com.fixcraft.basefwx.cli.BaseFwxCli'
-}
+mainClassName = 'com.fixcraft.basefwx.cli.BaseFwxCli'
 
 tasks.withType(JavaCompile) {
     options.encoding = 'UTF-8'
 }
 
 jar {
-    archiveBaseName.set('basefwx-java')
-    archiveVersion.set('')
+    baseName = 'basefwx-java'
+    version = ''
     manifest {
-        attributes('Main-Class': application.mainClass)
+        attributes 'Main-Class': 'com.fixcraft.basefwx.cli.BaseFwxCli'
     }
 }

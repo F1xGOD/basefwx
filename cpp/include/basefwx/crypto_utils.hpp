@@ -81,7 +81,7 @@ inline void AppendBytes(std::vector<std::uint8_t>& dest, const std::uint8_t* src
     if (len == 0) return;
     const std::size_t old_size = dest.size();
     dest.resize(old_size + len);
-    std::memcpy(dest.data() + old_size, src, len);
+    memcpy(dest.data() + old_size, src, len);
 }
 
 inline void AppendBytes(std::vector<std::uint8_t>& dest, const std::vector<std::uint8_t>& src) {

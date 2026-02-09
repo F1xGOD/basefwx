@@ -9,8 +9,6 @@ import javax.crypto.spec.SecretKeySpec;
 public final class JavaCryptoBackend implements CryptoBackend {
     // DirectByteBuffer pool for fast AES-GCM doFinal (~14x faster than byte[] arrays)
     private static final int DIRECT_BUF_SIZE = 1 << 20; // 1 MiB (matches STREAM_CHUNK)
-    private static final ThreadLocal<ByteBuffer> DIRECT_OUT = 
-        ThreadLocal.withInitial(() -> ByteBuffer.allocateDirect(DIRECT_BUF_SIZE + Constants.AEAD_TAG_LEN));
 
     @Override
     public boolean isNative() {

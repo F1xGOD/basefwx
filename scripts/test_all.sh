@@ -2410,7 +2410,12 @@ def cmd_bench_jmg(args: list[str]) -> int:
             enc_path = tmp / f"bench_enc_{uid}{src.suffix}"
             dec_path = tmp / f"bench_dec_{uid}{src.suffix}"
             try:
-                basefwx.MediaCipher.encrypt_media(str(src), pw, output=str(enc_path))
+                basefwx.MediaCipher.encrypt_media(
+                    str(src),
+                    pw,
+                    output=str(enc_path),
+                    keep_input=True,
+                )
                 basefwx.MediaCipher.decrypt_media(str(enc_path), pw, output=str(dec_path))
                 size = dec_path.stat().st_size
                 return size
@@ -2438,7 +2443,12 @@ def cmd_bench_jmg(args: list[str]) -> int:
             enc_path = tmp / f"bench_enc{src.suffix}"
             dec_path = tmp / f"bench_dec{src.suffix}"
             def run() -> int:
-                basefwx.MediaCipher.encrypt_media(str(src), pw, output=str(enc_path))
+                basefwx.MediaCipher.encrypt_media(
+                    str(src),
+                    pw,
+                    output=str(enc_path),
+                    keep_input=True,
+                )
                 basefwx.MediaCipher.decrypt_media(str(enc_path), pw, output=str(dec_path))
                 return dec_path.stat().st_size
             _bench(warmup, iters, run)

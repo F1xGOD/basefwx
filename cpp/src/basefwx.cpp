@@ -2,12 +2,14 @@
 
 #include "basefwx/codec.hpp"
 #include "basefwx/base64.hpp"
+#include "basefwx/crypto_utils.hpp"
 #include "basefwx/format.hpp"
 #include "basefwx/pb512.hpp"
 #include "basefwx/imagecipher.hpp"
 #include "basefwx/env.hpp"
 
 #include <algorithm>
+#include <array>
 #include <filesystem>
 #include <fstream>
 #include <openssl/evp.h>
@@ -28,31 +30,29 @@ std::string HexEncode(const std::vector<std::uint8_t>& data) {
 }
 
 std::string DigestHex(const std::string& input, const EVP_MD* md) {
-    EVP_MD_CTX* ctx = EVP_MD_CTX_new();
+    using basefwx::crypto::detail::UniqueMDCtx;
+    UniqueMDCtx ctx(EVP_MD_CTX_new());
     if (!ctx) {
         throw std::runtime_error("Digest context allocation failed");
     }
+    // Use stack buffer for hash result (max 64 bytes for SHA-512)
+    std::array<std::uint8_t, 64> out{};
     unsigned int out_len = 0;
-    std::vector<std::uint8_t> out(EVP_MD_size(md));
-    try {
-        if (EVP_DigestInit_ex(ctx, md, nullptr) != 1) {
-            throw std::runtime_error("Digest init failed");
-        }
-        if (!input.empty()) {
-            if (EVP_DigestUpdate(ctx, input.data(), input.size()) != 1) {
-                throw std::runtime_error("Digest update failed");
-            }
-        }
-        if (EVP_DigestFinal_ex(ctx, out.data(), &out_len) != 1) {
-            throw std::runtime_error("Digest final failed");
-        }
-    } catch (...) {
-        EVP_MD_CTX_free(ctx);
-        throw;
+    
+    if (EVP_DigestInit_ex(ctx.get(), md, nullptr) != 1) {
+        throw std::runtime_error("Digest init failed");
     }
-    EVP_MD_CTX_free(ctx);
-    out.resize(out_len);
-    return HexEncode(out);
+    if (!input.empty()) {
+        if (EVP_DigestUpdate(ctx.get(), input.data(), input.size()) != 1) {
+            throw std::runtime_error("Digest update failed");
+        }
+    }
+    if (EVP_DigestFinal_ex(ctx.get(), out.data(), &out_len) != 1) {
+        throw std::runtime_error("Digest final failed");
+    }
+    
+    std::vector<std::uint8_t> result(out.data(), out.data() + out_len);
+    return HexEncode(result);
 }
 
 std::string MdCode(const std::string& input) {
@@ -221,7 +221,10 @@ std::vector<std::uint8_t> ReadFile(const std::string& path) {
         throw std::runtime_error("Failed to read file size: " + path);
     }
     input.seekg(0, std::ios::beg);
-    std::vector<std::uint8_t> data(static_cast<std::size_t>(size));
+    
+    std::vector<std::uint8_t> data;
+    data.resize(static_cast<std::size_t>(size));
+    
     if (!data.empty()) {
         input.read(reinterpret_cast<char*>(data.data()), static_cast<std::streamsize>(data.size()));
         if (!input) {

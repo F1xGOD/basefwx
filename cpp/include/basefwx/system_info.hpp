@@ -54,7 +54,7 @@ enum class ChunkSizePolicy {
     MEDIUM,       // 256KB - good memory (< 4GB available)
     LARGE,        // 1MB - plenty of memory (< 8GB available)
     XLARGE,       // 4MB - lots of memory (< 16GB available)
-    HUGE          // 16MB - massive memory (>= 16GB available)
+    HUGE_CHUNK    // 16MB - massive memory (>= 16GB available)
 };
 
 ChunkSizePolicy GetChunkSizePolicy(const MemoryInfo& mem);

@@ -312,7 +312,7 @@ ChunkSizePolicy GetChunkSizePolicy(const MemoryInfo& mem) {
     if (avail_mb < 4096) return ChunkSizePolicy::MEDIUM;
     if (avail_mb < 8192) return ChunkSizePolicy::LARGE;
     if (avail_mb < 16384) return ChunkSizePolicy::XLARGE;
-    return ChunkSizePolicy::HUGE;
+    return ChunkSizePolicy::HUGE_CHUNK;
 }
 
 std::size_t ChunkSizeFromPolicy(ChunkSizePolicy policy) {
@@ -323,7 +323,7 @@ std::size_t ChunkSizeFromPolicy(ChunkSizePolicy policy) {
         case ChunkSizePolicy::MEDIUM:  return 256 * 1024;      // 256KB
         case ChunkSizePolicy::LARGE:   return 1024 * 1024;     // 1MB
         case ChunkSizePolicy::XLARGE:  return 4 * 1024 * 1024; // 4MB
-        case ChunkSizePolicy::HUGE:    return 16 * 1024 * 1024; // 16MB
+        case ChunkSizePolicy::HUGE_CHUNK: return 16 * 1024 * 1024; // 16MB
         default: return 64 * 1024;
     }
 }

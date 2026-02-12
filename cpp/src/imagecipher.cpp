@@ -8,12 +8,6 @@
 #include "basefwx/keywrap.hpp"
 #include "basefwx/pb512.hpp"
 
-#define STB_IMAGE_IMPLEMENTATION
-#define STBI_FAILURE_USERMSG
-#include "stb_image.h"
-#define STB_IMAGE_WRITE_IMPLEMENTATION
-#include "stb_image_write.h"
-
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -23,6 +17,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cmath>
+#include <new>
 #include <filesystem>
 #include <fstream>
 #include <functional>
@@ -38,6 +33,69 @@
 #include <stdexcept>
 #include <string>
 #include <thread>
+
+namespace {
+struct StbAllocHeader {
+    size_t size;
+};
+
+void* stb_malloc(size_t size) {
+    if (size == 0) {
+        return nullptr;
+    }
+    size_t total = size + sizeof(StbAllocHeader);
+    auto* base = new (std::nothrow) std::uint8_t[total];
+    if (!base) {
+        return nullptr;
+    }
+    auto* header = reinterpret_cast<StbAllocHeader*>(base);
+    header->size = size;
+    return base + sizeof(StbAllocHeader);
+}
+
+void* stb_realloc(void* ptr, size_t new_size) {
+    if (!ptr) {
+        return stb_malloc(new_size);
+    }
+    if (new_size == 0) {
+        return nullptr;
+    }
+    auto* base = static_cast<std::uint8_t*>(ptr) - sizeof(StbAllocHeader);
+    auto* header = reinterpret_cast<StbAllocHeader*>(base);
+    size_t old_size = header->size;
+    size_t total = new_size + sizeof(StbAllocHeader);
+    auto* fresh = new (std::nothrow) std::uint8_t[total];
+    if (!fresh) {
+        return nullptr;
+    }
+    auto* fresh_header = reinterpret_cast<StbAllocHeader*>(fresh);
+    fresh_header->size = new_size;
+    std::memcpy(fresh + sizeof(StbAllocHeader), base + sizeof(StbAllocHeader),
+                std::min(old_size, new_size));
+    delete[] base;
+    return fresh + sizeof(StbAllocHeader);
+}
+
+void stb_free(void* ptr) {
+    if (!ptr) {
+        return;
+    }
+    auto* base = static_cast<std::uint8_t*>(ptr) - sizeof(StbAllocHeader);
+    delete[] base;
+}
+}  // namespace
+
+#define STBI_MALLOC(sz) stb_malloc(sz)
+#define STBI_REALLOC(p, newsz) stb_realloc(p, newsz)
+#define STBI_FREE(p) stb_free(p)
+#define STBIW_MALLOC(sz) stb_malloc(sz)
+#define STBIW_REALLOC(p, newsz) stb_realloc(p, newsz)
+#define STBIW_FREE(p) stb_free(p)
+#define STB_IMAGE_IMPLEMENTATION
+#define STBI_FAILURE_USERMSG
+#include "stb_image.h"
+#define STB_IMAGE_WRITE_IMPLEMENTATION
+#include "stb_image_write.h"
 #include <vector>
 
 #include <openssl/evp.h>

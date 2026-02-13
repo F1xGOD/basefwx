@@ -101,24 +101,30 @@ const setLink = (selector, url) => {
   }
 };
 
+const HASH_COLLAPSED_LEN = 32;
+
 const setHashText = (selector, value) => {
   const el = document.querySelector(`[data-hash="${selector}"]`);
   if (!el) return;
-  el.textContent = value;
-  
-  // Add truncation for long hashes (SHA256 typically 64 chars)
-  if (value && value.length > 40) {
-    el.classList.add('truncated');
-    el.style.cursor = 'pointer';
-    
-    // Add click handler for expansion
-    el.onclick = function(e) {
+  const text = typeof value === "string" ? value : String(value ?? "");
+  const isHashLike = /^[a-f0-9]+$/i.test(text);
+  const canTruncate = isHashLike && text.length > HASH_COLLAPSED_LEN;
+
+  el.dataset.fullHash = text;
+  el.classList.remove("expanded");
+  el.textContent = canTruncate ? text.slice(0, HASH_COLLAPSED_LEN) : text;
+
+  if (canTruncate) {
+    el.classList.add("truncated");
+    el.style.cursor = "pointer";
+    el.onclick = function (e) {
       e.preventDefault();
-      this.classList.toggle('expanded');
+      const expanded = this.classList.toggle("expanded");
+      this.textContent = expanded ? this.dataset.fullHash || "" : (this.dataset.fullHash || "").slice(0, HASH_COLLAPSED_LEN);
     };
   } else {
-    el.classList.remove('truncated');
-    el.style.cursor = 'default';
+    el.classList.remove("truncated");
+    el.style.cursor = "default";
     el.onclick = null;
   }
 };

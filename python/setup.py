@@ -3,7 +3,7 @@ from setuptools import setup, find_packages
 
 
 def read_readme() -> str:
-    readme_path = Path(__file__).resolve().parent / "README.md"
+    readme_path = Path(__file__).resolve().parent.parent / "README.md"
     return readme_path.read_text(encoding="utf-8") if readme_path.exists() else ""
 
 
@@ -27,5 +27,5 @@ setup(
     long_description=read_readme(),
     long_description_content_type="text/markdown",
     license="GPL-3.0-or-later",
-    license_files=["LICENCE"],
+    license_files=["../LICENCE"],
 )

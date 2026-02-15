@@ -3,6 +3,10 @@ set -u
 set -o pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PY_ROOT="${PY_ROOT:-$ROOT/python}"
+if [[ ! -f "$PY_ROOT/pyproject.toml" && ! -f "$PY_ROOT/setup.py" ]]; then
+    PY_ROOT="$ROOT"
+fi
 cd "$ROOT"
 
 USE_VENV="${USE_VENV:-1}"
@@ -506,7 +510,7 @@ ensure_venv() {
         fi
         pip_cmd=("$PYTHON_BIN" "-m" "pip")
         time_cmd_no_fail "venv_pip" "${pip_cmd[@]}" install -U pip setuptools wheel
-        time_cmd_no_fail "venv_install" "${pip_cmd[@]}" install -e "$ROOT"
+        time_cmd_no_fail "venv_install" "${pip_cmd[@]}" install -e "$PY_ROOT"
         return 0
     fi
     if [[ ! -x "$VENV_PY" ]]; then
@@ -525,7 +529,7 @@ ensure_venv() {
         pip_cmd=("$PYTHON_BIN" "-m" "pip")
     fi
     time_cmd_no_fail "venv_pip" "${pip_cmd[@]}" install -U pip setuptools wheel
-    time_cmd_no_fail "venv_install" "${pip_cmd[@]}" install -e "$ROOT"
+    time_cmd_no_fail "venv_install" "${pip_cmd[@]}" install -e "$PY_ROOT"
     return 0
 }
 

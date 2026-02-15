@@ -1,5 +1,5 @@
-include README.md
-include LICENCE
+include ../README.md
+include ../LICENCE
 include pyproject.toml
 include setup.py
 

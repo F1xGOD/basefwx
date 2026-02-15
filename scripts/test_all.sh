@@ -217,7 +217,7 @@ if [[ -z "$TIME_BIN" && -x /usr/bin/time ]]; then
     TIME_BIN="/usr/bin/time"
 fi
 
-export PYTHONPATH="$ROOT${PYTHONPATH:+:$PYTHONPATH}"
+export PYTHONPATH="$PY_ROOT${PYTHONPATH:+:$PYTHONPATH}"
 export BASEFWX_USER_KDF="pbkdf2"
 export BASEFWX_B512_AEAD="1"
 export BASEFWX_OBFUSCATE="1"

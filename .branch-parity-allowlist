@@ -1,0 +1,8 @@
+# Debug/diagnostics files allowed to differ between main and DEV
+AI_gen/**
+diagnose.log
+test_output.txt
+*.log
+scripts/debug/**
+website/results/benchmarks-*.json
+website/results/benchmarks-*.txt

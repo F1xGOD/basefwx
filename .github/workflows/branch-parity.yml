@@ -1,0 +1,29 @@
+name: Branch parity
+
+on:
+  push:
+    branches: [main, DEV]
+  pull_request:
+    branches: [main, DEV]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  parity:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Fetch compared branches
+        run: |
+          git fetch --no-tags origin main DEV || true
+
+      - name: Validate main vs DEV parity
+        run: |
+          chmod +x scripts/check_branch_parity.sh
+          scripts/check_branch_parity.sh main DEV

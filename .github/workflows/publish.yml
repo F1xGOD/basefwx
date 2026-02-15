@@ -81,6 +81,8 @@ jobs:
           if-no-files-found: error
       
       - name: Security validation
+        env:
+          PYTHONPATH: ${{ github.workspace }}/python
         run: |
           echo "🔒 Running security validations..."
           
@@ -572,7 +574,7 @@ jobs:
           done
 
           echo "$json" > dist_out/virustotal-results.json
-          python scripts/format_vt_results.py dist_out/virustotal-results.json dist_out/virustotal-results.txt
+          python python/tools/format_vt_results.py dist_out/virustotal-results.json dist_out/virustotal-results.txt
           cp dist_out/virustotal-results.txt dist_out/results.txt
 
       - name: Upload VirusTotal results

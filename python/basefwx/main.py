@@ -116,7 +116,7 @@ class basefwx:
         
         try:
             # Linux: Read /proc/meminfo
-            if basefwx.os.path.exists('/proc/meminfo'):
+            if _os_module.path.exists('/proc/meminfo'):
                 with open('/proc/meminfo', 'r') as f:
                     for line in f:
                         if line.startswith('MemAvailable:'):
@@ -148,7 +148,42 @@ class basefwx:
         Check if system has sufficient RAM for Argon2 (at least 128 MiB available).
         Returns True if sufficient, False otherwise.
         """
-        ram_mib = basefwx._get_available_ram_mib()
+        ram_mib = None
+        try:
+            import psutil
+            ram_mib = psutil.virtual_memory().available / (1024 * 1024)
+        except Exception:
+            pass
+        if ram_mib is None:
+            try:
+                if _os_module.path.exists('/proc/meminfo'):
+                    with open('/proc/meminfo', 'r') as f:
+                        for line in f:
+                            if line.startswith('MemAvailable:'):
+                                kb = int(line.split()[1])
+                                ram_mib = kb / 1024
+                                break
+                if ram_mib is None:
+                    import subprocess
+                    result = subprocess.run(
+                        ['sysctl', '-n', 'vm.stats.vm.v_free_count'],
+                        capture_output=True,
+                        text=True,
+                        timeout=1
+                    )
+                    if result.returncode == 0:
+                        page_count = int(result.stdout.strip())
+                        page_size_result = subprocess.run(
+                            ['sysctl', '-n', 'hw.pagesize'],
+                            capture_output=True,
+                            text=True,
+                            timeout=1
+                        )
+                        if page_size_result.returncode == 0:
+                            page_size = int(page_size_result.stdout.strip())
+                            ram_mib = (page_count * page_size) / (1024 * 1024)
+            except Exception:
+                ram_mib = None
         if ram_mib is None:
             # Unable to determine, assume sufficient RAM
             return True

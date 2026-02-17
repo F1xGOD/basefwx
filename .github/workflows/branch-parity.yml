@@ -1,8 +1,6 @@
 name: Branch parity
 
 on:
-  push:
-    branches: [main, DEV]
   pull_request:
     branches: [main, DEV]
   workflow_dispatch:

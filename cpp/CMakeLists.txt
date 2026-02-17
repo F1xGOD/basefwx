@@ -182,6 +182,128 @@ if(NOT ARGON2_FOUND AND NOT CMAKE_CROSSCOMPILING)
     endif()
 endif()
 
+# Normalize Argon2 discovery for Homebrew/legacy pkg-config setups where only
+# bare -largon2 is returned and no link directory is propagated.
+set(_basefwx_argon2_lib_hints
+    /opt/homebrew/opt/argon2/lib
+    /opt/homebrew/lib
+    /usr/local/opt/argon2/lib
+    /usr/local/lib
+)
+set(_basefwx_argon2_inc_hints
+    /opt/homebrew/opt/argon2/include
+    /opt/homebrew/include
+    /usr/local/opt/argon2/include
+    /usr/local/include
+)
+if(NOT ARGON2_FOUND AND NOT CMAKE_CROSSCOMPILING)
+    find_path(ARGON2_INCLUDE_DIR NAMES argon2.h HINTS ${_basefwx_argon2_inc_hints})
+    find_library(ARGON2_LIBRARY NAMES argon2 HINTS ${_basefwx_argon2_lib_hints})
+    if(ARGON2_INCLUDE_DIR AND ARGON2_LIBRARY)
+        set(ARGON2_FOUND TRUE)
+        set(ARGON2_INCLUDE_DIRS ${ARGON2_INCLUDE_DIR})
+        set(ARGON2_LIBRARIES ${ARGON2_LIBRARY})
+    endif()
+endif()
+if(ARGON2_FOUND)
+    set(_basefwx_argon2_resolved "")
+    foreach(_basefwx_argon2_entry IN LISTS ARGON2_LIBRARIES)
+        if(EXISTS "${_basefwx_argon2_entry}")
+            list(APPEND _basefwx_argon2_resolved "${_basefwx_argon2_entry}")
+        elseif(_basefwx_argon2_entry MATCHES "^-l(.+)$")
+            find_library(_basefwx_argon2_lib
+                NAMES "${CMAKE_MATCH_1}"
+                HINTS ${_basefwx_argon2_lib_hints}
+            )
+            if(_basefwx_argon2_lib)
+                list(APPEND _basefwx_argon2_resolved "${_basefwx_argon2_lib}")
+            else()
+                list(APPEND _basefwx_argon2_resolved "${_basefwx_argon2_entry}")
+            endif()
+        elseif(NOT _basefwx_argon2_entry STREQUAL "")
+            find_library(_basefwx_argon2_lib
+                NAMES "${_basefwx_argon2_entry}"
+                HINTS ${_basefwx_argon2_lib_hints}
+            )
+            if(_basefwx_argon2_lib)
+                list(APPEND _basefwx_argon2_resolved "${_basefwx_argon2_lib}")
+            else()
+                list(APPEND _basefwx_argon2_resolved "${_basefwx_argon2_entry}")
+            endif()
+        endif()
+    endforeach()
+    if(NOT _basefwx_argon2_resolved AND ARGON2_LIBRARY AND EXISTS "${ARGON2_LIBRARY}")
+        list(APPEND _basefwx_argon2_resolved "${ARGON2_LIBRARY}")
+    endif()
+    if(_basefwx_argon2_resolved)
+        set(ARGON2_LIBRARIES ${_basefwx_argon2_resolved})
+    endif()
+    if(ARGON2_INCLUDE_DIR AND NOT ARGON2_INCLUDE_DIRS)
+        set(ARGON2_INCLUDE_DIRS ${ARGON2_INCLUDE_DIR})
+    endif()
+endif()
+
+# Normalize OQS discovery for Homebrew/legacy pkg-config setups where only
+# bare -loqs is returned and no link directory is propagated.
+set(_basefwx_oqs_lib_hints
+    /opt/homebrew/opt/liboqs/lib
+    /opt/homebrew/lib
+    /usr/local/opt/liboqs/lib
+    /usr/local/lib
+)
+set(_basefwx_oqs_inc_hints
+    /opt/homebrew/opt/liboqs/include
+    /opt/homebrew/include
+    /usr/local/opt/liboqs/include
+    /usr/local/include
+)
+if(NOT OQS_FOUND AND NOT CMAKE_CROSSCOMPILING)
+    find_path(OQS_INCLUDE_DIR NAMES oqs/oqs.h HINTS ${_basefwx_oqs_inc_hints})
+    find_library(OQS_LIBRARY NAMES oqs HINTS ${_basefwx_oqs_lib_hints})
+    if(OQS_INCLUDE_DIR AND OQS_LIBRARY)
+        set(OQS_FOUND TRUE)
+        set(OQS_INCLUDE_DIRS ${OQS_INCLUDE_DIR})
+        set(OQS_LIBRARIES ${OQS_LIBRARY})
+    endif()
+endif()
+if(OQS_FOUND)
+    set(_basefwx_oqs_resolved "")
+    foreach(_basefwx_oqs_entry IN LISTS OQS_LIBRARIES)
+        if(EXISTS "${_basefwx_oqs_entry}")
+            list(APPEND _basefwx_oqs_resolved "${_basefwx_oqs_entry}")
+        elseif(_basefwx_oqs_entry MATCHES "^-l(.+)$")
+            find_library(_basefwx_oqs_lib
+                NAMES "${CMAKE_MATCH_1}"
+                HINTS ${_basefwx_oqs_lib_hints}
+            )
+            if(_basefwx_oqs_lib)
+                list(APPEND _basefwx_oqs_resolved "${_basefwx_oqs_lib}")
+            else()
+                list(APPEND _basefwx_oqs_resolved "${_basefwx_oqs_entry}")
+            endif()
+        elseif(NOT _basefwx_oqs_entry STREQUAL "")
+            find_library(_basefwx_oqs_lib
+                NAMES "${_basefwx_oqs_entry}"
+                HINTS ${_basefwx_oqs_lib_hints}
+            )
+            if(_basefwx_oqs_lib)
+                list(APPEND _basefwx_oqs_resolved "${_basefwx_oqs_lib}")
+            else()
+                list(APPEND _basefwx_oqs_resolved "${_basefwx_oqs_entry}")
+            endif()
+        endif()
+    endforeach()
+    if(NOT _basefwx_oqs_resolved AND OQS_LIBRARY AND EXISTS "${OQS_LIBRARY}")
+        list(APPEND _basefwx_oqs_resolved "${OQS_LIBRARY}")
+    endif()
+    if(_basefwx_oqs_resolved)
+        set(OQS_LIBRARIES ${_basefwx_oqs_resolved})
+    endif()
+    if(OQS_INCLUDE_DIR AND NOT OQS_INCLUDE_DIRS)
+        set(OQS_INCLUDE_DIRS ${OQS_INCLUDE_DIR})
+    endif()
+endif()
+
 if(NOT OQS_FOUND AND CMAKE_CROSSCOMPILING AND VCPKG_INSTALLED_DIR AND VCPKG_TARGET_TRIPLET)
     set(_oqs_prefix "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}")
     if(EXISTS "${_oqs_prefix}/include/oqs/oqs.h")
@@ -341,11 +463,17 @@ target_link_libraries(basefwxcpp PUBLIC OpenSSL::Crypto ZLIB::ZLIB)
 
 if(ARGON2_FOUND)
     target_include_directories(basefwxcpp PUBLIC ${ARGON2_INCLUDE_DIRS})
+    if(ARGON2_LIBRARY_DIRS)
+        target_link_directories(basefwxcpp PUBLIC ${ARGON2_LIBRARY_DIRS})
+    endif()
     target_link_libraries(basefwxcpp PUBLIC ${ARGON2_LIBRARIES})
 endif()
 
 if(OQS_FOUND)
     target_include_directories(basefwxcpp PUBLIC ${OQS_INCLUDE_DIRS})
+    if(OQS_LIBRARY_DIRS)
+        target_link_directories(basefwxcpp PUBLIC ${OQS_LIBRARY_DIRS})
+    endif()
     target_link_libraries(basefwxcpp PUBLIC ${OQS_LIBRARIES})
 endif()
 

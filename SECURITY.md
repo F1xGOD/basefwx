@@ -12,7 +12,7 @@
 
 |  Version  | Status / Notes                                                                                                                    | Supported |
 | :-------: | --------------------------------------------------------------------------------------------------------------------------------- | :-------: |
-| **3.6.0** | 👑 **USE IT!** Java support added, URL-safe pb512, Argon2 prioritized, performance optimizations. **Python ↔ C++ ↔ Java cross‑compatible.** Actively maintained. |     ✅     |
+| **3.6.x** | 👑 **USE IT!** (current: **3.6.0**) Java support added, URL-safe pb512, Argon2 prioritized, performance optimizations. **Python ↔ C++ ↔ Java cross‑compatible.** Actively maintained. |     ✅     |
 | **3.5.x** | ➖ Faster, Optimized, Multi-Thread. **Python ↔ C++ cross‑compatible.** Security maintenance only. |     ✅     |
 | **3.4.x** | ➖ PQE + AEAD + obfuscation fast‑paths. Security maintenance only. **Not cross‑compatible with earlier lines.**             |     ✅     |
 | **3.3.1** | ➖ PQE + AEAD + obfuscation fast‑paths. **Not cross‑compatible with earlier lines.**              |     ⚠️     |
@@ -48,7 +48,7 @@
 
 ### Maintenance policy
 
-* **Active:** `3.6.0` (PQE + AEAD + Java support + Argon2 priority) — features + security.
+* **Active:** `3.6.x` (current `3.6.0`) with PQE + AEAD + Java support + Argon2 priority — features + security.
 * **Security maintenance:** `3.5.x` and `3.4.x`.
 * **EOL:** `3.3.x`, `3.2`, `3.1`, `3.0`, `2.9`, `2.8`, `2.7`, and anything **< 2.6**.
 

@@ -93,3 +93,11 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git commit -m "chore(sync): ${source_branch} -> ${target_branch} [skip ci]"
           git push origin "HEAD:${target_branch}"
+
+      - name: Validate parity after sync
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin main DEV
+          chmod +x scripts/check_branch_parity.sh
+          scripts/check_branch_parity.sh main DEV

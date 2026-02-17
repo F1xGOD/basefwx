@@ -175,6 +175,29 @@ std::vector<std::uint8_t> ReadBinaryFile(const std::string& path) {
     return basefwx::ReadFile(path);
 }
 
+void WriteTextFile(const std::string& path, const std::string& data) {
+    std::ofstream out(path, std::ios::binary);
+    if (!out) {
+        throw std::runtime_error("Failed to open output file: " + path);
+    }
+    out.write(data.data(), static_cast<std::streamsize>(data.size()));
+    if (!out) {
+        throw std::runtime_error("Failed to write output file: " + path);
+    }
+}
+
+void WriteBinaryFile(const std::string& path, const std::string& data) {
+    WriteTextFile(path, data);
+}
+
+std::string StripAsciiWhitespace(std::string value) {
+    value.erase(std::remove_if(value.begin(),
+                               value.end(),
+                               [](unsigned char ch) { return std::isspace(ch) != 0; }),
+                value.end());
+    return value;
+}
+
 int ReadEnvInt(const char* name, int default_value, int min_value) {
     const char* raw = std::getenv(name);
     if (!raw || !*raw) {
@@ -358,6 +381,10 @@ void PrintUsage() {
     std::cout << "  basefwx_cpp info <file.fwx>\n";
     std::cout << "  basefwx_cpp b64-enc <text>\n";
     std::cout << "  basefwx_cpp b64-dec <text>\n";
+    std::cout << "  basefwx_cpp n10-enc <text>\n";
+    std::cout << "  basefwx_cpp n10-dec <digits>\n";
+    std::cout << "  basefwx_cpp n10file-enc <in-file> <out-file>\n";
+    std::cout << "  basefwx_cpp n10file-dec <in-file> <out-file>\n";
     std::cout << "  basefwx_cpp hash512 <text>\n";
     std::cout << "  basefwx_cpp uhash513 <text>\n";
     std::cout << "  basefwx_cpp a512-enc <text>\n";
@@ -1100,6 +1127,41 @@ int main(int argc, char** argv) {
                 return 2;
             }
             std::cout << basefwx::B64Decode(argv[2]) << "\n";
+            return 0;
+        }
+        if (command == "n10-enc") {
+            if (argc < 3) {
+                PrintUsage();
+                return 2;
+            }
+            std::cout << basefwx::N10Encode(argv[2]) << "\n";
+            return 0;
+        }
+        if (command == "n10-dec") {
+            if (argc < 3) {
+                PrintUsage();
+                return 2;
+            }
+            std::cout << basefwx::N10Decode(argv[2]) << "\n";
+            return 0;
+        }
+        if (command == "n10file-enc") {
+            if (argc < 4) {
+                PrintUsage();
+                return 2;
+            }
+            auto bytes = ReadBinaryFile(argv[2]);
+            std::string input(bytes.begin(), bytes.end());
+            WriteTextFile(argv[3], basefwx::N10Encode(input));
+            return 0;
+        }
+        if (command == "n10file-dec") {
+            if (argc < 4) {
+                PrintUsage();
+                return 2;
+            }
+            std::string digits = StripAsciiWhitespace(ReadTextFile(argv[2]));
+            WriteBinaryFile(argv[3], basefwx::N10Decode(digits));
             return 0;
         }
         if (command == "hash512") {

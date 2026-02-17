@@ -114,7 +114,17 @@ jobs:
           echo "✅ Security validation complete"
 
   build-cli-linux:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            arch: amd64
+            output: basefwx-linux-amd64
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+            output: basefwx-linux-arm64
     permissions:
       contents: read
     steps:
@@ -154,18 +164,28 @@ jobs:
       - name: Strip
         run: |
           mkdir -p dist
-          cp cpp/build/basefwx_cpp dist/basefwx-linux
-          strip dist/basefwx-linux
+          cp cpp/build/basefwx_cpp "dist/${{ matrix.output }}"
+          strip "dist/${{ matrix.output }}"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: basefwx-linux
-          path: dist/basefwx-linux
+          name: ${{ matrix.output }}
+          path: dist/${{ matrix.output }}
           if-no-files-found: error
 
   build-cli-windows:
     runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            triplet: x64-windows
+            output: basefwx-windows-amd64.exe
+          - arch: x86
+            triplet: x86-windows
+            output: basefwx-windows-x86.exe
     permissions:
       contents: read
     steps:
@@ -176,8 +196,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ github.workspace }}\\vcpkg_binary_cache
-          key: ${{ runner.os }}-vcpkg-${{ hashFiles('cpp/vcpkg.json', 'cpp/vcpkg-configuration.json') }}
+          key: ${{ runner.os }}-${{ matrix.triplet }}-vcpkg-${{ hashFiles('cpp/vcpkg.json', 'cpp/vcpkg-configuration.json') }}
           restore-keys: |
+            ${{ runner.os }}-${{ matrix.triplet }}-vcpkg-
             ${{ runner.os }}-vcpkg-
 
       - name: Prepare vcpkg cache dir
@@ -198,7 +219,7 @@ jobs:
         env:
           VCPKG_MAX_CONCURRENCY: "8"
         run: |
-          cmake -S cpp -B cpp/build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE="${{ github.workspace }}\\vcpkg\\scripts\\buildsystems\\vcpkg.cmake" -DVCPKG_TARGET_TRIPLET=x64-windows -DBASEFWX_REQUIRE_ARGON2=ON -DBASEFWX_REQUIRE_OQS=ON
+          cmake -S cpp -B cpp/build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE="${{ github.workspace }}\\vcpkg\\scripts\\buildsystems\\vcpkg.cmake" -DVCPKG_TARGET_TRIPLET=${{ matrix.triplet }} -DBASEFWX_REQUIRE_ARGON2=ON -DBASEFWX_REQUIRE_OQS=ON
 
       - name: Build
         env:
@@ -212,19 +233,29 @@ jobs:
           $bin = "cpp/build/Release/basefwx_cpp.exe"
           if (!(Test-Path $bin)) { $bin = "cpp/build/basefwx_cpp.exe" }
           if (!(Test-Path $bin)) { throw "basefwx_cpp.exe not found" }
-          Copy-Item $bin dist/basefwx-windows.exe
+          Copy-Item $bin "dist/${{ matrix.output }}"
           $strip = Get-Command llvm-strip -ErrorAction SilentlyContinue
-          if ($strip) { & $strip.Path dist\\basefwx-windows.exe }
+          if ($strip) { & $strip.Path "dist\\${{ matrix.output }}" }
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: basefwx-windows
-          path: dist/basefwx-windows.exe
+          name: basefwx-windows-${{ matrix.arch }}
+          path: dist/${{ matrix.output }}
           if-no-files-found: error
 
   build-cli-macos:
-    runs-on: macos-latest
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-13
+            arch: amd64
+            output: basefwx-mac-amd64
+          - runner: macos-14
+            arch: arm64
+            output: basefwx-mac-arm64
     permissions:
       contents: read
     steps:
@@ -252,14 +283,14 @@ jobs:
       - name: Strip
         run: |
           mkdir -p dist
-          cp cpp/build/basefwx_cpp dist/basefwx-mac
-          strip -x dist/basefwx-mac
+          cp cpp/build/basefwx_cpp "dist/${{ matrix.output }}"
+          strip -x "dist/${{ matrix.output }}"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: basefwx-mac
-          path: dist/basefwx-mac
+          name: ${{ matrix.output }}
+          path: dist/${{ matrix.output }}
           if-no-files-found: error
 
   build-java-jar:
@@ -366,23 +397,52 @@ jobs:
       - name: Collect binaries
         run: |
           mkdir -p dist_out
-          mv dist/basefwx-linux/basefwx-linux dist_out/basefwx-linux
-          mv dist/basefwx-windows/basefwx-windows.exe dist_out/basefwx-windows.exe
-          mv dist/basefwx-mac/basefwx-mac dist_out/basefwx-mac
-          mv dist/basefwx-java/basefwx-java.jar dist_out/basefwx-java.jar
+          files=(
+            "dist/basefwx-linux-amd64/basefwx-linux-amd64"
+            "dist/basefwx-linux-arm64/basefwx-linux-arm64"
+            "dist/basefwx-windows-amd64/basefwx-windows-amd64.exe"
+            "dist/basefwx-windows-x86/basefwx-windows-x86.exe"
+            "dist/basefwx-mac-amd64/basefwx-mac-amd64"
+            "dist/basefwx-mac-arm64/basefwx-mac-arm64"
+            "dist/basefwx-java/basefwx-java.jar"
+          )
+          for file in "${files[@]}"; do
+            if [ ! -f "$file" ]; then
+              echo "Missing artifact: $file"
+              exit 1
+            fi
+            mv "$file" "dist_out/$(basename "$file")"
+          done
+          chmod +x \
+            dist_out/basefwx-linux-amd64 \
+            dist_out/basefwx-linux-arm64 \
+            dist_out/basefwx-mac-amd64 \
+            dist_out/basefwx-mac-arm64
+          # Backward-compatible aliases for existing tooling/site links.
+          cp dist_out/basefwx-linux-amd64 dist_out/basefwx-linux
+          cp dist_out/basefwx-windows-amd64.exe dist_out/basefwx-windows.exe
+          cp dist_out/basefwx-mac-arm64 dist_out/basefwx-mac
           chmod +x dist_out/basefwx-linux dist_out/basefwx-mac
 
       - name: Generate hashes
         run: |
           cd dist_out
-          sha256sum basefwx-linux > basefwx-linux.sha256
-          md5sum basefwx-linux > basefwx-linux.md5
-          sha256sum basefwx-windows.exe > basefwx-windows.exe.sha256
-          md5sum basefwx-windows.exe > basefwx-windows.exe.md5
-          sha256sum basefwx-mac > basefwx-mac.sha256
-          md5sum basefwx-mac > basefwx-mac.md5
-          sha256sum basefwx-java.jar > basefwx-java.jar.sha256
-          md5sum basefwx-java.jar > basefwx-java.jar.md5
+          files=(
+            "basefwx-linux-amd64"
+            "basefwx-linux-arm64"
+            "basefwx-windows-amd64.exe"
+            "basefwx-windows-x86.exe"
+            "basefwx-mac-amd64"
+            "basefwx-mac-arm64"
+            "basefwx-java.jar"
+            "basefwx-linux"
+            "basefwx-windows.exe"
+            "basefwx-mac"
+          )
+          for file in "${files[@]}"; do
+            sha256sum "$file" > "$file.sha256"
+            md5sum "$file" > "$file.md5"
+          done
 
       - name: Import GPG key
         env:
@@ -397,51 +457,51 @@ jobs:
         env:
           GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
         run: |
-          gpg --batch --yes --pinentry-mode loopback --passphrase "$GPG_PASSPHRASE" \
-            --detach-sign -o dist_out/basefwx-linux.sig dist_out/basefwx-linux
-          gpg --batch --yes --pinentry-mode loopback --passphrase "$GPG_PASSPHRASE" \
-            --detach-sign -o dist_out/basefwx-windows.exe.sig dist_out/basefwx-windows.exe
-          gpg --batch --yes --pinentry-mode loopback --passphrase "$GPG_PASSPHRASE" \
-            --detach-sign -o dist_out/basefwx-mac.sig dist_out/basefwx-mac
-          gpg --batch --yes --pinentry-mode loopback --passphrase "$GPG_PASSPHRASE" \
-            --detach-sign -o dist_out/basefwx-java.jar.sig dist_out/basefwx-java.jar
+          files=(
+            "basefwx-linux-amd64"
+            "basefwx-linux-arm64"
+            "basefwx-windows-amd64.exe"
+            "basefwx-windows-x86.exe"
+            "basefwx-mac-amd64"
+            "basefwx-mac-arm64"
+            "basefwx-java.jar"
+            "basefwx-linux"
+            "basefwx-windows.exe"
+            "basefwx-mac"
+          )
+          for file in "${files[@]}"; do
+            gpg --batch --yes --pinentry-mode loopback --passphrase "$GPG_PASSPHRASE" \
+              --detach-sign -o "dist_out/${file}.sig" "dist_out/${file}"
+          done
 
       - name: Verify signatures + hashes
         run: |
-          gpg --batch --verify dist_out/basefwx-linux.sig dist_out/basefwx-linux
-          gpg --batch --verify dist_out/basefwx-windows.exe.sig dist_out/basefwx-windows.exe
-          gpg --batch --verify dist_out/basefwx-mac.sig dist_out/basefwx-mac
-          gpg --batch --verify dist_out/basefwx-java.jar.sig dist_out/basefwx-java.jar
+          files=(
+            "basefwx-linux-amd64"
+            "basefwx-linux-arm64"
+            "basefwx-windows-amd64.exe"
+            "basefwx-windows-x86.exe"
+            "basefwx-mac-amd64"
+            "basefwx-mac-arm64"
+            "basefwx-java.jar"
+            "basefwx-linux"
+            "basefwx-windows.exe"
+            "basefwx-mac"
+          )
+          for file in "${files[@]}"; do
+            gpg --batch --verify "dist_out/${file}.sig" "dist_out/${file}"
+          done
           cd dist_out
-          sha256sum -c basefwx-linux.sha256
-          sha256sum -c basefwx-windows.exe.sha256
-          sha256sum -c basefwx-mac.sha256
-          sha256sum -c basefwx-java.jar.sha256
-          md5sum -c basefwx-linux.md5
-          md5sum -c basefwx-windows.exe.md5
-          md5sum -c basefwx-mac.md5
-          md5sum -c basefwx-java.jar.md5
+          for file in "${files[@]}"; do
+            sha256sum -c "${file}.sha256"
+            md5sum -c "${file}.md5"
+          done
 
       - name: Upload release assets
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            dist_out/basefwx-linux
-            dist_out/basefwx-linux.sha256
-            dist_out/basefwx-linux.md5
-            dist_out/basefwx-linux.sig
-            dist_out/basefwx-windows.exe
-            dist_out/basefwx-windows.exe.sha256
-            dist_out/basefwx-windows.exe.md5
-            dist_out/basefwx-windows.exe.sig
-            dist_out/basefwx-mac
-            dist_out/basefwx-mac.sha256
-            dist_out/basefwx-mac.md5
-            dist_out/basefwx-mac.sig
-            dist_out/basefwx-java.jar
-            dist_out/basefwx-java.jar.sha256
-            dist_out/basefwx-java.jar.md5
-            dist_out/basefwx-java.jar.sig
+            dist_out/basefwx-*
 
       - name: VirusTotal scan
         env:
@@ -496,7 +556,18 @@ jobs:
           json=$(jq -n --arg generated_at "$generated_at" --arg release_tag "$tag" --arg repo "$repo" \
             '{generated_at:$generated_at, release_tag:$release_tag, repo:$repo, files:[]}')
 
-          files=(dist_out/basefwx-linux dist_out/basefwx-windows.exe dist_out/basefwx-mac dist_out/basefwx-java.jar)
+          files=(
+            dist_out/basefwx-linux-amd64
+            dist_out/basefwx-linux-arm64
+            dist_out/basefwx-windows-amd64.exe
+            dist_out/basefwx-windows-x86.exe
+            dist_out/basefwx-mac-amd64
+            dist_out/basefwx-mac-arm64
+            dist_out/basefwx-java.jar
+            dist_out/basefwx-linux
+            dist_out/basefwx-windows.exe
+            dist_out/basefwx-mac
+          )
           names=()
           ids=()
           statuses=()
@@ -605,14 +676,31 @@ jobs:
           cp dist_out/virustotal-results.txt "results/virustotal-${tag}.txt"
           cp dist_out/virustotal-results.json results/virustotal-latest.json
           cp dist_out/virustotal-results.txt results/virustotal-latest.txt
-          cp dist_out/basefwx-linux.sha256 results/basefwx-linux.sha256
-          cp dist_out/basefwx-linux.md5 results/basefwx-linux.md5
-          cp dist_out/basefwx-windows.exe.sha256 results/basefwx-windows.exe.sha256
-          cp dist_out/basefwx-windows.exe.md5 results/basefwx-windows.exe.md5
-          cp dist_out/basefwx-mac.sha256 results/basefwx-mac.sha256
-          cp dist_out/basefwx-mac.md5 results/basefwx-mac.md5
-          cp dist_out/basefwx-java.jar.sha256 results/basefwx-java.jar.sha256
-          cp dist_out/basefwx-java.jar.md5 results/basefwx-java.jar.md5
+          hash_files=(
+            "basefwx-linux-amd64.sha256"
+            "basefwx-linux-amd64.md5"
+            "basefwx-linux-arm64.sha256"
+            "basefwx-linux-arm64.md5"
+            "basefwx-windows-amd64.exe.sha256"
+            "basefwx-windows-amd64.exe.md5"
+            "basefwx-windows-x86.exe.sha256"
+            "basefwx-windows-x86.exe.md5"
+            "basefwx-mac-amd64.sha256"
+            "basefwx-mac-amd64.md5"
+            "basefwx-mac-arm64.sha256"
+            "basefwx-mac-arm64.md5"
+            "basefwx-java.jar.sha256"
+            "basefwx-java.jar.md5"
+            "basefwx-linux.sha256"
+            "basefwx-linux.md5"
+            "basefwx-windows.exe.sha256"
+            "basefwx-windows.exe.md5"
+            "basefwx-mac.sha256"
+            "basefwx-mac.md5"
+          )
+          for hash_file in "${hash_files[@]}"; do
+            cp "dist_out/${hash_file}" "results/${hash_file}"
+          done
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           key_id="$(gpg --list-secret-keys --with-colons | awk -F: '/^sec:/ {print $5; exit}')"
@@ -667,5 +755,6 @@ jobs:
       - name: Publish package
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
+          packages-dir: python/dist
           user: __token__
           password: ${{ secrets.PYPI_API_TOKEN }}

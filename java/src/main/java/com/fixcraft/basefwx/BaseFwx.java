@@ -480,6 +480,22 @@ public final class BaseFwx {
         return Codec.b256Decode(input);
     }
 
+    public static String n10Encode(String input) {
+        return Codec.n10Encode(input);
+    }
+
+    public static String n10EncodeBytes(byte[] input) {
+        return Codec.n10EncodeBytes(input);
+    }
+
+    public static String n10Decode(String input) {
+        return Codec.n10Decode(input);
+    }
+
+    public static byte[] n10DecodeBytes(String input) {
+        return Codec.n10DecodeBytes(input);
+    }
+
     public static String b64Encode(String input) {
         return Base64Codec.encode(input.getBytes(StandardCharsets.UTF_8));
     }

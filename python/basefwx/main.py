@@ -25,7 +25,10 @@ class basefwx:
     except Exception:  # pragma: no cover - optional dependency
         Image = None
     from io import BytesIO
-    import numpy as np
+    try:
+        import numpy as np
+    except Exception:  # pragma: no cover - optional dependency
+        np = None
     import os
     import zlib
     import hashlib
@@ -50,7 +53,21 @@ class basefwx:
     from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
     from cryptography.hazmat.primitives.kdf.hkdf import HKDF
     from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-    from pqcrypto.kem import ml_kem_768
+    try:
+        from pqcrypto.kem import ml_kem_768
+    except Exception:  # pragma: no cover - optional dependency
+        class _PQUnavailable:
+            CIPHERTEXT_SIZE = 0
+
+            @staticmethod
+            def encrypt(_public_key):
+                raise RuntimeError("pqcrypto is required for PQ operations (pip install pqcrypto)")
+
+            @staticmethod
+            def decrypt(_private_key, _ciphertext):
+                raise RuntimeError("pqcrypto is required for PQ operations (pip install pqcrypto)")
+
+        ml_kem_768 = _PQUnavailable()
     from datetime import datetime, timezone
     try:
         from argon2.low_level import hash_secret_raw as _argon2_hash_secret_raw, Type as _Argon2Type

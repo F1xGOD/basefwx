@@ -215,6 +215,8 @@ public final class BaseFwxCli {
                 return BaseFwx.b256Encode(text);
             case "a512":
                 return BaseFwx.a512Encode(text);
+            case "n10":
+                return BaseFwx.n10Encode(text);
             case "b512":
                 return BaseFwx.b512Encode(text, password, useMaster);
             case "pb512":
@@ -232,6 +234,8 @@ public final class BaseFwxCli {
                 return BaseFwx.b256Decode(text);
             case "a512":
                 return BaseFwx.a512Decode(text);
+            case "n10":
+                return BaseFwx.n10Decode(text);
             case "b512":
                 return BaseFwx.b512Decode(text, password, useMaster);
             case "pb512":
@@ -322,6 +326,46 @@ public final class BaseFwxCli {
                         return;
                     }
                     System.out.println(BaseFwx.b512Encode(args[1], args[2], useMaster));
+                    return;
+                case "n10-enc":
+                    if (argc < 2) {
+                        usage();
+                        return;
+                    }
+                    System.out.println(BaseFwx.n10Encode(args[1]));
+                    return;
+                case "n10-dec":
+                    if (argc < 2) {
+                        usage();
+                        return;
+                    }
+                    System.out.println(BaseFwx.n10Decode(args[1]));
+                    return;
+                case "n10file-enc":
+                    if (argc < 3) {
+                        usage();
+                        return;
+                    }
+                    try {
+                        byte[] data = java.nio.file.Files.readAllBytes(new File(args[1]).toPath());
+                        String digits = BaseFwx.n10EncodeBytes(data);
+                        java.nio.file.Files.write(new File(args[2]).toPath(), digits.getBytes(StandardCharsets.UTF_8));
+                    } catch (java.io.IOException exc) {
+                        throw new RuntimeException("n10 file encode failed", exc);
+                    }
+                    return;
+                case "n10file-dec":
+                    if (argc < 3) {
+                        usage();
+                        return;
+                    }
+                    try {
+                        String digits = new String(java.nio.file.Files.readAllBytes(new File(args[1]).toPath()), StandardCharsets.UTF_8);
+                        byte[] decoded = BaseFwx.n10DecodeBytes(digits);
+                        java.nio.file.Files.write(new File(args[2]).toPath(), decoded);
+                    } catch (java.io.IOException exc) {
+                        throw new RuntimeException("n10 file decode failed", exc);
+                    }
                     return;
                 case "b512-dec":
                     if (argc < 3) {
@@ -860,6 +904,10 @@ public final class BaseFwxCli {
         System.out.println("  fwxaes-stream-dec <in> <out> <password> [--no-master]");
         System.out.println("  b64-enc <text>");
         System.out.println("  b64-dec <text>");
+        System.out.println("  n10-enc <text>");
+        System.out.println("  n10-dec <digits>");
+        System.out.println("  n10file-enc <in> <out>");
+        System.out.println("  n10file-dec <in> <out>");
         System.out.println("  hash512 <text>");
         System.out.println("  uhash513 <text>");
         System.out.println("  a512-enc <text>");

@@ -79,6 +79,11 @@ jobs:
             results/benchmarks-*.json
             results/benchmarks-*.txt
           if-no-files-found: error
+
+      - name: Install Python package for security validation
+        run: |
+          python3 -m pip install --upgrade pip
+          python3 -m pip install -e './python[argon2]'
       
       - name: Security validation
         env:

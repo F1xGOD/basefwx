@@ -195,11 +195,15 @@ jobs:
           binaryCachePath: ${{ github.workspace }}\\vcpkg_binary_cache
 
       - name: Configure
+        env:
+          VCPKG_MAX_CONCURRENCY: "8"
         run: |
-          cmake -S cpp -B cpp/build -DCMAKE_TOOLCHAIN_FILE="${{ github.workspace }}\\vcpkg\\scripts\\buildsystems\\vcpkg.cmake" -DVCPKG_TARGET_TRIPLET=x64-windows -DBASEFWX_REQUIRE_ARGON2=ON -DBASEFWX_REQUIRE_OQS=ON
+          cmake -S cpp -B cpp/build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE="${{ github.workspace }}\\vcpkg\\scripts\\buildsystems\\vcpkg.cmake" -DVCPKG_TARGET_TRIPLET=x64-windows -DBASEFWX_REQUIRE_ARGON2=ON -DBASEFWX_REQUIRE_OQS=ON
 
       - name: Build
-        run: cmake --build cpp/build --config Release --parallel
+        env:
+          VCPKG_MAX_CONCURRENCY: "8"
+        run: cmake --build cpp/build --parallel
 
       - name: Prepare binary
         shell: pwsh

@@ -756,6 +756,13 @@ int main(int argc, char** argv) {
                     g_bench_sink.fetch_xor(dec.size(), std::memory_order_relaxed);
                     return dec.size();
                 };
+            } else if (method == "n10") {
+                op = [&]() {
+                    std::string enc = basefwx::N10Encode(text);
+                    std::string dec = basefwx::N10Decode(enc);
+                    g_bench_sink.fetch_xor(dec.size(), std::memory_order_relaxed);
+                    return dec.size();
+                };
             } else if (method == "b512") {
                 op = [&]() {
                     std::string enc = basefwx::B512Encode(text, opts.password, opts.use_master, opts.kdf);

@@ -1,0 +1,95 @@
+name: Branch sync
+
+on:
+  push:
+    branches: [main, DEV]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: branch-sync-${{ github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  sync:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Sync branch snapshot
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          source_branch="${GITHUB_REF_NAME}"
+          case "${source_branch}" in
+            main) target_branch="DEV" ;;
+            DEV) target_branch="main" ;;
+            *)
+              echo "Branch ${source_branch} is not synced."
+              exit 0
+              ;;
+          esac
+
+          exclude_file=".branch-sync-exclude"
+          if [[ ! -f "${exclude_file}" ]]; then
+            : > "${exclude_file}"
+          fi
+
+          git fetch --no-tags origin main DEV
+          work_branch="branch-sync-${source_branch}-to-${target_branch}-${GITHUB_RUN_ID}"
+          git checkout -B "${work_branch}" "origin/${target_branch}"
+
+          # Start from source snapshot.
+          git checkout "origin/${source_branch}" -- .
+
+          mapfile -t exclude_patterns < <(
+            sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' "${exclude_file}" \
+              | grep -v '^$' \
+              | grep -v '^#' || true
+          )
+
+          matches_exclude() {
+            local path="$1"
+            local pattern
+            for pattern in "${exclude_patterns[@]:-}"; do
+              if [[ "${path}" == ${pattern} ]]; then
+                return 0
+              fi
+            done
+            return 1
+          }
+
+          if (( ${#exclude_patterns[@]} > 0 )); then
+            # Keep excluded tracked paths from target branch.
+            while IFS= read -r path; do
+              if matches_exclude "${path}"; then
+                git checkout "origin/${target_branch}" -- "${path}"
+              fi
+            done < <(git ls-tree -r --name-only "origin/${target_branch}")
+
+            # Remove excluded paths that only exist in source snapshot.
+            while IFS= read -r path; do
+              if matches_exclude "${path}"; then
+                if ! git cat-file -e "origin/${target_branch}:${path}" 2>/dev/null; then
+                  git rm -f --ignore-unmatch "${path}" >/dev/null 2>&1 || true
+                fi
+              fi
+            done < <(git ls-files)
+          fi
+
+          if [[ -z "$(git status --porcelain)" ]]; then
+            echo "No sync changes from ${source_branch} -> ${target_branch}."
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git commit -m "chore(sync): ${source_branch} -> ${target_branch} [skip ci]"
+          git push origin "HEAD:${target_branch}"

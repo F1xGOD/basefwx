@@ -112,8 +112,11 @@ for arg in "$@"; do
     esac
 done
 FBENCH_TEXT_MAX_BYTES="${FBENCH_TEXT_MAX_BYTES:-$((2 * 1024 * 1024))}"
-FBENCH_TEXT_SLOW_BYTES="${FBENCH_TEXT_SLOW_BYTES:-$((64 * 1024))}"
+FBENCH_TEXT_SLOW_BYTES="${FBENCH_TEXT_SLOW_BYTES:-$((512 * 1024))}"
 FBENCH_FILE_MAX_BYTES="${FBENCH_FILE_MAX_BYTES:-$((70 * 1024 * 1024))}"
+FBENCH_TEXT_MIN_BYTES="${FBENCH_TEXT_MIN_BYTES:-$((1 * 1024 * 1024))}"
+FBENCH_TEXT_SLOW_MIN_BYTES="${FBENCH_TEXT_SLOW_MIN_BYTES:-$((256 * 1024))}"
+FBENCH_FILE_MIN_BYTES="${FBENCH_FILE_MIN_BYTES:-$((16 * 1024 * 1024))}"
 if (( FBENCH == 1 )); then
     bench_text_max="${BENCH_TEXT_MAX_BYTES:-}"
     if [[ -z "$bench_text_max" || ! "$bench_text_max" =~ ^[0-9]+$ || "$bench_text_max" -gt "$FBENCH_TEXT_MAX_BYTES" ]]; then
@@ -125,6 +128,12 @@ if (( FBENCH == 1 )); then
     if [[ -z "$bench_text_bytes" || ! "$bench_text_bytes" =~ ^[0-9]+$ || "$bench_text_bytes" -gt "$BENCH_TEXT_MAX_BYTES" ]]; then
         bench_text_bytes="$BENCH_TEXT_MAX_BYTES"
     fi
+    if [[ "$bench_text_bytes" =~ ^[0-9]+$ && "$bench_text_bytes" -lt "$FBENCH_TEXT_MIN_BYTES" ]]; then
+        bench_text_bytes="$FBENCH_TEXT_MIN_BYTES"
+        if (( bench_text_bytes > BENCH_TEXT_MAX_BYTES )); then
+            bench_text_bytes="$BENCH_TEXT_MAX_BYTES"
+        fi
+    fi
     BENCH_TEXT_BYTES="$bench_text_bytes"
 
     bench_text_slow_bytes="${BENCH_TEXT_SLOW_BYTES:-}"
@@ -134,11 +143,23 @@ if (( FBENCH == 1 )); then
     if (( bench_text_slow_bytes > FBENCH_TEXT_SLOW_BYTES )); then
         bench_text_slow_bytes="$FBENCH_TEXT_SLOW_BYTES"
     fi
+    if [[ "$bench_text_slow_bytes" =~ ^[0-9]+$ && "$bench_text_slow_bytes" -lt "$FBENCH_TEXT_SLOW_MIN_BYTES" ]]; then
+        bench_text_slow_bytes="$FBENCH_TEXT_SLOW_MIN_BYTES"
+        if (( bench_text_slow_bytes > BENCH_TEXT_MAX_BYTES )); then
+            bench_text_slow_bytes="$BENCH_TEXT_MAX_BYTES"
+        fi
+    fi
     BENCH_TEXT_SLOW_BYTES="$bench_text_slow_bytes"
 
     bench_file_bytes="${BENCH_FILE_BYTES:-}"
     if [[ -z "$bench_file_bytes" || ! "$bench_file_bytes" =~ ^[0-9]+$ || "$bench_file_bytes" -gt "$FBENCH_FILE_MAX_BYTES" ]]; then
         bench_file_bytes="$FBENCH_FILE_MAX_BYTES"
+    fi
+    if [[ "$bench_file_bytes" =~ ^[0-9]+$ && "$bench_file_bytes" -lt "$FBENCH_FILE_MIN_BYTES" ]]; then
+        bench_file_bytes="$FBENCH_FILE_MIN_BYTES"
+        if (( bench_file_bytes > FBENCH_FILE_MAX_BYTES )); then
+            bench_file_bytes="$FBENCH_FILE_MAX_BYTES"
+        fi
     fi
     BENCH_FILE_BYTES="$bench_file_bytes"
 

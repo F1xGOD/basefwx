@@ -21,13 +21,13 @@ dependencies {
 }
 
 jar {
-    if (hasProperty('duplicatesStrategy')) {
+    if (delegate.metaClass.hasProperty(delegate, 'duplicatesStrategy')) {
         duplicatesStrategy = 'exclude'
     }
     from { configurations.runtimeClasspath.collect { it.isDirectory() ? it : zipTree(it) } }
-    if (hasProperty('archiveFileName')) {
+    if (delegate.metaClass.hasProperty(delegate, 'archiveFileName')) {
         archiveFileName = 'basefwx-java.jar'
-    } else {
+    } else if (delegate.metaClass.hasProperty(delegate, 'archiveName')) {
         archiveName = 'basefwx-java.jar'
     }
     exclude 'META-INF/*.SF'

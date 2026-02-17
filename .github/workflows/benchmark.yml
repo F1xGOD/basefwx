@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Optional benchmark tag (used for results/benchmarks-<tag>.json)
+        description: Optional benchmark tag (used for website/results/benchmarks-<tag>.json)
         required: false
         default: ""
 
@@ -67,15 +67,20 @@ jobs:
           chmod +x scripts/test_all.sh
           ./scripts/test_all.sh --fbench
 
-      - name: Publish benchmark results to main
+      - name: Publish benchmark results to DEV
         run: |
           set -euo pipefail
+          git fetch --no-tags origin DEV
+          git checkout -B DEV origin/DEV
+          mkdir -p website/results
+          cp -f results/benchmarks-*.json website/results/
+          cp -f results/benchmarks-*.txt website/results/
           git config user.name "github-actions"
           git config user.email "github-actions@github.com"
-          git add results/benchmarks-*.json results/benchmarks-*.txt
+          git add website/results/benchmarks-*.json website/results/benchmarks-*.txt
           if git diff --cached --quiet; then
             echo "No benchmark updates to publish."
             exit 0
           fi
           git commit -m "Update benchmark results (${BASEFWX_RELEASE_TAG:-manual})"
-          git push origin HEAD:main
+          git push origin HEAD:DEV

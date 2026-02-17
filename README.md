@@ -10,7 +10,7 @@
 [![License](https://img.shields.io/github/license/F1xGOD/basefwx?style=flat)](https://github.com/F1xGOD/basefwx/blob/main/LICENCE)
 [![Discord](https://img.shields.io/discord/1130897522051788821?color=7289da&label=Discord&logo=discord&logoColor=ffffff)](https://discord.gg/6d3QxXnzbV)
 
-BASEFWX is a hybrid post-quantum + AEAD encryption toolkit for files and media, with cross-compatible Python and C++ implementations.
+BASEFWX is a hybrid post-quantum + AEAD encryption toolkit for files and media, with cross-compatible Python, C++, and Java implementations.
 
 - Website: https://basefwx.fixcraft.jp
 - Documentation: https://basefwx.fixcraft.jp/docs/CLI.html
@@ -26,7 +26,7 @@ It provides:
 - fwxAES file encryption with optional normalize wrapper
 - b512/pb512 reversible encodings and file modes
 - jMG media cipher for images, video, and audio with metadata control
-- C++ library and CLI with Python and C++ format parity
+- C++ library and CLI with Python/C++/Java format parity
 - Java (JVM) library and CLI for cross-compatible fwxAES/b512/pb512/b256/jMG
 
 Quick Start

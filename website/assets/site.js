@@ -24,17 +24,53 @@ const VT_HASH_ICON = `
   </svg>
 `;
 const assetMap = {
+  "linux-amd64": {
+    bin: "basefwx-linux-amd64",
+    sha256: "basefwx-linux-amd64.sha256",
+    md5: "basefwx-linux-amd64.md5",
+    sig: "basefwx-linux-amd64.sig"
+  },
+  "linux-arm64": {
+    bin: "basefwx-linux-arm64",
+    sha256: "basefwx-linux-arm64.sha256",
+    md5: "basefwx-linux-arm64.md5",
+    sig: "basefwx-linux-arm64.sig"
+  },
   linux: {
     bin: "basefwx-linux",
     sha256: "basefwx-linux.sha256",
     md5: "basefwx-linux.md5",
     sig: "basefwx-linux.sig"
   },
+  "windows-amd64": {
+    bin: "basefwx-windows-amd64.exe",
+    sha256: "basefwx-windows-amd64.exe.sha256",
+    md5: "basefwx-windows-amd64.exe.md5",
+    sig: "basefwx-windows-amd64.exe.sig"
+  },
+  "windows-x86": {
+    bin: "basefwx-windows-x86.exe",
+    sha256: "basefwx-windows-x86.exe.sha256",
+    md5: "basefwx-windows-x86.exe.md5",
+    sig: "basefwx-windows-x86.exe.sig"
+  },
   windows: {
     bin: "basefwx-windows.exe",
     sha256: "basefwx-windows.exe.sha256",
     md5: "basefwx-windows.exe.md5",
     sig: "basefwx-windows.exe.sig"
+  },
+  "mac-amd64": {
+    bin: "basefwx-mac-amd64",
+    sha256: "basefwx-mac-amd64.sha256",
+    md5: "basefwx-mac-amd64.md5",
+    sig: "basefwx-mac-amd64.sig"
+  },
+  "mac-arm64": {
+    bin: "basefwx-mac-arm64",
+    sha256: "basefwx-mac-arm64.sha256",
+    md5: "basefwx-mac-arm64.md5",
+    sig: "basefwx-mac-arm64.sig"
   },
   mac: {
     bin: "basefwx-mac",
@@ -283,11 +319,10 @@ const renderBenchDetails = (container, tests, epsilon) => {
 };
 
 const getResultsBases = (tag) => {
-  const mainBase = `https://raw.githubusercontent.com/${repo}/refs/heads/main/results`;
-  const tagBase = tag ? `https://raw.githubusercontent.com/${repo}/refs/heads/results/${tag}/results` : "";
+  const devBase = `https://raw.githubusercontent.com/${repo}/refs/heads/DEV/website/results`;
   return {
-    primary: mainBase,
-    fallback: tagBase || mainBase
+    primary: devBase,
+    fallback: devBase
   };
 };
 

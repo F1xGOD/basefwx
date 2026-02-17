@@ -25,6 +25,10 @@ cmake --build cpp/build
 ./cpp/build/basefwx_cpp info <file.fwx>
 ./cpp/build/basefwx_cpp b256-enc "hello"
 ./cpp/build/basefwx_cpp b256-dec "<payload>"
+./cpp/build/basefwx_cpp n10-enc "hello"
+./cpp/build/basefwx_cpp n10-dec "<digits>"
+./cpp/build/basefwx_cpp n10file-enc secret.bin secret.n10
+./cpp/build/basefwx_cpp n10file-dec secret.n10 secret.bin
 ./cpp/build/basefwx_cpp b512-enc "hello" -p "pw"
 ./cpp/build/basefwx_cpp b512-dec "<payload>" -p "pw"
 ./cpp/build/basefwx_cpp pb512-enc "hello" -p "pw"

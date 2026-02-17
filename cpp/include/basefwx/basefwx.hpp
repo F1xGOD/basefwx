@@ -28,6 +28,8 @@ std::string B256Encode(const std::string& input);
 std::string B256Decode(const std::string& input);
 std::string B64Encode(const std::string& input);
 std::string B64Decode(const std::string& input);
+std::string N10Encode(const std::string& input);
+std::string N10Decode(const std::string& input);
 std::string Hash512(const std::string& input);
 std::string Uhash513(const std::string& input);
 std::string Bi512Encode(const std::string& input);

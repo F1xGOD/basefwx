@@ -41,6 +41,12 @@ const assetMap = {
     sha256: "basefwx-mac.sha256",
     md5: "basefwx-mac.md5",
     sig: "basefwx-mac.sig"
+  },
+  java: {
+    bin: "basefwx-java.jar",
+    sha256: "basefwx-java.jar.sha256",
+    md5: "basefwx-java.jar.md5",
+    sig: "basefwx-java.jar.sig"
   }
 };
 

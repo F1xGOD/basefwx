@@ -8,6 +8,7 @@ This module provides a Java implementation of the core BaseFWX codecs so it can 
 - jMG media cipher for images, video, and audio (ffmpeg/ffprobe required)
 - b512 / pb512 encode/decode (PBKDF2 + optional EC master-key wrap)
 - b256 encode/decode
+- n10 numeric encode/decode (text + bytes/file helpers)
 - b64 encode/decode
 - hash512 / uhash513
 - a512 encode/decode
@@ -63,6 +64,11 @@ java -jar build/libs/basefwx-java.jar jmgd <in> <out> <password>
 
 java -jar build/libs/basefwx-java.jar b64-enc <text>
 java -jar build/libs/basefwx-java.jar b64-dec <text>
+
+java -jar build/libs/basefwx-java.jar n10-enc <text>
+java -jar build/libs/basefwx-java.jar n10-dec <digits>
+java -jar build/libs/basefwx-java.jar n10file-enc <in> <out>
+java -jar build/libs/basefwx-java.jar n10file-dec <in> <out>
 
 java -jar build/libs/basefwx-java.jar hash512 <text>
 java -jar build/libs/basefwx-java.jar uhash513 <text>

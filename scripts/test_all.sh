@@ -295,7 +295,7 @@ if command -v ffmpeg >/dev/null 2>&1 && command -v ffprobe >/dev/null 2>&1; then
 fi
 export FFMPEG_AVAILABLE COOLDOWN_SECONDS
 
-TEXT_NOPASS_METHODS=("b64" "b256" "a512")
+TEXT_NOPASS_METHODS=("b64" "b256" "a512" "n10")
 TEXT_PASS_METHODS=("b512" "pb512")
 HASH_METHODS=("hash512" "uhash513" "bi512" "b1024")
 
@@ -927,7 +927,7 @@ cpp_text_roundtrip() {
     local enc_file="${out_path}.enc"
     local text
     text="$(cat "$text_path")"
-    if [[ "$method" == "b256" || "$method" == "b64" || "$method" == "a512" ]]; then
+    if [[ "$method" == "b256" || "$method" == "b64" || "$method" == "a512" || "$method" == "n10" ]]; then
         log "STEP: $CPP_BIN ${method}-enc"
         "$CPP_BIN" "${method}-enc" "$text" >"$enc_file" || return $?
         local enc
@@ -953,7 +953,7 @@ cpp_text_encode() {
     local pw="$4"
     local text
     text="$(cat "$text_path")"
-    if [[ "$method" == "b256" || "$method" == "b64" || "$method" == "a512" ]]; then
+    if [[ "$method" == "b256" || "$method" == "b64" || "$method" == "a512" || "$method" == "n10" ]]; then
         log "STEP: $CPP_BIN ${method}-enc"
         "$CPP_BIN" "${method}-enc" "$text" >"$enc_file" || return $?
         strip_newline "$enc_file"
@@ -971,7 +971,7 @@ cpp_text_decode() {
     local pw="$4"
     local enc
     enc="$(cat "$enc_file")"
-    if [[ "$method" == "b256" || "$method" == "b64" || "$method" == "a512" ]]; then
+    if [[ "$method" == "b256" || "$method" == "b64" || "$method" == "a512" || "$method" == "n10" ]]; then
         log "STEP: $CPP_BIN ${method}-dec"
         "$CPP_BIN" "${method}-dec" "$enc" >"$out_path" || return $?
         strip_newline "$out_path"
@@ -1078,7 +1078,7 @@ java_text_roundtrip() {
     local enc_file="${out_path}.enc"
     local text
     text="$(cat "$text_path")"
-    if [[ "$method" == "b256" || "$method" == "b64" || "$method" == "a512" ]]; then
+    if [[ "$method" == "b256" || "$method" == "b64" || "$method" == "a512" || "$method" == "n10" ]]; then
         log "STEP: $JAVA_BIN -jar $JAVA_JAR ${method}-enc"
         "$JAVA_BIN" -jar "$JAVA_JAR" "${method}-enc" "$text" >"$enc_file" || return $?
         local enc
@@ -1104,7 +1104,7 @@ java_text_encode() {
     local pw="$4"
     local text
     text="$(cat "$text_path")"
-    if [[ "$method" == "b256" || "$method" == "b64" || "$method" == "a512" ]]; then
+    if [[ "$method" == "b256" || "$method" == "b64" || "$method" == "a512" || "$method" == "n10" ]]; then
         log "STEP: $JAVA_BIN -jar $JAVA_JAR ${method}-enc"
         "$JAVA_BIN" -jar "$JAVA_JAR" "${method}-enc" "$text" >"$enc_file" || return $?
         strip_newline "$enc_file"
@@ -1122,7 +1122,7 @@ java_text_decode() {
     local pw="$4"
     local enc
     enc="$(cat "$enc_file")"
-    if [[ "$method" == "b256" || "$method" == "b64" || "$method" == "a512" ]]; then
+    if [[ "$method" == "b256" || "$method" == "b64" || "$method" == "a512" || "$method" == "n10" ]]; then
         log "STEP: $JAVA_BIN -jar $JAVA_JAR ${method}-dec"
         "$JAVA_BIN" -jar "$JAVA_JAR" "${method}-dec" "$enc" >"$out_path" || return $?
         strip_newline "$out_path"
@@ -1140,7 +1140,7 @@ java_text_wrong() {
     local enc_file="$4"
     local text
     text="$(cat "$text_path")"
-    if [[ "$method" == "b256" ]]; then
+    if [[ "$method" == "b256" || "$method" == "b64" || "$method" == "a512" || "$method" == "n10" ]]; then
         return 0
     fi
     log "STEP: $JAVA_BIN -jar $JAVA_JAR ${method}-enc"
@@ -1889,6 +1889,8 @@ def text_encode(method: str, text: str, pw: str) -> str:
         return basefwx.b256encode(text)
     if method == "a512":
         return basefwx.a512encode(text)
+    if method == "n10":
+        return basefwx.n10encode(text)
     if method == "b512":
         return basefwx.b512encode(text, pw, use_master=False)
     if method == "pb512":
@@ -1902,6 +1904,8 @@ def text_decode(method: str, enc: str, pw: str) -> str:
         return basefwx.b256decode(enc)
     if method == "a512":
         return basefwx.a512decode(enc)
+    if method == "n10":
+        return basefwx.n10decode(enc)
     if method == "b512":
         return basefwx.b512decode(enc, pw, use_master=False)
     if method == "pb512":
@@ -3599,7 +3603,7 @@ case "$BENCH_FWXAES_MODE" in
         ;;
 esac
 
-BENCH_TEXT_METHODS=("b256" "b512" "pb512" "b64" "a512")
+BENCH_TEXT_METHODS=("b256" "b512" "pb512" "b64" "a512" "n10")
 BENCH_HASH_METHODS=("hash512" "uhash513" "bi512" "b1024")
 
 BENCH_LANGS=()

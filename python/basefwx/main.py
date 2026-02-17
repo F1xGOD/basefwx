@@ -150,6 +150,14 @@ class basefwx:
     PACK_SUFFIX_GZ = ".tgz"
     PACK_SUFFIX_XZ = ".txz"
     ENGINE_VERSION = "3.6.0"
+    N10_MOD = 10_000_000_000
+    N10_MUL = 3_816_547_291
+    N10_ADD = 7_261_940_353
+    N10_MAGIC = "927451"
+    N10_VERSION = "01"
+    N10_HEADER_DIGITS = 28
+    N10_MASK64 = (1 << 64) - 1
+    N10_MUL_INV = pow(N10_MUL, -1, N10_MOD)
     MASTER_PQ_ALG = "ml-kem-768"
     MASTER_PQ_PUBLIC = b"eJwBoARf+/rkrYxhXn0CNFqTkzQUrIYloydzGrqpIuWXi+qnLO/XRnspzQBDwwTKLW3Ku6Zwii1AfriFM5t8PtugqMNFt/5HoHxIZLGkytTWKP3IKoP7EH2HFu14b5bagh+KIFTWoW12qZqLRNjJLBHZmzxasEIsN7AnsOiokMHxt4XwoLk5fscIhXSANBZpHUVEO+NkBhg5UnvzWkzAqPm6rEvCfE+CHxgFg1SjBJeFfVMyzpKpsUi6iCGXSl6nZuTkr10btfi8RHCEfxDrfhcJk0bsKMWEI6wVY23KQXXlmcJ4VydGZ/ZbjWhVbX6bo0DKqG5IlwpTDPJIwlumRpxbBog8JG10p8PTaRJEAKfiVo7jiD1Aki7hYqmyyBn2Q0RFy03Bm/Rpy1zlK3DahaaoMj1mJrJ5ff2FYYVsBQbrywcDUcdHUkIpUqwrrRyqdEIHq1T6AiKHmf2KHTXQnLuZpJ3Ih59bkH1GC2UzbEIWzFSImvQDkswCBW9cF0tFYCNnReiReb57XAjaW3smdOg1o9oyk2IbyptJtNe1teHoPsMJkBGin/ugUeFmEOa0f8lTEmK4u1/GxHrQxD65kxm2IHT4NPM8Z5oqQ9z0WthUE5MouNrZLK8EltZQzAcZJ/g7CesRi40qFecyD14hDPBcr6cEV6yqOXXrcDRQVCUhuYRyUNqrFe4JPks2kZlxXjABHMD1PHVzfJpsAtsTDJa2EdpoAkKRvfg2QOK6CpYix6zIyB1yGwdCG8L2QS9DQefDQntXDlwSIieqRrwmiWcba4mSgwfxsoH2SIbQPZKbtEA4XNGqen1CcldAw1w2mnO3otspreJEBZJjVSihGcoyVjWap9dWc0pLffeDC5mUyOTzWUQ3XBAxX817G9rIbFyMQ+4AdeP2zL/nk9s2wYuZT2MEbwTHW/6UJQXbRf+svg9Kq//ryl/YRiaxdK2xRkP7oaBBVbyyXxYUJEhXOD7cUar8HsGZlXmiDSxzCBZSJG+4ooAgOKfEx6liOvqHBQKrsG4ylg3JQqmKBUdXcf6cMImRqS4MFM23vQkSPqIckxGgkrJGDKLGg8DKsuOqUvkzexAWviAIJQZsJsqjUl2stBgnltsyysE2cdI5Poh7KgOFV27bfi4iCpFSXc46Aa2jjN0WFYAgfhcRXgvIanJ3L8/sPrR7QKvpTtPFSfdcBipqp8vRdYImF5HceU1TU+QwtOcmCKDmaDTBGtJLZDXYJ3/2VQAEr8Mhk1WxGQsWUikZBi9pHTTbh93gvl9gLaGlxlRCjwzSqcJVXF80UiVMA06hfDnzi9MFpIGZL0czax+1zwdLFsnnHLGLzm/YpgrUBIk0gTgMVhqiu0+JyagxwrXCsDmGbhj8PzJGUeR8xhoxzOtTMgtaFwekbEAss+JGzuZJeakDxhMJEvvbKabIFDeQLsImO4eaAslqXyNoSg7AtnDlHfzTTFvwk2/UppeXNmcEC9n1UyfyWNW6qAZRJe5zQkijzLfkGKWsR/ksjmUQwMHwOOWVQ8qqUapYxsmbZkosPBXRDNBhY6PNjfciD2hRoIqrd/pnkJ6cZd1FQyxge6FA3PMpHw=="
     MASTER_EC_MAGIC = b"EC1"
@@ -3071,6 +3079,139 @@ class basefwx:
     def b64decode(string: str):
 
         return basefwx.base64.b64decode(string.encode('utf-8')).decode('utf-8')
+
+    @staticmethod
+    def _n10_mod_sub(value: int, sub: int) -> int:
+        if value >= sub:
+            return value - sub
+        return basefwx.N10_MOD - (sub - value)
+
+    @staticmethod
+    def _n10_mix64(value: int) -> int:
+        value = (value + 0x9E3779B97F4A7C15) & basefwx.N10_MASK64
+        value = ((value ^ (value >> 30)) * 0xBF58476D1CE4E5B9) & basefwx.N10_MASK64
+        value = ((value ^ (value >> 27)) * 0x94D049BB133111EB) & basefwx.N10_MASK64
+        return (value ^ (value >> 31)) & basefwx.N10_MASK64
+
+    @staticmethod
+    def _n10_offset(index: int) -> int:
+        return basefwx._n10_mix64(index ^ 0xA5A5F0F01234ABCD) % basefwx.N10_MOD
+
+    @staticmethod
+    def _n10_transform(value: int, index: int) -> int:
+        if value < 0 or value >= basefwx.N10_MOD:
+            raise ValueError("n10 value too large")
+        mixed = (value + basefwx._n10_offset(index)) % basefwx.N10_MOD
+        return ((basefwx.N10_MUL * mixed) + basefwx.N10_ADD) % basefwx.N10_MOD
+
+    @staticmethod
+    def _n10_inverse_transform(encoded: int, index: int) -> int:
+        if encoded < 0 or encoded >= basefwx.N10_MOD:
+            raise ValueError("n10 encoded value too large")
+        step = basefwx._n10_mod_sub(encoded, basefwx.N10_ADD)
+        mixed = (step * basefwx.N10_MUL_INV) % basefwx.N10_MOD
+        return basefwx._n10_mod_sub(mixed, basefwx._n10_offset(index))
+
+    @staticmethod
+    def _n10_parse_fixed10(payload: str, offset: int) -> int:
+        part = payload[offset:offset + 10]
+        if len(part) != 10:
+            raise ValueError("n10 payload truncated")
+        if not part.isdigit():
+            raise ValueError("n10 payload must contain only digits")
+        return int(part)
+
+    @staticmethod
+    def _n10_fnv1a32(data: bytes) -> int:
+        hash_value = 2166136261
+        for byte in data:
+            hash_value ^= byte
+            hash_value = (hash_value * 16777619) & 0xFFFFFFFF
+        return hash_value
+
+    @staticmethod
+    def n10encode(data):
+        if isinstance(data, str):
+            return basefwx.n10encode_bytes(data.encode('utf-8'))
+        return basefwx.n10encode_bytes(data)
+
+    @staticmethod
+    def n10encode_bytes(data):
+        if isinstance(data, memoryview):
+            raw = data.tobytes()
+        elif isinstance(data, bytearray):
+            raw = bytes(data)
+        elif isinstance(data, bytes):
+            raw = data
+        else:
+            raise TypeError("n10encode_bytes expects bytes-like input")
+
+        if len(raw) >= basefwx.N10_MOD:
+            raise ValueError("n10 input is too large")
+
+        block_count = (len(raw) + 3) // 4
+        parts = [
+            basefwx.N10_MAGIC,
+            basefwx.N10_VERSION,
+            f"{basefwx._n10_transform(len(raw), 0):010d}",
+            f"{basefwx._n10_transform(basefwx._n10_fnv1a32(raw), 1):010d}",
+        ]
+
+        offset = 0
+        for block in range(block_count):
+            word = 0
+            chunk = raw[offset:offset + 4]
+            for idx, byte in enumerate(chunk):
+                word |= byte << (24 - (idx * 8))
+            parts.append(f"{basefwx._n10_transform(word, block + 2):010d}")
+            offset += len(chunk)
+
+        return "".join(parts)
+
+    @staticmethod
+    def n10decode(digits: str, errors: str = "strict"):
+        return basefwx.n10decode_bytes(digits).decode('utf-8', errors=errors)
+
+    @staticmethod
+    def n10decode_bytes(digits: str):
+        if not isinstance(digits, str):
+            raise TypeError("n10decode expects string digits")
+        payload = digits.strip()
+        if len(payload) < basefwx.N10_HEADER_DIGITS:
+            raise ValueError("n10 payload is too short")
+        if payload[:6] != basefwx.N10_MAGIC or payload[6:8] != basefwx.N10_VERSION:
+            raise ValueError("n10 header mismatch")
+
+        payload_len = basefwx._n10_inverse_transform(basefwx._n10_parse_fixed10(payload, 8), 0)
+        if payload_len >= basefwx.N10_MOD:
+            raise ValueError("n10 decoded length is invalid")
+
+        checksum_expected = basefwx._n10_inverse_transform(basefwx._n10_parse_fixed10(payload, 18), 1)
+        if checksum_expected > 0xFFFFFFFF:
+            raise ValueError("n10 checksum is invalid")
+
+        block_count = (payload_len + 3) // 4
+        expected_digits = basefwx.N10_HEADER_DIGITS + (block_count * 10)
+        if len(payload) != expected_digits:
+            raise ValueError("n10 payload length mismatch")
+
+        out = bytearray(block_count * 4)
+        in_offset = basefwx.N10_HEADER_DIGITS
+        for block in range(block_count):
+            decoded = basefwx._n10_inverse_transform(basefwx._n10_parse_fixed10(payload, in_offset), block + 2)
+            in_offset += 10
+            if decoded > 0xFFFFFFFF:
+                raise ValueError("n10 block out of range")
+            out_offset = block * 4
+            out[out_offset] = (decoded >> 24) & 0xFF
+            out[out_offset + 1] = (decoded >> 16) & 0xFF
+            out[out_offset + 2] = (decoded >> 8) & 0xFF
+            out[out_offset + 3] = decoded & 0xFF
+
+        raw = bytes(out[:payload_len])
+        if basefwx._n10_fnv1a32(raw) != checksum_expected:
+            raise ValueError("n10 checksum mismatch")
+        return raw
 
     @staticmethod
     def hash512(string: str):
@@ -8189,9 +8330,69 @@ def cli(argv=None) -> int:
         help="Do not delete the input after encryption"
     )
 
+    n10_enc = subparsers.add_parser(
+        "n10-enc",
+        help="Encode UTF-8 text into a numeric n10 payload"
+    )
+    n10_enc.add_argument("text", help="Input text")
+
+    n10_dec = subparsers.add_parser(
+        "n10-dec",
+        help="Decode an n10 numeric payload back to UTF-8 text"
+    )
+    n10_dec.add_argument("digits", help="n10 payload digits")
+
+    n10file_enc = subparsers.add_parser(
+        "n10file-enc",
+        help="Encode a binary file into n10 digits"
+    )
+    n10file_enc.add_argument("input", help="Input file path")
+    n10file_enc.add_argument("output", help="Output file path for digits")
+
+    n10file_dec = subparsers.add_parser(
+        "n10file-dec",
+        help="Decode an n10 digit file back to binary"
+    )
+    n10file_dec.add_argument("input", help="Input n10 digit file")
+    n10file_dec.add_argument("output", help="Output binary file path")
+
     args = parser.parse_args(argv)
 
     _confirm_single_thread_cli()
+
+    if args.command == "n10-enc":
+        print(basefwx.n10encode(args.text))
+        return 0
+
+    if args.command == "n10-dec":
+        try:
+            print(basefwx.n10decode(args.digits))
+            return 0
+        except Exception as exc:
+            print(theme.err(f"n10 decode failed: {exc}"))
+            return 1
+
+    if args.command == "n10file-enc":
+        try:
+            in_path = basefwx.pathlib.Path(args.input)
+            out_path = basefwx.pathlib.Path(args.output)
+            out_path.write_text(basefwx.n10encode_bytes(in_path.read_bytes()), encoding="utf-8")
+            print(theme.ok(f"Wrote {out_path}"))
+            return 0
+        except Exception as exc:
+            print(theme.err(f"n10 file encode failed: {exc}"))
+            return 1
+
+    if args.command == "n10file-dec":
+        try:
+            in_path = basefwx.pathlib.Path(args.input)
+            out_path = basefwx.pathlib.Path(args.output)
+            out_path.write_bytes(basefwx.n10decode_bytes(in_path.read_text(encoding="utf-8")))
+            print(theme.ok(f"Wrote {out_path}"))
+            return 0
+        except Exception as exc:
+            print(theme.err(f"n10 file decode failed: {exc}"))
+            return 1
 
     if args.command == "cryptin":
         method = args.method.lower()

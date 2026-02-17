@@ -142,6 +142,18 @@ class BaseFWXUnitTests(unittest.TestCase):
         plain = basefwx.b512decode(cipher, "pw", use_master=False)
         self.assertEqual(plain, original)
 
+    def test_n10_roundtrip_text(self):
+        original = "n10 unicode ✓ test"
+        encoded = basefwx.n10encode(original)
+        decoded = basefwx.n10decode(encoded)
+        self.assertEqual(decoded, original)
+
+    def test_n10_roundtrip_bytes(self):
+        original = os.urandom(257)
+        encoded = basefwx.n10encode_bytes(original)
+        decoded = basefwx.n10decode_bytes(encoded)
+        self.assertEqual(decoded, original)
+
     def test_aes_roundtrip_without_master(self):
         original = "Symmetric data"
         blob = basefwx.encryptAES(original, "pw", use_master=False)
@@ -213,6 +225,17 @@ class BaseFWXUnitTests(unittest.TestCase):
         result = self._run_cli("cryptin", "512", str(encoded), "-p", "pw", "--strip")
         self.assertEqual(result.returncode, 0, msg=result.stderr + result.stdout)
         self.assertEqual(src.read_text(encoding="utf-8"), "### reversible")
+
+    def test_cli_n10_file_roundtrip(self):
+        src = self.tmp_path / "blob.bin"
+        src.write_bytes(os.urandom(513))
+        encoded = self.tmp_path / "blob.n10"
+        restored = self.tmp_path / "blob.out"
+        result = self._run_cli("n10file-enc", str(src), str(encoded))
+        self.assertEqual(result.returncode, 0, msg=result.stderr + result.stdout)
+        result = self._run_cli("n10file-dec", str(encoded), str(restored))
+        self.assertEqual(result.returncode, 0, msg=result.stderr + result.stdout)
+        self.assertEqual(restored.read_bytes(), src.read_bytes())
 
     def test_aes_heavy_small_legacy_mode(self):
         src = self.tmp_path / "legacy.bin"

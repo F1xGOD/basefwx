@@ -72,8 +72,12 @@
             <h3>basefwx-linux</h3>
             <p class="section-lead">Optimized for Ubuntu runners and portable Linux distributions.</p>
             <div class="link-row">
-              <a class="btn" data-download="linux" href="#">Download</a>
-              <a data-asset="linux.sig" href="#">Signature</a>
+              <a class="btn" data-download="linux-amd64" href="#">Download amd64</a>
+              <a class="btn secondary" data-download="linux-arm64" href="#">Download arm64</a>
+            </div>
+            <div class="link-row">
+              <a data-asset="linux-amd64.sig" href="#">Signature amd64</a>
+              <a data-asset="linux-arm64.sig" href="#">Signature arm64</a>
             </div>
             <div class="hash-block">
               <div class="hash-title">SHA256</div>
@@ -87,8 +91,12 @@
             <h3>basefwx-windows.exe</h3>
             <p class="section-lead">Native Windows CLI build with vcpkg-managed dependencies.</p>
             <div class="link-row">
-              <a class="btn" data-download="windows" href="#">Download</a>
-              <a data-asset="windows.sig" href="#">Signature</a>
+              <a class="btn" data-download="windows-amd64" href="#">Download amd64</a>
+              <a class="btn secondary" data-download="windows-x86" href="#">Download x86</a>
+            </div>
+            <div class="link-row">
+              <a data-asset="windows-amd64.sig" href="#">Signature amd64</a>
+              <a data-asset="windows-x86.sig" href="#">Signature x86</a>
             </div>
             <div class="hash-block">
               <div class="hash-title">SHA256</div>
@@ -102,8 +110,12 @@
             <h3>basefwx-mac</h3>
             <p class="section-lead">macOS CLI build with OpenSSL 3 support.</p>
             <div class="link-row">
-              <a class="btn" data-download="mac" href="#">Download</a>
-              <a data-asset="mac.sig" href="#">Signature</a>
+              <a class="btn" data-download="mac-amd64" href="#">Download amd64</a>
+              <a class="btn secondary" data-download="mac-arm64" href="#">Download arm64</a>
+            </div>
+            <div class="link-row">
+              <a data-asset="mac-amd64.sig" href="#">Signature amd64</a>
+              <a data-asset="mac-arm64.sig" href="#">Signature arm64</a>
             </div>
             <div class="hash-block">
               <div class="hash-title">SHA256</div>
@@ -169,8 +181,8 @@
         </div>
         <div style="margin-bottom:16px;" id="vt-summary" class="status-pill ok">Loading VirusTotal results...</div>
         <div class="link-row" style="margin-bottom:16px;">
-          <a id="vt-results-text" href="results/virustotal-latest.txt" target="_blank" rel="noopener">Download results.txt</a>
-          <a id="vt-results-json" href="results/virustotal-latest.json" target="_blank" rel="noopener">Raw JSON</a>
+          <a id="vt-results-text" href="https://raw.githubusercontent.com/F1xGOD/basefwx/refs/heads/DEV/website/results/virustotal-latest.txt" target="_blank" rel="noopener">Download results.txt</a>
+          <a id="vt-results-json" href="https://raw.githubusercontent.com/F1xGOD/basefwx/refs/heads/DEV/website/results/virustotal-latest.json" target="_blank" rel="noopener">Raw JSON</a>
         </div>
         <div class="table-scroll">
           <table class="vt-table" id="vt-table">

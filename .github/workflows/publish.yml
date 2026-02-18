@@ -562,7 +562,9 @@ jobs:
             exit 1
           fi
 
-          rate_limit_sec=15
+          # Public VT API free tier is 4 requests/minute.
+          # Keep a small safety margin below that limit.
+          rate_limit_sec=16
           last_ts=0
           vt_request() {
             local method="$1"
@@ -602,9 +604,10 @@ jobs:
           tag="${GITHUB_REF_NAME}"
           repo="${GITHUB_REPOSITORY}"
           generated_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-          json=$(jq -n --arg generated_at "$generated_at" --arg release_tag "$tag" --arg repo "$repo" \
-            '{generated_at:$generated_at, release_tag:$release_tag, repo:$repo, files:[]}')
+          json=$(jq -n --arg generated_at "$generated_at" --arg release_tag "$tag" --arg repository "$repo" \
+            '{generated_at:$generated_at, release_tag:$release_tag, repository:$repository, files:[]}')
 
+          # Scan canonical release artifacts (all supported arches + Java JAR).
           files=(
             dist_out/basefwx-linux-amd64
             dist_out/basefwx-linux-arm64
@@ -613,9 +616,6 @@ jobs:
             dist_out/basefwx-mac-amd64
             dist_out/basefwx-mac-arm64
             dist_out/basefwx-java.jar
-            dist_out/basefwx-linux
-            dist_out/basefwx-windows.exe
-            dist_out/basefwx-mac
           )
           names=()
           ids=()
@@ -642,7 +642,9 @@ jobs:
 
           sleep 60
 
-          for attempt in 1 2; do
+          # Poll analyses long enough to cover slower backends while
+          # respecting the global request-rate guard.
+          for attempt in $(seq 1 6); do
             pending=0
             for idx in "${!ids[@]}"; do
               if [ "${statuses[$idx]}" = "completed" ]; then

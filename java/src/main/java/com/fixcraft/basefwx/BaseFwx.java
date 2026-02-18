@@ -87,6 +87,14 @@ public final class BaseFwx {
     private static final int KFM_HEADER_LEN = 32;
     private static final long KFM_MAX_PAYLOAD = 1L << 30;
     private static final int KFM_AUDIO_RATE = 24000;
+    private static final List<String> KFM_AUDIO_EXTENSIONS = Arrays.asList(
+        ".wav", ".mp3", ".m4a", ".aac", ".flac", ".ogg", ".oga", ".opus",
+        ".wma", ".amr", ".aiff", ".aif", ".alac", ".m4b", ".caf", ".mka"
+    );
+    private static final List<String> KFM_IMAGE_EXTENSIONS = Arrays.asList(
+        ".png", ".jpg", ".jpeg", ".bmp", ".gif", ".webp", ".tif",
+        ".tiff", ".ico", ".heic", ".heif", ".ppm", ".pgm"
+    );
 
     public static byte[] fwxAesEncryptRaw(byte[] plaintext, String password, boolean useMaster) {
         if (plaintext == null) {
@@ -513,9 +521,16 @@ public final class BaseFwx {
         if (input == null || !input.isFile()) {
             throw new IllegalArgumentException("kFMe input file not found");
         }
+        String inputExt = kfmCleanExt(getExtension(input));
+        if (kfmIsAudioExtension(inputExt)) {
+            throw new IllegalArgumentException(
+                "kFMe expects an image/media input, got audio extension '" + inputExt
+                    + "'. Use kFAe for audio->image carriers."
+            );
+        }
         byte[] payload = readFileBytes(input);
-        byte[] container = kfmPackContainer(KFM_MODE_IMAGE_AUDIO, payload, getExtension(input), 0);
-        File out = output != null ? output : replaceExtension(input, ".wav");
+        byte[] container = kfmPackContainer(KFM_MODE_IMAGE_AUDIO, payload, inputExt, 0);
+        File out = kfmResolveOutput(input, output, ".wav", "kfme");
         writeFileBytes(out, kfmCarrierToWav(container));
         return out;
     }
@@ -524,14 +539,30 @@ public final class BaseFwx {
         if (input == null || !input.isFile()) {
             throw new IllegalArgumentException("kFMd input file not found");
         }
-        byte[] carrier = kfmWavToCarrier(readFileBytes(input));
+        String inputExt = kfmCleanExt(getExtension(input));
+        if (kfmIsImageExtension(inputExt)) {
+            throw new IllegalArgumentException(
+                "kFMd expects an audio carrier input, got image extension '" + inputExt
+                    + "'. Use kFAd for image carriers."
+            );
+        }
+        byte[] carrier = kfmAudioToCarrier(input);
         KfmDecoded decoded = kfmUnpackContainer(carrier);
         if (decoded != null) {
-            File out = output != null ? output : replaceExtension(input, decoded.extension);
+            if (decoded.mode != KFM_MODE_IMAGE_AUDIO) {
+                throw new IllegalArgumentException(
+                    "kFMd received a kFAe carrier (audio->image). Decode it with kFAd."
+                );
+            }
+            File out = kfmResolveOutput(input, output, decoded.extension, "kfmd");
             writeFileBytes(out, decoded.payload);
             return out;
         }
-        File out = output != null ? output : replaceExtension(input, ".png");
+        kfmWarn(
+            "kFMd fallback: input is regular audio (not a BaseFWX kFMe carrier). "
+                + "Output will be static PNG noise."
+        );
+        File out = kfmResolveOutput(input, output, ".png", "kfmd");
         writeFileBytes(out, kfmCarrierToPng(carrier, bwMode));
         return out;
     }
@@ -540,10 +571,17 @@ public final class BaseFwx {
         if (input == null || !input.isFile()) {
             throw new IllegalArgumentException("kFAe input file not found");
         }
+        String inputExt = kfmCleanExt(getExtension(input));
+        if (kfmIsImageExtension(inputExt)) {
+            throw new IllegalArgumentException(
+                "kFAe expects an audio input, got image extension '" + inputExt
+                    + "'. Use kFMe for image->audio carriers."
+            );
+        }
         byte[] payload = readFileBytes(input);
         int flags = bwMode ? KFM_FLAG_BW : 0;
-        byte[] container = kfmPackContainer(KFM_MODE_AUDIO_IMAGE, payload, getExtension(input), flags);
-        File out = output != null ? output : replaceExtension(input, ".png");
+        byte[] container = kfmPackContainer(KFM_MODE_AUDIO_IMAGE, payload, inputExt, flags);
+        File out = kfmResolveOutput(input, output, ".png", "kfae");
         writeFileBytes(out, kfmCarrierToPng(container, bwMode));
         return out;
     }
@@ -552,14 +590,30 @@ public final class BaseFwx {
         if (input == null || !input.isFile()) {
             throw new IllegalArgumentException("kFAd input file not found");
         }
+        String inputExt = kfmCleanExt(getExtension(input));
+        if (kfmIsAudioExtension(inputExt)) {
+            throw new IllegalArgumentException(
+                "kFAd expects an image/PNG carrier input, got audio extension '" + inputExt
+                    + "'. Use kFMd for audio carriers."
+            );
+        }
         byte[] carrier = kfmPngToCarrier(readFileBytes(input));
         KfmDecoded decoded = kfmUnpackContainer(carrier);
         if (decoded != null) {
-            File out = output != null ? output : replaceExtension(input, decoded.extension);
+            if (decoded.mode != KFM_MODE_AUDIO_IMAGE) {
+                throw new IllegalArgumentException(
+                    "kFAd received a kFMe carrier (image->audio). Decode it with kFMd."
+                );
+            }
+            File out = kfmResolveOutput(input, output, decoded.extension, "kfad");
             writeFileBytes(out, decoded.payload);
             return out;
         }
-        File out = output != null ? output : replaceExtension(input, ".wav");
+        kfmWarn(
+            "kFAd fallback: you used kFAd instead of kFMe to encode an image. "
+                + "This will result in a longer file, and you won't be able to hear what's in the file."
+        );
+        File out = kfmResolveOutput(input, output, ".wav", "kfad");
         writeFileBytes(out, kfmCarrierToWav(carrier));
         return out;
     }
@@ -3522,6 +3576,38 @@ public final class BaseFwx {
         return parent == null ? new File(name) : new File(parent, name);
     }
 
+    private static boolean samePath(File a, File b) {
+        try {
+            return a.getCanonicalFile().equals(b.getCanonicalFile());
+        } catch (IOException ignored) {
+            return a.getAbsoluteFile().equals(b.getAbsoluteFile());
+        }
+    }
+
+    private static File replaceExtensionWithTag(File input, String extension, String tag) {
+        String ext = kfmCleanExt(extension);
+        String name = input.getName();
+        int idx = name.lastIndexOf('.');
+        String stem = idx >= 0 ? name.substring(0, idx) : name;
+        String tagged = stem + "." + tag + ext;
+        File parent = input.getParentFile();
+        return parent == null ? new File(tagged) : new File(parent, tagged);
+    }
+
+    private static File kfmResolveOutput(File input, File output, String extension, String tag) {
+        if (output != null) {
+            if (samePath(input, output)) {
+                throw new IllegalArgumentException("Refusing to overwrite input file; choose a different output path");
+            }
+            return output;
+        }
+        File candidate = replaceExtension(input, extension);
+        if (samePath(input, candidate)) {
+            candidate = replaceExtensionWithTag(input, extension, tag);
+        }
+        return candidate;
+    }
+
     private static String kfmCleanExt(String ext) {
         if (ext == null || ext.trim().isEmpty()) {
             return ".bin";
@@ -3543,6 +3629,18 @@ public final class BaseFwx {
             }
         }
         return normalized;
+    }
+
+    private static boolean kfmIsAudioExtension(String ext) {
+        return KFM_AUDIO_EXTENSIONS.contains(kfmCleanExt(ext));
+    }
+
+    private static boolean kfmIsImageExtension(String ext) {
+        return KFM_IMAGE_EXTENSIONS.contains(kfmCleanExt(ext));
+    }
+
+    private static void kfmWarn(String message) {
+        System.err.println("WARN: " + message);
     }
 
     private static long bytesToLong(byte[] input, int offset) {
@@ -3764,17 +3862,105 @@ public final class BaseFwx {
         if (!(fmtPcm && channels == 1 && bitsPerSample == 16)) {
             return dataChunk;
         }
-        if ((dataChunk.length & 1) != 0) {
-            dataChunk = Arrays.copyOf(dataChunk, dataChunk.length + 1);
+        return kfmPcm16MonoToCarrier(dataChunk);
+    }
+
+    private static byte[] kfmPcm16MonoToCarrier(byte[] pcm) {
+        byte[] normalized = pcm;
+        if ((normalized.length & 1) != 0) {
+            normalized = Arrays.copyOf(normalized, normalized.length + 1);
         }
-        byte[] out = new byte[dataChunk.length];
-        for (int i = 0; i < dataChunk.length; i += 2) {
-            short sample = (short) ((dataChunk[i] & 0xFF) | ((dataChunk[i + 1] & 0xFF) << 8));
+        byte[] out = new byte[normalized.length];
+        for (int i = 0; i < normalized.length; i += 2) {
+            short sample = (short) ((normalized[i] & 0xFF) | ((normalized[i + 1] & 0xFF) << 8));
             int value = (sample + 32768) & 0xFFFF;
             out[i] = (byte) (value & 0xFF);
             out[i + 1] = (byte) ((value >> 8) & 0xFF);
         }
         return out;
+    }
+
+    private static byte[] kfmDecodeAudioViaFfmpeg(File input) {
+        String ffmpegBin = System.getenv("BASEFWX_FFMPEG_BIN");
+        if (ffmpegBin == null || ffmpegBin.trim().isEmpty()) {
+            ffmpegBin = "ffmpeg";
+        }
+        File tempRaw;
+        try {
+            tempRaw = File.createTempFile("basefwx_kfm_", ".raw");
+        } catch (IOException exc) {
+            throw new IllegalStateException("Unable to create temporary ffmpeg output file", exc);
+        }
+        String output;
+        int exitCode;
+        try {
+            List<String> cmd = Arrays.asList(
+                ffmpegBin,
+                "-v", "error",
+                "-y",
+                "-i", input.getAbsolutePath(),
+                "-f", "s16le",
+                "-ac", "1",
+                "-ar", Integer.toString(KFM_AUDIO_RATE),
+                tempRaw.getAbsolutePath()
+            );
+            Process process = new ProcessBuilder(cmd)
+                .redirectErrorStream(true)
+                .start();
+            try (InputStream stream = process.getInputStream()) {
+                ByteArrayOutputStream capture = new ByteArrayOutputStream();
+                byte[] chunk = new byte[8192];
+                int read;
+                while ((read = stream.read(chunk)) != -1) {
+                    capture.write(chunk, 0, read);
+                }
+                output = new String(capture.toByteArray(), StandardCharsets.UTF_8);
+            }
+            exitCode = process.waitFor();
+        } catch (IOException exc) {
+            throw new IllegalStateException("Unable to start ffmpeg for audio decoding", exc);
+        } catch (InterruptedException exc) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("Interrupted while waiting for ffmpeg", exc);
+        }
+        try {
+            if (exitCode != 0) {
+                String trimmed = output == null ? "" : output.trim();
+                throw new IllegalArgumentException(
+                    trimmed.isEmpty()
+                        ? "ffmpeg failed to decode non-WAV audio input"
+                        : "ffmpeg failed to decode non-WAV audio input: " + trimmed
+                );
+            }
+            byte[] pcm = readFileBytes(tempRaw);
+            if (pcm.length == 0) {
+                throw new IllegalArgumentException("ffmpeg decode produced empty PCM output");
+            }
+            return kfmPcm16MonoToCarrier(pcm);
+        } finally {
+            if (!tempRaw.delete()) {
+                tempRaw.deleteOnExit();
+            }
+        }
+    }
+
+    private static byte[] kfmAudioToCarrier(File input) {
+        byte[] raw = readFileBytes(input);
+        String wavError;
+        try {
+            return kfmWavToCarrier(raw);
+        } catch (IllegalArgumentException exc) {
+            wavError = exc.getMessage();
+        }
+        try {
+            return kfmDecodeAudioViaFfmpeg(input);
+        } catch (RuntimeException ffmpegExc) {
+            throw new IllegalArgumentException(
+                "Failed to decode audio carrier '" + input.getName()
+                    + "' (WAV parse: " + wavError + "; ffmpeg: " + ffmpegExc.getMessage() + ")",
+                ffmpegExc
+            );
+        }
     }
 
     private static byte[] kfmCarrierToPng(byte[] carrier, boolean bwMode) {

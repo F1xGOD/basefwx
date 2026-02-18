@@ -1,7 +1,7 @@
 # basefwx C++ port (WIP)
 
 This folder is the start of a C++ rewrite intended to stay wire-compatible with
-BaseFWX 3.6.0. The initial focus is shared codecs (b256/b512/pb512) and
+BaseFWX 3.6.1. The initial focus is shared codecs (b256/b512/pb512) and
 file-format parsing so we can inspect payloads and validate blob structure before
 porting the full AES file pipeline.
 
@@ -31,6 +31,7 @@ cmake --build cpp/build
 ./cpp/build/basefwx_cpp n10file-dec secret.n10 secret.bin
 ./cpp/build/basefwx_cpp kFMe input.bin --out input.wav
 ./cpp/build/basefwx_cpp kFMd input.wav --out restored.bin
+./cpp/build/basefwx_cpp kFMd input.mp3 --out fallback.png
 ./cpp/build/basefwx_cpp kFAe input.bin --out input.png --bw
 ./cpp/build/basefwx_cpp kFAd input.png --out restored.bin
 ./cpp/build/basefwx_cpp b512-enc "hello" -p "pw"
@@ -58,6 +59,7 @@ payload matches the AES file format.
   decryption.
 - kFM/kFA carriers are byte-reversible across Python/C++/Java for BaseFWX-made
   files; non-BaseFWX carriers transparently fall back to waveform/noise transforms.
+- `kFMd` supports non-WAV audio (`.mp3`/`.m4a`) through runtime `ffmpeg` decoding.
 - The fwxaes raw format uses the FWX1 header and PBKDF2 + AES-256-GCM, with an
   optional normalize wrapper that hides bytes in zero-width Unicode markers.
 - Current C++ codec support covers b256/b512/pb512 plus b512file/pb512file

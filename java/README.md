@@ -9,6 +9,7 @@ This module provides a Java implementation of the core BaseFWX codecs so it can 
 - b512 / pb512 encode/decode (PBKDF2 + optional EC master-key wrap)
 - b256 encode/decode
 - n10 numeric encode/decode (text + bytes/file helpers)
+- kFM/kFA carrier transforms (file<->WAV/PNG with container detection)
 - b64 encode/decode
 - hash512 / uhash513
 - a512 encode/decode
@@ -70,6 +71,11 @@ java -jar build/libs/basefwx-java.jar n10-dec <digits>
 java -jar build/libs/basefwx-java.jar n10file-enc <in> <out>
 java -jar build/libs/basefwx-java.jar n10file-dec <in> <out>
 
+java -jar build/libs/basefwx-java.jar kFMe <in> [--out <out.wav>]
+java -jar build/libs/basefwx-java.jar kFMd <in.wav> [--out <out>] [--bw]
+java -jar build/libs/basefwx-java.jar kFAe <in> [--out <out.png>] [--bw]
+java -jar build/libs/basefwx-java.jar kFAd <in.png> [--out <out>]
+
 java -jar build/libs/basefwx-java.jar hash512 <text>
 java -jar build/libs/basefwx-java.jar uhash513 <text>
 
@@ -92,6 +98,7 @@ Notes:
 - fwxAES PBKDF2 mode is fully compatible across Python/C++/Java.
 - EC master-key wrap is supported using P-521 (secp521r1) and EC1 blobs.
 - AES-heavy file containers (pb512file) are implemented and cross-compatible with Python/C++ (PBKDF2 mode).
+- kFM/kFA containers are compatible across Python/C++/Java (including `--bw` PNG carrier mode).
 
 ### Master key paths (EC)
 Java reads EC public/private keys from:

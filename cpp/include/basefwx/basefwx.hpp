@@ -57,5 +57,9 @@ std::string Jmge(const std::string& path,
                  bool keep_meta = false,
                  bool keep_input = false);
 std::string Jmgd(const std::string& path, const std::string& password, const std::string& output = {});
+std::string Kfme(const std::string& path, const std::string& output = {});
+std::string Kfmd(const std::string& path, const std::string& output = {}, bool bw_mode = false);
+std::string Kfae(const std::string& path, const std::string& output = {}, bool bw_mode = false);
+std::string Kfad(const std::string& path, const std::string& output = {});
 
 }  // namespace basefwx

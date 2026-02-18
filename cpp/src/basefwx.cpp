@@ -2,6 +2,7 @@
 
 #include "basefwx/codec.hpp"
 #include "basefwx/base64.hpp"
+#include "basefwx/crypto.hpp"
 #include "basefwx/crypto_utils.hpp"
 #include "basefwx/format.hpp"
 #include "basefwx/pb512.hpp"
@@ -10,12 +11,22 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
+#include <cctype>
+#include <cstdint>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <limits>
+#include <optional>
 #include <openssl/evp.h>
+#include <random>
 #include <stdexcept>
 #include <string_view>
+#include <zlib.h>
+
+#include "stb_image.h"
+#include "stb_image_write.h"
 
 namespace {
 
@@ -340,6 +351,420 @@ std::uint32_t Fnv1a32(std::string_view input) {
     return hash;
 }
 
+constexpr std::array<char, 4> kKfmMagic = {'K', 'F', 'M', '!'};
+constexpr std::uint8_t kKfmVersion = 1;
+constexpr std::uint8_t kKfmModeImageAudio = 1;
+constexpr std::uint8_t kKfmModeAudioImage = 2;
+constexpr std::uint8_t kKfmFlagBw = 1;
+constexpr std::size_t kKfmHeaderLen = 32;
+constexpr std::size_t kKfmMaxPayload = 1u << 30;
+constexpr std::uint32_t kKfmAudioRate = 24000;
+
+void WriteU32BE(std::vector<std::uint8_t>& out, std::uint32_t value) {
+    out.push_back(static_cast<std::uint8_t>((value >> 24) & 0xFFu));
+    out.push_back(static_cast<std::uint8_t>((value >> 16) & 0xFFu));
+    out.push_back(static_cast<std::uint8_t>((value >> 8) & 0xFFu));
+    out.push_back(static_cast<std::uint8_t>(value & 0xFFu));
+}
+
+void WriteU64BE(std::vector<std::uint8_t>& out, std::uint64_t value) {
+    for (int shift = 56; shift >= 0; shift -= 8) {
+        out.push_back(static_cast<std::uint8_t>((value >> shift) & 0xFFu));
+    }
+}
+
+std::uint32_t ReadU32BE(const std::vector<std::uint8_t>& data, std::size_t offset) {
+    if (offset + 4 > data.size()) {
+        throw std::runtime_error("kFM header truncated");
+    }
+    return (static_cast<std::uint32_t>(data[offset]) << 24)
+         | (static_cast<std::uint32_t>(data[offset + 1]) << 16)
+         | (static_cast<std::uint32_t>(data[offset + 2]) << 8)
+         | static_cast<std::uint32_t>(data[offset + 3]);
+}
+
+std::uint64_t ReadU64BE(const std::vector<std::uint8_t>& data, std::size_t offset) {
+    if (offset + 8 > data.size()) {
+        throw std::runtime_error("kFM header truncated");
+    }
+    std::uint64_t out = 0;
+    for (std::size_t i = 0; i < 8; ++i) {
+        out = (out << 8) | static_cast<std::uint64_t>(data[offset + i]);
+    }
+    return out;
+}
+
+std::uint32_t ReadU32LE(const std::vector<std::uint8_t>& data, std::size_t offset) {
+    if (offset + 4 > data.size()) {
+        throw std::runtime_error("kFM wav chunk truncated");
+    }
+    return static_cast<std::uint32_t>(data[offset])
+         | (static_cast<std::uint32_t>(data[offset + 1]) << 8)
+         | (static_cast<std::uint32_t>(data[offset + 2]) << 16)
+         | (static_cast<std::uint32_t>(data[offset + 3]) << 24);
+}
+
+std::uint16_t ReadU16LE(const std::vector<std::uint8_t>& data, std::size_t offset) {
+    if (offset + 2 > data.size()) {
+        throw std::runtime_error("kFM wav chunk truncated");
+    }
+    return static_cast<std::uint16_t>(data[offset])
+         | static_cast<std::uint16_t>(data[offset + 1] << 8);
+}
+
+void WriteU16LE(std::vector<std::uint8_t>& out, std::uint16_t value) {
+    out.push_back(static_cast<std::uint8_t>(value & 0xFFu));
+    out.push_back(static_cast<std::uint8_t>((value >> 8) & 0xFFu));
+}
+
+void WriteU32LE(std::vector<std::uint8_t>& out, std::uint32_t value) {
+    out.push_back(static_cast<std::uint8_t>(value & 0xFFu));
+    out.push_back(static_cast<std::uint8_t>((value >> 8) & 0xFFu));
+    out.push_back(static_cast<std::uint8_t>((value >> 16) & 0xFFu));
+    out.push_back(static_cast<std::uint8_t>((value >> 24) & 0xFFu));
+}
+
+std::string CleanKfmExt(std::string ext) {
+    if (ext.empty()) {
+        return ".bin";
+    }
+    std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char ch) {
+        return static_cast<char>(std::tolower(ch));
+    });
+    if (ext.front() != '.') {
+        ext.insert(ext.begin(), '.');
+    }
+    if (ext.size() > 24) {
+        return ".bin";
+    }
+    for (char ch : ext) {
+        bool ok = (ch == '.') || (ch == '_') || (ch == '-')
+            || (ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9');
+        if (!ok) {
+            return ".bin";
+        }
+    }
+    return ext;
+}
+
+std::vector<std::uint8_t> KfmKeystream(std::uint64_t seed, std::size_t length) {
+    std::vector<std::uint8_t> out(length);
+    if (length == 0) {
+        return out;
+    }
+    std::array<std::uint8_t, 16> seed_counter{};
+    for (int i = 0; i < 8; ++i) {
+        seed_counter[7 - i] = static_cast<std::uint8_t>((seed >> (i * 8)) & 0xFFu);
+    }
+    std::size_t offset = 0;
+    std::uint64_t counter = 0;
+    while (offset < length) {
+        for (int i = 0; i < 8; ++i) {
+            seed_counter[15 - i] = static_cast<std::uint8_t>((counter >> (i * 8)) & 0xFFu);
+        }
+        unsigned int digest_len = 0;
+        std::array<std::uint8_t, 32> digest{};
+        if (EVP_Digest(seed_counter.data(), seed_counter.size(), digest.data(), &digest_len, EVP_sha256(), nullptr) != 1
+            || digest_len == 0) {
+            throw std::runtime_error("kFM keystream digest failed");
+        }
+        std::size_t take = std::min<std::size_t>(digest_len, length - offset);
+        std::memcpy(out.data() + offset, digest.data(), take);
+        offset += take;
+        ++counter;
+    }
+    return out;
+}
+
+void XorInPlace(std::vector<std::uint8_t>& target, const std::vector<std::uint8_t>& mask) {
+    if (target.size() != mask.size()) {
+        throw std::runtime_error("kFM mask length mismatch");
+    }
+    for (std::size_t i = 0; i < target.size(); ++i) {
+        target[i] ^= mask[i];
+    }
+}
+
+std::uint64_t RandomSeed64() {
+    auto bytes = basefwx::crypto::RandomBytes(8);
+    std::uint64_t seed = 0;
+    for (std::uint8_t byte : bytes) {
+        seed = (seed << 8) | static_cast<std::uint64_t>(byte);
+    }
+    return seed;
+}
+
+std::vector<std::uint8_t> BuildKfmContainer(std::uint8_t mode,
+                                            const std::vector<std::uint8_t>& payload,
+                                            const std::string& ext,
+                                            std::uint8_t flags) {
+    if (mode != kKfmModeImageAudio && mode != kKfmModeAudioImage) {
+        throw std::runtime_error("kFM mode is invalid");
+    }
+    if (payload.size() > kKfmMaxPayload) {
+        throw std::runtime_error("kFM payload is too large");
+    }
+    std::string cleaned_ext = CleanKfmExt(ext);
+    std::vector<std::uint8_t> ext_bytes(cleaned_ext.begin(), cleaned_ext.end());
+    if (ext_bytes.size() > 255) {
+        ext_bytes.assign({'.', 'b', 'i', 'n'});
+    }
+
+    std::vector<std::uint8_t> body;
+    body.reserve(ext_bytes.size() + payload.size());
+    body.insert(body.end(), ext_bytes.begin(), ext_bytes.end());
+    body.insert(body.end(), payload.begin(), payload.end());
+
+    std::uint64_t seed = RandomSeed64();
+    auto mask = KfmKeystream(seed, body.size());
+    XorInPlace(body, mask);
+    std::uint32_t crc = crc32(0L, payload.data(), static_cast<uInt>(payload.size()));
+
+    std::vector<std::uint8_t> out;
+    out.reserve(kKfmHeaderLen + body.size());
+    out.insert(out.end(), kKfmMagic.begin(), kKfmMagic.end());
+    out.push_back(kKfmVersion);
+    out.push_back(mode);
+    out.push_back(flags);
+    out.push_back(static_cast<std::uint8_t>(ext_bytes.size()));
+    WriteU64BE(out, static_cast<std::uint64_t>(payload.size()));
+    WriteU32BE(out, crc);
+    WriteU64BE(out, seed);
+    WriteU32BE(out, 0u);
+    out.insert(out.end(), body.begin(), body.end());
+    return out;
+}
+
+struct KfmDecoded {
+    std::uint8_t mode = 0;
+    std::uint8_t flags = 0;
+    std::string ext;
+    std::vector<std::uint8_t> payload;
+};
+
+std::optional<KfmDecoded> ParseKfmContainer(const std::vector<std::uint8_t>& blob) {
+    if (blob.size() < kKfmHeaderLen) {
+        return std::nullopt;
+    }
+    if (!std::equal(kKfmMagic.begin(), kKfmMagic.end(), blob.begin())) {
+        return std::nullopt;
+    }
+    std::uint8_t version = blob[4];
+    std::uint8_t mode = blob[5];
+    std::uint8_t flags = blob[6];
+    std::uint8_t ext_len = blob[7];
+    if (version != kKfmVersion || (mode != kKfmModeImageAudio && mode != kKfmModeAudioImage)) {
+        return std::nullopt;
+    }
+    std::uint64_t payload_len = ReadU64BE(blob, 8);
+    std::uint32_t crc_expected = ReadU32BE(blob, 16);
+    std::uint64_t seed = ReadU64BE(blob, 20);
+    if (payload_len > static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max() - ext_len)) {
+        return std::nullopt;
+    }
+    std::size_t body_len = static_cast<std::size_t>(ext_len) + static_cast<std::size_t>(payload_len);
+    if (body_len < ext_len) {
+        return std::nullopt;
+    }
+    if (kKfmHeaderLen + body_len > blob.size()) {
+        return std::nullopt;
+    }
+    std::vector<std::uint8_t> body(blob.begin() + static_cast<std::ptrdiff_t>(kKfmHeaderLen),
+                                   blob.begin() + static_cast<std::ptrdiff_t>(kKfmHeaderLen + body_len));
+    auto mask = KfmKeystream(seed, body.size());
+    XorInPlace(body, mask);
+    std::vector<std::uint8_t> payload(body.begin() + static_cast<std::ptrdiff_t>(ext_len), body.end());
+    std::uint32_t crc_actual = crc32(0L, payload.data(), static_cast<uInt>(payload.size()));
+    if (crc_actual != crc_expected) {
+        return std::nullopt;
+    }
+    std::string ext(body.begin(), body.begin() + static_cast<std::ptrdiff_t>(ext_len));
+    KfmDecoded decoded;
+    decoded.mode = mode;
+    decoded.flags = flags;
+    decoded.ext = CleanKfmExt(ext);
+    decoded.payload = std::move(payload);
+    return decoded;
+}
+
+void WriteBinaryFileRaw(const std::filesystem::path& path, const std::vector<std::uint8_t>& data) {
+    if (!path.parent_path().empty()) {
+        std::filesystem::create_directories(path.parent_path());
+    }
+    std::ofstream out(path, std::ios::binary);
+    if (!out) {
+        throw std::runtime_error("Failed to open output file: " + path.string());
+    }
+    if (!data.empty()) {
+        out.write(reinterpret_cast<const char*>(data.data()), static_cast<std::streamsize>(data.size()));
+    }
+    if (!out) {
+        throw std::runtime_error("Failed to write output file: " + path.string());
+    }
+}
+
+std::vector<std::uint8_t> ReadWavCarrierBytes(const std::filesystem::path& path) {
+    std::vector<std::uint8_t> file = basefwx::ReadFile(path.string());
+    if (file.size() < 44) {
+        throw std::runtime_error("kFM wav input is too short");
+    }
+    if (!std::equal(file.begin(), file.begin() + 4, "RIFF")
+        || !std::equal(file.begin() + 8, file.begin() + 12, "WAVE")) {
+        throw std::runtime_error("kFM wav input has invalid header");
+    }
+
+    bool has_fmt = false;
+    bool has_data = false;
+    std::uint16_t channels = 0;
+    std::uint16_t bits_per_sample = 0;
+    std::vector<std::uint8_t> data_chunk;
+
+    std::size_t offset = 12;
+    while (offset + 8 <= file.size()) {
+        std::array<char, 4> chunk_id{};
+        std::memcpy(chunk_id.data(), file.data() + offset, 4);
+        std::uint32_t chunk_len = ReadU32LE(file, offset + 4);
+        std::size_t data_offset = offset + 8;
+        std::size_t next = data_offset + static_cast<std::size_t>(chunk_len);
+        if (next > file.size()) {
+            break;
+        }
+        if (std::equal(chunk_id.begin(), chunk_id.end(), "fmt ")) {
+            if (chunk_len >= 16) {
+                std::uint16_t format = ReadU16LE(file, data_offset);
+                channels = ReadU16LE(file, data_offset + 2);
+                bits_per_sample = ReadU16LE(file, data_offset + 14);
+                has_fmt = (format == 1);
+            }
+        } else if (std::equal(chunk_id.begin(), chunk_id.end(), "data")) {
+            data_chunk.assign(file.begin() + static_cast<std::ptrdiff_t>(data_offset),
+                              file.begin() + static_cast<std::ptrdiff_t>(next));
+            has_data = true;
+        }
+        offset = next + (chunk_len % 2u);
+    }
+
+    if (!has_data) {
+        throw std::runtime_error("kFM wav input missing data chunk");
+    }
+    if (!(has_fmt && channels == 1 && bits_per_sample == 16)) {
+        return data_chunk;
+    }
+
+    if (data_chunk.size() % 2 != 0) {
+        data_chunk.push_back(0);
+    }
+    std::vector<std::uint8_t> out(data_chunk.size());
+    for (std::size_t i = 0; i < data_chunk.size(); i += 2) {
+        std::int16_t sample = static_cast<std::int16_t>(
+            static_cast<std::uint16_t>(data_chunk[i]) |
+            static_cast<std::uint16_t>(data_chunk[i + 1] << 8));
+        std::uint16_t value = static_cast<std::uint16_t>(sample + 32768);
+        out[i] = static_cast<std::uint8_t>(value & 0xFFu);
+        out[i + 1] = static_cast<std::uint8_t>((value >> 8) & 0xFFu);
+    }
+    return out;
+}
+
+void WriteWavCarrierBytes(const std::filesystem::path& path, const std::vector<std::uint8_t>& carrier) {
+    std::vector<std::uint8_t> raw = carrier;
+    if (raw.size() % 2 != 0) {
+        raw.push_back(0);
+    }
+    std::vector<std::uint8_t> pcm(raw.size());
+    for (std::size_t i = 0; i < raw.size(); i += 2) {
+        std::uint16_t value = static_cast<std::uint16_t>(raw[i]) |
+            static_cast<std::uint16_t>(raw[i + 1] << 8);
+        std::int32_t sample = static_cast<std::int32_t>(value) - 32768;
+        std::uint16_t le = static_cast<std::uint16_t>(static_cast<std::int16_t>(sample));
+        pcm[i] = static_cast<std::uint8_t>(le & 0xFFu);
+        pcm[i + 1] = static_cast<std::uint8_t>((le >> 8) & 0xFFu);
+    }
+
+    std::vector<std::uint8_t> out;
+    out.reserve(44 + pcm.size());
+    out.insert(out.end(), {'R', 'I', 'F', 'F'});
+    WriteU32LE(out, static_cast<std::uint32_t>(36 + pcm.size()));
+    out.insert(out.end(), {'W', 'A', 'V', 'E'});
+    out.insert(out.end(), {'f', 'm', 't', ' '});
+    WriteU32LE(out, 16u);
+    WriteU16LE(out, 1u);
+    WriteU16LE(out, 1u);
+    WriteU32LE(out, kKfmAudioRate);
+    WriteU32LE(out, kKfmAudioRate * 2u);
+    WriteU16LE(out, 2u);
+    WriteU16LE(out, 16u);
+    out.insert(out.end(), {'d', 'a', 't', 'a'});
+    WriteU32LE(out, static_cast<std::uint32_t>(pcm.size()));
+    out.insert(out.end(), pcm.begin(), pcm.end());
+    WriteBinaryFileRaw(path, out);
+}
+
+std::vector<std::uint8_t> ReadPngCarrierBytes(const std::filesystem::path& path) {
+    int width = 0;
+    int height = 0;
+    int channels = 0;
+    stbi_uc* raw = stbi_load(path.string().c_str(), &width, &height, &channels, 0);
+    if (!raw || width <= 0 || height <= 0 || channels <= 0) {
+        std::string reason = stbi_failure_reason() ? stbi_failure_reason() : "unknown";
+        throw std::runtime_error("Failed to load PNG carrier: " + reason);
+    }
+
+    std::vector<std::uint8_t> out;
+    std::size_t pixels = static_cast<std::size_t>(width) * static_cast<std::size_t>(height);
+    if (channels == 1) {
+        out.assign(raw, raw + static_cast<std::ptrdiff_t>(pixels));
+    } else if (channels == 3) {
+        out.assign(raw, raw + static_cast<std::ptrdiff_t>(pixels * 3));
+    } else if (channels == 2) {
+        out.resize(pixels * 3);
+        for (std::size_t i = 0; i < pixels; ++i) {
+            std::uint8_t l = raw[i * 2];
+            out[i * 3] = l;
+            out[i * 3 + 1] = l;
+            out[i * 3 + 2] = l;
+        }
+    } else {
+        out.resize(pixels * 3);
+        for (std::size_t i = 0; i < pixels; ++i) {
+            out[i * 3] = raw[i * channels];
+            out[i * 3 + 1] = raw[i * channels + 1];
+            out[i * 3 + 2] = raw[i * channels + 2];
+        }
+    }
+    stbi_image_free(raw);
+    return out;
+}
+
+void WritePngCarrierBytes(const std::filesystem::path& path,
+                          const std::vector<std::uint8_t>& carrier,
+                          bool bw_mode) {
+    int channels = bw_mode ? 1 : 3;
+    std::size_t pixels = std::max<std::size_t>(1, (carrier.size() + static_cast<std::size_t>(channels) - 1u) / static_cast<std::size_t>(channels));
+    int width = static_cast<int>(std::ceil(std::sqrt(static_cast<double>(pixels))));
+    if (width < 1) {
+        width = 1;
+    }
+    int height = static_cast<int>((pixels + static_cast<std::size_t>(width) - 1u) / static_cast<std::size_t>(width));
+    std::size_t capacity = static_cast<std::size_t>(width) * static_cast<std::size_t>(height) * static_cast<std::size_t>(channels);
+
+    std::vector<std::uint8_t> pixels_data = basefwx::crypto::RandomBytes(capacity);
+    std::copy(carrier.begin(), carrier.end(), pixels_data.begin());
+
+    if (!path.parent_path().empty()) {
+        std::filesystem::create_directories(path.parent_path());
+    }
+    int stride = width * channels;
+    if (stbi_write_png(path.string().c_str(),
+                       width,
+                       height,
+                       channels,
+                       pixels_data.data(),
+                       stride) == 0) {
+        throw std::runtime_error("Failed to write PNG carrier");
+    }
+}
+
 }  // namespace
 
 namespace basefwx {
@@ -653,6 +1078,59 @@ std::string Jmge(const std::string& path,
 
 std::string Jmgd(const std::string& path, const std::string& password, const std::string& output) {
     return basefwx::imagecipher::DecryptMedia(path, ResolvePassword(password), output);
+}
+
+std::string Kfme(const std::string& path, const std::string& output) {
+    std::filesystem::path input_path(path);
+    auto payload = ReadFile(path);
+    std::string ext = input_path.has_extension() ? input_path.extension().string() : ".bin";
+    auto container = BuildKfmContainer(kKfmModeImageAudio, payload, ext, 0u);
+    std::filesystem::path out_path = output.empty() ? input_path.replace_extension(".wav") : std::filesystem::path(output);
+    WriteWavCarrierBytes(out_path, container);
+    return out_path.string();
+}
+
+std::string Kfmd(const std::string& path, const std::string& output, bool bw_mode) {
+    std::filesystem::path input_path(path);
+    auto carrier = ReadWavCarrierBytes(input_path);
+    auto decoded = ParseKfmContainer(carrier);
+    if (decoded) {
+        std::filesystem::path out_path = output.empty()
+            ? input_path.replace_extension(decoded->ext)
+            : std::filesystem::path(output);
+        WriteBinaryFileRaw(out_path, decoded->payload);
+        return out_path.string();
+    }
+    std::filesystem::path out_path = output.empty() ? input_path.replace_extension(".png") : std::filesystem::path(output);
+    WritePngCarrierBytes(out_path, carrier, bw_mode);
+    return out_path.string();
+}
+
+std::string Kfae(const std::string& path, const std::string& output, bool bw_mode) {
+    std::filesystem::path input_path(path);
+    auto payload = ReadFile(path);
+    std::string ext = input_path.has_extension() ? input_path.extension().string() : ".bin";
+    std::uint8_t flags = bw_mode ? kKfmFlagBw : 0u;
+    auto container = BuildKfmContainer(kKfmModeAudioImage, payload, ext, flags);
+    std::filesystem::path out_path = output.empty() ? input_path.replace_extension(".png") : std::filesystem::path(output);
+    WritePngCarrierBytes(out_path, container, bw_mode);
+    return out_path.string();
+}
+
+std::string Kfad(const std::string& path, const std::string& output) {
+    std::filesystem::path input_path(path);
+    auto carrier = ReadPngCarrierBytes(input_path);
+    auto decoded = ParseKfmContainer(carrier);
+    if (decoded) {
+        std::filesystem::path out_path = output.empty()
+            ? input_path.replace_extension(decoded->ext)
+            : std::filesystem::path(output);
+        WriteBinaryFileRaw(out_path, decoded->payload);
+        return out_path.string();
+    }
+    std::filesystem::path out_path = output.empty() ? input_path.replace_extension(".wav") : std::filesystem::path(output);
+    WriteWavCarrierBytes(out_path, carrier);
+    return out_path.string();
 }
 
 }  // namespace basefwx

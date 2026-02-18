@@ -29,6 +29,10 @@ cmake --build cpp/build
 ./cpp/build/basefwx_cpp n10-dec "<digits>"
 ./cpp/build/basefwx_cpp n10file-enc secret.bin secret.n10
 ./cpp/build/basefwx_cpp n10file-dec secret.n10 secret.bin
+./cpp/build/basefwx_cpp kFMe input.bin --out input.wav
+./cpp/build/basefwx_cpp kFMd input.wav --out restored.bin
+./cpp/build/basefwx_cpp kFAe input.bin --out input.png --bw
+./cpp/build/basefwx_cpp kFAd input.png --out restored.bin
 ./cpp/build/basefwx_cpp b512-enc "hello" -p "pw"
 ./cpp/build/basefwx_cpp b512-dec "<payload>" -p "pw"
 ./cpp/build/basefwx_cpp pb512-enc "hello" -p "pw"
@@ -52,6 +56,8 @@ payload matches the AES file format.
   JSON metadata, followed by ciphertext.
 - The b512 AEAD payload is fully encrypted, so metadata cannot be parsed without
   decryption.
+- kFM/kFA carriers are byte-reversible across Python/C++/Java for BaseFWX-made
+  files; non-BaseFWX carriers transparently fall back to waveform/noise transforms.
 - The fwxaes raw format uses the FWX1 header and PBKDF2 + AES-256-GCM, with an
   optional normalize wrapper that hides bytes in zero-width Unicode markers.
 - Current C++ codec support covers b256/b512/pb512 plus b512file/pb512file

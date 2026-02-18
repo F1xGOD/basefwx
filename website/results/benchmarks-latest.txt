@@ -1,24 +1,24 @@
-Generated: 2026-02-18T11:25:58Z
+Generated: 2026-02-18T16:07:30Z
 Release: v3.6.1
 Baseline: python
 
 OVERALL
-python: 40963852783 ns (40.964s)
-cpp: 11935987199 ns (11.936s)
-java: 20346272795 ns (20.346s)
+python: 39301901533 ns (39.302s)
+cpp: 11853432649 ns (11.853s)
+java: 19785622811 ns (19.786s)
 
 TESTS
-fwxAES-light | python=225410955ns | cpp=142530559ns | java=1913236586ns
-fwxAES | python=624284030ns | cpp=537630704ns | java=2175632003ns
-b256 | python=1838498753ns | cpp=232010704ns | java=280958284ns
-b512 | python=3197994026ns | cpp=891333925ns | java=565696838ns
-pb512 | python=3200953590ns | cpp=889418169ns | java=544842265ns
-b64 | python=25882943ns | cpp=9409833ns | java=13245040ns
-a512 | python=2800502339ns | cpp=240895467ns | java=291359241ns
-n10 | python=4156280581ns | cpp=44871343ns | java=70340805ns
-hash512 | python=6050101ns | cpp=5143815ns | java=6389233ns
-uhash513 | python=7791960ns | cpp=6489577ns | java=8773247ns
-bi512 | python=272116158ns | cpp=120109509ns | java=163276082ns
-b1024 | python=10564634045ns | cpp=2811130358ns | java=4675114969ns
-b512file | python=6559972866ns | cpp=2712640181ns | java=4512011709ns
-pb512file | python=7483480436ns | cpp=3292373055ns | java=5125396493ns
+fwxAES-light | python=216371381ns | cpp=140317427ns | java=1898228654ns
+fwxAES | python=609414237ns | cpp=538370498ns | java=2164588732ns
+b256 | python=1813169884ns | cpp=230328730ns | java=287600046ns
+b512 | python=3181596885ns | cpp=889080646ns | java=548716136ns
+pb512 | python=3201989536ns | cpp=886325877ns | java=560380708ns
+b64 | python=20535770ns | cpp=9432396ns | java=13565560ns
+a512 | python=2785273390ns | cpp=241468944ns | java=296007764ns
+n10 | python=4126751789ns | cpp=44716366ns | java=70201375ns
+hash512 | python=6060973ns | cpp=5111732ns | java=6424382ns
+uhash513 | python=7521145ns | cpp=6474613ns | java=8319762ns
+bi512 | python=269585063ns | cpp=118963967ns | java=164009957ns
+b1024 | python=10111101098ns | cpp=2797706331ns | java=4273139705ns
+b512file | python=6223812871ns | cpp=2623342959ns | java=4503047604ns
+pb512file | python=6728717511ns | cpp=3321792163ns | java=4991392426ns

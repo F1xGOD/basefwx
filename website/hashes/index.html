@@ -1,0 +1,200 @@
+<!doctype html>
+<html lang="en" data-asset-base="../assets/" data-results-base="../results/">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>BaseFWX Hashes</title>
+    <meta name="description" content="SHA256 and MD5 manifests for BaseFWX release artifacts.">
+    <link rel="icon" type="image/svg+xml" href="../assets/basefwx-white.svg">
+    <link rel="stylesheet" href="../assets/site.css">
+    <script src="../assets/site.js" defer></script>
+  </head>
+  <body>
+    <div class="container">
+      <header class="site-header">
+        <div class="brand">
+          <div class="brand-mark" aria-hidden="true">
+            <span class="brand-icon" aria-hidden="true"></span>
+            <span class="brand-cutout" aria-hidden="true"></span>
+          </div>
+          <div>
+            <div class="brand-name">FixCraft</div>
+            <div class="brand-sub">BaseFWX secure toolkit</div>
+          </div>
+        </div>
+        <nav>
+          <a href="../#downloads">Downloads</a>
+          <a href="./">Hashes</a>
+          <a href="../#integrity">Integrity</a>
+          <a href="../#virustotal">VirusTotal</a>
+          <a href="../benchmark/">Benchmark</a>
+          <a href="../#docs">Docs</a>
+          <a href="../#support">Support</a>
+        </nav>
+      </header>
+
+      <section class="hero">
+        <div>
+          <div class="chip">Release manifest</div>
+          <h1>SHA256 + MD5 Hashes</h1>
+          <p>
+            Use this page to verify every published artifact. Values are fetched from the latest GitHub release hash files.
+          </p>
+          <div class="link-row">
+            <a class="btn secondary" href="../#downloads">Back to downloads</a>
+            <a class="btn secondary" id="release-link" href="https://github.com/F1xGOD/basefwx/releases" target="_blank" rel="noopener">View release</a>
+          </div>
+        </div>
+        <div class="hero-panel">
+          <div>
+            <div class="meta">Latest release</div>
+            <div class="panel-title" id="release-version">Loading...</div>
+            <div class="meta-row">
+              <span id="release-date">Fetching date</span>
+              <span id="release-assets">0 assets</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="linux">
+        <div class="section-title">Linux</div>
+        <div class="table-scroll">
+          <table class="bench-table hash-manifest-table">
+            <thead>
+              <tr>
+                <th>Artifact</th>
+                <th>SHA256</th>
+                <th>MD5</th>
+                <th>Hash Files</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td class="mono">basefwx-linux-amd64</td>
+                <td class="mono hash-digest" data-hash-file="basefwx-linux-amd64.sha256">Loading...</td>
+                <td class="mono hash-digest" data-hash-file="basefwx-linux-amd64.md5">Loading...</td>
+                <td class="mono">
+                  <a data-asset-link="basefwx-linux-amd64.sha256" href="#">sha256</a> ·
+                  <a data-asset-link="basefwx-linux-amd64.md5" href="#">md5</a>
+                </td>
+              </tr>
+              <tr>
+                <td class="mono">basefwx-linux-arm64</td>
+                <td class="mono hash-digest" data-hash-file="basefwx-linux-arm64.sha256">Loading...</td>
+                <td class="mono hash-digest" data-hash-file="basefwx-linux-arm64.md5">Loading...</td>
+                <td class="mono">
+                  <a data-asset-link="basefwx-linux-arm64.sha256" href="#">sha256</a> ·
+                  <a data-asset-link="basefwx-linux-arm64.md5" href="#">md5</a>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="windows">
+        <div class="section-title">Windows</div>
+        <div class="table-scroll">
+          <table class="bench-table hash-manifest-table">
+            <thead>
+              <tr>
+                <th>Artifact</th>
+                <th>SHA256</th>
+                <th>MD5</th>
+                <th>Hash Files</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td class="mono">basefwx-windows-amd64.exe</td>
+                <td class="mono hash-digest" data-hash-file="basefwx-windows-amd64.exe.sha256">Loading...</td>
+                <td class="mono hash-digest" data-hash-file="basefwx-windows-amd64.exe.md5">Loading...</td>
+                <td class="mono">
+                  <a data-asset-link="basefwx-windows-amd64.exe.sha256" href="#">sha256</a> ·
+                  <a data-asset-link="basefwx-windows-amd64.exe.md5" href="#">md5</a>
+                </td>
+              </tr>
+              <tr>
+                <td class="mono">basefwx-windows-x86.exe</td>
+                <td class="mono hash-digest" data-hash-file="basefwx-windows-x86.exe.sha256">Loading...</td>
+                <td class="mono hash-digest" data-hash-file="basefwx-windows-x86.exe.md5">Loading...</td>
+                <td class="mono">
+                  <a data-asset-link="basefwx-windows-x86.exe.sha256" href="#">sha256</a> ·
+                  <a data-asset-link="basefwx-windows-x86.exe.md5" href="#">md5</a>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="mac">
+        <div class="section-title">macOS</div>
+        <div class="table-scroll">
+          <table class="bench-table hash-manifest-table">
+            <thead>
+              <tr>
+                <th>Artifact</th>
+                <th>SHA256</th>
+                <th>MD5</th>
+                <th>Hash Files</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td class="mono">basefwx-mac-amd64</td>
+                <td class="mono hash-digest" data-hash-file="basefwx-mac-amd64.sha256">Loading...</td>
+                <td class="mono hash-digest" data-hash-file="basefwx-mac-amd64.md5">Loading...</td>
+                <td class="mono">
+                  <a data-asset-link="basefwx-mac-amd64.sha256" href="#">sha256</a> ·
+                  <a data-asset-link="basefwx-mac-amd64.md5" href="#">md5</a>
+                </td>
+              </tr>
+              <tr>
+                <td class="mono">basefwx-mac-arm64</td>
+                <td class="mono hash-digest" data-hash-file="basefwx-mac-arm64.sha256">Loading...</td>
+                <td class="mono hash-digest" data-hash-file="basefwx-mac-arm64.md5">Loading...</td>
+                <td class="mono">
+                  <a data-asset-link="basefwx-mac-arm64.sha256" href="#">sha256</a> ·
+                  <a data-asset-link="basefwx-mac-arm64.md5" href="#">md5</a>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="java">
+        <div class="section-title">Java</div>
+        <div class="table-scroll">
+          <table class="bench-table hash-manifest-table">
+            <thead>
+              <tr>
+                <th>Artifact</th>
+                <th>SHA256</th>
+                <th>MD5</th>
+                <th>Hash Files</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td class="mono">basefwx-java.jar</td>
+                <td class="mono hash-digest" data-hash-file="basefwx-java.jar.sha256">Loading...</td>
+                <td class="mono hash-digest" data-hash-file="basefwx-java.jar.md5">Loading...</td>
+                <td class="mono">
+                  <a data-asset-link="basefwx-java.jar.sha256" href="#">sha256</a> ·
+                  <a data-asset-link="basefwx-java.jar.md5" href="#">md5</a>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <footer>
+        FixCraft BaseFWX Documentation and Release Portal
+      </footer>
+    </div>
+  </body>
+</html>

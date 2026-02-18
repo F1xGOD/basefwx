@@ -250,11 +250,11 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - runner: macos-13
+          - runner: macos-15-intel
             arch: amd64
             target_arch: x86_64
             output: basefwx-mac-amd64
-          - runner: macos-14
+          - runner: macos-15
             arch: arm64
             target_arch: arm64
             output: basefwx-mac-arm64

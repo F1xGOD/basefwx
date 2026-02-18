@@ -394,7 +394,7 @@ if(BASEFWX_REQUIRE_ARGON2 AND NOT ARGON2_FOUND)
 endif()
 
 # Avoid pulling host liboqs paths when cross-compiling.
-if((CMAKE_CROSSCOMPILING OR YUME_FORCE_CROSS OR CMAKE_SYSTEM_NAME STREQUAL "Windows" OR CMAKE_SYSTEM_NAME STREQUAL "Darwin") AND OQS_FOUND)
+if((CMAKE_CROSSCOMPILING OR YUME_FORCE_CROSS) AND OQS_FOUND)
     set(_basefwx_host_oqs 0)
     if(OQS_INCLUDE_DIR MATCHES "^/usr/include" OR OQS_INCLUDE_DIR MATCHES "^/usr/local/include")
         set(_basefwx_host_oqs 1)

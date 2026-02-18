@@ -1,6 +1,7 @@
 const repo = "F1xGOD/basefwx";
 const releaseApi = `https://api.github.com/repos/${repo}/releases/latest`;
 let latestReleaseTag = "";
+let latestReleaseData = null;
 const vtHashes = new Map();
 const vtFlags = new Map();
 const VT_OK_ICON = `
@@ -141,6 +142,39 @@ const setLink = (selector, url) => {
   } else {
     el.href = "#";
   }
+};
+
+const setAssetLinkElement = (el, url) => {
+  if (!el) return;
+  if (url) {
+    el.href = url;
+    el.setAttribute("target", "_blank");
+    el.setAttribute("rel", "noopener");
+    el.classList.remove("disabled");
+  } else {
+    el.href = "#";
+    el.classList.add("disabled");
+  }
+};
+
+const fetchLatestRelease = async () => {
+  if (latestReleaseData) {
+    return latestReleaseData;
+  }
+  const response = await fetch(releaseApi);
+  if (!response.ok) {
+    throw new Error("release fetch failed");
+  }
+  latestReleaseData = await response.json();
+  return latestReleaseData;
+};
+
+const applyAssetLinks = (assetLookup) => {
+  document.querySelectorAll("[data-asset-link]").forEach((el) => {
+    const assetName = el.getAttribute("data-asset-link");
+    const asset = assetName ? assetLookup.get(assetName) : null;
+    setAssetLinkElement(el, asset ? asset.browser_download_url : null);
+  });
 };
 
 const HASH_COLLAPSED_LEN = 32;
@@ -328,11 +362,7 @@ const getResultsBases = (tag) => {
 
 const loadRelease = async () => {
   try {
-    const response = await fetch(releaseApi);
-    if (!response.ok) {
-      throw new Error("release fetch failed");
-    }
-    const data = await response.json();
+    const data = await fetchLatestRelease();
     latestReleaseTag = data.tag_name || "";
     const assets = data.assets || [];
     const assetLookup = new Map(assets.map((asset) => [asset.name, asset]));
@@ -354,10 +384,65 @@ const loadRelease = async () => {
       setHashText(`${key}.sha256`, "Awaiting VirusTotal");
       setHashText(`${key}.md5`, "Awaiting VirusTotal");
     });
+    applyAssetLinks(assetLookup);
   } catch (err) {
     setText("release-version", "Release data unavailable");
     setText("release-date", "Check GitHub for details");
     setText("release-assets", "-");
+  }
+};
+
+const parseHashFile = (assetName, body) => {
+  const expectedLength = assetName.endsWith(".md5") ? 32 : 64;
+  const matcher = new RegExp(`\\b[a-fA-F0-9]{${expectedLength}}\\b`);
+  const match = String(body || "").match(matcher);
+  if (match) {
+    return match[0].toLowerCase();
+  }
+  const first = String(body || "").trim().split(/\s+/)[0] || "";
+  return first || "Unavailable";
+};
+
+const loadHashFiles = async () => {
+  const nodes = Array.from(document.querySelectorAll("[data-hash-file]"));
+  if (!nodes.length) {
+    return;
+  }
+  try {
+    const data = await fetchLatestRelease();
+    latestReleaseTag = data.tag_name || latestReleaseTag;
+    const assets = data.assets || [];
+    const assetLookup = new Map(assets.map((asset) => [asset.name, asset]));
+    applyAssetLinks(assetLookup);
+
+    await Promise.all(
+      nodes.map(async (node) => {
+        const assetName = node.getAttribute("data-hash-file");
+        if (!assetName) {
+          node.textContent = "Unavailable";
+          return;
+        }
+        const asset = assetLookup.get(assetName);
+        if (!asset) {
+          node.textContent = "Missing release asset";
+          return;
+        }
+        try {
+          const response = await fetch(asset.browser_download_url);
+          if (!response.ok) {
+            throw new Error("hash fetch failed");
+          }
+          const body = await response.text();
+          node.textContent = parseHashFile(assetName, body);
+        } catch (_err) {
+          node.textContent = "Unavailable";
+        }
+      })
+    );
+  } catch (_err) {
+    nodes.forEach((node) => {
+      node.textContent = "Unavailable";
+    });
   }
 };
 
@@ -538,6 +623,9 @@ document.addEventListener("DOMContentLoaded", () => {
   const run = async () => {
     if (document.getElementById("release-version") || document.getElementById("bench-release")) {
       await loadRelease();
+    }
+    if (document.querySelector("[data-hash-file]")) {
+      await loadHashFiles();
     }
     if (document.getElementById("vt-table")) {
       await loadVirusTotal();

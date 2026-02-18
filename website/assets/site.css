@@ -351,6 +351,10 @@ section {
   gap: 12px;
 }
 
+.download-card-wide {
+  grid-column: 1 / -1;
+}
+
 .download-card h3 {
   margin: 0;
   font-size: 18px;
@@ -530,6 +534,16 @@ section {
 
 .bench-table-compact {
   border-spacing: 0 6px;
+}
+
+.hash-manifest-table {
+  min-width: 760px;
+}
+
+.hash-manifest-table .hash-digest {
+  white-space: normal;
+  word-break: break-all;
+  overflow-wrap: anywhere;
 }
 
 .bench-runtime {

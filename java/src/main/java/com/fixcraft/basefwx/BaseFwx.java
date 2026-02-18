@@ -2,6 +2,7 @@ package com.fixcraft.basefwx;
 
 import java.io.BufferedInputStream;
 import java.io.BufferedOutputStream;
+import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileInputStream;
@@ -20,6 +21,10 @@ import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.zip.CRC32;
+import java.awt.image.BufferedImage;
+import java.awt.image.WritableRaster;
+import javax.imageio.ImageIO;
 import javax.crypto.AEADBadTagException;
 import javax.crypto.Cipher;
 import javax.crypto.Mac;
@@ -74,6 +79,14 @@ public final class BaseFwx {
 
     private static final int STREAM_CHUNK = 1 << 20;
     private static final int PERF_OBFUSCATION_THRESHOLD = 1 << 20;
+    private static final byte[] KFM_MAGIC = "KFM!".getBytes(StandardCharsets.US_ASCII);
+    private static final int KFM_VERSION = 1;
+    private static final int KFM_MODE_IMAGE_AUDIO = 1;
+    private static final int KFM_MODE_AUDIO_IMAGE = 2;
+    private static final int KFM_FLAG_BW = 1;
+    private static final int KFM_HEADER_LEN = 32;
+    private static final long KFM_MAX_PAYLOAD = 1L << 30;
+    private static final int KFM_AUDIO_RATE = 24000;
 
     public static byte[] fwxAesEncryptRaw(byte[] plaintext, String password, boolean useMaster) {
         if (plaintext == null) {
@@ -494,6 +507,61 @@ public final class BaseFwx {
 
     public static byte[] n10DecodeBytes(String input) {
         return Codec.n10DecodeBytes(input);
+    }
+
+    public static File kFMe(File input, File output) {
+        if (input == null || !input.isFile()) {
+            throw new IllegalArgumentException("kFMe input file not found");
+        }
+        byte[] payload = readFileBytes(input);
+        byte[] container = kfmPackContainer(KFM_MODE_IMAGE_AUDIO, payload, getExtension(input), 0);
+        File out = output != null ? output : replaceExtension(input, ".wav");
+        writeFileBytes(out, kfmCarrierToWav(container));
+        return out;
+    }
+
+    public static File kFMd(File input, File output, boolean bwMode) {
+        if (input == null || !input.isFile()) {
+            throw new IllegalArgumentException("kFMd input file not found");
+        }
+        byte[] carrier = kfmWavToCarrier(readFileBytes(input));
+        KfmDecoded decoded = kfmUnpackContainer(carrier);
+        if (decoded != null) {
+            File out = output != null ? output : replaceExtension(input, decoded.extension);
+            writeFileBytes(out, decoded.payload);
+            return out;
+        }
+        File out = output != null ? output : replaceExtension(input, ".png");
+        writeFileBytes(out, kfmCarrierToPng(carrier, bwMode));
+        return out;
+    }
+
+    public static File kFAe(File input, File output, boolean bwMode) {
+        if (input == null || !input.isFile()) {
+            throw new IllegalArgumentException("kFAe input file not found");
+        }
+        byte[] payload = readFileBytes(input);
+        int flags = bwMode ? KFM_FLAG_BW : 0;
+        byte[] container = kfmPackContainer(KFM_MODE_AUDIO_IMAGE, payload, getExtension(input), flags);
+        File out = output != null ? output : replaceExtension(input, ".png");
+        writeFileBytes(out, kfmCarrierToPng(container, bwMode));
+        return out;
+    }
+
+    public static File kFAd(File input, File output) {
+        if (input == null || !input.isFile()) {
+            throw new IllegalArgumentException("kFAd input file not found");
+        }
+        byte[] carrier = kfmPngToCarrier(readFileBytes(input));
+        KfmDecoded decoded = kfmUnpackContainer(carrier);
+        if (decoded != null) {
+            File out = output != null ? output : replaceExtension(input, decoded.extension);
+            writeFileBytes(out, decoded.payload);
+            return out;
+        }
+        File out = output != null ? output : replaceExtension(input, ".wav");
+        writeFileBytes(out, kfmCarrierToWav(carrier));
+        return out;
     }
 
     public static String b64Encode(String input) {
@@ -3441,6 +3509,363 @@ public final class BaseFwx {
             return "";
         }
         return name.substring(idx);
+    }
+
+    private static File replaceExtension(File input, String extension) {
+        String name = input.getName();
+        int idx = name.lastIndexOf('.');
+        if (idx >= 0) {
+            name = name.substring(0, idx);
+        }
+        name += kfmCleanExt(extension);
+        File parent = input.getParentFile();
+        return parent == null ? new File(name) : new File(parent, name);
+    }
+
+    private static String kfmCleanExt(String ext) {
+        if (ext == null || ext.trim().isEmpty()) {
+            return ".bin";
+        }
+        String normalized = ext.trim().toLowerCase();
+        if (!normalized.startsWith(".")) {
+            normalized = "." + normalized;
+        }
+        if (normalized.length() > 24) {
+            return ".bin";
+        }
+        for (int i = 0; i < normalized.length(); i++) {
+            char ch = normalized.charAt(i);
+            boolean ok = ch == '.' || ch == '_' || ch == '-'
+                || (ch >= 'a' && ch <= 'z')
+                || (ch >= '0' && ch <= '9');
+            if (!ok) {
+                return ".bin";
+            }
+        }
+        return normalized;
+    }
+
+    private static long bytesToLong(byte[] input, int offset) {
+        long out = 0L;
+        for (int i = 0; i < 8; i++) {
+            out = (out << 8) | (input[offset + i] & 0xFFL);
+        }
+        return out;
+    }
+
+    private static void writeU64(byte[] target, int offset, long value) {
+        long v = value;
+        for (int i = 7; i >= 0; i--) {
+            target[offset + i] = (byte) (v & 0xFFL);
+            v >>>= 8;
+        }
+    }
+
+    private static int readU16LE(byte[] source, int offset) {
+        return (source[offset] & 0xFF) | ((source[offset + 1] & 0xFF) << 8);
+    }
+
+    private static int readU32LE(byte[] source, int offset) {
+        return (source[offset] & 0xFF)
+            | ((source[offset + 1] & 0xFF) << 8)
+            | ((source[offset + 2] & 0xFF) << 16)
+            | ((source[offset + 3] & 0xFF) << 24);
+    }
+
+    private static void writeU16LE(OutputStream out, int value) throws IOException {
+        out.write(value & 0xFF);
+        out.write((value >> 8) & 0xFF);
+    }
+
+    private static void writeU32LE(OutputStream out, long value) throws IOException {
+        out.write((int) (value & 0xFFL));
+        out.write((int) ((value >> 8) & 0xFFL));
+        out.write((int) ((value >> 16) & 0xFFL));
+        out.write((int) ((value >> 24) & 0xFFL));
+    }
+
+    private static byte[] kfmKeystream(long seed, int length) {
+        byte[] out = new byte[length];
+        if (length <= 0) {
+            return out;
+        }
+        byte[] state = new byte[16];
+        writeU64(state, 0, seed);
+        int offset = 0;
+        long counter = 0L;
+        while (offset < length) {
+            writeU64(state, 8, counter);
+            MessageDigest sha = SHA256_DIGEST.get();
+            sha.reset();
+            byte[] block = sha.digest(state);
+            int take = Math.min(block.length, length - offset);
+            System.arraycopy(block, 0, out, offset, take);
+            offset += take;
+            counter++;
+        }
+        return out;
+    }
+
+    private static byte[] kfmXor(byte[] input, byte[] mask) {
+        if (input.length != mask.length) {
+            throw new IllegalArgumentException("kFM mask length mismatch");
+        }
+        byte[] out = new byte[input.length];
+        for (int i = 0; i < input.length; i++) {
+            out[i] = (byte) (input[i] ^ mask[i]);
+        }
+        return out;
+    }
+
+    private static byte[] kfmPackContainer(int mode, byte[] payload, String ext, int flags) {
+        if (payload == null) {
+            throw new IllegalArgumentException("kFM payload is null");
+        }
+        if (payload.length > KFM_MAX_PAYLOAD) {
+            throw new IllegalArgumentException("kFM payload is too large");
+        }
+        if (mode != KFM_MODE_IMAGE_AUDIO && mode != KFM_MODE_AUDIO_IMAGE) {
+            throw new IllegalArgumentException("kFM mode is invalid");
+        }
+        String cleanedExt = kfmCleanExt(ext);
+        byte[] extBytes = cleanedExt.getBytes(StandardCharsets.UTF_8);
+        if (extBytes.length > 255) {
+            extBytes = ".bin".getBytes(StandardCharsets.UTF_8);
+        }
+        byte[] body = new byte[extBytes.length + payload.length];
+        System.arraycopy(extBytes, 0, body, 0, extBytes.length);
+        System.arraycopy(payload, 0, body, extBytes.length, payload.length);
+
+        long seed = bytesToLong(Crypto.randomBytes(8), 0);
+        byte[] masked = kfmXor(body, kfmKeystream(seed, body.length));
+        CRC32 crc32 = new CRC32();
+        crc32.update(payload, 0, payload.length);
+
+        byte[] out = new byte[KFM_HEADER_LEN + masked.length];
+        System.arraycopy(KFM_MAGIC, 0, out, 0, KFM_MAGIC.length);
+        out[4] = (byte) KFM_VERSION;
+        out[5] = (byte) mode;
+        out[6] = (byte) (flags & 0xFF);
+        out[7] = (byte) extBytes.length;
+        writeU64(out, 8, payload.length);
+        writeU32(out, 16, (int) (crc32.getValue() & 0xFFFFFFFFL));
+        writeU64(out, 20, seed);
+        writeU32(out, 28, 0);
+        System.arraycopy(masked, 0, out, KFM_HEADER_LEN, masked.length);
+        return out;
+    }
+
+    private static KfmDecoded kfmUnpackContainer(byte[] blob) {
+        if (blob == null || blob.length < KFM_HEADER_LEN) {
+            return null;
+        }
+        for (int i = 0; i < KFM_MAGIC.length; i++) {
+            if (blob[i] != KFM_MAGIC[i]) {
+                return null;
+            }
+        }
+        int version = blob[4] & 0xFF;
+        int mode = blob[5] & 0xFF;
+        int flags = blob[6] & 0xFF;
+        int extLen = blob[7] & 0xFF;
+        if (version != KFM_VERSION || (mode != KFM_MODE_IMAGE_AUDIO && mode != KFM_MODE_AUDIO_IMAGE)) {
+            return null;
+        }
+        long payloadLen = bytesToLong(blob, 8);
+        long bodyLenLong = payloadLen + extLen;
+        if (payloadLen < 0 || bodyLenLong < extLen || bodyLenLong > (blob.length - KFM_HEADER_LEN)) {
+            return null;
+        }
+        int bodyLen = (int) bodyLenLong;
+        int crcExpected = readU32(blob, 16);
+        long seed = bytesToLong(blob, 20);
+        byte[] body = Arrays.copyOfRange(blob, KFM_HEADER_LEN, KFM_HEADER_LEN + bodyLen);
+        byte[] clear = kfmXor(body, kfmKeystream(seed, body.length));
+        byte[] extBytes = Arrays.copyOfRange(clear, 0, extLen);
+        byte[] payload = Arrays.copyOfRange(clear, extLen, clear.length);
+        CRC32 crc32 = new CRC32();
+        crc32.update(payload, 0, payload.length);
+        if (((int) (crc32.getValue() & 0xFFFFFFFFL)) != crcExpected) {
+            return null;
+        }
+        String ext = kfmCleanExt(new String(extBytes, StandardCharsets.UTF_8));
+        return new KfmDecoded(mode, flags, ext, payload);
+    }
+
+    private static byte[] kfmCarrierToWav(byte[] carrier) {
+        byte[] raw = carrier;
+        if ((raw.length & 1) != 0) {
+            raw = Arrays.copyOf(raw, raw.length + 1);
+        }
+        byte[] pcm = new byte[raw.length];
+        for (int i = 0; i < raw.length; i += 2) {
+            int value = (raw[i] & 0xFF) | ((raw[i + 1] & 0xFF) << 8);
+            short sample = (short) (value - 32768);
+            pcm[i] = (byte) (sample & 0xFF);
+            pcm[i + 1] = (byte) ((sample >> 8) & 0xFF);
+        }
+        try (ByteArrayOutputStream out = new ByteArrayOutputStream(44 + pcm.length)) {
+            out.write('R'); out.write('I'); out.write('F'); out.write('F');
+            writeU32LE(out, 36L + pcm.length);
+            out.write('W'); out.write('A'); out.write('V'); out.write('E');
+            out.write('f'); out.write('m'); out.write('t'); out.write(' ');
+            writeU32LE(out, 16);
+            writeU16LE(out, 1);
+            writeU16LE(out, 1);
+            writeU32LE(out, KFM_AUDIO_RATE);
+            writeU32LE(out, KFM_AUDIO_RATE * 2L);
+            writeU16LE(out, 2);
+            writeU16LE(out, 16);
+            out.write('d'); out.write('a'); out.write('t'); out.write('a');
+            writeU32LE(out, pcm.length);
+            out.write(pcm);
+            return out.toByteArray();
+        } catch (IOException exc) {
+            throw new IllegalStateException("kFM WAV encode failed", exc);
+        }
+    }
+
+    private static byte[] kfmWavToCarrier(byte[] wav) {
+        if (wav.length < 44) {
+            throw new IllegalArgumentException("kFM WAV input too short");
+        }
+        if (!(wav[0] == 'R' && wav[1] == 'I' && wav[2] == 'F' && wav[3] == 'F'
+            && wav[8] == 'W' && wav[9] == 'A' && wav[10] == 'V' && wav[11] == 'E')) {
+            throw new IllegalArgumentException("kFM WAV header mismatch");
+        }
+        boolean fmtPcm = false;
+        int channels = 0;
+        int bitsPerSample = 0;
+        byte[] dataChunk = null;
+        int offset = 12;
+        while (offset + 8 <= wav.length) {
+            int chunkLen = readU32LE(wav, offset + 4);
+            long chunkLenU = chunkLen & 0xFFFFFFFFL;
+            long dataOffset = offset + 8L;
+            long next = dataOffset + chunkLenU;
+            if (next > wav.length) {
+                break;
+            }
+            if (wav[offset] == 'f' && wav[offset + 1] == 'm' && wav[offset + 2] == 't' && wav[offset + 3] == ' ') {
+                if (chunkLenU >= 16) {
+                    int format = readU16LE(wav, (int) dataOffset);
+                    channels = readU16LE(wav, (int) dataOffset + 2);
+                    bitsPerSample = readU16LE(wav, (int) dataOffset + 14);
+                    fmtPcm = (format == 1);
+                }
+            } else if (wav[offset] == 'd' && wav[offset + 1] == 'a' && wav[offset + 2] == 't' && wav[offset + 3] == 'a') {
+                dataChunk = Arrays.copyOfRange(wav, (int) dataOffset, (int) next);
+            }
+            offset = (int) (next + (chunkLenU & 1L));
+        }
+        if (dataChunk == null) {
+            throw new IllegalArgumentException("kFM WAV data chunk missing");
+        }
+        if (!(fmtPcm && channels == 1 && bitsPerSample == 16)) {
+            return dataChunk;
+        }
+        if ((dataChunk.length & 1) != 0) {
+            dataChunk = Arrays.copyOf(dataChunk, dataChunk.length + 1);
+        }
+        byte[] out = new byte[dataChunk.length];
+        for (int i = 0; i < dataChunk.length; i += 2) {
+            short sample = (short) ((dataChunk[i] & 0xFF) | ((dataChunk[i + 1] & 0xFF) << 8));
+            int value = (sample + 32768) & 0xFFFF;
+            out[i] = (byte) (value & 0xFF);
+            out[i + 1] = (byte) ((value >> 8) & 0xFF);
+        }
+        return out;
+    }
+
+    private static byte[] kfmCarrierToPng(byte[] carrier, boolean bwMode) {
+        int channels = bwMode ? 1 : 3;
+        int pixels = Math.max(1, (carrier.length + channels - 1) / channels);
+        int width = Math.max(1, (int) Math.ceil(Math.sqrt(pixels)));
+        int height = (int) Math.ceil(pixels / (double) width);
+        int capacity = width * height * channels;
+        byte[] raster = Crypto.randomBytes(capacity);
+        System.arraycopy(carrier, 0, raster, 0, Math.min(carrier.length, raster.length));
+
+        BufferedImage image;
+        if (bwMode) {
+            image = new BufferedImage(width, height, BufferedImage.TYPE_BYTE_GRAY);
+            WritableRaster imageRaster = image.getRaster();
+            int idx = 0;
+            for (int y = 0; y < height; y++) {
+                for (int x = 0; x < width; x++) {
+                    int v = raster[idx++] & 0xFF;
+                    imageRaster.setSample(x, y, 0, v);
+                }
+            }
+        } else {
+            image = new BufferedImage(width, height, BufferedImage.TYPE_INT_RGB);
+            int idx = 0;
+            for (int y = 0; y < height; y++) {
+                for (int x = 0; x < width; x++) {
+                    int r = raster[idx++] & 0xFF;
+                    int g = raster[idx++] & 0xFF;
+                    int b = raster[idx++] & 0xFF;
+                    image.setRGB(x, y, (r << 16) | (g << 8) | b);
+                }
+            }
+        }
+        try (ByteArrayOutputStream out = new ByteArrayOutputStream()) {
+            if (!ImageIO.write(image, "png", out)) {
+                throw new IllegalStateException("kFM PNG encode failed");
+            }
+            return out.toByteArray();
+        } catch (IOException exc) {
+            throw new IllegalStateException("kFM PNG encode failed", exc);
+        }
+    }
+
+    private static byte[] kfmPngToCarrier(byte[] png) {
+        try (ByteArrayInputStream in = new ByteArrayInputStream(png)) {
+            BufferedImage image = ImageIO.read(in);
+            if (image == null) {
+                throw new IllegalArgumentException("kFM PNG decode failed");
+            }
+            int width = image.getWidth();
+            int height = image.getHeight();
+            int bands = image.getRaster().getNumBands();
+            if (bands == 1) {
+                byte[] out = new byte[width * height];
+                int idx = 0;
+                for (int y = 0; y < height; y++) {
+                    for (int x = 0; x < width; x++) {
+                        out[idx++] = (byte) image.getRaster().getSample(x, y, 0);
+                    }
+                }
+                return out;
+            }
+            byte[] out = new byte[width * height * 3];
+            int idx = 0;
+            for (int y = 0; y < height; y++) {
+                for (int x = 0; x < width; x++) {
+                    int rgb = image.getRGB(x, y);
+                    out[idx++] = (byte) ((rgb >> 16) & 0xFF);
+                    out[idx++] = (byte) ((rgb >> 8) & 0xFF);
+                    out[idx++] = (byte) (rgb & 0xFF);
+                }
+            }
+            return out;
+        } catch (IOException exc) {
+            throw new IllegalStateException("kFM PNG decode failed", exc);
+        }
+    }
+
+    private static final class KfmDecoded {
+        final int mode;
+        final int flags;
+        final String extension;
+        final byte[] payload;
+
+        KfmDecoded(int mode, int flags, String extension, byte[] payload) {
+            this.mode = mode;
+            this.flags = flags;
+            this.extension = extension;
+            this.payload = payload;
+        }
     }
 
     public static byte[] resolvePasswordBytes(String password, boolean useMaster) {

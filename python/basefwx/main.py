@@ -20,6 +20,7 @@ class basefwx:
     import typing
     import json
     import struct
+    import wave
     try:
         from PIL import Image
     except Exception:  # pragma: no cover - optional dependency
@@ -210,6 +211,15 @@ class basefwx:
     N10_HEADER_DIGITS = 28
     N10_MASK64 = (1 << 64) - 1
     N10_MUL_INV = pow(N10_MUL, -1, N10_MOD)
+    KFM_MAGIC = b"KFM!"
+    KFM_VERSION = 1
+    KFM_MODE_IMAGE_AUDIO = 1
+    KFM_MODE_AUDIO_IMAGE = 2
+    KFM_FLAG_BW = 1
+    KFM_HEADER_STRUCT = struct.Struct(">4sBBBBQIQI")
+    KFM_HEADER_LEN = KFM_HEADER_STRUCT.size
+    KFM_MAX_PAYLOAD = 1_073_741_824
+    KFM_AUDIO_RATE = 24000
     MASTER_PQ_ALG = "ml-kem-768"
     MASTER_PQ_PUBLIC = b"eJwBoARf+/rkrYxhXn0CNFqTkzQUrIYloydzGrqpIuWXi+qnLO/XRnspzQBDwwTKLW3Ku6Zwii1AfriFM5t8PtugqMNFt/5HoHxIZLGkytTWKP3IKoP7EH2HFu14b5bagh+KIFTWoW12qZqLRNjJLBHZmzxasEIsN7AnsOiokMHxt4XwoLk5fscIhXSANBZpHUVEO+NkBhg5UnvzWkzAqPm6rEvCfE+CHxgFg1SjBJeFfVMyzpKpsUi6iCGXSl6nZuTkr10btfi8RHCEfxDrfhcJk0bsKMWEI6wVY23KQXXlmcJ4VydGZ/ZbjWhVbX6bo0DKqG5IlwpTDPJIwlumRpxbBog8JG10p8PTaRJEAKfiVo7jiD1Aki7hYqmyyBn2Q0RFy03Bm/Rpy1zlK3DahaaoMj1mJrJ5ff2FYYVsBQbrywcDUcdHUkIpUqwrrRyqdEIHq1T6AiKHmf2KHTXQnLuZpJ3Ih59bkH1GC2UzbEIWzFSImvQDkswCBW9cF0tFYCNnReiReb57XAjaW3smdOg1o9oyk2IbyptJtNe1teHoPsMJkBGin/ugUeFmEOa0f8lTEmK4u1/GxHrQxD65kxm2IHT4NPM8Z5oqQ9z0WthUE5MouNrZLK8EltZQzAcZJ/g7CesRi40qFecyD14hDPBcr6cEV6yqOXXrcDRQVCUhuYRyUNqrFe4JPks2kZlxXjABHMD1PHVzfJpsAtsTDJa2EdpoAkKRvfg2QOK6CpYix6zIyB1yGwdCG8L2QS9DQefDQntXDlwSIieqRrwmiWcba4mSgwfxsoH2SIbQPZKbtEA4XNGqen1CcldAw1w2mnO3otspreJEBZJjVSihGcoyVjWap9dWc0pLffeDC5mUyOTzWUQ3XBAxX817G9rIbFyMQ+4AdeP2zL/nk9s2wYuZT2MEbwTHW/6UJQXbRf+svg9Kq//ryl/YRiaxdK2xRkP7oaBBVbyyXxYUJEhXOD7cUar8HsGZlXmiDSxzCBZSJG+4ooAgOKfEx6liOvqHBQKrsG4ylg3JQqmKBUdXcf6cMImRqS4MFM23vQkSPqIckxGgkrJGDKLGg8DKsuOqUvkzexAWviAIJQZsJsqjUl2stBgnltsyysE2cdI5Poh7KgOFV27bfi4iCpFSXc46Aa2jjN0WFYAgfhcRXgvIanJ3L8/sPrR7QKvpTtPFSfdcBipqp8vRdYImF5HceU1TU+QwtOcmCKDmaDTBGtJLZDXYJ3/2VQAEr8Mhk1WxGQsWUikZBi9pHTTbh93gvl9gLaGlxlRCjwzSqcJVXF80UiVMA06hfDnzi9MFpIGZL0czax+1zwdLFsnnHLGLzm/YpgrUBIk0gTgMVhqiu0+JyagxwrXCsDmGbhj8PzJGUeR8xhoxzOtTMgtaFwekbEAss+JGzuZJeakDxhMJEvvbKabIFDeQLsImO4eaAslqXyNoSg7AtnDlHfzTTFvwk2/UppeXNmcEC9n1UyfyWNW6qAZRJe5zQkijzLfkGKWsR/ksjmUQwMHwOOWVQ8qqUapYxsmbZkosPBXRDNBhY6PNjfciD2hRoIqrd/pnkJ6cZd1FQyxge6FA3PMpHw=="
     MASTER_EC_MAGIC = b"EC1"
@@ -3264,6 +3274,254 @@ class basefwx:
         if basefwx._n10_fnv1a32(raw) != checksum_expected:
             raise ValueError("n10 checksum mismatch")
         return raw
+
+    @staticmethod
+    def _kfm_clean_ext(ext: str) -> str:
+        normalized = (ext or "").strip().lower()
+        if not normalized:
+            return ".bin"
+        if not normalized.startswith("."):
+            normalized = f".{normalized}"
+        if len(normalized) > 24:
+            return ".bin"
+        allowed = set("._-abcdefghijklmnopqrstuvwxyz0123456789")
+        if any(ch not in allowed for ch in normalized):
+            return ".bin"
+        return normalized
+
+    @staticmethod
+    def _kfm_keystream(seed: int, length: int) -> bytes:
+        if length <= 0:
+            return b""
+        out = bytearray(length)
+        seed_bytes = seed.to_bytes(8, "big", signed=False)
+        cursor = 0
+        counter = 0
+        while cursor < length:
+            block = basefwx.hashlib.blake2s(
+                seed_bytes + counter.to_bytes(8, "big", signed=False)
+            ).digest()
+            take = min(length - cursor, len(block))
+            out[cursor:cursor + take] = block[:take]
+            cursor += take
+            counter += 1
+        return bytes(out)
+
+    @staticmethod
+    def _kfm_xor(data: bytes, mask: bytes) -> bytes:
+        if len(data) != len(mask):
+            raise ValueError("kFM mask length mismatch")
+        out = bytearray(len(data))
+        for idx in range(len(data)):
+            out[idx] = data[idx] ^ mask[idx]
+        return bytes(out)
+
+    @staticmethod
+    def _kfm_pack_container(mode: int, payload: bytes, ext: str, *, flags: int = 0) -> bytes:
+        if mode not in (basefwx.KFM_MODE_IMAGE_AUDIO, basefwx.KFM_MODE_AUDIO_IMAGE):
+            raise ValueError("kFM mode is invalid")
+        if isinstance(payload, memoryview):
+            raw = payload.tobytes()
+        elif isinstance(payload, bytearray):
+            raw = bytes(payload)
+        elif isinstance(payload, bytes):
+            raw = payload
+        else:
+            raise TypeError("kFM payload must be bytes-like")
+        if len(raw) > basefwx.KFM_MAX_PAYLOAD:
+            raise ValueError("kFM payload is too large")
+        ext_clean = basefwx._kfm_clean_ext(ext)
+        ext_bytes = ext_clean.encode("utf-8")
+        if len(ext_bytes) > 255:
+            ext_bytes = b".bin"
+        seed = int.from_bytes(basefwx.secrets.token_bytes(8), "big", signed=False)
+        body = ext_bytes + raw
+        masked = basefwx._kfm_xor(body, basefwx._kfm_keystream(seed, len(body)))
+        crc32 = basefwx.zlib.crc32(raw) & 0xFFFFFFFF
+        header = basefwx.KFM_HEADER_STRUCT.pack(
+            basefwx.KFM_MAGIC,
+            basefwx.KFM_VERSION,
+            mode,
+            flags & 0xFF,
+            len(ext_bytes),
+            len(raw),
+            crc32,
+            seed,
+            0,
+        )
+        return header + masked
+
+    @staticmethod
+    def _kfm_unpack_container(blob: bytes) -> "basefwx.typing.Optional[dict]":
+        if isinstance(blob, memoryview):
+            data = blob.tobytes()
+        elif isinstance(blob, bytearray):
+            data = bytes(blob)
+        elif isinstance(blob, bytes):
+            data = blob
+        else:
+            return None
+        if len(data) < basefwx.KFM_HEADER_LEN:
+            return None
+        try:
+            magic, version, mode, flags, ext_len, payload_len, crc32, seed, _ = (
+                basefwx.KFM_HEADER_STRUCT.unpack(data[:basefwx.KFM_HEADER_LEN])
+            )
+        except basefwx.struct.error:
+            return None
+        if magic != basefwx.KFM_MAGIC or version != basefwx.KFM_VERSION:
+            return None
+        if mode not in (basefwx.KFM_MODE_IMAGE_AUDIO, basefwx.KFM_MODE_AUDIO_IMAGE):
+            return None
+        body_len = ext_len + payload_len
+        if body_len < ext_len:
+            return None
+        if body_len > len(data) - basefwx.KFM_HEADER_LEN:
+            return None
+        masked = data[basefwx.KFM_HEADER_LEN:basefwx.KFM_HEADER_LEN + body_len]
+        body = basefwx._kfm_xor(masked, basefwx._kfm_keystream(seed, body_len))
+        ext_bytes = body[:ext_len]
+        payload = body[ext_len:]
+        if (basefwx.zlib.crc32(payload) & 0xFFFFFFFF) != crc32:
+            return None
+        try:
+            ext = ext_bytes.decode("utf-8")
+        except UnicodeDecodeError:
+            ext = ".bin"
+        return {
+            "mode": mode,
+            "flags": flags,
+            "ext": basefwx._kfm_clean_ext(ext),
+            "payload": payload,
+        }
+
+    @staticmethod
+    def _kfm_bytes_to_wav(data: bytes, output_path: "basefwx.pathlib.Path") -> None:
+        if isinstance(data, memoryview):
+            raw = data.tobytes()
+        elif isinstance(data, bytearray):
+            raw = bytes(data)
+        else:
+            raw = data
+        if len(raw) % 2:
+            raw += b"\x00"
+        pcm = bytearray(len(raw))
+        for idx in range(0, len(raw), 2):
+            value = raw[idx] | (raw[idx + 1] << 8)
+            sample = value - 32768
+            pcm[idx:idx + 2] = basefwx.struct.pack("<h", sample)
+        with basefwx.wave.open(str(output_path), "wb") as wav_file:
+            wav_file.setnchannels(1)
+            wav_file.setsampwidth(2)
+            wav_file.setframerate(basefwx.KFM_AUDIO_RATE)
+            wav_file.writeframes(bytes(pcm))
+
+    @staticmethod
+    def _kfm_wav_to_bytes(path: "basefwx.pathlib.Path") -> bytes:
+        with basefwx.wave.open(str(path), "rb") as wav_file:
+            channels = wav_file.getnchannels()
+            width = wav_file.getsampwidth()
+            frames = wav_file.readframes(wav_file.getnframes())
+        if channels != 1 or width != 2:
+            return frames
+        out = bytearray(len(frames))
+        for idx in range(0, len(frames), 2):
+            sample = basefwx.struct.unpack("<h", frames[idx:idx + 2])[0]
+            value = (sample + 32768) & 0xFFFF
+            out[idx:idx + 2] = basefwx.struct.pack("<H", value)
+        return bytes(out)
+
+    @staticmethod
+    def _kfm_bytes_to_png(data: bytes, output_path: "basefwx.pathlib.Path", *, bw_mode: bool = False) -> None:
+        if basefwx.Image is None:
+            raise RuntimeError("Pillow is required for kFM PNG operations")
+        if isinstance(data, memoryview):
+            raw = data.tobytes()
+        elif isinstance(data, bytearray):
+            raw = bytes(data)
+        else:
+            raw = data
+        channels = 1 if bw_mode else 3
+        mode = "L" if bw_mode else "RGB"
+        pixels = max(1, (len(raw) + channels - 1) // channels)
+        width = max(1, int(basefwx.math.sqrt(pixels)))
+        if width * width < pixels:
+            width += 1
+        height = (pixels + width - 1) // width
+        capacity = width * height * channels
+        carrier = bytearray(basefwx.secrets.token_bytes(capacity))
+        carrier[:len(raw)] = raw
+        image = basefwx.Image.frombytes(mode, (width, height), bytes(carrier))
+        image.save(str(output_path), format="PNG")
+
+    @staticmethod
+    def _kfm_png_to_bytes(path: "basefwx.pathlib.Path") -> bytes:
+        if basefwx.Image is None:
+            raise RuntimeError("Pillow is required for kFM PNG operations")
+        with basefwx.Image.open(str(path)) as image:
+            if image.mode == "L":
+                return image.tobytes()
+            if image.mode != "RGB":
+                image = image.convert("RGB")
+            return image.tobytes()
+
+    @staticmethod
+    def kFMe(path: str, output: str | None = None) -> str:
+        src = basefwx.pathlib.Path(path)
+        payload = src.read_bytes()
+        ext = basefwx._kfm_clean_ext(src.suffix)
+        container = basefwx._kfm_pack_container(
+            basefwx.KFM_MODE_IMAGE_AUDIO,
+            payload,
+            ext,
+        )
+        out_path = basefwx.pathlib.Path(output) if output else src.with_suffix(".wav")
+        basefwx._kfm_bytes_to_wav(container, out_path)
+        return str(out_path)
+
+    @staticmethod
+    def kFMd(path: str, output: str | None = None, *, bw_mode: bool = False) -> str:
+        src = basefwx.pathlib.Path(path)
+        carrier = basefwx._kfm_wav_to_bytes(src)
+        decoded = basefwx._kfm_unpack_container(carrier)
+        if decoded is not None:
+            ext = decoded["ext"]
+            out_path = basefwx.pathlib.Path(output) if output else src.with_suffix(ext)
+            out_path.write_bytes(decoded["payload"])
+            return str(out_path)
+        out_path = basefwx.pathlib.Path(output) if output else src.with_suffix(".png")
+        basefwx._kfm_bytes_to_png(carrier, out_path, bw_mode=bw_mode)
+        return str(out_path)
+
+    @staticmethod
+    def kFAe(path: str, output: str | None = None, *, bw_mode: bool = False) -> str:
+        src = basefwx.pathlib.Path(path)
+        payload = src.read_bytes()
+        ext = basefwx._kfm_clean_ext(src.suffix)
+        flags = basefwx.KFM_FLAG_BW if bw_mode else 0
+        container = basefwx._kfm_pack_container(
+            basefwx.KFM_MODE_AUDIO_IMAGE,
+            payload,
+            ext,
+            flags=flags,
+        )
+        out_path = basefwx.pathlib.Path(output) if output else src.with_suffix(".png")
+        basefwx._kfm_bytes_to_png(container, out_path, bw_mode=bw_mode)
+        return str(out_path)
+
+    @staticmethod
+    def kFAd(path: str, output: str | None = None) -> str:
+        src = basefwx.pathlib.Path(path)
+        carrier = basefwx._kfm_png_to_bytes(src)
+        decoded = basefwx._kfm_unpack_container(carrier)
+        if decoded is not None:
+            ext = decoded["ext"]
+            out_path = basefwx.pathlib.Path(output) if output else src.with_suffix(ext)
+            out_path.write_bytes(decoded["payload"])
+            return str(out_path)
+        out_path = basefwx.pathlib.Path(output) if output else src.with_suffix(".wav")
+        basefwx._kfm_bytes_to_wav(carrier, out_path)
+        return str(out_path)
 
     @staticmethod
     def hash512(string: str):
@@ -8408,6 +8666,40 @@ def cli(argv=None) -> int:
     n10file_dec.add_argument("input", help="Input n10 digit file")
     n10file_dec.add_argument("output", help="Output binary file path")
 
+    kfme = subparsers.add_parser(
+        "kFMe",
+        help="Encode image/media bytes into a noise-like WAV carrier"
+    )
+    kfme.add_argument("input", help="Input image/media file path")
+    kfme.add_argument("-o", "--output", default=None, help="Output WAV file path")
+
+    kfmd = subparsers.add_parser(
+        "kFMd",
+        help="Decode WAV carrier back to media bytes (or fallback to noise PNG)"
+    )
+    kfmd.add_argument("input", help="Input WAV file path")
+    kfmd.add_argument("-o", "--output", default=None, help="Output file path")
+    kfmd.add_argument(
+        "--bw",
+        action="store_true",
+        help="Fallback mode: generate black/white static PNG for non-kFM audio"
+    )
+
+    kfae = subparsers.add_parser(
+        "kFAe",
+        help="Encode audio bytes into a noise PNG carrier"
+    )
+    kfae.add_argument("input", help="Input audio file path")
+    kfae.add_argument("-o", "--output", default=None, help="Output PNG file path")
+    kfae.add_argument("--bw", action="store_true", help="Use black/white static mode")
+
+    kfad = subparsers.add_parser(
+        "kFAd",
+        help="Decode PNG carrier back to audio bytes (or fallback to noise WAV)"
+    )
+    kfad.add_argument("input", help="Input PNG/image file path")
+    kfad.add_argument("-o", "--output", default=None, help="Output file path")
+
     args = parser.parse_args(argv)
 
     _confirm_single_thread_cli()
@@ -8444,6 +8736,42 @@ def cli(argv=None) -> int:
             return 0
         except Exception as exc:
             print(theme.err(f"n10 file decode failed: {exc}"))
+            return 1
+
+    if args.command == "kFMe":
+        try:
+            out_path = basefwx.kFMe(args.input, args.output)
+            print(theme.ok(f"Wrote {out_path}"))
+            return 0
+        except Exception as exc:
+            print(theme.err(f"kFMe failed: {exc}"))
+            return 1
+
+    if args.command == "kFMd":
+        try:
+            out_path = basefwx.kFMd(args.input, args.output, bw_mode=args.bw)
+            print(theme.ok(f"Wrote {out_path}"))
+            return 0
+        except Exception as exc:
+            print(theme.err(f"kFMd failed: {exc}"))
+            return 1
+
+    if args.command == "kFAe":
+        try:
+            out_path = basefwx.kFAe(args.input, args.output, bw_mode=args.bw)
+            print(theme.ok(f"Wrote {out_path}"))
+            return 0
+        except Exception as exc:
+            print(theme.err(f"kFAe failed: {exc}"))
+            return 1
+
+    if args.command == "kFAd":
+        try:
+            out_path = basefwx.kFAd(args.input, args.output)
+            print(theme.ok(f"Wrote {out_path}"))
+            return 0
+        except Exception as exc:
+            print(theme.err(f"kFAd failed: {exc}"))
             return 1
 
     if args.command == "cryptin":

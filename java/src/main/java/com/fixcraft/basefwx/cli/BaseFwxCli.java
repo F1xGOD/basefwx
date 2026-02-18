@@ -367,6 +367,30 @@ public final class BaseFwxCli {
                         throw new RuntimeException("n10 file decode failed", exc);
                     }
                     return;
+                case "kFMe": {
+                    KfmArgs opts = parseKfmArgs(args, 1);
+                    File out = BaseFwx.kFMe(opts.input, opts.output);
+                    System.out.println(out.getPath());
+                    return;
+                }
+                case "kFMd": {
+                    KfmArgs opts = parseKfmArgs(args, 1);
+                    File out = BaseFwx.kFMd(opts.input, opts.output, opts.bwMode);
+                    System.out.println(out.getPath());
+                    return;
+                }
+                case "kFAe": {
+                    KfmArgs opts = parseKfmArgs(args, 1);
+                    File out = BaseFwx.kFAe(opts.input, opts.output, opts.bwMode);
+                    System.out.println(out.getPath());
+                    return;
+                }
+                case "kFAd": {
+                    KfmArgs opts = parseKfmArgs(args, 1);
+                    File out = BaseFwx.kFAd(opts.input, opts.output);
+                    System.out.println(out.getPath());
+                    return;
+                }
                 case "b512-dec":
                     if (argc < 3) {
                         usage();
@@ -908,6 +932,10 @@ public final class BaseFwxCli {
         System.out.println("  n10-dec <digits>");
         System.out.println("  n10file-enc <in> <out>");
         System.out.println("  n10file-dec <in> <out>");
+        System.out.println("  kFMe <in> [--out <out>]");
+        System.out.println("  kFMd <in> [--out <out>] [--bw]");
+        System.out.println("  kFAe <in> [--out <out>] [--bw]");
+        System.out.println("  kFAd <in> [--out <out>]");
         System.out.println("  hash512 <text>");
         System.out.println("  uhash513 <text>");
         System.out.println("  a512-enc <text>");
@@ -935,6 +963,40 @@ public final class BaseFwxCli {
         System.out.println("  bench-b512file <file> <password> [--no-master]");
         System.out.println("  bench-pb512file <file> <password> [--no-master]");
         System.out.println("  bench-jmg <media> <password> [--no-master]");
+    }
+
+    private static KfmArgs parseKfmArgs(String[] args, int startIndex) {
+        KfmArgs parsed = new KfmArgs();
+        java.util.List<String> positional = new java.util.ArrayList<>();
+        for (int i = startIndex; i < args.length; i++) {
+            String arg = args[i];
+            if ("--no-master".equalsIgnoreCase(arg)) {
+                continue;
+            }
+            if ("--bw".equalsIgnoreCase(arg)) {
+                parsed.bwMode = true;
+                continue;
+            }
+            if ("-o".equalsIgnoreCase(arg) || "--out".equalsIgnoreCase(arg)) {
+                if (i + 1 >= args.length) {
+                    throw new IllegalArgumentException("Missing output value");
+                }
+                parsed.output = new File(args[++i]);
+                continue;
+            }
+            positional.add(arg);
+        }
+        if (positional.isEmpty()) {
+            throw new IllegalArgumentException("Missing input path");
+        }
+        parsed.input = new File(positional.get(0));
+        if (parsed.output == null && positional.size() >= 2) {
+            parsed.output = new File(positional.get(1));
+        }
+        if (positional.size() > 2) {
+            throw new IllegalArgumentException("Too many kFM arguments");
+        }
+        return parsed;
     }
 
     private static JmgArgs parseJmgArgs(String[] args, int startIndex) {
@@ -1004,6 +1066,12 @@ public final class BaseFwxCli {
             parsed.password = "";
         }
         return parsed;
+    }
+
+    private static final class KfmArgs {
+        File input;
+        File output;
+        boolean bwMode = false;
     }
 
     private static final class JmgArgs {

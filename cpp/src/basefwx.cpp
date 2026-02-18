@@ -11,12 +11,15 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cctype>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <iostream>
 #include <limits>
 #include <optional>
 #include <openssl/evp.h>
@@ -447,6 +450,40 @@ std::string CleanKfmExt(std::string ext) {
     return ext;
 }
 
+std::string KfmPathExt(const std::filesystem::path& path) {
+    return CleanKfmExt(path.has_extension() ? path.extension().string() : "");
+}
+
+bool IsKnownKfmAudioExt(const std::string& ext) {
+    static constexpr std::array<std::string_view, 16> kAudioExts = {
+        ".wav", ".mp3", ".m4a", ".aac", ".flac", ".ogg", ".oga", ".opus",
+        ".wma", ".amr", ".aiff", ".aif", ".alac", ".m4b", ".caf", ".mka",
+    };
+    for (std::string_view value : kAudioExts) {
+        if (ext == value) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool IsKnownKfmImageExt(const std::string& ext) {
+    static constexpr std::array<std::string_view, 13> kImageExts = {
+        ".png", ".jpg", ".jpeg", ".bmp", ".gif", ".webp", ".tif",
+        ".tiff", ".ico", ".heic", ".heif", ".ppm", ".pgm",
+    };
+    for (std::string_view value : kImageExts) {
+        if (ext == value) {
+            return true;
+        }
+    }
+    return false;
+}
+
+void WarnKfmUsage(const std::string& message) {
+    std::cerr << "WARN: " << message << "\n";
+}
+
 std::vector<std::uint8_t> KfmKeystream(std::uint64_t seed, std::size_t length) {
     std::vector<std::uint8_t> out(length);
     if (length == 0) {
@@ -603,6 +640,38 @@ void WriteBinaryFileRaw(const std::filesystem::path& path, const std::vector<std
     }
 }
 
+std::filesystem::path NormalizePathForCompare(const std::filesystem::path& path) {
+    std::error_code ec;
+    auto abs = std::filesystem::absolute(path, ec);
+    if (ec) {
+        return path.lexically_normal();
+    }
+    return abs.lexically_normal();
+}
+
+bool PathsEqual(const std::filesystem::path& lhs, const std::filesystem::path& rhs) {
+    return NormalizePathForCompare(lhs) == NormalizePathForCompare(rhs);
+}
+
+std::filesystem::path ResolveKfmOutputPath(const std::filesystem::path& src,
+                                           const std::string& output,
+                                           const std::string& ext,
+                                           const std::string& tag) {
+    if (!output.empty()) {
+        std::filesystem::path out_path(output);
+        if (PathsEqual(out_path, src)) {
+            throw std::runtime_error("Refusing to overwrite input file; choose a different output path");
+        }
+        return out_path;
+    }
+    std::filesystem::path out_path = src;
+    out_path.replace_extension(ext);
+    if (PathsEqual(out_path, src)) {
+        out_path = src.parent_path() / (src.stem().string() + "." + tag + ext);
+    }
+    return out_path;
+}
+
 std::vector<std::uint8_t> ReadWavCarrierBytes(const std::filesystem::path& path) {
     std::vector<std::uint8_t> file = basefwx::ReadFile(path.string());
     if (file.size() < 44) {
@@ -650,20 +719,127 @@ std::vector<std::uint8_t> ReadWavCarrierBytes(const std::filesystem::path& path)
     if (!(has_fmt && channels == 1 && bits_per_sample == 16)) {
         return data_chunk;
     }
-
-    if (data_chunk.size() % 2 != 0) {
-        data_chunk.push_back(0);
+    std::vector<std::uint8_t> pcm = std::move(data_chunk);
+    if (pcm.size() % 2 != 0) {
+        pcm.push_back(0);
     }
-    std::vector<std::uint8_t> out(data_chunk.size());
-    for (std::size_t i = 0; i < data_chunk.size(); i += 2) {
+    std::vector<std::uint8_t> out(pcm.size());
+    for (std::size_t i = 0; i < pcm.size(); i += 2) {
         std::int16_t sample = static_cast<std::int16_t>(
-            static_cast<std::uint16_t>(data_chunk[i]) |
-            static_cast<std::uint16_t>(data_chunk[i + 1] << 8));
+            static_cast<std::uint16_t>(pcm[i]) |
+            static_cast<std::uint16_t>(pcm[i + 1] << 8));
         std::uint16_t value = static_cast<std::uint16_t>(sample + 32768);
         out[i] = static_cast<std::uint8_t>(value & 0xFFu);
         out[i + 1] = static_cast<std::uint8_t>((value >> 8) & 0xFFu);
     }
     return out;
+}
+
+std::vector<std::uint8_t> PCM16MonoToCarrierBytes(const std::vector<std::uint8_t>& pcm_input) {
+    std::vector<std::uint8_t> pcm = pcm_input;
+    if (pcm.size() % 2 != 0) {
+        pcm.push_back(0);
+    }
+    std::vector<std::uint8_t> out(pcm.size());
+    for (std::size_t i = 0; i < pcm.size(); i += 2) {
+        std::int16_t sample = static_cast<std::int16_t>(
+            static_cast<std::uint16_t>(pcm[i]) |
+            static_cast<std::uint16_t>(pcm[i + 1] << 8));
+        std::uint16_t value = static_cast<std::uint16_t>(sample + 32768);
+        out[i] = static_cast<std::uint8_t>(value & 0xFFu);
+        out[i + 1] = static_cast<std::uint8_t>((value >> 8) & 0xFFu);
+    }
+    return out;
+}
+
+std::string QuoteShellArg(const std::string& value) {
+#ifdef _WIN32
+    std::string out = "\"";
+    for (char ch : value) {
+        if (ch == '"') {
+            out += "\\\"";
+        } else {
+            out.push_back(ch);
+        }
+    }
+    out += "\"";
+    return out;
+#else
+    std::string out = "'";
+    for (char ch : value) {
+        if (ch == '\'') {
+            out += "'\\''";
+        } else {
+            out.push_back(ch);
+        }
+    }
+    out += "'";
+    return out;
+#endif
+}
+
+std::filesystem::path MakeKfmTempPath(const std::string& suffix) {
+    const auto now = static_cast<std::uint64_t>(
+        std::chrono::high_resolution_clock::now().time_since_epoch().count());
+    for (std::uint32_t i = 0; i < 32; ++i) {
+        auto candidate = std::filesystem::temp_directory_path() /
+            ("basefwx_kfm_" + std::to_string(now) + "_" + std::to_string(i) + suffix);
+        if (!std::filesystem::exists(candidate)) {
+            return candidate;
+        }
+    }
+    throw std::runtime_error("Failed to allocate temporary path for ffmpeg decode");
+}
+
+std::vector<std::uint8_t> DecodeAudioViaFfmpeg(const std::filesystem::path& path) {
+    const char* ffmpeg_env = std::getenv("BASEFWX_FFMPEG_BIN");
+    std::string ffmpeg_bin = (ffmpeg_env && *ffmpeg_env) ? ffmpeg_env : "ffmpeg";
+    auto temp_raw = MakeKfmTempPath(".raw");
+    struct Cleanup {
+        std::filesystem::path path;
+        ~Cleanup() {
+            if (!path.empty()) {
+                std::error_code ec;
+                std::filesystem::remove(path, ec);
+            }
+        }
+    } cleanup{temp_raw};
+
+    std::string command = QuoteShellArg(ffmpeg_bin)
+        + " -v error -y -i " + QuoteShellArg(path.string())
+        + " -f s16le -ac 1 -ar " + std::to_string(kKfmAudioRate)
+        + " " + QuoteShellArg(temp_raw.string());
+#ifdef _WIN32
+    command += " >NUL 2>&1";
+#else
+    command += " >/dev/null 2>&1";
+#endif
+    int rc = std::system(command.c_str());
+    if (rc != 0) {
+        throw std::runtime_error(
+            "ffmpeg failed to decode audio carrier (install ffmpeg or use WAV input)");
+    }
+    std::vector<std::uint8_t> pcm = basefwx::ReadFile(temp_raw.string());
+    if (pcm.empty()) {
+        throw std::runtime_error("ffmpeg decode produced an empty PCM stream");
+    }
+    return PCM16MonoToCarrierBytes(pcm);
+}
+
+std::vector<std::uint8_t> ReadAudioCarrierBytes(const std::filesystem::path& path) {
+    std::string wav_error;
+    try {
+        return ReadWavCarrierBytes(path);
+    } catch (const std::exception& exc) {
+        wav_error = exc.what();
+    }
+    try {
+        return DecodeAudioViaFfmpeg(path);
+    } catch (const std::exception& ff_exc) {
+        throw std::runtime_error(
+            "Failed to decode audio carrier '" + path.string() + "' (WAV parse: "
+            + wav_error + "; ffmpeg: " + ff_exc.what() + ")");
+    }
 }
 
 void WriteWavCarrierBytes(const std::filesystem::path& path, const std::vector<std::uint8_t>& carrier) {
@@ -1082,53 +1258,87 @@ std::string Jmgd(const std::string& path, const std::string& password, const std
 
 std::string Kfme(const std::string& path, const std::string& output) {
     std::filesystem::path input_path(path);
+    std::string input_ext = KfmPathExt(input_path);
+    if (IsKnownKfmAudioExt(input_ext)) {
+        throw std::runtime_error(
+            "kFMe expects an image/media input, got audio extension '" + input_ext
+            + "'. Use kFAe for audio->image carriers.");
+    }
     auto payload = ReadFile(path);
-    std::string ext = input_path.has_extension() ? input_path.extension().string() : ".bin";
+    std::string ext = input_ext;
     auto container = BuildKfmContainer(kKfmModeImageAudio, payload, ext, 0u);
-    std::filesystem::path out_path = output.empty() ? input_path.replace_extension(".wav") : std::filesystem::path(output);
+    std::filesystem::path out_path = ResolveKfmOutputPath(input_path, output, ".wav", "kfme");
     WriteWavCarrierBytes(out_path, container);
     return out_path.string();
 }
 
 std::string Kfmd(const std::string& path, const std::string& output, bool bw_mode) {
     std::filesystem::path input_path(path);
-    auto carrier = ReadWavCarrierBytes(input_path);
+    std::string input_ext = KfmPathExt(input_path);
+    if (IsKnownKfmImageExt(input_ext)) {
+        throw std::runtime_error(
+            "kFMd expects an audio carrier input, got image extension '" + input_ext
+            + "'. Use kFAd for image carriers.");
+    }
+    auto carrier = ReadAudioCarrierBytes(input_path);
     auto decoded = ParseKfmContainer(carrier);
     if (decoded) {
-        std::filesystem::path out_path = output.empty()
-            ? input_path.replace_extension(decoded->ext)
-            : std::filesystem::path(output);
+        if (decoded->mode != kKfmModeImageAudio) {
+            throw std::runtime_error(
+                "kFMd received a kFAe carrier (audio->image). Decode it with kFAd.");
+        }
+        std::filesystem::path out_path = ResolveKfmOutputPath(input_path, output, decoded->ext, "kfmd");
         WriteBinaryFileRaw(out_path, decoded->payload);
         return out_path.string();
     }
-    std::filesystem::path out_path = output.empty() ? input_path.replace_extension(".png") : std::filesystem::path(output);
+    WarnKfmUsage(
+        "kFMd fallback: input is regular audio (not a BaseFWX kFMe carrier). "
+        "Output will be static PNG noise.");
+    std::filesystem::path out_path = ResolveKfmOutputPath(input_path, output, ".png", "kfmd");
     WritePngCarrierBytes(out_path, carrier, bw_mode);
     return out_path.string();
 }
 
 std::string Kfae(const std::string& path, const std::string& output, bool bw_mode) {
     std::filesystem::path input_path(path);
+    std::string input_ext = KfmPathExt(input_path);
+    if (IsKnownKfmImageExt(input_ext)) {
+        throw std::runtime_error(
+            "kFAe expects an audio input, got image extension '" + input_ext
+            + "'. Use kFMe for image->audio carriers.");
+    }
     auto payload = ReadFile(path);
-    std::string ext = input_path.has_extension() ? input_path.extension().string() : ".bin";
+    std::string ext = input_ext;
     std::uint8_t flags = bw_mode ? kKfmFlagBw : 0u;
     auto container = BuildKfmContainer(kKfmModeAudioImage, payload, ext, flags);
-    std::filesystem::path out_path = output.empty() ? input_path.replace_extension(".png") : std::filesystem::path(output);
+    std::filesystem::path out_path = ResolveKfmOutputPath(input_path, output, ".png", "kfae");
     WritePngCarrierBytes(out_path, container, bw_mode);
     return out_path.string();
 }
 
 std::string Kfad(const std::string& path, const std::string& output) {
     std::filesystem::path input_path(path);
+    std::string input_ext = KfmPathExt(input_path);
+    if (IsKnownKfmAudioExt(input_ext)) {
+        throw std::runtime_error(
+            "kFAd expects an image/PNG carrier input, got audio extension '" + input_ext
+            + "'. Use kFMd for audio carriers.");
+    }
     auto carrier = ReadPngCarrierBytes(input_path);
     auto decoded = ParseKfmContainer(carrier);
     if (decoded) {
-        std::filesystem::path out_path = output.empty()
-            ? input_path.replace_extension(decoded->ext)
-            : std::filesystem::path(output);
+        if (decoded->mode != kKfmModeAudioImage) {
+            throw std::runtime_error(
+                "kFAd received a kFMe carrier (image->audio). Decode it with kFMd.");
+        }
+        std::filesystem::path out_path = ResolveKfmOutputPath(input_path, output, decoded->ext, "kfad");
         WriteBinaryFileRaw(out_path, decoded->payload);
         return out_path.string();
     }
-    std::filesystem::path out_path = output.empty() ? input_path.replace_extension(".wav") : std::filesystem::path(output);
+    WarnKfmUsage(
+        "kFAd fallback: you used kFAd instead of kFMe to encode an image. "
+        "This will result in a longer file, and you won't be able to hear what's in the file.");
+    std::filesystem::path out_path = ResolveKfmOutputPath(input_path, output, ".wav", "kfad");
     WriteWavCarrierBytes(out_path, carrier);
     return out_path.string();
 }

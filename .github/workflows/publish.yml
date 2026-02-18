@@ -277,6 +277,14 @@ jobs:
       - name: Configure
         run: |
           brew_prefix="$(brew --prefix)"
+          openssl_crypto_lib="${brew_prefix}/opt/openssl@3/lib/libcrypto.dylib"
+          if [ ! -f "$openssl_crypto_lib" ]; then
+            openssl_crypto_lib="${brew_prefix}/opt/openssl@3/lib/libcrypto.a"
+          fi
+          openssl_ssl_lib="${brew_prefix}/opt/openssl@3/lib/libssl.dylib"
+          if [ ! -f "$openssl_ssl_lib" ]; then
+            openssl_ssl_lib="${brew_prefix}/opt/openssl@3/lib/libssl.a"
+          fi
           argon2_lib="${brew_prefix}/opt/argon2/lib/libargon2.a"
           if [ ! -f "$argon2_lib" ]; then
             argon2_lib="${brew_prefix}/opt/argon2/lib/libargon2.dylib"
@@ -285,9 +293,21 @@ jobs:
           if [ ! -f "$oqs_lib" ]; then
             oqs_lib="${brew_prefix}/opt/liboqs/lib/liboqs.dylib"
           fi
+          for dep in "$openssl_crypto_lib" "$openssl_ssl_lib" "$argon2_lib" "$oqs_lib"; do
+            if [ ! -f "$dep" ]; then
+              echo "Missing dependency library: $dep"
+              exit 1
+            fi
+          done
           echo "Dependency architecture check:"
-          lipo -archs "$argon2_lib" || true
-          lipo -archs "$oqs_lib" || true
+          for dep in "$openssl_crypto_lib" "$openssl_ssl_lib" "$argon2_lib" "$oqs_lib"; do
+            dep_archs="$(lipo -archs "$dep")"
+            echo "$dep => $dep_archs"
+            if ! echo "$dep_archs" | grep -qw "${{ matrix.target_arch }}"; then
+              echo "Architecture mismatch for $dep (expected ${{ matrix.target_arch }})"
+              exit 1
+            fi
+          done
           cmake -S cpp -B cpp/build \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_OSX_ARCHITECTURES="${{ matrix.target_arch }}" \
@@ -296,6 +316,8 @@ jobs:
             -DBASEFWX_NATIVE_OPT=OFF \
             -DCMAKE_CXX_FLAGS="-Wno-deprecated-declarations" \
             -DOPENSSL_ROOT_DIR="${brew_prefix}/opt/openssl@3" \
+            -DOPENSSL_CRYPTO_LIBRARY="${openssl_crypto_lib}" \
+            -DOPENSSL_SSL_LIBRARY="${openssl_ssl_lib}" \
             -DARGON2_INCLUDE_DIR="${brew_prefix}/opt/argon2/include" \
             -DARGON2_LIBRARY="${argon2_lib}" \
             -DOQS_INCLUDE_DIR="${brew_prefix}/opt/liboqs/include" \

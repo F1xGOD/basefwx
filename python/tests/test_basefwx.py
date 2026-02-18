@@ -7,6 +7,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import wave
 from unittest.mock import patch
 from contextlib import redirect_stdout
 from pathlib import Path
@@ -17,7 +18,10 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 import numpy as np
-from pqcrypto.kem import ml_kem_768
+try:
+    from pqcrypto.kem import ml_kem_768
+except Exception:  # pragma: no cover - optional dependency
+    ml_kem_768 = None
 
 try:
     from basefwx.main import basefwx
@@ -154,6 +158,74 @@ class BaseFWXUnitTests(unittest.TestCase):
         decoded = basefwx.n10decode_bytes(encoded)
         self.assertEqual(decoded, original)
 
+    def test_kfm_image_audio_roundtrip(self):
+        if basefwx.Image is None:
+            self.skipTest("Pillow unavailable")
+        src = self.tmp_path / "noise.png"
+        img = basefwx.Image.frombytes("RGB", (48, 48), os.urandom(48 * 48 * 3))
+        img.save(src)
+        original = src.read_bytes()
+
+        wav_path = self.tmp_path / "carrier.wav"
+        decoded_path = self.tmp_path / "decoded.png"
+        basefwx.kFMe(str(src), str(wav_path))
+        basefwx.kFMd(str(wav_path), str(decoded_path))
+
+        self.assertTrue(wav_path.exists())
+        self.assertTrue(decoded_path.exists())
+        self.assertEqual(decoded_path.read_bytes(), original)
+
+    def test_kfa_audio_image_roundtrip(self):
+        src = self.tmp_path / "tone.wav"
+        with wave.open(str(src), "wb") as wav_file:
+            wav_file.setnchannels(1)
+            wav_file.setsampwidth(2)
+            wav_file.setframerate(24000)
+            wav_file.writeframes(os.urandom(4096))
+        original = src.read_bytes()
+
+        png_path = self.tmp_path / "carrier.png"
+        decoded_path = self.tmp_path / "decoded.wav"
+        basefwx.kFAe(str(src), str(png_path), bw_mode=True)
+        basefwx.kFAd(str(png_path), str(decoded_path))
+
+        self.assertTrue(png_path.exists())
+        self.assertTrue(decoded_path.exists())
+        self.assertEqual(decoded_path.read_bytes(), original)
+
+    def test_kfad_fallback_for_plain_png(self):
+        if basefwx.Image is None:
+            self.skipTest("Pillow unavailable")
+        src = self.tmp_path / "plain.png"
+        img = basefwx.Image.frombytes("RGB", (32, 32), os.urandom(32 * 32 * 3))
+        img.save(src)
+
+        out_wav = self.tmp_path / "fallback.wav"
+        basefwx.kFAd(str(src), str(out_wav))
+        self.assertTrue(out_wav.exists())
+        self.assertGreater(out_wav.stat().st_size, 44)
+        with wave.open(str(out_wav), "rb") as wav_file:
+            self.assertEqual(wav_file.getsampwidth(), 2)
+            self.assertEqual(wav_file.getnchannels(), 1)
+            self.assertGreater(wav_file.getnframes(), 0)
+
+    def test_kfmd_fallback_for_plain_wav(self):
+        if basefwx.Image is None:
+            self.skipTest("Pillow unavailable")
+        src = self.tmp_path / "plain.wav"
+        with wave.open(str(src), "wb") as wav_file:
+            wav_file.setnchannels(1)
+            wav_file.setsampwidth(2)
+            wav_file.setframerate(22050)
+            wav_file.writeframes(os.urandom(4096))
+
+        out_png = self.tmp_path / "fallback.png"
+        basefwx.kFMd(str(src), str(out_png), bw_mode=True)
+        self.assertTrue(out_png.exists())
+        with basefwx.Image.open(str(out_png)) as image:
+            self.assertEqual(image.mode, "L")
+            self.assertGreater(image.size[0] * image.size[1], 0)
+
     def test_aes_roundtrip_without_master(self):
         original = "Symmetric data"
         blob = basefwx.encryptAES(original, "pw", use_master=False)
@@ -161,6 +233,8 @@ class BaseFWXUnitTests(unittest.TestCase):
         self.assertEqual(recovered, original)
 
     def test_aes_roundtrip_with_master(self):
+        if ml_kem_768 is None:
+            self.skipTest("pqcrypto unavailable")
         original = "QuantumGuardian"
         public_key, private_key = ml_kem_768.generate_keypair()
         basefwx._set_master_pubkey_override(public_key)
@@ -236,6 +310,39 @@ class BaseFWXUnitTests(unittest.TestCase):
         result = self._run_cli("n10file-dec", str(encoded), str(restored))
         self.assertEqual(result.returncode, 0, msg=result.stderr + result.stdout)
         self.assertEqual(restored.read_bytes(), src.read_bytes())
+
+    def test_cli_kfm_roundtrip(self):
+        if basefwx.Image is None:
+            self.skipTest("Pillow unavailable")
+        src = self.tmp_path / "cli-noise.png"
+        img = basefwx.Image.frombytes("RGB", (24, 24), os.urandom(24 * 24 * 3))
+        img.save(src)
+        original = src.read_bytes()
+
+        wav_path = self.tmp_path / "cli-noise.wav"
+        restored = self.tmp_path / "cli-noise-restored.png"
+        result = self._run_cli("kFMe", str(src), "-o", str(wav_path))
+        self.assertEqual(result.returncode, 0, msg=result.stderr + result.stdout)
+        result = self._run_cli("kFMd", str(wav_path), "-o", str(restored))
+        self.assertEqual(result.returncode, 0, msg=result.stderr + result.stdout)
+        self.assertEqual(restored.read_bytes(), original)
+
+    def test_cli_kfa_roundtrip(self):
+        src = self.tmp_path / "cli-tone.wav"
+        with wave.open(str(src), "wb") as wav_file:
+            wav_file.setnchannels(1)
+            wav_file.setsampwidth(2)
+            wav_file.setframerate(16000)
+            wav_file.writeframes(os.urandom(3072))
+        original = src.read_bytes()
+
+        png_path = self.tmp_path / "cli-tone.png"
+        restored = self.tmp_path / "cli-tone-restored.wav"
+        result = self._run_cli("kFAe", str(src), "-o", str(png_path), "--bw")
+        self.assertEqual(result.returncode, 0, msg=result.stderr + result.stdout)
+        result = self._run_cli("kFAd", str(png_path), "-o", str(restored))
+        self.assertEqual(result.returncode, 0, msg=result.stderr + result.stdout)
+        self.assertEqual(restored.read_bytes(), original)
 
     def test_aes_heavy_small_legacy_mode(self):
         src = self.tmp_path / "legacy.bin"
@@ -470,6 +577,8 @@ class CryptographyIntegrationTests(unittest.TestCase):
             basefwx.decryptAES(tampered_blob, "secret", use_master=False)
 
     def test_master_only_roundtrip(self):
+        if ml_kem_768 is None:
+            self.skipTest("pqcrypto unavailable")
         public_key, private_key = ml_kem_768.generate_keypair()
         basefwx._set_master_pubkey_override(public_key)
         basefwx._load_master_pq_private = staticmethod(lambda: private_key)

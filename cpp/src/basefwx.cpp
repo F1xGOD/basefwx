@@ -298,7 +298,29 @@ std::uint64_t N10Offset(std::uint64_t index) {
 }
 
 std::uint64_t MulMod10(std::uint64_t lhs, std::uint64_t rhs) {
-    return static_cast<std::uint64_t>((static_cast<unsigned __int128>(lhs) * static_cast<unsigned __int128>(rhs)) % kN10Mod);
+#if defined(__SIZEOF_INT128__)
+    return static_cast<std::uint64_t>(
+        (static_cast<unsigned __int128>(lhs) * static_cast<unsigned __int128>(rhs)) % kN10Mod
+    );
+#else
+    lhs %= kN10Mod;
+    rhs %= kN10Mod;
+    std::uint64_t out = 0;
+    while (rhs != 0) {
+        if ((rhs & 1ULL) != 0ULL) {
+            out += lhs;
+            if (out >= kN10Mod) {
+                out -= kN10Mod;
+            }
+        }
+        rhs >>= 1U;
+        lhs <<= 1U;
+        if (lhs >= kN10Mod) {
+            lhs -= kN10Mod;
+        }
+    }
+    return out;
+#endif
 }
 
 std::uint64_t N10Transform(std::uint64_t value, std::uint64_t index) {

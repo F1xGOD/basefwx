@@ -3,6 +3,7 @@
 import os as _os_module
 import re as _re_module
 import sys as _sys_module
+import warnings as _warnings_module
 
 # Enable large integer string conversion for performance-critical decimal math
 if hasattr(_sys_module, "set_int_max_str_digits"):
@@ -202,7 +203,7 @@ class basefwx:
     PACK_TAR_XZ = "x"
     PACK_SUFFIX_GZ = ".tgz"
     PACK_SUFFIX_XZ = ".txz"
-    ENGINE_VERSION = "3.6.0"
+    ENGINE_VERSION = "3.6.1"
     N10_MOD = 10_000_000_000
     N10_MUL = 3_816_547_291
     N10_ADD = 7_261_940_353
@@ -220,6 +221,14 @@ class basefwx:
     KFM_HEADER_LEN = KFM_HEADER_STRUCT.size
     KFM_MAX_PAYLOAD = 1_073_741_824
     KFM_AUDIO_RATE = 24000
+    KFM_AUDIO_EXTENSIONS = frozenset({
+        ".wav", ".mp3", ".m4a", ".aac", ".flac", ".ogg", ".oga", ".opus",
+        ".wma", ".amr", ".aiff", ".aif", ".alac", ".m4b", ".caf", ".mka",
+    })
+    KFM_IMAGE_EXTENSIONS = frozenset({
+        ".png", ".jpg", ".jpeg", ".bmp", ".gif", ".webp", ".tif", ".tiff",
+        ".ico", ".heic", ".heif", ".ppm", ".pgm",
+    })
     MASTER_PQ_ALG = "ml-kem-768"
     MASTER_PQ_PUBLIC = b"eJwBoARf+/rkrYxhXn0CNFqTkzQUrIYloydzGrqpIuWXi+qnLO/XRnspzQBDwwTKLW3Ku6Zwii1AfriFM5t8PtugqMNFt/5HoHxIZLGkytTWKP3IKoP7EH2HFu14b5bagh+KIFTWoW12qZqLRNjJLBHZmzxasEIsN7AnsOiokMHxt4XwoLk5fscIhXSANBZpHUVEO+NkBhg5UnvzWkzAqPm6rEvCfE+CHxgFg1SjBJeFfVMyzpKpsUi6iCGXSl6nZuTkr10btfi8RHCEfxDrfhcJk0bsKMWEI6wVY23KQXXlmcJ4VydGZ/ZbjWhVbX6bo0DKqG5IlwpTDPJIwlumRpxbBog8JG10p8PTaRJEAKfiVo7jiD1Aki7hYqmyyBn2Q0RFy03Bm/Rpy1zlK3DahaaoMj1mJrJ5ff2FYYVsBQbrywcDUcdHUkIpUqwrrRyqdEIHq1T6AiKHmf2KHTXQnLuZpJ3Ih59bkH1GC2UzbEIWzFSImvQDkswCBW9cF0tFYCNnReiReb57XAjaW3smdOg1o9oyk2IbyptJtNe1teHoPsMJkBGin/ugUeFmEOa0f8lTEmK4u1/GxHrQxD65kxm2IHT4NPM8Z5oqQ9z0WthUE5MouNrZLK8EltZQzAcZJ/g7CesRi40qFecyD14hDPBcr6cEV6yqOXXrcDRQVCUhuYRyUNqrFe4JPks2kZlxXjABHMD1PHVzfJpsAtsTDJa2EdpoAkKRvfg2QOK6CpYix6zIyB1yGwdCG8L2QS9DQefDQntXDlwSIieqRrwmiWcba4mSgwfxsoH2SIbQPZKbtEA4XNGqen1CcldAw1w2mnO3otspreJEBZJjVSihGcoyVjWap9dWc0pLffeDC5mUyOTzWUQ3XBAxX817G9rIbFyMQ+4AdeP2zL/nk9s2wYuZT2MEbwTHW/6UJQXbRf+svg9Kq//ryl/YRiaxdK2xRkP7oaBBVbyyXxYUJEhXOD7cUar8HsGZlXmiDSxzCBZSJG+4ooAgOKfEx6liOvqHBQKrsG4ylg3JQqmKBUdXcf6cMImRqS4MFM23vQkSPqIckxGgkrJGDKLGg8DKsuOqUvkzexAWviAIJQZsJsqjUl2stBgnltsyysE2cdI5Poh7KgOFV27bfi4iCpFSXc46Aa2jjN0WFYAgfhcRXgvIanJ3L8/sPrR7QKvpTtPFSfdcBipqp8vRdYImF5HceU1TU+QwtOcmCKDmaDTBGtJLZDXYJ3/2VQAEr8Mhk1WxGQsWUikZBi9pHTTbh93gvl9gLaGlxlRCjwzSqcJVXF80UiVMA06hfDnzi9MFpIGZL0czax+1zwdLFsnnHLGLzm/YpgrUBIk0gTgMVhqiu0+JyagxwrXCsDmGbhj8PzJGUeR8xhoxzOtTMgtaFwekbEAss+JGzuZJeakDxhMJEvvbKabIFDeQLsImO4eaAslqXyNoSg7AtnDlHfzTTFvwk2/UppeXNmcEC9n1UyfyWNW6qAZRJe5zQkijzLfkGKWsR/ksjmUQwMHwOOWVQ8qqUapYxsmbZkosPBXRDNBhY6PNjfciD2hRoIqrd/pnkJ6cZd1FQyxge6FA3PMpHw=="
     MASTER_EC_MAGIC = b"EC1"
@@ -3290,15 +3299,54 @@ class basefwx:
         return normalized
 
     @staticmethod
-    def _kfm_keystream(seed: int, length: int) -> bytes:
+    def _kfm_is_audio_ext(ext: str) -> bool:
+        return basefwx._kfm_clean_ext(ext) in basefwx.KFM_AUDIO_EXTENSIONS
+
+    @staticmethod
+    def _kfm_is_image_ext(ext: str) -> bool:
+        return basefwx._kfm_clean_ext(ext) in basefwx.KFM_IMAGE_EXTENSIONS
+
+    @staticmethod
+    def _kfm_warn(message: str) -> None:
+        _warnings_module.warn(message, RuntimeWarning, stacklevel=3)
+
+    @staticmethod
+    def _kfm_paths_equal(a: "basefwx.pathlib.Path", b: "basefwx.pathlib.Path") -> bool:
+        try:
+            return a.resolve() == b.resolve()
+        except Exception:
+            return a.absolute() == b.absolute()
+
+    @staticmethod
+    def _kfm_default_output(src: "basefwx.pathlib.Path", ext: str, tag: str) -> "basefwx.pathlib.Path":
+        candidate = src.with_suffix(ext)
+        if basefwx._kfm_paths_equal(candidate, src):
+            candidate = src.with_name(f"{src.stem}.{tag}{ext}")
+        return candidate
+
+    @staticmethod
+    def _kfm_resolve_output(src: "basefwx.pathlib.Path",
+                            output: str | None,
+                            ext: str,
+                            tag: str) -> "basefwx.pathlib.Path":
+        if output:
+            out_path = basefwx.pathlib.Path(output)
+            if basefwx._kfm_paths_equal(out_path, src):
+                raise ValueError("Refusing to overwrite input file; choose a different output path")
+            return out_path
+        return basefwx._kfm_default_output(src, ext, tag)
+
+    @staticmethod
+    def _kfm_keystream(seed: int, length: int, *, legacy_blake2s: bool = False) -> bytes:
         if length <= 0:
             return b""
         out = bytearray(length)
         seed_bytes = seed.to_bytes(8, "big", signed=False)
         cursor = 0
         counter = 0
+        digest_fn = basefwx.hashlib.blake2s if legacy_blake2s else basefwx.hashlib.sha256
         while cursor < length:
-            block = basefwx.hashlib.blake2s(
+            block = digest_fn(
                 seed_bytes + counter.to_bytes(8, "big", signed=False)
             ).digest()
             take = min(length - cursor, len(block))
@@ -3383,7 +3431,17 @@ class basefwx:
         ext_bytes = body[:ext_len]
         payload = body[ext_len:]
         if (basefwx.zlib.crc32(payload) & 0xFFFFFFFF) != crc32:
-            return None
+            # Backward compatibility: older Python previews used BLAKE2s here.
+            legacy_body = basefwx._kfm_xor(
+                masked,
+                basefwx._kfm_keystream(seed, body_len, legacy_blake2s=True),
+            )
+            legacy_payload = legacy_body[ext_len:]
+            if (basefwx.zlib.crc32(legacy_payload) & 0xFFFFFFFF) != crc32:
+                return None
+            body = legacy_body
+            ext_bytes = body[:ext_len]
+            payload = legacy_payload
         try:
             ext = ext_bytes.decode("utf-8")
         except UnicodeDecodeError:
@@ -3424,12 +3482,60 @@ class basefwx:
             frames = wav_file.readframes(wav_file.getnframes())
         if channels != 1 or width != 2:
             return frames
+        return basefwx._kfm_pcm16le_to_bytes(frames)
+
+    @staticmethod
+    def _kfm_pcm16le_to_bytes(frames: bytes) -> bytes:
+        if len(frames) % 2:
+            frames += b"\x00"
         out = bytearray(len(frames))
         for idx in range(0, len(frames), 2):
             sample = basefwx.struct.unpack("<h", frames[idx:idx + 2])[0]
             value = (sample + 32768) & 0xFFFF
             out[idx:idx + 2] = basefwx.struct.pack("<H", value)
         return bytes(out)
+
+    @staticmethod
+    def _kfm_ffmpeg_audio_to_bytes(path: "basefwx.pathlib.Path") -> bytes:
+        ffmpeg_bin = basefwx.os.environ.get("BASEFWX_FFMPEG_BIN", "ffmpeg")
+        cmd = [
+            ffmpeg_bin,
+            "-v", "error",
+            "-i", str(path),
+            "-f", "s16le",
+            "-ac", "1",
+            "-ar", str(basefwx.KFM_AUDIO_RATE),
+            "-",
+        ]
+        try:
+            result = basefwx.subprocess.run(cmd, capture_output=True, check=False)
+        except FileNotFoundError as exc:
+            raise RuntimeError(
+                "ffmpeg is required to read non-WAV audio (mp3/m4a). "
+                "Install ffmpeg or provide WAV input."
+            ) from exc
+        if result.returncode != 0:
+            stderr = (result.stderr or b"").decode("utf-8", errors="replace").strip()
+            detail = f": {stderr}" if stderr else ""
+            raise RuntimeError(f"ffmpeg failed to decode audio{detail}")
+        if not result.stdout:
+            raise RuntimeError("ffmpeg produced no PCM output")
+        return basefwx._kfm_pcm16le_to_bytes(result.stdout)
+
+    @staticmethod
+    def _kfm_audio_to_bytes(path: "basefwx.pathlib.Path") -> bytes:
+        wav_error = None
+        try:
+            return basefwx._kfm_wav_to_bytes(path)
+        except Exception as exc:
+            wav_error = exc
+        try:
+            return basefwx._kfm_ffmpeg_audio_to_bytes(path)
+        except Exception as ffmpeg_error:
+            raise RuntimeError(
+                f"Failed to decode audio carrier from {path.name}. "
+                f"WAV parse error: {wav_error}; ffmpeg error: {ffmpeg_error}"
+            ) from ffmpeg_error
 
     @staticmethod
     def _kfm_bytes_to_png(data: bytes, output_path: "basefwx.pathlib.Path", *, bw_mode: bool = False) -> None:
@@ -3468,36 +3574,62 @@ class basefwx:
     @staticmethod
     def kFMe(path: str, output: str | None = None) -> str:
         src = basefwx.pathlib.Path(path)
+        src_ext = basefwx._kfm_clean_ext(src.suffix)
+        if basefwx._kfm_is_audio_ext(src_ext):
+            raise ValueError(
+                f"kFMe expects an image/media input, got audio extension '{src_ext}'. "
+                "Use kFAe for audio->image carriers."
+            )
         payload = src.read_bytes()
-        ext = basefwx._kfm_clean_ext(src.suffix)
+        ext = src_ext
         container = basefwx._kfm_pack_container(
             basefwx.KFM_MODE_IMAGE_AUDIO,
             payload,
             ext,
         )
-        out_path = basefwx.pathlib.Path(output) if output else src.with_suffix(".wav")
+        out_path = basefwx._kfm_resolve_output(src, output, ".wav", "kfme")
         basefwx._kfm_bytes_to_wav(container, out_path)
         return str(out_path)
 
     @staticmethod
     def kFMd(path: str, output: str | None = None, *, bw_mode: bool = False) -> str:
         src = basefwx.pathlib.Path(path)
-        carrier = basefwx._kfm_wav_to_bytes(src)
+        src_ext = basefwx._kfm_clean_ext(src.suffix)
+        if basefwx._kfm_is_image_ext(src_ext):
+            raise ValueError(
+                f"kFMd expects an audio carrier input, got image extension '{src_ext}'. "
+                "Use kFAd for image carriers."
+            )
+        carrier = basefwx._kfm_audio_to_bytes(src)
         decoded = basefwx._kfm_unpack_container(carrier)
         if decoded is not None:
+            if decoded["mode"] != basefwx.KFM_MODE_IMAGE_AUDIO:
+                raise ValueError(
+                    "kFMd received a kFAe carrier (audio->image). Decode it with kFAd."
+                )
             ext = decoded["ext"]
-            out_path = basefwx.pathlib.Path(output) if output else src.with_suffix(ext)
+            out_path = basefwx._kfm_resolve_output(src, output, ext, "kfmd")
             out_path.write_bytes(decoded["payload"])
             return str(out_path)
-        out_path = basefwx.pathlib.Path(output) if output else src.with_suffix(".png")
+        basefwx._kfm_warn(
+            "kFMd fallback: input is regular audio (not a BaseFWX kFMe carrier). "
+            "Output will be static PNG noise."
+        )
+        out_path = basefwx._kfm_resolve_output(src, output, ".png", "kfmd")
         basefwx._kfm_bytes_to_png(carrier, out_path, bw_mode=bw_mode)
         return str(out_path)
 
     @staticmethod
     def kFAe(path: str, output: str | None = None, *, bw_mode: bool = False) -> str:
         src = basefwx.pathlib.Path(path)
+        src_ext = basefwx._kfm_clean_ext(src.suffix)
+        if basefwx._kfm_is_image_ext(src_ext):
+            raise ValueError(
+                f"kFAe expects an audio input, got image extension '{src_ext}'. "
+                "Use kFMe for image->audio carriers."
+            )
         payload = src.read_bytes()
-        ext = basefwx._kfm_clean_ext(src.suffix)
+        ext = src_ext
         flags = basefwx.KFM_FLAG_BW if bw_mode else 0
         container = basefwx._kfm_pack_container(
             basefwx.KFM_MODE_AUDIO_IMAGE,
@@ -3505,21 +3637,35 @@ class basefwx:
             ext,
             flags=flags,
         )
-        out_path = basefwx.pathlib.Path(output) if output else src.with_suffix(".png")
+        out_path = basefwx._kfm_resolve_output(src, output, ".png", "kfae")
         basefwx._kfm_bytes_to_png(container, out_path, bw_mode=bw_mode)
         return str(out_path)
 
     @staticmethod
     def kFAd(path: str, output: str | None = None) -> str:
         src = basefwx.pathlib.Path(path)
+        src_ext = basefwx._kfm_clean_ext(src.suffix)
+        if basefwx._kfm_is_audio_ext(src_ext):
+            raise ValueError(
+                f"kFAd expects an image/PNG carrier input, got audio extension '{src_ext}'. "
+                "Use kFMd for audio carriers."
+            )
         carrier = basefwx._kfm_png_to_bytes(src)
         decoded = basefwx._kfm_unpack_container(carrier)
         if decoded is not None:
+            if decoded["mode"] != basefwx.KFM_MODE_AUDIO_IMAGE:
+                raise ValueError(
+                    "kFAd received a kFMe carrier (image->audio). Decode it with kFMd."
+                )
             ext = decoded["ext"]
-            out_path = basefwx.pathlib.Path(output) if output else src.with_suffix(ext)
+            out_path = basefwx._kfm_resolve_output(src, output, ext, "kfad")
             out_path.write_bytes(decoded["payload"])
             return str(out_path)
-        out_path = basefwx.pathlib.Path(output) if output else src.with_suffix(".wav")
+        basefwx._kfm_warn(
+            "kFAd fallback: you used kFAd instead of kFMe to encode an image. "
+            "This will result in a longer file, and you won't be able to hear what's in the file."
+        )
+        out_path = basefwx._kfm_resolve_output(src, output, ".wav", "kfad")
         basefwx._kfm_bytes_to_wav(carrier, out_path)
         return str(out_path)
 

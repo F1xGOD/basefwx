@@ -2,7 +2,7 @@ name: Branch sync
 
 on:
   push:
-    branches: [main, DEV]
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -28,14 +28,11 @@ jobs:
           set -euo pipefail
 
           source_branch="${GITHUB_REF_NAME}"
-          case "${source_branch}" in
-            main) target_branch="DEV" ;;
-            DEV) target_branch="main" ;;
-            *)
-              echo "Branch ${source_branch} is not synced."
-              exit 0
-              ;;
-          esac
+          if [[ "${source_branch}" != "main" ]]; then
+            echo "Branch ${source_branch} is not synced."
+            exit 0
+          fi
+          target_branch="DEV"
 
           exclude_file=".branch-sync-exclude"
           if [[ ! -f "${exclude_file}" ]]; then

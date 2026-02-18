@@ -39,6 +39,7 @@ python -m basefwx cryptin aes-light file.bin -p "password" --strip
 python -m basefwx cryptin aes-light file.bin.fwx -p "password"
 python -m basefwx kFMe photo.png -o photo.wav
 python -m basefwx kFMd photo.wav -o photo-restored.png
+# mp3/m4a inputs are accepted for kFMd when ffmpeg is available.
 ```
 
 Optional extras:

@@ -72,7 +72,7 @@ java -jar build/libs/basefwx-java.jar n10file-enc <in> <out>
 java -jar build/libs/basefwx-java.jar n10file-dec <in> <out>
 
 java -jar build/libs/basefwx-java.jar kFMe <in> [--out <out.wav>]
-java -jar build/libs/basefwx-java.jar kFMd <in.wav> [--out <out>] [--bw]
+java -jar build/libs/basefwx-java.jar kFMd <in-audio> [--out <out>] [--bw]
 java -jar build/libs/basefwx-java.jar kFAe <in> [--out <out.png>] [--bw]
 java -jar build/libs/basefwx-java.jar kFAd <in.png> [--out <out>]
 
@@ -99,6 +99,7 @@ Notes:
 - EC master-key wrap is supported using P-521 (secp521r1) and EC1 blobs.
 - AES-heavy file containers (pb512file) are implemented and cross-compatible with Python/C++ (PBKDF2 mode).
 - kFM/kFA containers are compatible across Python/C++/Java (including `--bw` PNG carrier mode).
+- `kFMd` accepts WAV directly and can also decode `.mp3`/`.m4a` when `ffmpeg` is available.
 
 ### Master key paths (EC)
 Java reads EC public/private keys from:

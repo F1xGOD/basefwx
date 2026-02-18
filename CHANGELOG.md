@@ -2,6 +2,8 @@
 
 ## [v3.6.1] - Unreleased
 
+Compare: <https://github.com/F1xGOD/basefwx/compare/ed79adb...907833c>
+
 ### Added
 - Python `kFM`/`kFA` reversible carrier methods:
   - `kFMe`: image/media bytes -> WAV noise carrier
@@ -17,20 +19,11 @@
 - Versioned kFM container header with magic/version/mode/checksum for deterministic detection.
 - Python CLI commands: `kFMe`, `kFMd`, `kFAe`, `kFAd`.
 - Python tests covering kFM/kFA API and CLI roundtrips plus fallback behavior.
-
-### Fixed
-- Java BW-mode PNG carrier serialization now preserves exact bytes (prevents false fallback on `kFAd`).
-
-## [v3.6.0] - 2026-02-17
-
-Compare: <https://github.com/F1xGOD/basefwx/compare/ed79adb...907833c>
-
-### Added
 - n10 numeric codec support across C++, Java, and Python.
 - n10 CLI commands for text and file workflows in all supported runtimes.
 - n10 coverage in benchmark export and benchmark summary output.
 - Expanded benchmark scenarios for Java and cross-language parity checks.
-- Added branch sync workflow
+- Added branch sync workflow.
 
 ### Changed
 - Python package layout moved under `python/` with workflow and editable-install fixes.
@@ -38,6 +31,8 @@ Compare: <https://github.com/F1xGOD/basefwx/compare/ed79adb...907833c>
 - Benchmark pipeline updated to keep website benchmark feeds aligned with runtime changes.
 
 ### Fixed
+- Java BW-mode PNG carrier serialization now preserves exact bytes (prevents false fallback on `kFAd`).
+- `kFMd` now accepts `.mp3`/`.m4a` audio inputs in Python/C++/Java using runtime ffmpeg decode fallback.
 - Cross-language compatibility issues in codec/KDF paths (including PBKDF2 interoperability).
 - Java build and Gradle compatibility issues.
 - Website hash/integrity display issues.

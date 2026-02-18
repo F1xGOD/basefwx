@@ -651,12 +651,17 @@ calc_total_steps() {
             if (( jmg_count > 0 )); then
                 STEP_TOTAL=$((STEP_TOTAL + 2 * jmg_count))
             fi
+            STEP_TOTAL=$((STEP_TOTAL + 4))
         fi
         if [[ "$RUN_PY_TESTS" == "1" && "$RUN_JAVA_TESTS" == "1" && "$JAVA_AVAILABLE" == "1" ]]; then
             STEP_TOTAL=$((STEP_TOTAL + 2 * reversible_count + 2))
             if (( jmg_count > 0 )); then
                 STEP_TOTAL=$((STEP_TOTAL + 2 * jmg_count))
             fi
+            STEP_TOTAL=$((STEP_TOTAL + 4))
+        fi
+        if [[ "$RUN_CPP_TESTS" == "1" && "$CPP_AVAILABLE" == "1" && "$RUN_JAVA_TESTS" == "1" && "$JAVA_AVAILABLE" == "1" ]]; then
+            STEP_TOTAL=$((STEP_TOTAL + 4))
         fi
     fi
 }
@@ -1519,6 +1524,186 @@ java_jmg_dec() {
     "$JAVA_BIN" -jar "$JAVA_JAR" jmgd "$input" "$dec" "$PW"
 }
 
+py_kfme() {
+    local input="$1"
+    local out="$2"
+    log "STEP: python -m basefwx kFMe $input"
+    "$PYTHON_BIN" -m basefwx kFMe "$input" --out "$out"
+}
+
+py_kfmd() {
+    local input="$1"
+    local out="$2"
+    log "STEP: python -m basefwx kFMd $input"
+    "$PYTHON_BIN" -m basefwx kFMd "$input" --out "$out"
+}
+
+py_kfae() {
+    local input="$1"
+    local out="$2"
+    log "STEP: python -m basefwx kFAe $input"
+    "$PYTHON_BIN" -m basefwx kFAe "$input" --out "$out"
+}
+
+py_kfad() {
+    local input="$1"
+    local out="$2"
+    log "STEP: python -m basefwx kFAd $input"
+    "$PYTHON_BIN" -m basefwx kFAd "$input" --out "$out"
+}
+
+cpp_kfme() {
+    local input="$1"
+    local out="$2"
+    log "STEP: $CPP_BIN kFMe $input"
+    "$CPP_BIN" kFMe "$input" --out "$out"
+}
+
+cpp_kfmd() {
+    local input="$1"
+    local out="$2"
+    log "STEP: $CPP_BIN kFMd $input"
+    "$CPP_BIN" kFMd "$input" --out "$out"
+}
+
+cpp_kfae() {
+    local input="$1"
+    local out="$2"
+    log "STEP: $CPP_BIN kFAe $input"
+    "$CPP_BIN" kFAe "$input" --out "$out"
+}
+
+cpp_kfad() {
+    local input="$1"
+    local out="$2"
+    log "STEP: $CPP_BIN kFAd $input"
+    "$CPP_BIN" kFAd "$input" --out "$out"
+}
+
+java_kfme() {
+    local input="$1"
+    local out="$2"
+    log "STEP: $JAVA_BIN -jar $JAVA_JAR kFMe $input"
+    "$JAVA_BIN" -jar "$JAVA_JAR" kFMe "$input" --out "$out"
+}
+
+java_kfmd() {
+    local input="$1"
+    local out="$2"
+    log "STEP: $JAVA_BIN -jar $JAVA_JAR kFMd $input"
+    "$JAVA_BIN" -jar "$JAVA_JAR" kFMd "$input" --out "$out"
+}
+
+java_kfae() {
+    local input="$1"
+    local out="$2"
+    log "STEP: $JAVA_BIN -jar $JAVA_JAR kFAe $input"
+    "$JAVA_BIN" -jar "$JAVA_JAR" kFAe "$input" --out "$out"
+}
+
+java_kfad() {
+    local input="$1"
+    local out="$2"
+    log "STEP: $JAVA_BIN -jar $JAVA_JAR kFAd $input"
+    "$JAVA_BIN" -jar "$JAVA_JAR" kFAd "$input" --out "$out"
+}
+
+kfme_py_enc_cpp_dec() {
+    local input="$1"
+    local enc="$2"
+    local dec="$3"
+    py_kfme "$input" "$enc" || return $?
+    cpp_kfmd "$enc" "$dec"
+}
+
+kfme_cpp_enc_py_dec() {
+    local input="$1"
+    local enc="$2"
+    local dec="$3"
+    cpp_kfme "$input" "$enc" || return $?
+    py_kfmd "$enc" "$dec"
+}
+
+kfae_py_enc_cpp_dec() {
+    local input="$1"
+    local enc="$2"
+    local dec="$3"
+    py_kfae "$input" "$enc" || return $?
+    cpp_kfad "$enc" "$dec"
+}
+
+kfae_cpp_enc_py_dec() {
+    local input="$1"
+    local enc="$2"
+    local dec="$3"
+    cpp_kfae "$input" "$enc" || return $?
+    py_kfad "$enc" "$dec"
+}
+
+kfme_py_enc_java_dec() {
+    local input="$1"
+    local enc="$2"
+    local dec="$3"
+    py_kfme "$input" "$enc" || return $?
+    java_kfmd "$enc" "$dec"
+}
+
+kfme_java_enc_py_dec() {
+    local input="$1"
+    local enc="$2"
+    local dec="$3"
+    java_kfme "$input" "$enc" || return $?
+    py_kfmd "$enc" "$dec"
+}
+
+kfae_py_enc_java_dec() {
+    local input="$1"
+    local enc="$2"
+    local dec="$3"
+    py_kfae "$input" "$enc" || return $?
+    java_kfad "$enc" "$dec"
+}
+
+kfae_java_enc_py_dec() {
+    local input="$1"
+    local enc="$2"
+    local dec="$3"
+    java_kfae "$input" "$enc" || return $?
+    py_kfad "$enc" "$dec"
+}
+
+kfme_cpp_enc_java_dec() {
+    local input="$1"
+    local enc="$2"
+    local dec="$3"
+    cpp_kfme "$input" "$enc" || return $?
+    java_kfmd "$enc" "$dec"
+}
+
+kfme_java_enc_cpp_dec() {
+    local input="$1"
+    local enc="$2"
+    local dec="$3"
+    java_kfme "$input" "$enc" || return $?
+    cpp_kfmd "$enc" "$dec"
+}
+
+kfae_cpp_enc_java_dec() {
+    local input="$1"
+    local enc="$2"
+    local dec="$3"
+    cpp_kfae "$input" "$enc" || return $?
+    java_kfad "$enc" "$dec"
+}
+
+kfae_java_enc_cpp_dec() {
+    local input="$1"
+    local enc="$2"
+    local dec="$3"
+    java_kfae "$input" "$enc" || return $?
+    cpp_kfad "$enc" "$dec"
+}
+
 fwxaes_py_enc_cpp_dec() {
     local input="$1"
     local enc="$2"
@@ -1753,6 +1938,7 @@ bench_mode = mode == "bench"
 
 text = ("The quick brown fox jumps over the lazy dog. " * 40).encode("ascii")
 (root / "tiny.txt").write_bytes(text[:1024])
+(root / "kfm_payload.bin").write_bytes(os.urandom(256 * 1024))
 bench_text_bytes = int(os.getenv("BENCH_TEXT_BYTES", "0"))
 if bench_text_bytes > 0:
     phrase = (
@@ -3138,6 +3324,7 @@ else
 fi
 
 FWXAES_FILE="tiny.txt"
+KFM_FILE="kfm_payload.bin"
 if [[ "$TEST_MODE" == "fast" || "$TEST_MODE" == "quickest" ]]; then
     B512FILE_CASES=("sample_payload.bin" "sample_payload_copy.bin")
     PB512FILE_CASES=("sample_payload.bin" "sample_payload_copy.bin")
@@ -3251,6 +3438,35 @@ if [[ "$SKIP_CROSS" != "1" ]]; then
         time_cmd "fwxaes_cpp_enc_py_dec" fwxaes_cpp_enc_py_dec "$fwxaes_cpyp_input" "$fwxaes_cpyp_enc" "$fwxaes_cpyp_dec"
         add_verify "$ORIG_DIR/$FWXAES_FILE" "$fwxaes_cpyp_dec"
 
+        # kFM/kFA cross-compat (Python <-> C++)
+        kfme_pycc_input="$(copy_input "kfme_pycc" "$KFM_FILE")"
+        kfme_pycc_enc="$WORK_DIR/kfme_pycc/carrier.wav"
+        kfme_pycc_dec="$WORK_DIR/kfme_pycc/decoded_${KFM_FILE}"
+        time_cmd "kfme_py_enc_cpp_dec" kfme_py_enc_cpp_dec "$kfme_pycc_input" "$kfme_pycc_enc" "$kfme_pycc_dec"
+        add_verify "$ORIG_DIR/$KFM_FILE" "$kfme_pycc_dec"
+        add_verify "$ORIG_DIR/$KFM_FILE" "$kfme_pycc_input"
+
+        kfme_cpyp_input="$(copy_input "kfme_cpyp" "$KFM_FILE")"
+        kfme_cpyp_enc="$WORK_DIR/kfme_cpyp/carrier.wav"
+        kfme_cpyp_dec="$WORK_DIR/kfme_cpyp/decoded_${KFM_FILE}"
+        time_cmd "kfme_cpp_enc_py_dec" kfme_cpp_enc_py_dec "$kfme_cpyp_input" "$kfme_cpyp_enc" "$kfme_cpyp_dec"
+        add_verify "$ORIG_DIR/$KFM_FILE" "$kfme_cpyp_dec"
+        add_verify "$ORIG_DIR/$KFM_FILE" "$kfme_cpyp_input"
+
+        kfae_pycc_input="$(copy_input "kfae_pycc" "$KFM_FILE")"
+        kfae_pycc_enc="$WORK_DIR/kfae_pycc/carrier.png"
+        kfae_pycc_dec="$WORK_DIR/kfae_pycc/decoded_${KFM_FILE}"
+        time_cmd "kfae_py_enc_cpp_dec" kfae_py_enc_cpp_dec "$kfae_pycc_input" "$kfae_pycc_enc" "$kfae_pycc_dec"
+        add_verify "$ORIG_DIR/$KFM_FILE" "$kfae_pycc_dec"
+        add_verify "$ORIG_DIR/$KFM_FILE" "$kfae_pycc_input"
+
+        kfae_cpyp_input="$(copy_input "kfae_cpyp" "$KFM_FILE")"
+        kfae_cpyp_enc="$WORK_DIR/kfae_cpyp/carrier.png"
+        kfae_cpyp_dec="$WORK_DIR/kfae_cpyp/decoded_${KFM_FILE}"
+        time_cmd "kfae_cpp_enc_py_dec" kfae_cpp_enc_py_dec "$kfae_cpyp_input" "$kfae_cpyp_enc" "$kfae_cpyp_dec"
+        add_verify "$ORIG_DIR/$KFM_FILE" "$kfae_cpyp_dec"
+        add_verify "$ORIG_DIR/$KFM_FILE" "$kfae_cpyp_input"
+
         for method in "${TEXT_NOPASS_METHODS[@]}" "${TEXT_PASS_METHODS[@]}"; do
             py_enc="$OUT_DIR/${method}_py_enc.txt"
             pycc_out="$OUT_DIR/${method}_pycc.txt"
@@ -3321,6 +3537,35 @@ if [[ "$SKIP_CROSS" != "1" ]]; then
         time_cmd "fwxaes_java_enc_py_dec" fwxaes_java_enc_py_dec "$fwxaes_jp_input" "$fwxaes_jp_enc" "$fwxaes_jp_dec"
         add_verify "$ORIG_DIR/$FWXAES_FILE" "$fwxaes_jp_dec"
 
+        # kFM/kFA cross-compat (Python <-> Java)
+        kfme_pyj_input="$(copy_input "kfme_pyj" "$KFM_FILE")"
+        kfme_pyj_enc="$WORK_DIR/kfme_pyj/carrier.wav"
+        kfme_pyj_dec="$WORK_DIR/kfme_pyj/decoded_${KFM_FILE}"
+        time_cmd "kfme_py_enc_java_dec" kfme_py_enc_java_dec "$kfme_pyj_input" "$kfme_pyj_enc" "$kfme_pyj_dec"
+        add_verify "$ORIG_DIR/$KFM_FILE" "$kfme_pyj_dec"
+        add_verify "$ORIG_DIR/$KFM_FILE" "$kfme_pyj_input"
+
+        kfme_jp_input="$(copy_input "kfme_jp" "$KFM_FILE")"
+        kfme_jp_enc="$WORK_DIR/kfme_jp/carrier.wav"
+        kfme_jp_dec="$WORK_DIR/kfme_jp/decoded_${KFM_FILE}"
+        time_cmd "kfme_java_enc_py_dec" kfme_java_enc_py_dec "$kfme_jp_input" "$kfme_jp_enc" "$kfme_jp_dec"
+        add_verify "$ORIG_DIR/$KFM_FILE" "$kfme_jp_dec"
+        add_verify "$ORIG_DIR/$KFM_FILE" "$kfme_jp_input"
+
+        kfae_pyj_input="$(copy_input "kfae_pyj" "$KFM_FILE")"
+        kfae_pyj_enc="$WORK_DIR/kfae_pyj/carrier.png"
+        kfae_pyj_dec="$WORK_DIR/kfae_pyj/decoded_${KFM_FILE}"
+        time_cmd "kfae_py_enc_java_dec" kfae_py_enc_java_dec "$kfae_pyj_input" "$kfae_pyj_enc" "$kfae_pyj_dec"
+        add_verify "$ORIG_DIR/$KFM_FILE" "$kfae_pyj_dec"
+        add_verify "$ORIG_DIR/$KFM_FILE" "$kfae_pyj_input"
+
+        kfae_jp_input="$(copy_input "kfae_jp" "$KFM_FILE")"
+        kfae_jp_enc="$WORK_DIR/kfae_jp/carrier.png"
+        kfae_jp_dec="$WORK_DIR/kfae_jp/decoded_${KFM_FILE}"
+        time_cmd "kfae_java_enc_py_dec" kfae_java_enc_py_dec "$kfae_jp_input" "$kfae_jp_enc" "$kfae_jp_dec"
+        add_verify "$ORIG_DIR/$KFM_FILE" "$kfae_jp_dec"
+        add_verify "$ORIG_DIR/$KFM_FILE" "$kfae_jp_input"
+
         for method in "${TEXT_NOPASS_METHODS[@]}" "${TEXT_PASS_METHODS[@]}"; do
             py_enc="$OUT_DIR/${method}_py_enc_java.txt"
             pyj_out="$OUT_DIR/${method}_pyj.txt"
@@ -3349,6 +3594,37 @@ if [[ "$SKIP_CROSS" != "1" ]]; then
                 add_verify "$ORIG_DIR/$file_name" "$jmg_jp_dec"
             done
         fi
+    fi
+
+    if [[ "$RUN_CPP_TESTS" == "1" && "$CPP_AVAILABLE" == "1" && "$RUN_JAVA_TESTS" == "1" && "$JAVA_AVAILABLE" == "1" ]]; then
+        # kFM/kFA cross-compat (C++ <-> Java)
+        kfme_cppj_input="$(copy_input "kfme_cppj" "$KFM_FILE")"
+        kfme_cppj_enc="$WORK_DIR/kfme_cppj/carrier.wav"
+        kfme_cppj_dec="$WORK_DIR/kfme_cppj/decoded_${KFM_FILE}"
+        time_cmd "kfme_cpp_enc_java_dec" kfme_cpp_enc_java_dec "$kfme_cppj_input" "$kfme_cppj_enc" "$kfme_cppj_dec"
+        add_verify "$ORIG_DIR/$KFM_FILE" "$kfme_cppj_dec"
+        add_verify "$ORIG_DIR/$KFM_FILE" "$kfme_cppj_input"
+
+        kfme_jcpp_input="$(copy_input "kfme_jcpp" "$KFM_FILE")"
+        kfme_jcpp_enc="$WORK_DIR/kfme_jcpp/carrier.wav"
+        kfme_jcpp_dec="$WORK_DIR/kfme_jcpp/decoded_${KFM_FILE}"
+        time_cmd "kfme_java_enc_cpp_dec" kfme_java_enc_cpp_dec "$kfme_jcpp_input" "$kfme_jcpp_enc" "$kfme_jcpp_dec"
+        add_verify "$ORIG_DIR/$KFM_FILE" "$kfme_jcpp_dec"
+        add_verify "$ORIG_DIR/$KFM_FILE" "$kfme_jcpp_input"
+
+        kfae_cppj_input="$(copy_input "kfae_cppj" "$KFM_FILE")"
+        kfae_cppj_enc="$WORK_DIR/kfae_cppj/carrier.png"
+        kfae_cppj_dec="$WORK_DIR/kfae_cppj/decoded_${KFM_FILE}"
+        time_cmd "kfae_cpp_enc_java_dec" kfae_cpp_enc_java_dec "$kfae_cppj_input" "$kfae_cppj_enc" "$kfae_cppj_dec"
+        add_verify "$ORIG_DIR/$KFM_FILE" "$kfae_cppj_dec"
+        add_verify "$ORIG_DIR/$KFM_FILE" "$kfae_cppj_input"
+
+        kfae_jcpp_input="$(copy_input "kfae_jcpp" "$KFM_FILE")"
+        kfae_jcpp_enc="$WORK_DIR/kfae_jcpp/carrier.png"
+        kfae_jcpp_dec="$WORK_DIR/kfae_jcpp/decoded_${KFM_FILE}"
+        time_cmd "kfae_java_enc_cpp_dec" kfae_java_enc_cpp_dec "$kfae_jcpp_input" "$kfae_jcpp_enc" "$kfae_jcpp_dec"
+        add_verify "$ORIG_DIR/$KFM_FILE" "$kfae_jcpp_dec"
+        add_verify "$ORIG_DIR/$KFM_FILE" "$kfae_jcpp_input"
     fi
 fi
 
@@ -3540,6 +3816,7 @@ if [[ -z "$BENCH_FILE_WORKERS" ]]; then
             fi
         fi
     fi
+
 fi
 if [[ -z "$BENCH_FILE_WORKERS" || ! "$BENCH_FILE_WORKERS" =~ ^[0-9]+$ || "$BENCH_FILE_WORKERS" -lt 1 ]]; then
     BENCH_FILE_WORKERS=1

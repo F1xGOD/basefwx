@@ -2,11 +2,13 @@ import collections
 import io
 import math
 import os
+import shutil
 import site
 import subprocess
 import sys
 import tempfile
 import unittest
+import warnings
 import wave
 from unittest.mock import patch
 from contextlib import redirect_stdout
@@ -201,9 +203,12 @@ class BaseFWXUnitTests(unittest.TestCase):
         img.save(src)
 
         out_wav = self.tmp_path / "fallback.wav"
-        basefwx.kFAd(str(src), str(out_wav))
+        with warnings.catch_warnings(record=True) as seen:
+            warnings.simplefilter("always")
+            basefwx.kFAd(str(src), str(out_wav))
         self.assertTrue(out_wav.exists())
         self.assertGreater(out_wav.stat().st_size, 44)
+        self.assertTrue(any("used kFAd instead of kFMe to encode an image" in str(item.message) for item in seen))
         with wave.open(str(out_wav), "rb") as wav_file:
             self.assertEqual(wav_file.getsampwidth(), 2)
             self.assertEqual(wav_file.getnchannels(), 1)
@@ -220,7 +225,128 @@ class BaseFWXUnitTests(unittest.TestCase):
             wav_file.writeframes(os.urandom(4096))
 
         out_png = self.tmp_path / "fallback.png"
-        basefwx.kFMd(str(src), str(out_png), bw_mode=True)
+        with warnings.catch_warnings(record=True) as seen:
+            warnings.simplefilter("always")
+            basefwx.kFMd(str(src), str(out_png), bw_mode=True)
+        self.assertTrue(out_png.exists())
+        self.assertTrue(any("kFMd fallback" in str(item.message) for item in seen))
+        with basefwx.Image.open(str(out_png)) as image:
+            self.assertEqual(image.mode, "L")
+            self.assertGreater(image.size[0] * image.size[1], 0)
+
+    def test_kfme_rejects_audio_input(self):
+        src = self.tmp_path / "audio.wav"
+        with wave.open(str(src), "wb") as wav_file:
+            wav_file.setnchannels(1)
+            wav_file.setsampwidth(2)
+            wav_file.setframerate(24000)
+            wav_file.writeframes(os.urandom(4096))
+        with self.assertRaisesRegex(ValueError, "kFMe expects an image/media input"):
+            basefwx.kFMe(str(src))
+
+    def test_kfae_rejects_image_input(self):
+        if basefwx.Image is None:
+            self.skipTest("Pillow unavailable")
+        src = self.tmp_path / "image.png"
+        img = basefwx.Image.frombytes("RGB", (16, 16), os.urandom(16 * 16 * 3))
+        img.save(src)
+        with self.assertRaisesRegex(ValueError, "kFAe expects an audio input"):
+            basefwx.kFAe(str(src))
+
+    def test_kfmd_rejects_image_input(self):
+        if basefwx.Image is None:
+            self.skipTest("Pillow unavailable")
+        src = self.tmp_path / "image.png"
+        img = basefwx.Image.frombytes("RGB", (16, 16), os.urandom(16 * 16 * 3))
+        img.save(src)
+        with self.assertRaisesRegex(ValueError, "kFMd expects an audio carrier input"):
+            basefwx.kFMd(str(src))
+
+    def test_kfad_rejects_audio_input(self):
+        src = self.tmp_path / "audio.wav"
+        with wave.open(str(src), "wb") as wav_file:
+            wav_file.setnchannels(1)
+            wav_file.setsampwidth(2)
+            wav_file.setframerate(24000)
+            wav_file.writeframes(os.urandom(4096))
+        with self.assertRaisesRegex(ValueError, "kFAd expects an image/PNG carrier input"):
+            basefwx.kFAd(str(src))
+
+    def test_kfae_default_output_does_not_overwrite_png_input(self):
+        src = self.tmp_path / "input.png"
+        original = os.urandom(4096)
+        src.write_bytes(original)
+        out = Path(basefwx.kFAe(str(src), bw_mode=True))
+        self.assertTrue(out.exists())
+        self.assertNotEqual(out.resolve(), src.resolve())
+        self.assertEqual(src.read_bytes(), original)
+
+    def test_kfme_default_output_does_not_overwrite_wav_input(self):
+        src = self.tmp_path / "input.wav"
+        with wave.open(str(src), "wb") as wav_file:
+            wav_file.setnchannels(1)
+            wav_file.setsampwidth(2)
+            wav_file.setframerate(24000)
+            wav_file.writeframes(os.urandom(4096))
+        original = src.read_bytes()
+        out = Path(basefwx.kFMe(str(src)))
+        self.assertTrue(out.exists())
+        self.assertNotEqual(out.resolve(), src.resolve())
+        self.assertEqual(src.read_bytes(), original)
+
+    def test_kfm_rejects_explicit_same_output_path(self):
+        src = self.tmp_path / "input.bin"
+        src.write_bytes(os.urandom(1024))
+        with self.assertRaises(ValueError):
+            basefwx.kFAe(str(src), str(src), bw_mode=True)
+
+    def test_kfmd_accepts_mp3_input(self):
+        if basefwx.Image is None:
+            self.skipTest("Pillow unavailable")
+        if shutil.which("ffmpeg") is None:
+            self.skipTest("ffmpeg unavailable")
+        src = self.tmp_path / "plain.wav"
+        with wave.open(str(src), "wb") as wav_file:
+            wav_file.setnchannels(1)
+            wav_file.setsampwidth(2)
+            wav_file.setframerate(22050)
+            wav_file.writeframes(os.urandom(4096))
+        mp3_path = self.tmp_path / "plain.mp3"
+        result = subprocess.run(
+            ["ffmpeg", "-y", "-v", "error", "-i", str(src), str(mp3_path)],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            self.skipTest(f"ffmpeg mp3 encode unavailable: {result.stderr.strip()}")
+        out_png = self.tmp_path / "from-mp3.png"
+        basefwx.kFMd(str(mp3_path), str(out_png), bw_mode=True)
+        self.assertTrue(out_png.exists())
+        with basefwx.Image.open(str(out_png)) as image:
+            self.assertEqual(image.mode, "L")
+            self.assertGreater(image.size[0] * image.size[1], 0)
+
+    def test_kfmd_accepts_m4a_input(self):
+        if basefwx.Image is None:
+            self.skipTest("Pillow unavailable")
+        if shutil.which("ffmpeg") is None:
+            self.skipTest("ffmpeg unavailable")
+        src = self.tmp_path / "plain.wav"
+        with wave.open(str(src), "wb") as wav_file:
+            wav_file.setnchannels(1)
+            wav_file.setsampwidth(2)
+            wav_file.setframerate(22050)
+            wav_file.writeframes(os.urandom(4096))
+        m4a_path = self.tmp_path / "plain.m4a"
+        result = subprocess.run(
+            ["ffmpeg", "-y", "-v", "error", "-i", str(src), "-c:a", "aac", str(m4a_path)],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            self.skipTest(f"ffmpeg m4a encode unavailable: {result.stderr.strip()}")
+        out_png = self.tmp_path / "from-m4a.png"
+        basefwx.kFMd(str(m4a_path), str(out_png), bw_mode=True)
         self.assertTrue(out_png.exists())
         with basefwx.Image.open(str(out_png)) as image:
             self.assertEqual(image.mode, "L")

@@ -9,7 +9,7 @@
 #include <cstring>
 #include <stdexcept>
 
-#if defined(_MSC_VER) && !defined(__clang__)
+#if defined(_MSC_VER) && defined(_M_X64) && !defined(__clang__)
 #include <intrin.h>
 #endif
 
@@ -36,7 +36,7 @@ constexpr std::uint32_t kXShift = 16U;
 constexpr std::uint64_t kPcgMultiplierHigh = 2549297995355413924ULL;
 constexpr std::uint64_t kPcgMultiplierLow = 4865540595714422341ULL;
 
-#if defined(_MSC_VER) && !defined(__clang__)
+#if defined(_MSC_VER) && defined(_M_X64) && !defined(__clang__)
 #define BASEFWX_HAS_INT128 1
 #elif defined(__SIZEOF_INT128__)
 #define BASEFWX_HAS_INT128 1
@@ -44,7 +44,7 @@ constexpr std::uint64_t kPcgMultiplierLow = 4865540595714422341ULL;
 #define BASEFWX_HAS_INT128 0
 #endif
 
-#if defined(_MSC_VER) && !defined(__clang__)
+#if defined(_MSC_VER) && defined(_M_X64) && !defined(__clang__)
 struct UInt128 {
     std::uint64_t hi;
     std::uint64_t lo;
@@ -194,7 +194,7 @@ public:
     }
 
     std::uint64_t Next64() {
-#if defined(_MSC_VER) && !defined(__clang__)
+#if defined(_MSC_VER) && defined(_M_X64) && !defined(__clang__)
         UInt128 old_state = state_;
         Step();
         std::uint64_t high = old_state.hi;
@@ -251,7 +251,7 @@ private:
               std::uint64_t seed_low,
               std::uint64_t inc_high,
               std::uint64_t inc_low) {
-#if defined(_MSC_VER) && !defined(__clang__)
+#if defined(_MSC_VER) && defined(_M_X64) && !defined(__clang__)
         UInt128 initstate = MakeUInt128(seed_high, seed_low);
         UInt128 initseq = MakeUInt128(inc_high, inc_low);
         state_ = {0, 0};
@@ -272,7 +272,7 @@ private:
     }
 
     void Step() {
-#if defined(_MSC_VER) && !defined(__clang__)
+#if defined(_MSC_VER) && defined(_M_X64) && !defined(__clang__)
         UInt128 multiplier = MakeUInt128(kPcgMultiplierHigh, kPcgMultiplierLow);
         state_ = Add128(Mul128(state_, multiplier), inc_);
 #else
@@ -282,7 +282,7 @@ private:
 #endif
     }
 
-#if defined(_MSC_VER) && !defined(__clang__)
+#if defined(_MSC_VER) && defined(_M_X64) && !defined(__clang__)
     UInt128 state_{0, 0};
     UInt128 inc_{0, 0};
 #else

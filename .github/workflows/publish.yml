@@ -245,16 +245,18 @@ jobs:
           if-no-files-found: error
 
   build-cli-macos:
-    runs-on: macos-latest
+    runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - arch: amd64
-            cmake_arch: x86_64
+          - runner: macos-13
+            arch: amd64
+            target_arch: x86_64
             output: basefwx-mac-amd64
-          - arch: arm64
-            cmake_arch: arm64
+          - runner: macos-14
+            arch: arm64
+            target_arch: arm64
             output: basefwx-mac-arm64
     permissions:
       contents: read
@@ -264,22 +266,52 @@ jobs:
 
       - name: Install system deps
         run: |
+          host_arch="$(uname -m)"
+          if [ "$host_arch" != "${{ matrix.target_arch }}" ]; then
+            echo "Runner arch mismatch: expected ${{ matrix.target_arch }}, got ${host_arch}"
+            exit 1
+          fi
           brew update
           brew install openssl@3 argon2 liboqs
 
       - name: Configure
         run: |
+          brew_prefix="$(brew --prefix)"
+          argon2_lib="${brew_prefix}/opt/argon2/lib/libargon2.a"
+          if [ ! -f "$argon2_lib" ]; then
+            argon2_lib="${brew_prefix}/opt/argon2/lib/libargon2.dylib"
+          fi
+          oqs_lib="${brew_prefix}/opt/liboqs/lib/liboqs.a"
+          if [ ! -f "$oqs_lib" ]; then
+            oqs_lib="${brew_prefix}/opt/liboqs/lib/liboqs.dylib"
+          fi
+          echo "Dependency architecture check:"
+          lipo -archs "$argon2_lib" || true
+          lipo -archs "$oqs_lib" || true
           cmake -S cpp -B cpp/build \
             -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_OSX_ARCHITECTURES="${{ matrix.target_arch }}" \
             -DBASEFWX_REQUIRE_ARGON2=ON \
             -DBASEFWX_REQUIRE_OQS=ON \
             -DBASEFWX_NATIVE_OPT=OFF \
-            -DCMAKE_OSX_ARCHITECTURES="${{ matrix.cmake_arch }}" \
             -DCMAKE_CXX_FLAGS="-Wno-deprecated-declarations" \
-            -DOPENSSL_ROOT_DIR="$(brew --prefix openssl@3)"
+            -DOPENSSL_ROOT_DIR="${brew_prefix}/opt/openssl@3" \
+            -DARGON2_INCLUDE_DIR="${brew_prefix}/opt/argon2/include" \
+            -DARGON2_LIBRARY="${argon2_lib}" \
+            -DOQS_INCLUDE_DIR="${brew_prefix}/opt/liboqs/include" \
+            -DOQS_LIBRARY="${oqs_lib}"
 
       - name: Build
         run: cmake --build cpp/build --config Release
+
+      - name: Verify output architecture
+        run: |
+          archs="$(lipo -archs cpp/build/basefwx_cpp)"
+          echo "Built binary architectures: ${archs}"
+          if ! echo "$archs" | grep -qw "${{ matrix.target_arch }}"; then
+            echo "Unexpected output arch; expected ${{ matrix.target_arch }}"
+            exit 1
+          fi
 
       - name: Strip
         run: |

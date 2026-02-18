@@ -45,8 +45,19 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     add_compile_options($<$<CONFIG:Release>:-flto>)
     add_link_options($<$<CONFIG:Release>:-flto>)
 elseif(MSVC)
-    add_compile_options($<$<CONFIG:Release>:/O2 /GL /Oi /Ot /Oy /fp:fast>)
+    add_compile_options(
+        $<$<CONFIG:Release>:/O2>
+        $<$<CONFIG:Release>:/GL>
+        $<$<CONFIG:Release>:/Oi>
+        $<$<CONFIG:Release>:/Ot>
+        $<$<CONFIG:Release>:/Oy>
+        $<$<CONFIG:Release>:/fp:fast>
+    )
     add_link_options($<$<CONFIG:Release>:/LTCG>)
+endif()
+
+if(WIN32)
+    add_compile_definitions(NOMINMAX WIN32_LEAN_AND_MEAN)
 endif()
 
 find_package(OpenSSL REQUIRED)

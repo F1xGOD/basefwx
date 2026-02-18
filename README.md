@@ -25,9 +25,10 @@ It provides:
 - Password-based encryption with Argon2id or PBKDF2
 - fwxAES file encryption with optional normalize wrapper
 - b512/pb512 reversible encodings and file modes
+- kFM carrier codecs (image<->audio reversible containers, noise-style output)
 - jMG media cipher for images, video, and audio with metadata control
 - C++ library and CLI with Python/C++/Java format parity
-- Java (JVM) library and CLI for cross-compatible fwxAES/b512/pb512/b256/jMG
+- Java (JVM) library and CLI for cross-compatible fwxAES/b512/pb512/b256/jMG/kFM
 
 Quick Start
 -----------
@@ -36,6 +37,8 @@ Quick Start
 pip install basefwx
 python -m basefwx cryptin aes-light file.bin -p "password" --strip
 python -m basefwx cryptin aes-light file.bin.fwx -p "password"
+python -m basefwx kFMe photo.png -o photo.wav
+python -m basefwx kFMd photo.wav -o photo-restored.png
 ```
 
 Optional extras:

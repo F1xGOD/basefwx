@@ -573,31 +573,44 @@ jobs:
           fi
 
           # Public VT API free tier is 4 requests/minute.
-          # Keep a small safety margin below that limit.
-          rate_limit_sec=16
-          last_ts=0
+          # Enforce a strict 4 requests / 65s window.
+          rate_limit_max=4
+          rate_limit_window_sec=65
+          rate_window_start=$(date +%s)
+          rate_window_count=0
+          vt_rate_limit_wait() {
+            local now elapsed sleep_for
+            now=$(date +%s)
+            elapsed=$((now - rate_window_start))
+            if [ "$elapsed" -ge "$rate_limit_window_sec" ]; then
+              rate_window_start="$now"
+              rate_window_count=0
+              elapsed=0
+            fi
+            if [ "$rate_window_count" -ge "$rate_limit_max" ]; then
+              sleep_for=$((rate_limit_window_sec - elapsed))
+              if [ "$sleep_for" -gt 0 ]; then
+                sleep "$sleep_for"
+              fi
+              rate_window_start=$(date +%s)
+              rate_window_count=0
+            fi
+            rate_window_count=$((rate_window_count + 1))
+          }
           vt_request() {
             local method="$1"
             local url="$2"
             shift 2
-            local now elapsed sleep_for response http_code body
+            local response http_code body
 
-            now=$(date +%s)
-            if [ "$last_ts" -ne 0 ]; then
-              elapsed=$((now - last_ts))
-              if [ "$elapsed" -lt "$rate_limit_sec" ]; then
-                sleep_for=$((rate_limit_sec - elapsed))
-                sleep "$sleep_for"
-              fi
-            fi
-            last_ts=$(date +%s)
-
+            vt_rate_limit_wait
             response=$(curl -sS -w "\n%{http_code}" --request "$method" "$url" "$@")
             http_code=$(printf '%s' "$response" | tail -n1)
             body=$(printf '%s' "$response" | sed '$d')
 
             if [ "$http_code" = "429" ]; then
               sleep 60
+              vt_rate_limit_wait
               response=$(curl -sS -w "\n%{http_code}" --request "$method" "$url" "$@")
               http_code=$(printf '%s' "$response" | tail -n1)
               body=$(printf '%s' "$response" | sed '$d')
@@ -690,6 +703,28 @@ jobs:
             sha256=$(echo "$analysis" | jq -r '.meta.file_info.sha256 // empty')
             md5=$(echo "$analysis" | jq -r '.meta.file_info.md5 // empty')
             sha1=$(echo "$analysis" | jq -r '.meta.file_info.sha1 // empty')
+            if [ "$status" != "completed" ] && [ -n "$sha256" ]; then
+              # If analysis job is still queued, use the file endpoint's cached stats.
+              file_info=$(vt_request GET "https://www.virustotal.com/api/v3/files/${sha256}" \
+                --header "accept: application/json" \
+                --header "x-apikey: ${VIRUSTOTAL_API_KEY}" || true)
+              if [ -n "${file_info:-}" ]; then
+                file_stats=$(echo "$file_info" | jq '.data.attributes.last_analysis_stats // {}')
+                stats_total=$(echo "$file_stats" | jq '[.[]?] | add // 0')
+                if [ "$stats_total" -gt 0 ]; then
+                  stats="$file_stats"
+                fi
+                if [ -z "$md5" ]; then
+                  md5=$(echo "$file_info" | jq -r '.data.attributes.md5 // empty')
+                fi
+                if [ -z "$sha1" ]; then
+                  sha1=$(echo "$file_info" | jq -r '.data.attributes.sha1 // empty')
+                fi
+                if [ -z "$item_url" ]; then
+                  item_url=$(echo "$file_info" | jq -r '.data.links.self // empty')
+                fi
+              fi
+            fi
 
             json=$(jq \
               --arg name "$name" \

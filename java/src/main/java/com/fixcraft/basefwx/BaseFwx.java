@@ -565,8 +565,17 @@ public final class BaseFwx {
     }
 
     public static File kFAe(File input, File output, boolean bwMode) {
-        kfmWarn("kFAe is deprecated; use kFMe (auto-detect) instead.");
-        return kFMe(input, output, bwMode);
+        if (input == null || !input.isFile()) {
+            throw new IllegalArgumentException("kFAe input file not found");
+        }
+        kfmWarn("kFAe is deprecated; using legacy PNG carrier mode. Prefer kFMe for auto mode.");
+        String inputExt = kfmCleanExt(getExtension(input));
+        byte[] payload = readFileBytes(input);
+        int flags = bwMode ? KFM_FLAG_BW : 0;
+        byte[] container = kfmPackContainer(KFM_MODE_AUDIO_IMAGE, payload, inputExt, flags);
+        File out = kfmResolveOutput(input, output, ".png", "kfae");
+        writeFileBytes(out, kfmCarrierToPng(container, bwMode));
+        return out;
     }
 
     public static File kFAd(File input, File output) {

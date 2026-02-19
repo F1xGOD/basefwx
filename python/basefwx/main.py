@@ -3654,6 +3654,22 @@ class basefwx:
         return str(out_path)
 
     @staticmethod
+    def _kfae_legacy_encode(path: str, output: str | None = None, *, bw_mode: bool = False) -> str:
+        src = basefwx.pathlib.Path(path)
+        src_ext = basefwx._kfm_clean_ext(src.suffix)
+        payload = src.read_bytes()
+        flags = basefwx.KFM_FLAG_BW if bw_mode else 0
+        container = basefwx._kfm_pack_container(
+            basefwx.KFM_MODE_AUDIO_IMAGE,
+            payload,
+            src_ext,
+            flags=flags,
+        )
+        out_path = basefwx._kfm_resolve_output(src, output, ".png", "kfae")
+        basefwx._kfm_bytes_to_png(container, out_path, bw_mode=bw_mode)
+        return str(out_path)
+
+    @staticmethod
     def kFMd(path: str, output: str | None = None, *, bw_mode: bool = False) -> str:
         src = basefwx.pathlib.Path(path)
         src_ext = basefwx._kfm_clean_ext(src.suffix)
@@ -3667,8 +3683,10 @@ class basefwx:
 
     @staticmethod
     def kFAe(path: str, output: str | None = None, *, bw_mode: bool = False) -> str:
-        basefwx._kfm_warn("kFAe is deprecated; use kFMe (auto-detect) instead.")
-        return basefwx.kFMe(path, output, bw_mode=bw_mode)
+        basefwx._kfm_warn(
+            "kFAe is deprecated; using legacy PNG carrier mode. Prefer kFMe for auto mode."
+        )
+        return basefwx._kfae_legacy_encode(path, output, bw_mode=bw_mode)
 
     @staticmethod
     def kFAd(path: str, output: str | None = None) -> str:

@@ -516,10 +516,12 @@ const loadVirusTotal = async () => {
       const row = document.createElement("tr");
       const link = toGuiLink(file);
       const stats = file.stats || {};
+      const vtStatus = String(file.status || "").toLowerCase();
       const malicious = Number(stats.malicious ?? 0);
       const suspicious = Number(stats.suspicious ?? 0);
       const undetected = Number(stats.undetected ?? 0);
-      const ok = undetected > 61 && suspicious < 3 && malicious <= 1;
+      const pending = vtStatus !== "completed" && malicious === 0 && suspicious === 0 && undetected === 0;
+      const ok = malicious === 0 && suspicious === 0 && undetected > 0;
       const validSha256 = typeof file.sha256 === "string" && /^[a-f0-9]{64}$/i.test(file.sha256);
       const validMd5 = typeof file.md5 === "string" && /^[a-f0-9]{32}$/i.test(file.md5);
       const hashIssue = !validSha256 || !validMd5;
@@ -530,6 +532,10 @@ const loadVirusTotal = async () => {
         statusIcon = VT_HASH_ICON;
         statusClass = "vt-check hash";
         statusLabel = "Hash or signature metadata issue";
+      } else if (pending) {
+        statusIcon = VT_WARN_ICON;
+        statusClass = "vt-check warn";
+        statusLabel = "VirusTotal analysis pending";
       } else if (malicious > 4 || suspicious > 12) {
         statusIcon = VT_BAD_ICON;
         statusClass = "vt-check bad";

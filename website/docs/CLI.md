@@ -1,6 +1,7 @@
 ---
 layout: doc
 title: CLI
+permalink: /docs/CLI/
 ---
 
 # CLI

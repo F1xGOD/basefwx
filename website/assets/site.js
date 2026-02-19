@@ -353,7 +353,7 @@ const renderBenchDetails = (container, tests, epsilon) => {
 };
 
 const getResultsBases = (tag) => {
-  const devBase = `https://raw.githubusercontent.com/${repo}/refs/heads/DEV/website/results`;
+  const devBase = `https://raw.githubusercontent.com/${repo}/DEV/website/results`;
   return {
     primary: devBase,
     fallback: devBase

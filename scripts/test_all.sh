@@ -1541,15 +1541,15 @@ py_kfmd() {
 py_kfae() {
     local input="$1"
     local out="$2"
-    log "STEP: python -m basefwx kFMe $input (audio auto mode)"
-    "$PYTHON_BIN" -m basefwx kFMe "$input" --out "$out"
+    log "STEP: python -m basefwx kFAe $input (legacy PNG mode)"
+    "$PYTHON_BIN" -m basefwx kFAe "$input" --out "$out"
 }
 
 py_kfad() {
     local input="$1"
     local out="$2"
-    log "STEP: python -m basefwx kFMd $input (auto decode)"
-    "$PYTHON_BIN" -m basefwx kFMd "$input" --out "$out"
+    log "STEP: python -m basefwx kFAd $input (legacy decode alias)"
+    "$PYTHON_BIN" -m basefwx kFAd "$input" --out "$out"
 }
 
 pypy_kfme() {
@@ -1569,15 +1569,15 @@ pypy_kfmd() {
 pypy_kfae() {
     local input="$1"
     local out="$2"
-    log "STEP: pypy -m basefwx kFMe $input (audio auto mode)"
-    "$PYPY_BIN" -m basefwx kFMe "$input" --out "$out"
+    log "STEP: pypy -m basefwx kFAe $input (legacy PNG mode)"
+    "$PYPY_BIN" -m basefwx kFAe "$input" --out "$out"
 }
 
 pypy_kfad() {
     local input="$1"
     local out="$2"
-    log "STEP: pypy -m basefwx kFMd $input (auto decode)"
-    "$PYPY_BIN" -m basefwx kFMd "$input" --out "$out"
+    log "STEP: pypy -m basefwx kFAd $input (legacy decode alias)"
+    "$PYPY_BIN" -m basefwx kFAd "$input" --out "$out"
 }
 
 cpp_kfme() {
@@ -1597,15 +1597,15 @@ cpp_kfmd() {
 cpp_kfae() {
     local input="$1"
     local out="$2"
-    log "STEP: $CPP_BIN kFMe $input (audio auto mode)"
-    "$CPP_BIN" kFMe "$input" --out "$out"
+    log "STEP: $CPP_BIN kFAe $input (legacy PNG mode)"
+    "$CPP_BIN" kFAe "$input" --out "$out"
 }
 
 cpp_kfad() {
     local input="$1"
     local out="$2"
-    log "STEP: $CPP_BIN kFMd $input (auto decode)"
-    "$CPP_BIN" kFMd "$input" --out "$out"
+    log "STEP: $CPP_BIN kFAd $input (legacy decode alias)"
+    "$CPP_BIN" kFAd "$input" --out "$out"
 }
 
 java_kfme() {
@@ -1625,15 +1625,15 @@ java_kfmd() {
 java_kfae() {
     local input="$1"
     local out="$2"
-    log "STEP: $JAVA_BIN -jar $JAVA_JAR kFMe $input (audio auto mode)"
-    "$JAVA_BIN" -jar "$JAVA_JAR" kFMe "$input" --out "$out"
+    log "STEP: $JAVA_BIN -jar $JAVA_JAR kFAe $input (legacy PNG mode)"
+    "$JAVA_BIN" -jar "$JAVA_JAR" kFAe "$input" --out "$out"
 }
 
 java_kfad() {
     local input="$1"
     local out="$2"
-    log "STEP: $JAVA_BIN -jar $JAVA_JAR kFMd $input (auto decode)"
-    "$JAVA_BIN" -jar "$JAVA_JAR" kFMd "$input" --out "$out"
+    log "STEP: $JAVA_BIN -jar $JAVA_JAR kFAd $input (legacy decode alias)"
+    "$JAVA_BIN" -jar "$JAVA_JAR" kFAd "$input" --out "$out"
 }
 
 kfme_py_enc_cpp_dec() {

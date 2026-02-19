@@ -228,7 +228,8 @@ jobs:
             -DCMAKE_TOOLCHAIN_FILE="${{ github.workspace }}\\vcpkg\\scripts\\buildsystems\\vcpkg.cmake" `
             -DVCPKG_TARGET_TRIPLET=${{ matrix.triplet }} `
             -DBASEFWX_REQUIRE_ARGON2=ON `
-            -DBASEFWX_REQUIRE_OQS=ON
+            -DBASEFWX_REQUIRE_OQS=ON `
+            -DBASEFWX_WIN_IPO=OFF
 
       - name: Build
         shell: pwsh
@@ -244,8 +245,6 @@ jobs:
           if (!(Test-Path $bin)) { $bin = "cpp/build/basefwx_cpp.exe" }
           if (!(Test-Path $bin)) { throw "basefwx_cpp.exe not found" }
           Copy-Item $bin "dist/${{ matrix.output }}"
-          $strip = Get-Command llvm-strip -ErrorAction SilentlyContinue
-          if ($strip) { & $strip.Path "dist\\${{ matrix.output }}" }
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -629,6 +628,12 @@ jobs:
           generated_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           json=$(jq -n --arg generated_at "$generated_at" --arg release_tag "$tag" --arg repository "$repo" \
             '{generated_at:$generated_at, release_tag:$release_tag, repository:$repository, files:[]}')
+          allowlist_file=".github/virustotal-fp-allowlist.json"
+          if [ -f "$allowlist_file" ]; then
+            allowlist_json="$(cat "$allowlist_file")"
+          else
+            allowlist_json='{"rules":[]}'
+          fi
 
           # Scan canonical release artifacts (all supported arches + Java JAR).
           files=(
@@ -693,6 +698,7 @@ jobs:
             name="${names[$idx]}"
             analysis="${analyses[$idx]}"
             status="${statuses[$idx]}"
+            file_info=""
             if [ -z "$analysis" ]; then
               analysis="{}"
             fi
@@ -725,6 +731,46 @@ jobs:
                 fi
               fi
             fi
+            engine_results=$(echo "$analysis" | jq '.data.attributes.results // {}')
+            if [ -n "${file_info:-}" ]; then
+              file_results=$(echo "$file_info" | jq '.data.attributes.last_analysis_results // {}')
+              analysis_results_count=$(echo "$engine_results" | jq 'keys | length')
+              if [ "$analysis_results_count" -eq 0 ]; then
+                engine_results="$file_results"
+              fi
+            fi
+
+            known_false_positives=$(jq -cn \
+              --arg name "$name" \
+              --argjson results "$engine_results" \
+              --argjson allowlist "$allowlist_json" '
+                [ $results
+                  | to_entries[]
+                  | . as $engine_entry
+                  | ($engine_entry.key) as $engine_name
+                  | ($engine_entry.value.result // "") as $result_name
+                  | ($engine_entry.value.category // "") as $category
+                  | select($category == "malicious" or $category == "suspicious")
+                  | ($allowlist.rules // [])[]
+                  | select((.engine // "") == $engine_name)
+                  | select(($name | test((.file_regex // ".*"))))
+                  | select(($result_name | test((.result_regex // ".*"); "i")))
+                  | {
+                      engine: $engine_name,
+                      category: $category,
+                      result: $result_name,
+                      rule_id: (.id // ""),
+                      reason: (.reason // "")
+                    }
+                ]
+                | unique_by(.engine, .category, .result)')
+            fp_malicious=$(echo "$known_false_positives" | jq '[.[] | select(.category=="malicious")] | length')
+            fp_suspicious=$(echo "$known_false_positives" | jq '[.[] | select(.category=="suspicious")] | length')
+            effective_stats=$(echo "$stats" | jq \
+              --argjson fp_malicious "$fp_malicious" \
+              --argjson fp_suspicious "$fp_suspicious" '
+                .malicious = (((.malicious // 0) - $fp_malicious) | if . < 0 then 0 else . end)
+                | .suspicious = (((.suspicious // 0) - $fp_suspicious) | if . < 0 then 0 else . end)')
 
             json=$(jq \
               --arg name "$name" \
@@ -736,6 +782,8 @@ jobs:
               --arg sha1 "$sha1" \
               --arg status "$status" \
               --argjson stats "$stats" \
+              --argjson effective_stats "$effective_stats" \
+              --argjson known_false_positives "$known_false_positives" \
               '.files += [{
                 name: $name,
                 analysis_id: $analysis_id,
@@ -745,7 +793,9 @@ jobs:
                 md5: $md5,
                 sha1: $sha1,
                 status: $status,
-                stats: $stats
+                stats: $stats,
+                effective_stats: $effective_stats,
+                known_false_positives: $known_false_positives
               }]' <<< "$json")
           done
 

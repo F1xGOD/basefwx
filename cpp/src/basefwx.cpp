@@ -1404,8 +1404,15 @@ std::string Kfmd(const std::string& path, const std::string& output, bool bw_mod
 }
 
 std::string Kfae(const std::string& path, const std::string& output, bool bw_mode) {
-    WarnKfmUsage("kFAe is deprecated; use kFMe (auto-detect) instead.");
-    return Kfme(path, output, bw_mode);
+    WarnKfmUsage("kFAe is deprecated; using legacy PNG carrier mode. Prefer kFMe for auto mode.");
+    std::filesystem::path input_path(path);
+    std::string input_ext = KfmPathExt(input_path);
+    auto payload = ReadFile(path);
+    std::uint8_t flags = bw_mode ? kKfmFlagBw : 0u;
+    auto container = BuildKfmContainer(kKfmModeAudioImage, payload, input_ext, flags);
+    std::filesystem::path out_path = ResolveKfmOutputPath(input_path, output, ".png", "kfae");
+    WritePngCarrierBytes(out_path, container, bw_mode);
+    return out_path.string();
 }
 
 std::string Kfad(const std::string& path, const std::string& output) {

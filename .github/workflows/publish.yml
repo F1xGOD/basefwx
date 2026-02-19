@@ -732,6 +732,8 @@ jobs:
           GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
         run: |
           tag="${GITHUB_REF_NAME}"
+          git fetch --no-tags origin DEV
+          git checkout -B DEV origin/DEV
           mkdir -p website/results
           cp dist_out/virustotal-results.json "website/results/virustotal-${tag}.json"
           cp dist_out/virustotal-results.txt "website/results/virustotal-${tag}.txt"
@@ -777,8 +779,6 @@ jobs:
           EOF
           chmod +x gpg-wrapper.sh
           git config gpg.program "$PWD/gpg-wrapper.sh"
-          git fetch --no-tags origin DEV
-          git checkout -B DEV origin/DEV
           git add website/results/
           if git diff --cached --quiet; then
             echo "No results changes"

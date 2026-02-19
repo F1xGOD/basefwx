@@ -13,11 +13,11 @@
 BASEFWX is a hybrid post-quantum + AEAD encryption toolkit for files and media, with cross-compatible Python, C++, and Java implementations.
 
 - Website: https://basefwx.fixcraft.jp
-- Documentation: https://basefwx.fixcraft.jp/docs/CLI.html
+- Documentation: https://basefwx.fixcraft.jp/docs/CLI
 - Source code: https://github.com/F1xGOD/basefwx
-- Contributing: https://basefwx.fixcraft.jp/docs/CONTRIBUTING.html
+- Contributing: https://basefwx.fixcraft.jp/docs/CONTRIBUTING
 - Bug reports: https://github.com/F1xGOD/basefwx/issues
-- Report a security vulnerability: https://basefwx.fixcraft.jp/docs/SECURITY_MODEL.html
+- Report a security vulnerability: https://basefwx.fixcraft.jp/docs/SECURITY_MODEL
 
 It provides:
 
@@ -74,11 +74,11 @@ Documentation
 -------------
 
 - [Docs home (HTML)](https://basefwx.fixcraft.jp)
-- [CLI and usage](https://basefwx.fixcraft.jp/docs/CLI.html)
-- [Security model](https://basefwx.fixcraft.jp/docs/SECURITY_MODEL.html)
-- [Testing and benchmarks](https://basefwx.fixcraft.jp/docs/TESTING.html)
-- [Contributing and code of conduct](https://basefwx.fixcraft.jp/docs/CONTRIBUTING.html)
-- [Java module](https://basefwx.fixcraft.jp/docs/CLI.html#java-cli)
+- [CLI and usage](https://basefwx.fixcraft.jp/docs/CLI)
+- [Security model](https://basefwx.fixcraft.jp/docs/SECURITY_MODEL)
+- [Testing and benchmarks](https://basefwx.fixcraft.jp/docs/TESTING)
+- [Contributing and code of conduct](https://basefwx.fixcraft.jp/docs/CONTRIBUTING)
+- [Java module](https://basefwx.fixcraft.jp/docs/CLI#java-cli)
 
 License
 -------

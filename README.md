@@ -25,7 +25,7 @@ It provides:
 - Password-based encryption with Argon2id or PBKDF2
 - fwxAES file encryption with optional normalize wrapper
 - b512/pb512 reversible encodings and file modes
-- kFM carrier codecs (image<->audio reversible containers, noise-style output)
+- kFM carrier codecs (auto media/audio encode + strict carrier decode)
 - jMG media cipher for images, video, and audio with metadata control
 - C++ library and CLI with Python/C++/Java format parity
 - Java (JVM) library and CLI for cross-compatible fwxAES/b512/pb512/b256/jMG/kFM
@@ -37,9 +37,31 @@ Quick Start
 pip install basefwx
 python -m basefwx cryptin aes-light file.bin -p "password" --strip
 python -m basefwx cryptin aes-light file.bin.fwx -p "password"
-python -m basefwx kFMe photo.png -o photo.wav
-python -m basefwx kFMd photo.wav -o photo-restored.png
-# mp3/m4a inputs are accepted for kFMd when ffmpeg is available.
+python -m basefwx n10-enc "hello"
+python -m basefwx n10-dec "<digits>"
+python -m basefwx kFMe photo.png -o photo.wav            # image/media -> audio carrier
+python -m basefwx kFMe track.mp3 -o track.png --bw       # audio -> image carrier
+python -m basefwx kFMd photo.wav -o photo-restored.png   # strict decode
+python -m basefwx kFMd track.png -o track-restored.mp3
+```
+
+Notes:
+- `kFMd` only decodes BaseFWX carriers; it refuses plain WAV/PNG/MP3/M4A files.
+- `kFAe` / `kFAd` remain available as deprecated aliases to `kFMe` / `kFMd`.
+
+Python API quick refs:
+
+```python
+from basefwx import n10encode, n10decode, n10encode_bytes, n10decode_bytes
+from basefwx import kFMe, kFMd
+
+digits = n10encode("hello")
+text = n10decode(digits)
+blob_digits = n10encode_bytes(b"\x00\x01\x02")
+blob = n10decode_bytes(blob_digits)
+
+carrier = kFMe("input.mp3", output="input.png", bw_mode=True)
+restored = kFMd("input.png", output="restored.mp3")
 ```
 
 Optional extras:

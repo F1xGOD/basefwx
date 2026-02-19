@@ -369,7 +369,7 @@ public final class BaseFwxCli {
                     return;
                 case "kFMe": {
                     KfmArgs opts = parseKfmArgs(args, 1);
-                    File out = BaseFwx.kFMe(opts.input, opts.output);
+                    File out = BaseFwx.kFMe(opts.input, opts.output, opts.bwMode);
                     System.out.println(out.getPath());
                     return;
                 }
@@ -932,10 +932,10 @@ public final class BaseFwxCli {
         System.out.println("  n10-dec <digits>");
         System.out.println("  n10file-enc <in> <out>");
         System.out.println("  n10file-dec <in> <out>");
-        System.out.println("  kFMe <in> [--out <out>]");
+        System.out.println("  kFMe <in> [--out <out>] [--bw]");
         System.out.println("  kFMd <in> [--out <out>] [--bw]");
-        System.out.println("  kFAe <in> [--out <out>] [--bw]");
-        System.out.println("  kFAd <in> [--out <out>]");
+        System.out.println("  kFAe <in> [--out <out>] [--bw]   (deprecated alias)");
+        System.out.println("  kFAd <in> [--out <out>]          (deprecated alias)");
         System.out.println("  hash512 <text>");
         System.out.println("  uhash513 <text>");
         System.out.println("  a512-enc <text>");

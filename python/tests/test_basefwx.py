@@ -8,7 +8,6 @@ import subprocess
 import sys
 import tempfile
 import unittest
-import warnings
 import wave
 from unittest.mock import patch
 from contextlib import redirect_stdout
@@ -177,7 +176,7 @@ class BaseFWXUnitTests(unittest.TestCase):
         self.assertTrue(decoded_path.exists())
         self.assertEqual(decoded_path.read_bytes(), original)
 
-    def test_kfa_audio_image_roundtrip(self):
+    def test_kfm_audio_image_roundtrip_auto(self):
         src = self.tmp_path / "tone.wav"
         with wave.open(str(src), "wb") as wav_file:
             wav_file.setnchannels(1)
@@ -188,35 +187,24 @@ class BaseFWXUnitTests(unittest.TestCase):
 
         png_path = self.tmp_path / "carrier.png"
         decoded_path = self.tmp_path / "decoded.wav"
-        basefwx.kFAe(str(src), str(png_path), bw_mode=True)
-        basefwx.kFAd(str(png_path), str(decoded_path))
+        basefwx.kFMe(str(src), str(png_path), bw_mode=True)
+        basefwx.kFMd(str(png_path), str(decoded_path))
 
         self.assertTrue(png_path.exists())
         self.assertTrue(decoded_path.exists())
         self.assertEqual(decoded_path.read_bytes(), original)
 
-    def test_kfad_fallback_for_plain_png(self):
+    def test_kfmd_refuses_plain_png(self):
         if basefwx.Image is None:
             self.skipTest("Pillow unavailable")
         src = self.tmp_path / "plain.png"
         img = basefwx.Image.frombytes("RGB", (32, 32), os.urandom(32 * 32 * 3))
         img.save(src)
 
-        out_wav = self.tmp_path / "fallback.wav"
-        with warnings.catch_warnings(record=True) as seen:
-            warnings.simplefilter("always")
-            basefwx.kFAd(str(src), str(out_wav))
-        self.assertTrue(out_wav.exists())
-        self.assertGreater(out_wav.stat().st_size, 44)
-        self.assertTrue(any("used kFAd instead of kFMe to encode an image" in str(item.message) for item in seen))
-        with wave.open(str(out_wav), "rb") as wav_file:
-            self.assertEqual(wav_file.getsampwidth(), 2)
-            self.assertEqual(wav_file.getnchannels(), 1)
-            self.assertGreater(wav_file.getnframes(), 0)
+        with self.assertRaisesRegex(ValueError, "not a BaseFWX kFM carrier"):
+            basefwx.kFMd(str(src))
 
-    def test_kfmd_fallback_for_plain_wav(self):
-        if basefwx.Image is None:
-            self.skipTest("Pillow unavailable")
+    def test_kfmd_refuses_plain_wav(self):
         src = self.tmp_path / "plain.wav"
         with wave.open(str(src), "wb") as wav_file:
             wav_file.setnchannels(1)
@@ -224,53 +212,38 @@ class BaseFWXUnitTests(unittest.TestCase):
             wav_file.setframerate(22050)
             wav_file.writeframes(os.urandom(4096))
 
-        out_png = self.tmp_path / "fallback.png"
-        with warnings.catch_warnings(record=True) as seen:
-            warnings.simplefilter("always")
-            basefwx.kFMd(str(src), str(out_png), bw_mode=True)
-        self.assertTrue(out_png.exists())
-        self.assertTrue(any("kFMd fallback" in str(item.message) for item in seen))
-        with basefwx.Image.open(str(out_png)) as image:
-            self.assertEqual(image.mode, "L")
-            self.assertGreater(image.size[0] * image.size[1], 0)
-
-    def test_kfme_rejects_audio_input(self):
-        src = self.tmp_path / "audio.wav"
-        with wave.open(str(src), "wb") as wav_file:
-            wav_file.setnchannels(1)
-            wav_file.setsampwidth(2)
-            wav_file.setframerate(24000)
-            wav_file.writeframes(os.urandom(4096))
-        with self.assertRaisesRegex(ValueError, "kFMe expects an image/media input"):
-            basefwx.kFMe(str(src))
-
-    def test_kfae_rejects_image_input(self):
-        if basefwx.Image is None:
-            self.skipTest("Pillow unavailable")
-        src = self.tmp_path / "image.png"
-        img = basefwx.Image.frombytes("RGB", (16, 16), os.urandom(16 * 16 * 3))
-        img.save(src)
-        with self.assertRaisesRegex(ValueError, "kFAe expects an audio input"):
-            basefwx.kFAe(str(src))
-
-    def test_kfmd_rejects_image_input(self):
-        if basefwx.Image is None:
-            self.skipTest("Pillow unavailable")
-        src = self.tmp_path / "image.png"
-        img = basefwx.Image.frombytes("RGB", (16, 16), os.urandom(16 * 16 * 3))
-        img.save(src)
-        with self.assertRaisesRegex(ValueError, "kFMd expects an audio carrier input"):
+        with self.assertRaisesRegex(ValueError, "not a BaseFWX kFM carrier"):
             basefwx.kFMd(str(src))
 
-    def test_kfad_rejects_audio_input(self):
+    def test_kfme_accepts_audio_input(self):
         src = self.tmp_path / "audio.wav"
         with wave.open(str(src), "wb") as wav_file:
             wav_file.setnchannels(1)
             wav_file.setsampwidth(2)
             wav_file.setframerate(24000)
             wav_file.writeframes(os.urandom(4096))
-        with self.assertRaisesRegex(ValueError, "kFAd expects an image/PNG carrier input"):
-            basefwx.kFAd(str(src))
+        out = Path(basefwx.kFMe(str(src)))
+        self.assertEqual(out.suffix.lower(), ".png")
+        self.assertTrue(out.exists())
+
+    def test_kfmd_refuses_non_carrier_image(self):
+        if basefwx.Image is None:
+            self.skipTest("Pillow unavailable")
+        src = self.tmp_path / "image.png"
+        img = basefwx.Image.frombytes("RGB", (16, 16), os.urandom(16 * 16 * 3))
+        img.save(src)
+        with self.assertRaisesRegex(ValueError, "not a BaseFWX kFM carrier"):
+            basefwx.kFMd(str(src))
+
+    def test_kfmd_refuses_non_carrier_audio(self):
+        src = self.tmp_path / "audio.wav"
+        with wave.open(str(src), "wb") as wav_file:
+            wav_file.setnchannels(1)
+            wav_file.setsampwidth(2)
+            wav_file.setframerate(24000)
+            wav_file.writeframes(os.urandom(4096))
+        with self.assertRaisesRegex(ValueError, "not a BaseFWX kFM carrier"):
+            basefwx.kFMd(str(src))
 
     def test_kfae_default_output_does_not_overwrite_png_input(self):
         src = self.tmp_path / "input.png"
@@ -300,7 +273,7 @@ class BaseFWXUnitTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             basefwx.kFAe(str(src), str(src), bw_mode=True)
 
-    def test_kfmd_accepts_mp3_input(self):
+    def test_kfmd_refuses_plain_mp3_input(self):
         if basefwx.Image is None:
             self.skipTest("Pillow unavailable")
         if shutil.which("ffmpeg") is None:
@@ -319,14 +292,10 @@ class BaseFWXUnitTests(unittest.TestCase):
         )
         if result.returncode != 0:
             self.skipTest(f"ffmpeg mp3 encode unavailable: {result.stderr.strip()}")
-        out_png = self.tmp_path / "from-mp3.png"
-        basefwx.kFMd(str(mp3_path), str(out_png), bw_mode=True)
-        self.assertTrue(out_png.exists())
-        with basefwx.Image.open(str(out_png)) as image:
-            self.assertEqual(image.mode, "L")
-            self.assertGreater(image.size[0] * image.size[1], 0)
+        with self.assertRaisesRegex(ValueError, "not a BaseFWX kFM carrier"):
+            basefwx.kFMd(str(mp3_path))
 
-    def test_kfmd_accepts_m4a_input(self):
+    def test_kfmd_refuses_plain_m4a_input(self):
         if basefwx.Image is None:
             self.skipTest("Pillow unavailable")
         if shutil.which("ffmpeg") is None:
@@ -345,12 +314,8 @@ class BaseFWXUnitTests(unittest.TestCase):
         )
         if result.returncode != 0:
             self.skipTest(f"ffmpeg m4a encode unavailable: {result.stderr.strip()}")
-        out_png = self.tmp_path / "from-m4a.png"
-        basefwx.kFMd(str(m4a_path), str(out_png), bw_mode=True)
-        self.assertTrue(out_png.exists())
-        with basefwx.Image.open(str(out_png)) as image:
-            self.assertEqual(image.mode, "L")
-            self.assertGreater(image.size[0] * image.size[1], 0)
+        with self.assertRaisesRegex(ValueError, "not a BaseFWX kFM carrier"):
+            basefwx.kFMd(str(m4a_path))
 
     def test_aes_roundtrip_without_master(self):
         original = "Symmetric data"

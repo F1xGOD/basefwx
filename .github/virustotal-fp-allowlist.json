@@ -1,0 +1,32 @@
+{
+  "rules": [
+    {
+      "id": "windows-wacatac-microsoft",
+      "engine": "Microsoft",
+      "file_regex": "^basefwx-windows-(amd64|x86)\\.exe$",
+      "result_regex": "^Trojan:Win32/Wacatac\\.B!ml$",
+      "reason": "Known ML false positive for unsigned release binaries."
+    },
+    {
+      "id": "windows-malicious-secureage",
+      "engine": "SecureAge",
+      "file_regex": "^basefwx-windows-(amd64|x86)\\.exe$",
+      "result_regex": "^Malicious$",
+      "reason": "Generic verdict with no family attribution."
+    },
+    {
+      "id": "windows-susgen-maxsecure",
+      "engine": "MaxSecure",
+      "file_regex": "^basefwx-windows-(amd64|x86)\\.exe$",
+      "result_regex": "^Trojan\\.Malware\\.300983\\.susgen$",
+      "reason": "Heuristic signature reported as false positive."
+    },
+    {
+      "id": "windows-wacatac-vba32",
+      "engine": "VBA32",
+      "file_regex": "^basefwx-windows-(amd64|x86)\\.exe$",
+      "result_regex": "^BScope\\.Trojan\\.Wacatac$",
+      "reason": "Heuristic signature reported as false positive."
+    }
+  ]
+}

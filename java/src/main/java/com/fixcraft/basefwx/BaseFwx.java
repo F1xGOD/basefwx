@@ -13,6 +13,7 @@ import java.io.OutputStream;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.security.GeneralSecurityException;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -518,17 +519,22 @@ public final class BaseFwx {
     }
 
     public static File kFMe(File input, File output) {
+        return kFMe(input, output, false);
+    }
+
+    public static File kFMe(File input, File output, boolean bwMode) {
         if (input == null || !input.isFile()) {
             throw new IllegalArgumentException("kFMe input file not found");
         }
         String inputExt = kfmCleanExt(getExtension(input));
-        if (kfmIsAudioExtension(inputExt)) {
-            throw new IllegalArgumentException(
-                "kFMe expects an image/media input, got audio extension '" + inputExt
-                    + "'. Use kFAe for audio->image carriers."
-            );
-        }
         byte[] payload = readFileBytes(input);
+        if (kfmIsAudioExtension(inputExt)) {
+            int flags = bwMode ? KFM_FLAG_BW : 0;
+            byte[] container = kfmPackContainer(KFM_MODE_AUDIO_IMAGE, payload, inputExt, flags);
+            File out = kfmResolveOutput(input, output, ".png", "kfme");
+            writeFileBytes(out, kfmCarrierToPng(container, bwMode));
+            return out;
+        }
         byte[] container = kfmPackContainer(KFM_MODE_IMAGE_AUDIO, payload, inputExt, 0);
         File out = kfmResolveOutput(input, output, ".wav", "kfme");
         writeFileBytes(out, kfmCarrierToWav(container));
@@ -536,86 +542,36 @@ public final class BaseFwx {
     }
 
     public static File kFMd(File input, File output, boolean bwMode) {
+        if (bwMode) {
+            kfmWarn("kFMd --bw is deprecated and ignored in strict decode mode.");
+        }
+        return kFMd(input, output);
+    }
+
+    public static File kFMd(File input, File output) {
         if (input == null || !input.isFile()) {
             throw new IllegalArgumentException("kFMd input file not found");
         }
         String inputExt = kfmCleanExt(getExtension(input));
-        if (kfmIsImageExtension(inputExt)) {
+        KfmDecoded decoded = kfmDecodeContainer(input, inputExt);
+        if (decoded == null) {
             throw new IllegalArgumentException(
-                "kFMd expects an audio carrier input, got image extension '" + inputExt
-                    + "'. Use kFAd for image carriers."
+                "kFMd refused input: file is not a BaseFWX kFM carrier. Use kFMe to encode first."
             );
         }
-        byte[] carrier = kfmAudioToCarrier(input);
-        KfmDecoded decoded = kfmUnpackContainer(carrier);
-        if (decoded != null) {
-            if (decoded.mode != KFM_MODE_IMAGE_AUDIO) {
-                throw new IllegalArgumentException(
-                    "kFMd received a kFAe carrier (audio->image). Decode it with kFAd."
-                );
-            }
-            File out = kfmResolveOutput(input, output, decoded.extension, "kfmd");
-            writeFileBytes(out, decoded.payload);
-            return out;
-        }
-        kfmWarn(
-            "kFMd fallback: input is regular audio (not a BaseFWX kFMe carrier). "
-                + "Output will be static PNG noise."
-        );
-        File out = kfmResolveOutput(input, output, ".png", "kfmd");
-        writeFileBytes(out, kfmCarrierToPng(carrier, bwMode));
+        File out = kfmResolveOutput(input, output, decoded.extension, "kfmd");
+        writeFileBytes(out, decoded.payload);
         return out;
     }
 
     public static File kFAe(File input, File output, boolean bwMode) {
-        if (input == null || !input.isFile()) {
-            throw new IllegalArgumentException("kFAe input file not found");
-        }
-        String inputExt = kfmCleanExt(getExtension(input));
-        if (kfmIsImageExtension(inputExt)) {
-            throw new IllegalArgumentException(
-                "kFAe expects an audio input, got image extension '" + inputExt
-                    + "'. Use kFMe for image->audio carriers."
-            );
-        }
-        byte[] payload = readFileBytes(input);
-        int flags = bwMode ? KFM_FLAG_BW : 0;
-        byte[] container = kfmPackContainer(KFM_MODE_AUDIO_IMAGE, payload, inputExt, flags);
-        File out = kfmResolveOutput(input, output, ".png", "kfae");
-        writeFileBytes(out, kfmCarrierToPng(container, bwMode));
-        return out;
+        kfmWarn("kFAe is deprecated; use kFMe (auto-detect) instead.");
+        return kFMe(input, output, bwMode);
     }
 
     public static File kFAd(File input, File output) {
-        if (input == null || !input.isFile()) {
-            throw new IllegalArgumentException("kFAd input file not found");
-        }
-        String inputExt = kfmCleanExt(getExtension(input));
-        if (kfmIsAudioExtension(inputExt)) {
-            throw new IllegalArgumentException(
-                "kFAd expects an image/PNG carrier input, got audio extension '" + inputExt
-                    + "'. Use kFMd for audio carriers."
-            );
-        }
-        byte[] carrier = kfmPngToCarrier(readFileBytes(input));
-        KfmDecoded decoded = kfmUnpackContainer(carrier);
-        if (decoded != null) {
-            if (decoded.mode != KFM_MODE_AUDIO_IMAGE) {
-                throw new IllegalArgumentException(
-                    "kFAd received a kFMe carrier (image->audio). Decode it with kFMd."
-                );
-            }
-            File out = kfmResolveOutput(input, output, decoded.extension, "kfad");
-            writeFileBytes(out, decoded.payload);
-            return out;
-        }
-        kfmWarn(
-            "kFAd fallback: you used kFAd instead of kFMe to encode an image. "
-                + "This will result in a longer file, and you won't be able to hear what's in the file."
-        );
-        File out = kfmResolveOutput(input, output, ".wav", "kfad");
-        writeFileBytes(out, kfmCarrierToWav(carrier));
-        return out;
+        kfmWarn("kFAd is deprecated; use kFMd (auto-detect) instead.");
+        return kFMd(input, output);
     }
 
     public static String b64Encode(String input) {
@@ -3641,6 +3597,100 @@ public final class BaseFwx {
 
     private static void kfmWarn(String message) {
         System.err.println("WARN: " + message);
+    }
+
+    private static byte[] kfmReadHead(File input, int maxBytes) {
+        try (InputStream in = Files.newInputStream(input.toPath())) {
+            byte[] head = new byte[Math.max(0, maxBytes)];
+            int read = in.read(head);
+            if (read <= 0) {
+                return new byte[0];
+            }
+            if (read == head.length) {
+                return head;
+            }
+            return Arrays.copyOf(head, read);
+        } catch (IOException exc) {
+            return new byte[0];
+        }
+    }
+
+    private static java.util.List<String> kfmDetectCarrierKinds(File input, String inputExt) {
+        if (kfmIsAudioExtension(inputExt)) {
+            return java.util.Collections.singletonList("audio");
+        }
+        if (kfmIsImageExtension(inputExt)) {
+            return java.util.Collections.singletonList("image");
+        }
+        byte[] head = kfmReadHead(input, 16);
+        java.util.ArrayList<String> kinds = new java.util.ArrayList<>();
+        if (head.length >= 8
+            && (head[0] & 0xFF) == 0x89
+            && head[1] == 'P'
+            && head[2] == 'N'
+            && head[3] == 'G'
+            && head[4] == '\r'
+            && head[5] == '\n'
+            && (head[6] & 0xFF) == 0x1A
+            && head[7] == '\n') {
+            kinds.add("image");
+        }
+        if (head.length >= 12
+            && head[0] == 'R'
+            && head[1] == 'I'
+            && head[2] == 'F'
+            && head[3] == 'F'
+            && head[8] == 'W'
+            && head[9] == 'A'
+            && head[10] == 'V'
+            && head[11] == 'E') {
+            kinds.add("audio");
+        }
+        if (kinds.isEmpty()) {
+            kinds.add("audio");
+            kinds.add("image");
+        } else {
+            if (!kinds.contains("audio")) {
+                kinds.add("audio");
+            }
+            if (!kinds.contains("image")) {
+                kinds.add("image");
+            }
+        }
+        return kinds;
+    }
+
+    private static KfmDecoded kfmDecodeContainer(File input, String inputExt) {
+        java.util.List<String> kinds = kfmDetectCarrierKinds(input, inputExt);
+        java.util.ArrayList<String> errors = new java.util.ArrayList<>();
+        for (String kind : kinds) {
+            byte[] carrier;
+            try {
+                if ("audio".equals(kind)) {
+                    carrier = kfmAudioToCarrier(input);
+                } else {
+                    carrier = kfmPngToCarrier(readFileBytes(input));
+                }
+            } catch (RuntimeException exc) {
+                if (kinds.size() == 1) {
+                    throw exc;
+                }
+                errors.add(kind + ": " + exc.getMessage());
+                continue;
+            }
+            KfmDecoded decoded = kfmUnpackContainer(carrier);
+            if (decoded != null) {
+                return decoded;
+            }
+            errors.add(kind + ": no BaseFWX header");
+        }
+        if (!errors.isEmpty()) {
+            throw new IllegalArgumentException(
+                "kFMd refused input: file is not a BaseFWX kFM carrier. "
+                    + "Use kFMe to encode first (" + errors.get(0) + ")."
+            );
+        }
+        return null;
     }
 
     private static long bytesToLong(byte[] input, int offset) {

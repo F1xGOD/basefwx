@@ -385,10 +385,10 @@ void PrintUsage() {
     std::cout << "  basefwx_cpp n10-dec <digits>\n";
     std::cout << "  basefwx_cpp n10file-enc <in-file> <out-file>\n";
     std::cout << "  basefwx_cpp n10file-dec <in-file> <out-file>\n";
-    std::cout << "  basefwx_cpp kFMe <in-file> [--out <path>]\n";
+    std::cout << "  basefwx_cpp kFMe <in-file> [--out <path>] [--bw]\n";
     std::cout << "  basefwx_cpp kFMd <in-file> [--out <path>] [--bw]\n";
-    std::cout << "  basefwx_cpp kFAe <in-file> [--out <path>] [--bw]\n";
-    std::cout << "  basefwx_cpp kFAd <in-file> [--out <path>]\n";
+    std::cout << "  basefwx_cpp kFAe <in-file> [--out <path>] [--bw]    (deprecated alias)\n";
+    std::cout << "  basefwx_cpp kFAd <in-file> [--out <path>]           (deprecated alias)\n";
     std::cout << "  basefwx_cpp hash512 <text>\n";
     std::cout << "  basefwx_cpp uhash513 <text>\n";
     std::cout << "  basefwx_cpp a512-enc <text>\n";
@@ -1199,7 +1199,7 @@ int main(int argc, char** argv) {
 
             std::string out_path;
             if (command == "kFMe") {
-                out_path = basefwx::Kfme(input, output);
+                out_path = basefwx::Kfme(input, output, bw_mode);
             } else if (command == "kFMd") {
                 out_path = basefwx::Kfmd(input, output, bw_mode);
             } else if (command == "kFAe") {

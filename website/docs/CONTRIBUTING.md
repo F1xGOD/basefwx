@@ -1,6 +1,7 @@
 ---
 layout: doc
 title: Contributing
+permalink: /docs/CONTRIBUTING/
 ---
 
 # Contributing

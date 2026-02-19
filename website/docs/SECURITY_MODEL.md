@@ -1,6 +1,7 @@
 ---
 layout: doc
 title: Security Model
+permalink: /docs/SECURITY_MODEL/
 ---
 
 # Security Model

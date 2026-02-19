@@ -1,5 +1,23 @@
 from .main import *
 
+try:
+    from importlib.metadata import PackageNotFoundError as _PackageNotFoundError
+    from importlib.metadata import version as _package_version
+except Exception:
+    _PackageNotFoundError = Exception
+    _package_version = None
+
+_engine_version = str(getattr(basefwx, "ENGINE_VERSION", "")).strip()
+if _engine_version and _engine_version.lower() != "unknown":
+    __version__ = _engine_version
+elif _package_version is not None:
+    try:
+        __version__ = _package_version("basefwx")
+    except _PackageNotFoundError:
+        __version__ = "0.0.0"
+else:
+    __version__ = "0.0.0"
+
 def b64encode(string: str): return basefwx.b64encode(string)
 def b512encode(string: str, code: str="", use_master: bool = True): return basefwx.b512encode(string, code, use_master=use_master)
 def b256encode(string: str): return basefwx.b256encode(string)

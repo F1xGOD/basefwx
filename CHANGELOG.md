@@ -1,6 +1,6 @@
 # Changelog
 
-## [v3.6.1] - Released
+## [v3.6.2] - Released
 
 Compare: <https://github.com/F1xGOD/basefwx/compare/ed79adb...907833c>
 

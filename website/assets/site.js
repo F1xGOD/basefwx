@@ -515,13 +515,23 @@ const loadVirusTotal = async () => {
     files.forEach((file) => {
       const row = document.createElement("tr");
       const link = toGuiLink(file);
-      const stats = file.stats || {};
+      const rawStats = file.stats || {};
+      const stats = file.effective_stats || rawStats;
+      const knownFalsePositives = Array.isArray(file.known_false_positives)
+        ? file.known_false_positives
+        : [];
       const vtStatus = String(file.status || "").toLowerCase();
-      const malicious = Number(stats.malicious ?? 0);
-      const suspicious = Number(stats.suspicious ?? 0);
+      const maliciousRaw = Number(rawStats.malicious ?? 0);
+      const suspiciousRaw = Number(rawStats.suspicious ?? 0);
+      const malicious = Number(stats.malicious ?? maliciousRaw);
+      const suspicious = Number(stats.suspicious ?? suspiciousRaw);
       const undetected = Number(stats.undetected ?? 0);
       const pending = vtStatus !== "completed" && malicious === 0 && suspicious === 0 && undetected === 0;
       const ok = malicious === 0 && suspicious === 0 && undetected > 0;
+      const fpOnly = knownFalsePositives.length > 0 &&
+        malicious === 0 &&
+        suspicious === 0 &&
+        (maliciousRaw > 0 || suspiciousRaw > 0);
       const validSha256 = typeof file.sha256 === "string" && /^[a-f0-9]{64}$/i.test(file.sha256);
       const validMd5 = typeof file.md5 === "string" && /^[a-f0-9]{32}$/i.test(file.md5);
       const hashIssue = !validSha256 || !validMd5;
@@ -536,6 +546,10 @@ const loadVirusTotal = async () => {
         statusIcon = VT_WARN_ICON;
         statusClass = "vt-check warn";
         statusLabel = "VirusTotal analysis pending";
+      } else if (fpOnly) {
+        statusIcon = VT_OK_ICON;
+        statusClass = "vt-check ok";
+        statusLabel = "Known false positives only";
       } else if (malicious > 4 || suspicious > 12) {
         statusIcon = VT_BAD_ICON;
         statusClass = "vt-check bad";
@@ -552,6 +566,11 @@ const loadVirusTotal = async () => {
       });
       vtFlags.set(file.name || "", { hashIssue });
 
+      const countTitle =
+        maliciousRaw !== malicious || suspiciousRaw !== suspicious
+          ? `Raw VT: malicious=${maliciousRaw}, suspicious=${suspiciousRaw}. Known false positives filtered=${knownFalsePositives.length}.`
+          : "";
+
       row.innerHTML = `
         <td class="mono">
           <div class="vt-file-cell">
@@ -559,8 +578,8 @@ const loadVirusTotal = async () => {
             ${file.name || ""}
           </div>
         </td>
-        <td>${malicious}</td>
-        <td>${suspicious}</td>
+        <td title="${countTitle}">${malicious}</td>
+        <td title="${countTitle}">${suspicious}</td>
         <td>${undetected}</td>
         <td><a class="vt-btn" href="${link}" target="_blank" rel="noopener">View report</a></td>
       `;

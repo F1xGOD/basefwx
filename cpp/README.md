@@ -30,10 +30,11 @@ cmake --build cpp/build
 ./cpp/build/basefwx_cpp n10file-enc secret.bin secret.n10
 ./cpp/build/basefwx_cpp n10file-dec secret.n10 secret.bin
 ./cpp/build/basefwx_cpp kFMe input.bin --out input.wav
+./cpp/build/basefwx_cpp kFMe input.mp3 --out input.png --bw
 ./cpp/build/basefwx_cpp kFMd input.wav --out restored.bin
-./cpp/build/basefwx_cpp kFMd input.mp3 --out fallback.png
-./cpp/build/basefwx_cpp kFAe input.bin --out input.png --bw
-./cpp/build/basefwx_cpp kFAd input.png --out restored.bin
+./cpp/build/basefwx_cpp kFMd input.png --out restored.mp3
+./cpp/build/basefwx_cpp kFAe input.mp3 --out input.png --bw   # deprecated alias
+./cpp/build/basefwx_cpp kFAd input.png --out restored.mp3     # deprecated alias
 ./cpp/build/basefwx_cpp b512-enc "hello" -p "pw"
 ./cpp/build/basefwx_cpp b512-dec "<payload>" -p "pw"
 ./cpp/build/basefwx_cpp pb512-enc "hello" -p "pw"
@@ -57,9 +58,12 @@ payload matches the AES file format.
   JSON metadata, followed by ciphertext.
 - The b512 AEAD payload is fully encrypted, so metadata cannot be parsed without
   decryption.
-- kFM/kFA carriers are byte-reversible across Python/C++/Java for BaseFWX-made
-  files; non-BaseFWX carriers transparently fall back to waveform/noise transforms.
-- `kFMd` supports non-WAV audio (`.mp3`/`.m4a`) through runtime `ffmpeg` decoding.
+- kFM carriers are byte-reversible across Python/C++/Java for BaseFWX-made files.
+- `kFMe` auto-detects source type:
+  - audio input -> PNG carrier
+  - non-audio input -> WAV carrier
+- `kFMd` strictly decodes BaseFWX carriers and refuses non-carrier files.
+- `kFAe` / `kFAd` are kept as compatibility aliases but are deprecated.
 - The fwxaes raw format uses the FWX1 header and PBKDF2 + AES-256-GCM, with an
   optional normalize wrapper that hides bytes in zero-width Unicode markers.
 - Current C++ codec support covers b256/b512/pb512 plus b512file/pb512file
@@ -83,3 +87,17 @@ Quick install hints:
 ## Next steps
 
 - Expand CLI flags for argon2 tuning and streaming thresholds if needed.
+
+## Library API quick refs
+
+```cpp
+#include "basefwx/basefwx.hpp"
+
+// n10 API
+std::string digits = basefwx::N10Encode("hello");
+std::string text = basefwx::N10Decode(digits);
+
+// kFM API (auto media/audio encode + strict decode)
+std::string carrier = basefwx::Kfme("input.mp3", "input.png", true);
+std::string restored = basefwx::Kfmd("input.png", "restored.mp3");
+```

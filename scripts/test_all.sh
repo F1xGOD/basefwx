@@ -604,7 +604,7 @@ calc_total_steps() {
         fi
         STEP_TOTAL=$((STEP_TOTAL + py_base + py_wrong))
         STEP_TOTAL=$((STEP_TOTAL + file_unit * b512_count + file_unit * pb512_count))
-        STEP_TOTAL=$((STEP_TOTAL + 3))
+        STEP_TOTAL=$((STEP_TOTAL + 5))
         if (( jmg_count > 0 )); then
             STEP_TOTAL=$((STEP_TOTAL + jmg_count))
         fi
@@ -613,7 +613,7 @@ calc_total_steps() {
         local pypy_base=$((1 + nopass_count + pass_count + hash_count))
         STEP_TOTAL=$((STEP_TOTAL + pypy_base))
         STEP_TOTAL=$((STEP_TOTAL + b512_count + pb512_count))
-        STEP_TOTAL=$((STEP_TOTAL + 2))
+        STEP_TOTAL=$((STEP_TOTAL + 4))
         if (( jmg_count > 0 )); then
             STEP_TOTAL=$((STEP_TOTAL + jmg_count))
         fi
@@ -626,7 +626,7 @@ calc_total_steps() {
         fi
         STEP_TOTAL=$((STEP_TOTAL + cpp_base + cpp_wrong))
         STEP_TOTAL=$((STEP_TOTAL + file_unit * b512_count + file_unit * pb512_count))
-        STEP_TOTAL=$((STEP_TOTAL + 3))
+        STEP_TOTAL=$((STEP_TOTAL + 5))
         if (( jmg_count > 0 )); then
             STEP_TOTAL=$((STEP_TOTAL + jmg_count))
         fi
@@ -639,7 +639,7 @@ calc_total_steps() {
         fi
         STEP_TOTAL=$((STEP_TOTAL + java_base + java_wrong))
         STEP_TOTAL=$((STEP_TOTAL + file_unit * b512_count + file_unit * pb512_count))
-        STEP_TOTAL=$((STEP_TOTAL + 3))
+        STEP_TOTAL=$((STEP_TOTAL + 5))
         if (( jmg_count > 0 )); then
             STEP_TOTAL=$((STEP_TOTAL + jmg_count))
         fi
@@ -1541,15 +1541,43 @@ py_kfmd() {
 py_kfae() {
     local input="$1"
     local out="$2"
-    log "STEP: python -m basefwx kFAe $input"
-    "$PYTHON_BIN" -m basefwx kFAe "$input" --out "$out"
+    log "STEP: python -m basefwx kFMe $input (audio auto mode)"
+    "$PYTHON_BIN" -m basefwx kFMe "$input" --out "$out"
 }
 
 py_kfad() {
     local input="$1"
     local out="$2"
-    log "STEP: python -m basefwx kFAd $input"
-    "$PYTHON_BIN" -m basefwx kFAd "$input" --out "$out"
+    log "STEP: python -m basefwx kFMd $input (auto decode)"
+    "$PYTHON_BIN" -m basefwx kFMd "$input" --out "$out"
+}
+
+pypy_kfme() {
+    local input="$1"
+    local out="$2"
+    log "STEP: pypy -m basefwx kFMe $input"
+    "$PYPY_BIN" -m basefwx kFMe "$input" --out "$out"
+}
+
+pypy_kfmd() {
+    local input="$1"
+    local out="$2"
+    log "STEP: pypy -m basefwx kFMd $input"
+    "$PYPY_BIN" -m basefwx kFMd "$input" --out "$out"
+}
+
+pypy_kfae() {
+    local input="$1"
+    local out="$2"
+    log "STEP: pypy -m basefwx kFMe $input (audio auto mode)"
+    "$PYPY_BIN" -m basefwx kFMe "$input" --out "$out"
+}
+
+pypy_kfad() {
+    local input="$1"
+    local out="$2"
+    log "STEP: pypy -m basefwx kFMd $input (auto decode)"
+    "$PYPY_BIN" -m basefwx kFMd "$input" --out "$out"
 }
 
 cpp_kfme() {
@@ -1569,15 +1597,15 @@ cpp_kfmd() {
 cpp_kfae() {
     local input="$1"
     local out="$2"
-    log "STEP: $CPP_BIN kFAe $input"
-    "$CPP_BIN" kFAe "$input" --out "$out"
+    log "STEP: $CPP_BIN kFMe $input (audio auto mode)"
+    "$CPP_BIN" kFMe "$input" --out "$out"
 }
 
 cpp_kfad() {
     local input="$1"
     local out="$2"
-    log "STEP: $CPP_BIN kFAd $input"
-    "$CPP_BIN" kFAd "$input" --out "$out"
+    log "STEP: $CPP_BIN kFMd $input (auto decode)"
+    "$CPP_BIN" kFMd "$input" --out "$out"
 }
 
 java_kfme() {
@@ -1597,15 +1625,15 @@ java_kfmd() {
 java_kfae() {
     local input="$1"
     local out="$2"
-    log "STEP: $JAVA_BIN -jar $JAVA_JAR kFAe $input"
-    "$JAVA_BIN" -jar "$JAVA_JAR" kFAe "$input" --out "$out"
+    log "STEP: $JAVA_BIN -jar $JAVA_JAR kFMe $input (audio auto mode)"
+    "$JAVA_BIN" -jar "$JAVA_JAR" kFMe "$input" --out "$out"
 }
 
 java_kfad() {
     local input="$1"
     local out="$2"
-    log "STEP: $JAVA_BIN -jar $JAVA_JAR kFAd $input"
-    "$JAVA_BIN" -jar "$JAVA_JAR" kFAd "$input" --out "$out"
+    log "STEP: $JAVA_BIN -jar $JAVA_JAR kFMd $input (auto decode)"
+    "$JAVA_BIN" -jar "$JAVA_JAR" kFMd "$input" --out "$out"
 }
 
 kfme_py_enc_cpp_dec() {
@@ -1702,6 +1730,187 @@ kfae_java_enc_cpp_dec() {
     local dec="$3"
     java_kfae "$input" "$enc" || return $?
     cpp_kfad "$enc" "$dec"
+}
+
+kfme_py_roundtrip() {
+    local input="$1"
+    local enc="$2"
+    local dec="$3"
+    py_kfme "$input" "$enc" || return $?
+    py_kfmd "$enc" "$dec"
+}
+
+kfme_pypy_roundtrip() {
+    local input="$1"
+    local enc="$2"
+    local dec="$3"
+    pypy_kfme "$input" "$enc" || return $?
+    pypy_kfmd "$enc" "$dec"
+}
+
+kfme_cpp_roundtrip() {
+    local input="$1"
+    local enc="$2"
+    local dec="$3"
+    cpp_kfme "$input" "$enc" || return $?
+    cpp_kfmd "$enc" "$dec"
+}
+
+kfme_java_roundtrip() {
+    local input="$1"
+    local enc="$2"
+    local dec="$3"
+    java_kfme "$input" "$enc" || return $?
+    java_kfmd "$enc" "$dec"
+}
+
+kfae_py_roundtrip() {
+    local input="$1"
+    local enc="$2"
+    local dec="$3"
+    py_kfae "$input" "$enc" || return $?
+    py_kfad "$enc" "$dec"
+}
+
+kfae_pypy_roundtrip() {
+    local input="$1"
+    local enc="$2"
+    local dec="$3"
+    pypy_kfae "$input" "$enc" || return $?
+    pypy_kfad "$enc" "$dec"
+}
+
+kfae_cpp_roundtrip() {
+    local input="$1"
+    local enc="$2"
+    local dec="$3"
+    cpp_kfae "$input" "$enc" || return $?
+    cpp_kfad "$enc" "$dec"
+}
+
+kfae_java_roundtrip() {
+    local input="$1"
+    local enc="$2"
+    local dec="$3"
+    java_kfae "$input" "$enc" || return $?
+    java_kfad "$enc" "$dec"
+}
+
+bench_median_ns() {
+    if [[ "$#" -eq 0 ]]; then
+        printf "0\n"
+        return 0
+    fi
+    printf "%s\n" "$@" | sort -n | awk '
+        {
+            values[NR] = $1
+        }
+        END {
+            if (NR == 0) {
+                print 0
+            } else if (NR % 2 == 1) {
+                print values[(NR + 1) / 2]
+            } else {
+                printf "%.0f\n", (values[NR / 2] + values[(NR / 2) + 1]) / 2
+            }
+        }
+    '
+}
+
+bench_kf_roundtrip_once() {
+    local mode="$1"
+    local lang="$2"
+    local input="$3"
+    local run_dir="$4"
+    local enc_fn=""
+    local dec_fn=""
+    local carrier=""
+    local decoded=""
+
+    case "$mode" in
+        kfme)
+            carrier="$run_dir/carrier.wav"
+            decoded="$run_dir/decoded_${input##*/}"
+            case "$lang" in
+                py) enc_fn="py_kfme"; dec_fn="py_kfmd" ;;
+                pypy) enc_fn="pypy_kfme"; dec_fn="pypy_kfmd" ;;
+                cpp) enc_fn="cpp_kfme"; dec_fn="cpp_kfmd" ;;
+                java) enc_fn="java_kfme"; dec_fn="java_kfmd" ;;
+                *)
+                    log "Unknown kFM benchmark language: $lang"
+                    return 1
+                    ;;
+            esac
+            ;;
+        kfae)
+            carrier="$run_dir/carrier.png"
+            decoded="$run_dir/decoded_${input##*/}"
+            case "$lang" in
+                py) enc_fn="py_kfae"; dec_fn="py_kfad" ;;
+                pypy) enc_fn="pypy_kfae"; dec_fn="pypy_kfad" ;;
+                cpp) enc_fn="cpp_kfae"; dec_fn="cpp_kfad" ;;
+                java) enc_fn="java_kfae"; dec_fn="java_kfad" ;;
+                *)
+                    log "Unknown kFA benchmark language: $lang"
+                    return 1
+                    ;;
+            esac
+            ;;
+        *)
+            log "Unknown kF benchmark mode: $mode"
+            return 1
+            ;;
+    esac
+
+    cp -f "$input" "$run_dir/input_${input##*/}" || return 1
+    local input_copy="$run_dir/input_${input##*/}"
+    "$enc_fn" "$input_copy" "$carrier" || return 1
+    "$dec_fn" "$carrier" "$decoded" || return 1
+    cmp -s "$input_copy" "$decoded" || return 1
+    return 0
+}
+
+bench_kf_roundtrip() {
+    local mode="$1"
+    local lang="$2"
+    local input="$3"
+    local warmup="${BASEFWX_BENCH_WARMUP:-0}"
+    local iters="${BASEFWX_BENCH_ITERS:-1}"
+    if [[ ! "$warmup" =~ ^[0-9]+$ ]]; then
+        warmup=0
+    fi
+    if [[ ! "$iters" =~ ^[0-9]+$ || "$iters" -lt 1 ]]; then
+        iters=1
+    fi
+    if [[ ! -f "$input" ]]; then
+        log "kF benchmark input missing: $input"
+        return 1
+    fi
+
+    local run_root="$TMP_DIR/bench_${mode}_${lang}"
+    rm -rf "$run_root"
+    mkdir -p "$run_root"
+    local total_runs=$((warmup + iters))
+    local run_idx
+    local start_ns end_ns
+    local samples=()
+
+    for ((run_idx = 0; run_idx < total_runs; run_idx++)); do
+        local run_dir="$run_root/run_${run_idx}"
+        rm -rf "$run_dir"
+        mkdir -p "$run_dir"
+        start_ns=$(date +%s%N)
+        bench_kf_roundtrip_once "$mode" "$lang" "$input" "$run_dir" || return 1
+        end_ns=$(date +%s%N)
+        if (( run_idx >= warmup )); then
+            samples+=("$((end_ns - start_ns))")
+        fi
+        rm -rf "$run_dir"
+    done
+
+    local median
+    median="$(bench_median_ns "${samples[@]}")"
+    printf "BENCH_NS=%s\n" "$median"
 }
 
 fwxaes_py_enc_cpp_dec() {
@@ -3292,6 +3501,96 @@ else
         phase "PHASE2.1: jMG media tests (${PHASE2_LABEL:-native}, skipped)"
     fi
 fi
+
+if [[ "$RUN_PY_TESTS" == "1" ]] || [[ "$RUN_PYPY_TESTS" == "1" && "$PYPY_AVAILABLE" == "1" ]] || [[ "$RUN_CPP_TESTS" == "1" && "$CPP_AVAILABLE" == "1" ]] || [[ "$RUN_JAVA_TESTS" == "1" && "$JAVA_AVAILABLE" == "1" ]]; then
+    phase "PHASE2.15: kFM/kFA carrier tests (${PHASE2_LABEL:-native})"
+
+    if [[ "$RUN_PY_TESTS" == "1" ]]; then
+        kfme_py_input="$(copy_input "kfme_py_correct" "$KFM_FILE")"
+        kfme_py_enc="$WORK_DIR/kfme_py_correct/carrier.wav"
+        kfme_py_dec="$WORK_DIR/kfme_py_correct/decoded_${KFM_FILE}"
+        time_cmd "kfme_py_correct" kfme_py_roundtrip "$kfme_py_input" "$kfme_py_enc" "$kfme_py_dec"
+        add_verify "$ORIG_DIR/$KFM_FILE" "$kfme_py_dec"
+        add_verify "$ORIG_DIR/$KFM_FILE" "$kfme_py_input"
+
+        kfae_py_input="$(copy_input "kfae_py_correct" "$KFM_FILE")"
+        kfae_py_enc="$WORK_DIR/kfae_py_correct/carrier.png"
+        kfae_py_dec="$WORK_DIR/kfae_py_correct/decoded_${KFM_FILE}"
+        time_cmd "kfae_py_correct" kfae_py_roundtrip "$kfae_py_input" "$kfae_py_enc" "$kfae_py_dec"
+        add_verify "$ORIG_DIR/$KFM_FILE" "$kfae_py_dec"
+        add_verify "$ORIG_DIR/$KFM_FILE" "$kfae_py_input"
+    fi
+
+    if [[ "$RUN_PYPY_TESTS" == "1" && "$PYPY_AVAILABLE" == "1" ]]; then
+        kfme_pypy_input="$(copy_input "kfme_pypy_correct" "$KFM_FILE")"
+        kfme_pypy_enc="$WORK_DIR/kfme_pypy_correct/carrier.wav"
+        kfme_pypy_dec="$WORK_DIR/kfme_pypy_correct/decoded_${KFM_FILE}"
+        time_cmd "kfme_pypy_correct" kfme_pypy_roundtrip "$kfme_pypy_input" "$kfme_pypy_enc" "$kfme_pypy_dec"
+        add_verify "$ORIG_DIR/$KFM_FILE" "$kfme_pypy_dec"
+        add_verify "$ORIG_DIR/$KFM_FILE" "$kfme_pypy_input"
+
+        kfae_pypy_input="$(copy_input "kfae_pypy_correct" "$KFM_FILE")"
+        kfae_pypy_enc="$WORK_DIR/kfae_pypy_correct/carrier.png"
+        kfae_pypy_dec="$WORK_DIR/kfae_pypy_correct/decoded_${KFM_FILE}"
+        time_cmd "kfae_pypy_correct" kfae_pypy_roundtrip "$kfae_pypy_input" "$kfae_pypy_enc" "$kfae_pypy_dec"
+        add_verify "$ORIG_DIR/$KFM_FILE" "$kfae_pypy_dec"
+        add_verify "$ORIG_DIR/$KFM_FILE" "$kfae_pypy_input"
+    fi
+
+    if [[ "$RUN_CPP_TESTS" == "1" ]]; then
+        kfme_cpp_input="$(copy_input "kfme_cpp_correct" "$KFM_FILE")"
+        kfme_cpp_enc="$WORK_DIR/kfme_cpp_correct/carrier.wav"
+        kfme_cpp_dec="$WORK_DIR/kfme_cpp_correct/decoded_${KFM_FILE}"
+        if (( CPP_AVAILABLE == 1 )); then
+            cooldown "kfme_py_to_cpp_correct"
+            time_cmd "kfme_cpp_correct" kfme_cpp_roundtrip "$kfme_cpp_input" "$kfme_cpp_enc" "$kfme_cpp_dec"
+            add_verify "$ORIG_DIR/$KFM_FILE" "$kfme_cpp_dec"
+            add_verify "$ORIG_DIR/$KFM_FILE" "$kfme_cpp_input"
+        else
+            FAILURES+=("kfme_cpp_correct (cpp unavailable)")
+        fi
+
+        kfae_cpp_input="$(copy_input "kfae_cpp_correct" "$KFM_FILE")"
+        kfae_cpp_enc="$WORK_DIR/kfae_cpp_correct/carrier.png"
+        kfae_cpp_dec="$WORK_DIR/kfae_cpp_correct/decoded_${KFM_FILE}"
+        if (( CPP_AVAILABLE == 1 )); then
+            cooldown "kfae_py_to_cpp_correct"
+            time_cmd "kfae_cpp_correct" kfae_cpp_roundtrip "$kfae_cpp_input" "$kfae_cpp_enc" "$kfae_cpp_dec"
+            add_verify "$ORIG_DIR/$KFM_FILE" "$kfae_cpp_dec"
+            add_verify "$ORIG_DIR/$KFM_FILE" "$kfae_cpp_input"
+        else
+            FAILURES+=("kfae_cpp_correct (cpp unavailable)")
+        fi
+    fi
+
+    if [[ "$RUN_JAVA_TESTS" == "1" ]]; then
+        kfme_java_input="$(copy_input "kfme_java_correct" "$KFM_FILE")"
+        kfme_java_enc="$WORK_DIR/kfme_java_correct/carrier.wav"
+        kfme_java_dec="$WORK_DIR/kfme_java_correct/decoded_${KFM_FILE}"
+        if (( JAVA_AVAILABLE == 1 )); then
+            cooldown "kfme_cpp_to_java_correct"
+            time_cmd "kfme_java_correct" kfme_java_roundtrip "$kfme_java_input" "$kfme_java_enc" "$kfme_java_dec"
+            add_verify "$ORIG_DIR/$KFM_FILE" "$kfme_java_dec"
+            add_verify "$ORIG_DIR/$KFM_FILE" "$kfme_java_input"
+        else
+            FAILURES+=("kfme_java_correct (java unavailable)")
+        fi
+
+        kfae_java_input="$(copy_input "kfae_java_correct" "$KFM_FILE")"
+        kfae_java_enc="$WORK_DIR/kfae_java_correct/carrier.png"
+        kfae_java_dec="$WORK_DIR/kfae_java_correct/decoded_${KFM_FILE}"
+        if (( JAVA_AVAILABLE == 1 )); then
+            cooldown "kfae_cpp_to_java_correct"
+            time_cmd "kfae_java_correct" kfae_java_roundtrip "$kfae_java_input" "$kfae_java_enc" "$kfae_java_dec"
+            add_verify "$ORIG_DIR/$KFM_FILE" "$kfae_java_dec"
+            add_verify "$ORIG_DIR/$KFM_FILE" "$kfae_java_input"
+        else
+            FAILURES+=("kfae_java_correct (java unavailable)")
+        fi
+    fi
+else
+    phase "PHASE2.15: kFM/kFA carrier tests (${PHASE2_LABEL:-native}, skipped)"
+fi
 }
 
 phase "PHASE2: prepare native runtimes"
@@ -3751,6 +4050,11 @@ else
     BENCH_BYTES_FILE="$ORIG_DIR/$FWXAES_FILE"
 fi
 
+BENCH_KFM_FILE="$ORIG_DIR/$KFM_FILE"
+if [[ ! -f "$BENCH_KFM_FILE" ]]; then
+    BENCH_KFM_FILE="$BENCH_BYTES_FILE"
+fi
+
 BENCH_WORKERS_SLOW="${BENCH_WORKERS_SLOW:-}"
 if [[ -z "$BENCH_WORKERS_SLOW" ]]; then
     if (( FBENCH == 1 )); then
@@ -3851,6 +4155,11 @@ if [[ -z "${BENCH_WARMUP_LIGHT:-}" || -z "${BENCH_WARMUP_HEAVY:-}" ]]; then
         BENCH_WARMUP_JAVA_FWXAES="${BENCH_WARMUP_JAVA_FWXAES:-10}"
     fi
 fi
+BENCH_WARMUP_LIGHT="${BENCH_WARMUP_LIGHT:-5}"
+BENCH_WARMUP_HEAVY="${BENCH_WARMUP_HEAVY:-6}"
+BENCH_WARMUP_FILE="${BENCH_WARMUP_FILE:-1}"
+BENCH_WARMUP_FILE_JAVA="${BENCH_WARMUP_FILE_JAVA:-$BENCH_WARMUP_FILE}"
+BENCH_WARMUP_JAVA_FWXAES="${BENCH_WARMUP_JAVA_FWXAES:-10}"
 BENCH_ITERS_LIGHT="${BENCH_ITERS_LIGHT:-${BASEFWX_BENCH_ITERS:-50}}"
 BENCH_ITERS_SLOW="${BENCH_ITERS_SLOW:-4}"
 if [[ ! "$BENCH_ITERS_LIGHT" =~ ^[0-9]+$ || "$BENCH_ITERS_LIGHT" -lt 1 ]]; then
@@ -3943,6 +4252,7 @@ log "BENCH_ITERS_FILE: $BENCH_ITERS_FILE"
 log "BENCH_TEXT_BYTES: $BENCH_TEXT_BYTES"
 log "BENCH_TEXT_SLOW_BYTES: $BENCH_TEXT_SLOW_BYTES"
 log "BENCH_TEXT_MAX_BYTES: $BENCH_TEXT_MAX_BYTES"
+log "BENCH_KFM_FILE: $BENCH_KFM_FILE"
 
 for idx in "${!BENCH_LANGS[@]}"; do
     lang="${BENCH_LANGS[$idx]}"
@@ -3995,6 +4305,10 @@ for idx in "${!BENCH_LANGS[@]}"; do
                     BASEFWX_BENCH_WORKERS="$BENCH_FILE_WORKERS" \
                     "$PYTHON_BIN" "$PY_HELPER" bench-jmg "$ORIG_DIR/$jmg_file" "$PW"
             done
+            BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_FILE" BASEFWX_BENCH_ITERS="$BENCH_ITERS_FILE" \
+                time_cmd_bench "kfme_py_total" bench_kf_roundtrip "kfme" "py" "$BENCH_KFM_FILE"
+            BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_FILE" BASEFWX_BENCH_ITERS="$BENCH_ITERS_FILE" \
+                time_cmd_bench "kfae_py_total" bench_kf_roundtrip "kfae" "py" "$BENCH_KFM_FILE"
             ;;
         pypy)
             if [[ "$BENCH_FWXAES_MODE" == "par" ]]; then
@@ -4044,6 +4358,10 @@ for idx in "${!BENCH_LANGS[@]}"; do
                     BASEFWX_BENCH_WORKERS="$BENCH_FILE_WORKERS" \
                     "$PYPY_BIN" "$PY_HELPER" bench-jmg "$ORIG_DIR/$jmg_file" "$PW"
             done
+            BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_FILE" BASEFWX_BENCH_ITERS="$BENCH_ITERS_FILE" \
+                time_cmd_bench "kfme_pypy_total" bench_kf_roundtrip "kfme" "pypy" "$BENCH_KFM_FILE"
+            BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_FILE" BASEFWX_BENCH_ITERS="$BENCH_ITERS_FILE" \
+                time_cmd_bench "kfae_pypy_total" bench_kf_roundtrip "kfae" "pypy" "$BENCH_KFM_FILE"
             ;;
         cpp)
             if [[ "$BENCH_FWXAES_MODE" == "par" ]]; then
@@ -4100,6 +4418,10 @@ for idx in "${!BENCH_LANGS[@]}"; do
                     BASEFWX_BENCH_WORKERS="$BENCH_FILE_WORKERS" \
                     "$CPP_BIN" bench-jmg "$ORIG_DIR/$jmg_file" "$PW" --no-master
             done
+            BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_FILE" BASEFWX_BENCH_ITERS="$BENCH_ITERS_FILE" \
+                time_cmd_bench "kfme_cpp_total" bench_kf_roundtrip "kfme" "cpp" "$BENCH_KFM_FILE"
+            BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_FILE" BASEFWX_BENCH_ITERS="$BENCH_ITERS_FILE" \
+                time_cmd_bench "kfae_cpp_total" bench_kf_roundtrip "kfae" "cpp" "$BENCH_KFM_FILE"
             ;;
         java)
             if [[ "$BENCH_FWXAES_MODE" == "par" ]]; then
@@ -4153,6 +4475,10 @@ for idx in "${!BENCH_LANGS[@]}"; do
                     BASEFWX_BENCH_WORKERS="$BENCH_FILE_WORKERS" \
                     "$JAVA_BIN" "${JAVA_BENCH_FLAGS_ARR[@]}" -jar "$JAVA_JAR" bench-jmg "$ORIG_DIR/$jmg_file" "$PW" --no-master
             done
+            BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_FILE_JAVA" BASEFWX_BENCH_ITERS="$BENCH_ITERS_FILE" \
+                time_cmd_bench "kfme_java_total" bench_kf_roundtrip "kfme" "java" "$BENCH_KFM_FILE"
+            BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_FILE_JAVA" BASEFWX_BENCH_ITERS="$BENCH_ITERS_FILE" \
+                time_cmd_bench "kfae_java_total" bench_kf_roundtrip "kfae" "java" "$BENCH_KFM_FILE"
             ;;
     esac
     if (( idx < ${#BENCH_LANGS[@]} - 1 )); then
@@ -4376,6 +4702,8 @@ BENCH_METHODS=(
     "b1024|b1024_py_correct|b1024_pypy_correct|b1024_cpp_correct|b1024_java_correct"
     "b512file|b512file_py_total|b512file_pypy_total|b512file_cpp_total|b512file_java_total"
     "pb512file|pb512file_py_total|pb512file_pypy_total|pb512file_cpp_total|pb512file_java_total"
+    "kFMe|kfme_py_total|kfme_pypy_total|kfme_cpp_total|kfme_java_total"
+    "kFAe|kfae_py_total|kfae_pypy_total|kfae_cpp_total|kfae_java_total"
 )
 
 overall_summary() {
@@ -4451,6 +4779,7 @@ write_bench_results() {
     local bench_python="${PYTHON_BIN:-python3}"
     BENCH_EPSILON_NS="$DELTA_EPSILON_NS" \
     BENCH_BYTES_FILE="$BENCH_BYTES_FILE" \
+    BENCH_KFM_FILE="$BENCH_KFM_FILE" \
     BENCH_TEXT_FILE="$BENCH_TEXT" \
     BENCH_FWXAES_MODE="$BENCH_FWXAES_MODE" \
     BENCH_ITERS_LIGHT="$BENCH_ITERS_LIGHT" \
@@ -4554,6 +4883,7 @@ data = {
     "epsilon_ns": epsilon_ns,
     "bench_files": {
         "bytes": os.getenv("BENCH_BYTES_FILE", ""),
+        "kfm": os.getenv("BENCH_KFM_FILE", ""),
         "text": os.getenv("BENCH_TEXT_FILE", ""),
         "text_bytes": to_int(os.getenv("BENCH_TEXT_BYTES", "0")) or 0,
         "text_slow_bytes": to_int(os.getenv("BENCH_TEXT_SLOW_BYTES", "0")) or 0,
@@ -4638,6 +4968,8 @@ if [[ "$RUN_JAVA_TESTS" == "1" && -z "${TIMES[b512file_java_total]-}" ]]; then
 fi
 compare_speed_block "b512file" "b512file_py_total" "b512file_pypy_total" "b512file_cpp_total" "b512file_java_total"
 compare_speed_block "pb512file" "pb512file_py_total" "pb512file_pypy_total" "pb512file_cpp_total" "pb512file_java_total"
+compare_speed_block "kFMe" "kfme_py_total" "kfme_pypy_total" "kfme_cpp_total" "kfme_java_total"
+compare_speed_block "kFAe" "kfae_py_total" "kfae_pypy_total" "kfae_cpp_total" "kfae_java_total"
 
 overall_summary
 write_bench_results

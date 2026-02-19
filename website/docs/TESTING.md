@@ -1,6 +1,7 @@
 ---
 layout: doc
 title: Testing
+permalink: /docs/TESTING/
 ---
 
 # Testing

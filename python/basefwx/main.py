@@ -3572,102 +3572,108 @@ class basefwx:
             return image.tobytes()
 
     @staticmethod
-    def kFMe(path: str, output: str | None = None) -> str:
+    def _kfm_detect_carrier_kinds(
+        src: "basefwx.pathlib.Path",
+        src_ext: str
+    ) -> "basefwx.typing.List[str]":
+        if basefwx._kfm_is_audio_ext(src_ext):
+            return ["audio"]
+        if basefwx._kfm_is_image_ext(src_ext):
+            return ["image"]
+        head = b""
+        try:
+            with src.open("rb") as handle:
+                head = handle.read(16)
+        except Exception:
+            head = b""
+        kinds: list[str] = []
+        if head.startswith(b"\x89PNG\r\n\x1a\n"):
+            kinds.append("image")
+        if len(head) >= 12 and head[:4] == b"RIFF" and head[8:12] == b"WAVE":
+            kinds.append("audio")
+        if not kinds:
+            kinds = ["audio", "image"]
+        else:
+            if "audio" not in kinds:
+                kinds.append("audio")
+            if "image" not in kinds:
+                kinds.append("image")
+        return kinds
+
+    @staticmethod
+    def _kfm_decode_container(src: "basefwx.pathlib.Path", src_ext: str) -> dict:
+        kinds = basefwx._kfm_detect_carrier_kinds(src, src_ext)
+        attempt_errors: list[str] = []
+        for kind in kinds:
+            try:
+                carrier = (
+                    basefwx._kfm_audio_to_bytes(src)
+                    if kind == "audio"
+                    else basefwx._kfm_png_to_bytes(src)
+                )
+            except Exception as exc:
+                if len(kinds) == 1:
+                    raise
+                attempt_errors.append(f"{kind}: {exc}")
+                continue
+            decoded = basefwx._kfm_unpack_container(carrier)
+            if decoded is not None:
+                return decoded
+            attempt_errors.append(f"{kind}: no BaseFWX header")
+        detail = "; ".join(attempt_errors[:2])
+        if detail:
+            detail = f" ({detail})"
+        raise ValueError(
+            "kFMd refused input: file is not a BaseFWX kFM carrier. "
+            f"Use kFMe to encode first{detail}."
+        )
+
+    @staticmethod
+    def kFMe(path: str, output: str | None = None, *, bw_mode: bool = False) -> str:
         src = basefwx.pathlib.Path(path)
         src_ext = basefwx._kfm_clean_ext(src.suffix)
-        if basefwx._kfm_is_audio_ext(src_ext):
-            raise ValueError(
-                f"kFMe expects an image/media input, got audio extension '{src_ext}'. "
-                "Use kFAe for audio->image carriers."
-            )
         payload = src.read_bytes()
-        ext = src_ext
-        container = basefwx._kfm_pack_container(
-            basefwx.KFM_MODE_IMAGE_AUDIO,
-            payload,
-            ext,
-        )
-        out_path = basefwx._kfm_resolve_output(src, output, ".wav", "kfme")
-        basefwx._kfm_bytes_to_wav(container, out_path)
+        if basefwx._kfm_is_audio_ext(src_ext):
+            flags = basefwx.KFM_FLAG_BW if bw_mode else 0
+            container = basefwx._kfm_pack_container(
+                basefwx.KFM_MODE_AUDIO_IMAGE,
+                payload,
+                src_ext,
+                flags=flags,
+            )
+            out_path = basefwx._kfm_resolve_output(src, output, ".png", "kfme")
+            basefwx._kfm_bytes_to_png(container, out_path, bw_mode=bw_mode)
+        else:
+            container = basefwx._kfm_pack_container(
+                basefwx.KFM_MODE_IMAGE_AUDIO,
+                payload,
+                src_ext,
+            )
+            out_path = basefwx._kfm_resolve_output(src, output, ".wav", "kfme")
+            basefwx._kfm_bytes_to_wav(container, out_path)
         return str(out_path)
 
     @staticmethod
     def kFMd(path: str, output: str | None = None, *, bw_mode: bool = False) -> str:
         src = basefwx.pathlib.Path(path)
         src_ext = basefwx._kfm_clean_ext(src.suffix)
-        if basefwx._kfm_is_image_ext(src_ext):
-            raise ValueError(
-                f"kFMd expects an audio carrier input, got image extension '{src_ext}'. "
-                "Use kFAd for image carriers."
-            )
-        carrier = basefwx._kfm_audio_to_bytes(src)
-        decoded = basefwx._kfm_unpack_container(carrier)
-        if decoded is not None:
-            if decoded["mode"] != basefwx.KFM_MODE_IMAGE_AUDIO:
-                raise ValueError(
-                    "kFMd received a kFAe carrier (audio->image). Decode it with kFAd."
-                )
-            ext = decoded["ext"]
-            out_path = basefwx._kfm_resolve_output(src, output, ext, "kfmd")
-            out_path.write_bytes(decoded["payload"])
-            return str(out_path)
-        basefwx._kfm_warn(
-            "kFMd fallback: input is regular audio (not a BaseFWX kFMe carrier). "
-            "Output will be static PNG noise."
-        )
-        out_path = basefwx._kfm_resolve_output(src, output, ".png", "kfmd")
-        basefwx._kfm_bytes_to_png(carrier, out_path, bw_mode=bw_mode)
+        if bw_mode:
+            basefwx._kfm_warn("kFMd --bw is deprecated and ignored in strict decode mode.")
+        decoded = basefwx._kfm_decode_container(src, src_ext)
+        ext = decoded["ext"]
+        out_path = basefwx._kfm_resolve_output(src, output, ext, "kfmd")
+        out_path.write_bytes(decoded["payload"])
         return str(out_path)
 
     @staticmethod
     def kFAe(path: str, output: str | None = None, *, bw_mode: bool = False) -> str:
-        src = basefwx.pathlib.Path(path)
-        src_ext = basefwx._kfm_clean_ext(src.suffix)
-        if basefwx._kfm_is_image_ext(src_ext):
-            raise ValueError(
-                f"kFAe expects an audio input, got image extension '{src_ext}'. "
-                "Use kFMe for image->audio carriers."
-            )
-        payload = src.read_bytes()
-        ext = src_ext
-        flags = basefwx.KFM_FLAG_BW if bw_mode else 0
-        container = basefwx._kfm_pack_container(
-            basefwx.KFM_MODE_AUDIO_IMAGE,
-            payload,
-            ext,
-            flags=flags,
-        )
-        out_path = basefwx._kfm_resolve_output(src, output, ".png", "kfae")
-        basefwx._kfm_bytes_to_png(container, out_path, bw_mode=bw_mode)
-        return str(out_path)
+        basefwx._kfm_warn("kFAe is deprecated; use kFMe (auto-detect) instead.")
+        return basefwx.kFMe(path, output, bw_mode=bw_mode)
 
     @staticmethod
     def kFAd(path: str, output: str | None = None) -> str:
-        src = basefwx.pathlib.Path(path)
-        src_ext = basefwx._kfm_clean_ext(src.suffix)
-        if basefwx._kfm_is_audio_ext(src_ext):
-            raise ValueError(
-                f"kFAd expects an image/PNG carrier input, got audio extension '{src_ext}'. "
-                "Use kFMd for audio carriers."
-            )
-        carrier = basefwx._kfm_png_to_bytes(src)
-        decoded = basefwx._kfm_unpack_container(carrier)
-        if decoded is not None:
-            if decoded["mode"] != basefwx.KFM_MODE_AUDIO_IMAGE:
-                raise ValueError(
-                    "kFAd received a kFMe carrier (image->audio). Decode it with kFMd."
-                )
-            ext = decoded["ext"]
-            out_path = basefwx._kfm_resolve_output(src, output, ext, "kfad")
-            out_path.write_bytes(decoded["payload"])
-            return str(out_path)
-        basefwx._kfm_warn(
-            "kFAd fallback: you used kFAd instead of kFMe to encode an image. "
-            "This will result in a longer file, and you won't be able to hear what's in the file."
-        )
-        out_path = basefwx._kfm_resolve_output(src, output, ".wav", "kfad")
-        basefwx._kfm_bytes_to_wav(carrier, out_path)
-        return str(out_path)
+        basefwx._kfm_warn("kFAd is deprecated; use kFMd (auto-detect) instead.")
+        return basefwx.kFMd(path, output)
 
     @staticmethod
     def hash512(string: str):
@@ -8814,36 +8820,41 @@ def cli(argv=None) -> int:
 
     kfme = subparsers.add_parser(
         "kFMe",
-        help="Encode image/media bytes into a noise-like WAV carrier"
+        help="Encode data into a BaseFWX carrier (image/media->WAV, audio->PNG)"
     )
-    kfme.add_argument("input", help="Input image/media file path")
-    kfme.add_argument("-o", "--output", default=None, help="Output WAV file path")
+    kfme.add_argument("input", help="Input file path (audio or image/media)")
+    kfme.add_argument("-o", "--output", default=None, help="Output carrier path")
+    kfme.add_argument(
+        "--bw",
+        action="store_true",
+        help="When encoding audio->PNG, use black/white static mode"
+    )
 
     kfmd = subparsers.add_parser(
         "kFMd",
-        help="Decode WAV carrier back to media bytes (or fallback to noise PNG)"
+        help="Decode BaseFWX carrier (audio/image) back to original payload"
     )
-    kfmd.add_argument("input", help="Input WAV file path")
+    kfmd.add_argument("input", help="Input carrier file path (audio/image)")
     kfmd.add_argument("-o", "--output", default=None, help="Output file path")
     kfmd.add_argument(
         "--bw",
         action="store_true",
-        help="Fallback mode: generate black/white static PNG for non-kFM audio"
+        help="Deprecated no-op (kept for compatibility)"
     )
 
     kfae = subparsers.add_parser(
         "kFAe",
-        help="Encode audio bytes into a noise PNG carrier"
+        help="Deprecated alias for kFMe (auto-detect)"
     )
-    kfae.add_argument("input", help="Input audio file path")
-    kfae.add_argument("-o", "--output", default=None, help="Output PNG file path")
-    kfae.add_argument("--bw", action="store_true", help="Use black/white static mode")
+    kfae.add_argument("input", help="Input file path")
+    kfae.add_argument("-o", "--output", default=None, help="Output carrier path")
+    kfae.add_argument("--bw", action="store_true", help="When encoding audio->PNG, use black/white static mode")
 
     kfad = subparsers.add_parser(
         "kFAd",
-        help="Decode PNG carrier back to audio bytes (or fallback to noise WAV)"
+        help="Deprecated alias for kFMd (auto-detect)"
     )
-    kfad.add_argument("input", help="Input PNG/image file path")
+    kfad.add_argument("input", help="Input carrier file path")
     kfad.add_argument("-o", "--output", default=None, help="Output file path")
 
     args = parser.parse_args(argv)
@@ -8886,7 +8897,7 @@ def cli(argv=None) -> int:
 
     if args.command == "kFMe":
         try:
-            out_path = basefwx.kFMe(args.input, args.output)
+            out_path = basefwx.kFMe(args.input, args.output, bw_mode=args.bw)
             print(theme.ok(f"Wrote {out_path}"))
             return 0
         except Exception as exc:

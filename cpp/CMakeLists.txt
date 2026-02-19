@@ -9,6 +9,7 @@ option(BASEFWX_REQUIRE_LZMA "Require liblzma for xz support" OFF)
 option(BASEFWX_NATIVE_OPT "Enable -march/-mtune native optimizations" ON)
 option(BASEFWX_USE_VENDOR_DEPS "Prefer vendored liboqs/argon2 when available" ON)
 option(BASEFWX_FORCE_CROSS "Treat build as cross for dependency path hygiene" OFF)
+option(BASEFWX_WIN_IPO "Enable IPO/LTCG on Windows Release builds" OFF)
 set(BASEFWX_VENDOR_DIR "" CACHE PATH "Path to vendored dependencies root")
 
 set(CMAKE_CXX_STANDARD 17)
@@ -22,7 +23,9 @@ endif()
 include(CheckIPOSupported)
 check_ipo_supported(RESULT BASEFWX_IPO_SUPPORTED OUTPUT BASEFWX_IPO_ERROR)
 if(BASEFWX_IPO_SUPPORTED)
-    set(CMAKE_INTERPROCEDURAL_OPTIMIZATION_RELEASE ON)
+    if(NOT WIN32 OR BASEFWX_WIN_IPO)
+        set(CMAKE_INTERPROCEDURAL_OPTIMIZATION_RELEASE ON)
+    endif()
 endif()
 
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
@@ -47,13 +50,15 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
 elseif(MSVC)
     add_compile_options(
         $<$<CONFIG:Release>:/O2>
-        $<$<CONFIG:Release>:/GL>
         $<$<CONFIG:Release>:/Oi>
         $<$<CONFIG:Release>:/Ot>
         $<$<CONFIG:Release>:/Oy>
         $<$<CONFIG:Release>:/fp:fast>
     )
-    add_link_options($<$<CONFIG:Release>:/LTCG>)
+    if(BASEFWX_WIN_IPO)
+        add_compile_options($<$<CONFIG:Release>:/GL>)
+        add_link_options($<$<CONFIG:Release>:/LTCG>)
+    endif()
 endif()
 
 if(WIN32)

@@ -47,6 +47,8 @@ def main() -> int:
         analysis_url = entry.get("analysis_url", "")
         item_url = entry.get("item_url", "")
         stats = entry.get("stats", {}) or {}
+        effective_stats = entry.get("effective_stats", stats) or {}
+        known_false_positives = entry.get("known_false_positives", []) or []
         sha256 = entry.get("sha256", "")
         sha1 = entry.get("sha1", "")
         md5 = entry.get("md5", "")
@@ -57,13 +59,24 @@ def main() -> int:
                 f"  Status: {status}",
                 f"  VirusTotal analysis: {analysis_url}",
                 f"  VirusTotal file: {item_url}",
-                f"  Stats: {_stats_line(stats)}",
+                f"  Stats (raw): {_stats_line(stats)}",
+                f"  Stats (effective): {_stats_line(effective_stats)}",
                 f"  SHA256: {sha256}",
                 f"  SHA1: {sha1}",
                 f"  MD5: {md5}",
-                "",
             ]
         )
+        if known_false_positives:
+            lines.append(f"  Known false positives: {len(known_false_positives)}")
+            for finding in known_false_positives:
+                engine = finding.get("engine", "")
+                category = finding.get("category", "")
+                result = finding.get("result", "")
+                reason = finding.get("reason", "")
+                lines.append(
+                    f"    - {engine} [{category}] {result}" + (f" ({reason})" if reason else "")
+                )
+        lines.append("")
 
     out_path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
     return 0

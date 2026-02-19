@@ -46,6 +46,24 @@ python -m basefwx cryptin fwxaes photo.jpg -p "pass"
 python -m basefwx cryptin fwxaes video.mp4 -p "pass" --keep-meta
 ```
 
+n10 helpers:
+
+```
+python -m basefwx n10-enc "hello"
+python -m basefwx n10-dec "<digits>"
+python -m basefwx n10file-enc in.bin out.n10
+python -m basefwx n10file-dec out.n10 restored.bin
+```
+
+kFM carrier commands:
+
+```
+python -m basefwx kFMe input.png -o input.wav
+python -m basefwx kFMe input.mp3 -o input.png --bw
+python -m basefwx kFMd input.wav -o restored.png
+python -m basefwx kFMd input.png -o restored.mp3
+```
+
 Master key usage (master-only payloads):
 
 ```
@@ -57,6 +75,9 @@ Notes:
 
 - If a password string resolves to an existing file path, the file contents are used as the password.
 - PQ private key lookup defaults to `~/master_pq.sk` (or `W:\master_pq.sk` on Windows).
+- `kFMe` auto-detects source type (audio -> PNG, non-audio -> WAV).
+- `kFMd` strictly decodes BaseFWX carriers only.
+- `kFAe`/`kFAd` are deprecated compatibility aliases.
 
 ## Python API
 
@@ -85,6 +106,21 @@ blob = pb512file_encode_bytes(data, ".bin", "password", use_master=False)
 plain, ext = pb512file_decode_bytes(blob, "password", use_master=False)
 ```
 
+n10 and kFM helpers:
+
+```
+from basefwx import n10encode, n10decode, n10encode_bytes, n10decode_bytes
+from basefwx import kFMe, kFMd
+
+digits = n10encode("hello")
+text = n10decode(digits)
+blob_digits = n10encode_bytes(b"\x00\x01\x02")
+blob = n10decode_bytes(blob_digits)
+
+carrier = kFMe("input.mp3", output="input.png", bw_mode=True)
+restored = kFMd("input.png", output="restored.mp3")
+```
+
 Media helpers:
 
 ```
@@ -111,6 +147,14 @@ cpp/build/basefwx_cpp fwxaes-enc <file> -p <password> [--out <path>]
 cpp/build/basefwx_cpp fwxaes-dec <file> -p <password> [--out <path>]
 cpp/build/basefwx_cpp fwxaes-stream-enc <file> -p <password> [--out <path>]
 cpp/build/basefwx_cpp fwxaes-stream-dec <file> -p <password> [--out <path>]
+cpp/build/basefwx_cpp n10-enc <text>
+cpp/build/basefwx_cpp n10-dec <digits>
+cpp/build/basefwx_cpp n10file-enc <in-file> <out-file>
+cpp/build/basefwx_cpp n10file-dec <in-file> <out-file>
+cpp/build/basefwx_cpp kFMe <in-file> [--out <path>] [--bw]
+cpp/build/basefwx_cpp kFMd <carrier-file> [--out <path>] [--bw]
+cpp/build/basefwx_cpp kFAe <in-file> [--out <path>] [--bw]   # deprecated alias
+cpp/build/basefwx_cpp kFAd <carrier-file> [--out <path>]     # deprecated alias
 
 cpp/build/basefwx_cpp b512-enc <text> -p <password>
 cpp/build/basefwx_cpp b512-dec <text> -p <password>
@@ -160,6 +204,18 @@ auto blob2 = basefwx::filecodec::Pb512EncodeBytes(data, ".bin", "password", file
 auto decoded2 = basefwx::filecodec::Pb512DecodeBytes(blob2, "password", file_opts);
 ```
 
+n10 and kFM helpers:
+
+```
+#include "basefwx/basefwx.hpp"
+
+std::string digits = basefwx::N10Encode("hello");
+std::string text = basefwx::N10Decode(digits);
+
+std::string carrier = basefwx::Kfme("input.mp3", "input.png", true);
+std::string restored = basefwx::Kfmd("input.png", "restored.mp3");
+```
+
 ## Java CLI
 
 ```
@@ -167,6 +223,14 @@ java -jar build/libs/basefwx-java.jar fwxaes-enc <in> <out> <password>
 java -jar build/libs/basefwx-java.jar fwxaes-dec <in> <out> <password>
 java -jar build/libs/basefwx-java.jar fwxaes-stream-enc <in> <out> <password>
 java -jar build/libs/basefwx-java.jar fwxaes-stream-dec <in> <out> <password>
+java -jar build/libs/basefwx-java.jar n10-enc <text>
+java -jar build/libs/basefwx-java.jar n10-dec <digits>
+java -jar build/libs/basefwx-java.jar n10file-enc <in> <out>
+java -jar build/libs/basefwx-java.jar n10file-dec <in> <out>
+java -jar build/libs/basefwx-java.jar kFMe <in> [--out <out>] [--bw]
+java -jar build/libs/basefwx-java.jar kFMd <carrier> [--out <out>] [--bw]
+java -jar build/libs/basefwx-java.jar kFAe <in> [--out <out>] [--bw]   # deprecated alias
+java -jar build/libs/basefwx-java.jar kFAd <carrier> [--out <out>]     # deprecated alias
 
 java -jar build/libs/basefwx-java.jar b512-enc <text> <password>
 java -jar build/libs/basefwx-java.jar b512-dec <text> <password>
@@ -186,6 +250,7 @@ Notes:
 
 - jMG media requires `ffmpeg` and `ffprobe` to be available on PATH.
 - `jmge` supports `--keep-meta` and `--keep-input` to preserve metadata and inputs.
+- `kFMd` strictly decodes BaseFWX carriers and refuses plain files.
 - The Java module does not include ML-KEM or Argon2 support yet.
 
 ## Java API
@@ -203,4 +268,10 @@ BaseFwx.DecodedFile decoded = BaseFwx.b512FileDecodeBytes(blob, "password", fals
 
 BaseFwx.jmgEncryptFile(new File("input.mp4"), new File("out.mp4"), "password", true, false, true);
 BaseFwx.jmgDecryptFile(new File("out.mp4"), new File("plain.mp4"), "password", true);
+
+String digits = BaseFwx.n10Encode("hello");
+String text = BaseFwx.n10Decode(digits);
+
+File carrier = BaseFwx.kFMe(new File("input.mp3"), new File("input.png"), true);
+File restored = BaseFwx.kFMd(new File("input.png"), new File("restored.mp3"));
 ```

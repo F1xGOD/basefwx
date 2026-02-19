@@ -414,6 +414,8 @@ const loadHashFiles = async () => {
     const assets = data.assets || [];
     const assetLookup = new Map(assets.map((asset) => [asset.name, asset]));
     applyAssetLinks(assetLookup);
+    const resultsBases = getResultsBases(latestReleaseTag);
+    const localBase = getResultsLocalBase();
 
     await Promise.all(
       nodes.map(async (node) => {
@@ -427,9 +429,21 @@ const loadHashFiles = async () => {
           node.textContent = "Missing release asset";
           return;
         }
+        const candidates = [
+          `${resultsBases.primary}/${assetName}`,
+          `${resultsBases.fallback}/${assetName}`,
+          `${localBase}${assetName}`
+        ];
         try {
-          const response = await fetch(asset.browser_download_url);
-          if (!response.ok) {
+          let response = null;
+          for (const candidate of candidates) {
+            const attempt = await fetch(candidate);
+            if (attempt.ok) {
+              response = attempt;
+              break;
+            }
+          }
+          if (!response) {
             throw new Error("hash fetch failed");
           }
           const body = await response.text();

@@ -763,11 +763,6 @@ ensure_java() {
         return 1
     fi
     
-    # Pre-download dependencies using gradle if available
-    if command -v gradle &> /dev/null; then
-        gradle -p "$JAVA_DIR" dependencies --offline 2>/dev/null || gradle -p "$JAVA_DIR" dependencies 2>/dev/null || true
-    fi
-    
     local sources
     sources=()
     while IFS= read -r -d '' file; do
@@ -789,18 +784,30 @@ ensure_java() {
             fi
         done
     fi
+    if [[ -n "${CI:-}" ]]; then
+        needs_build=1
+    fi
     if (( needs_build == 1 )); then
         mkdir -p "$JAVA_BUILD_DIR/classes" "$JAVA_BUILD_DIR/libs"
         # Try to use gradle if available, otherwise fall back to manual javac compilation
         if command -v gradle &> /dev/null; then
-            if ! time_cmd_no_fail "java_build" gradle -p "$JAVA_DIR" build --no-daemon; then
+            local gradle_args
+            if [[ -n "${CI:-}" ]]; then
+                gradle_args=(clean build --no-daemon --refresh-dependencies)
+            else
+                gradle_args=(build --no-daemon)
+            fi
+            if ! time_cmd_no_fail "java_build" gradle -p "$JAVA_DIR" "${gradle_args[@]}"; then
                 JAVA_AVAILABLE=0
                 FAILURES+=("java_build (gradle build failed)")
                 return 1
             fi
-            # Copy the built jar to the expected location
-            if [[ -f "$JAVA_DIR/build/libs/basefwx-java.jar" ]]; then
-                cp "$JAVA_DIR/build/libs/basefwx-java.jar" "$JAVA_JAR"
+            if [[ ! -f "$JAVA_JAR" ]]; then
+                local built_jar
+                built_jar="$(find "$JAVA_DIR/build/libs" -maxdepth 1 -name "*.jar" | head -n1)"
+                if [[ -n "$built_jar" && -f "$built_jar" ]]; then
+                    JAVA_JAR="$built_jar"
+                fi
             fi
         else
             # Fallback: Compile with javac and manually resolve dependencies

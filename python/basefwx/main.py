@@ -203,7 +203,7 @@ class basefwx:
     PACK_TAR_XZ = "x"
     PACK_SUFFIX_GZ = ".tgz"
     PACK_SUFFIX_XZ = ".txz"
-    ENGINE_VERSION = "3.6.1"
+    ENGINE_VERSION = "3.6.2"
     N10_MOD = 10_000_000_000
     N10_MUL = 3_816_547_291
     N10_ADD = 7_261_940_353

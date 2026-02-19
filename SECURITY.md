@@ -2,7 +2,7 @@
 
 ## Supported Versions
 
-**Versioning note:** Current releases use `MAJOR.MINOR.PATCH` (e.g., `3.6.1`). Each row represents the whole patch line (`3.x.x`).
+**Versioning note:** Current releases use `MAJOR.MINOR.PATCH` (e.g., `3.6.2`). Each row represents the whole patch line (`3.x.x`).
 
 > [!CAUTION]
 > DO NOT USE ANY VERSION BELOW 2.6, you -> WILL <- get compromised!
@@ -12,7 +12,7 @@
 
 |  Version  | Status / Notes                                                                                                                    | Supported |
 | :-------: | --------------------------------------------------------------------------------------------------------------------------------- | :-------: |
-| **3.6.x** | 👑 **USE IT!** (current: **3.6.1**) Java support added, URL-safe pb512, Argon2 prioritized, performance optimizations. **Python ↔ C++ ↔ Java cross‑compatible.** Actively maintained. |     ✅     |
+| **3.6.x** | 👑 **USE IT!** (current: **3.6.2**) Java support added, URL-safe pb512, Argon2 prioritized, performance optimizations. **Python ↔ C++ ↔ Java cross‑compatible.** Actively maintained. |     ✅     |
 | **3.5.x** | ➖ Faster, Optimized, Multi-Thread. **Python ↔ C++ cross‑compatible.** Security maintenance only. |     ✅     |
 | **3.4.x** | ➖ PQE + AEAD + obfuscation fast‑paths. Security maintenance only. **Not cross‑compatible with earlier lines.**             |     ✅     |
 | **3.3.1** | ➖ PQE + AEAD + obfuscation fast‑paths. **Not cross‑compatible with earlier lines.**              |     ⚠️     |
@@ -24,7 +24,7 @@
 |  **2.7**  | ❌ "Kinda bad" (known issues), unsupported.                                                                                        |     ❌     |
 | **< 2.6** | 💀 **HELL NO** — known weaknesses; ~**90% open book**. Do not use.                                                                |     ❌     |
 
-### What's New in 3.6.1
+### What's New in 3.6.2
 
 * **Java Support:** Full cross-language compatibility with Java (pb512, b512, fwxAES)
 * **URL-Safe pb512:** pb512 now uses URL-safe base64 encoding (backward compatible)
@@ -48,16 +48,16 @@
 
 ### Maintenance policy
 
-* **Active:** `3.6.x` (current `3.6.1`) with PQE + AEAD + Java support + Argon2 priority — features + security.
+* **Active:** `3.6.x` (current `3.6.2`) with PQE + AEAD + Java support + Argon2 priority — features + security.
 * **Security maintenance:** `3.5.x` and `3.4.x`.
 * **EOL:** `3.3.x`, `3.2`, `3.1`, `3.0`, `2.9`, `2.8`, `2.7`, and anything **< 2.6**.
 
 ### Migration guidance
 
-* From **3.5.x** → **3.6.1**: Safe upgrade path. Java support added, pb512 output format enhanced (backward compatible). Test cross-language workflows if using Java.
-* From **≤ 3.4** → **3.6.1**: upgrade ASAP, **re‑generate keys** and **re‑encrypt** all stored data. Do **not** attempt mixed clusters.
-* From **2.9/2.8** → **3.6.1**: plan a one‑way migration with fresh keys and a full re‑encrypt. Validate exports before cutover. Roll back only with full 2.x snapshots (no forward replay).
-* From **< 2.6**: treat as potentially breached; rotate credentials, invalidate legacy ciphertext at rest, and perform a clean re‑ingest under **3.6.1**.
+* From **3.5.x** → **3.6.2**: Safe upgrade path. Java support added, pb512 output format enhanced (backward compatible). Test cross-language workflows if using Java.
+* From **≤ 3.4** → **3.6.2**: upgrade ASAP, **re‑generate keys** and **re‑encrypt** all stored data. Do **not** attempt mixed clusters.
+* From **2.9/2.8** → **3.6.2**: plan a one‑way migration with fresh keys and a full re‑encrypt. Validate exports before cutover. Roll back only with full 2.x snapshots (no forward replay).
+* From **< 2.6**: treat as potentially breached; rotate credentials, invalidate legacy ciphertext at rest, and perform a clean re‑ingest under **3.6.2**.
 
 ---
 

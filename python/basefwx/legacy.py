@@ -6192,6 +6192,7 @@ class basefwx:
         GPU_PIXELS_ENV = "BASEFWX_GPU_PIXELS"
         GPU_PIXELS_MIN_BYTES_ENV = "BASEFWX_GPU_PIXELS_MIN_BYTES"
         GPU_PIXELS_MIN_BYTES_DEFAULT = 1_000_000
+        GPU_PIXELS_AUTO_MIN_BYTES = 8 * 1024 * 1024
         _HWACCEL_CACHE: "basefwx.typing.Optional[str]" = None
         _HWACCEL_READY = False
         _HWACCEL_ENV_CACHE: "basefwx.typing.Optional[str]" = None
@@ -6463,6 +6464,7 @@ class basefwx:
                 reasons.append("decode pinned to CPU to avoid hwdownload for CPU-side transforms")
             pixel_backend = "cpu"
             gpu_pixels_strict = False
+            pixel_workers = cls._media_workers()
             if allow_pixel_gpu:
                 mode, min_bytes = cls._gpu_pixels_policy()
                 if mode == "cuda":
@@ -6475,6 +6477,11 @@ class basefwx:
                         raise RuntimeError(
                             "BASEFWX_GPU_PIXELS=cuda requested but NVIDIA/CUDA hwaccel is unavailable"
                         )
+                elif mode == "auto" and frame_bytes < max(min_bytes, cls.GPU_PIXELS_AUTO_MIN_BYTES):
+                    reasons.append(
+                        "CUDA pixel path skipped in auto mode "
+                        f"(frame={frame_bytes}B below auto threshold={max(min_bytes, cls.GPU_PIXELS_AUTO_MIN_BYTES)}B)"
+                    )
                 elif frame_bytes < min_bytes:
                     reasons.append(
                         f"CUDA pixel path skipped (frame={frame_bytes}B < threshold={min_bytes}B)"
@@ -6488,6 +6495,11 @@ class basefwx:
                         )
                 else:
                     pixel_backend = "cuda"
+                    if pixel_workers > 1:
+                        # One GPU context with many Python worker threads usually hurts throughput
+                        # and makes Ctrl+C shutdown noisy; pin CUDA masking to one worker.
+                        pixel_workers = 1
+                        reasons.append("CUDA pixel path forces single worker to avoid GPU thread contention")
                     reasons.append("CUDA pixel path enabled for large-frame masking")
                 gpu_pixels_strict = bool(mode == "cuda" and cls._hwaccel_strict())
             aes_accel_state = cls._detect_aes_accel_state()
@@ -6502,23 +6514,52 @@ class basefwx:
                 "decode_device": decode_device,
                 "pixel_backend": pixel_backend,
                 "gpu_pixels_strict": gpu_pixels_strict,
+                "pixel_workers": pixel_workers,
                 "crypto_device": "cpu",
                 "aes_accel_state": aes_accel_state,
                 "reasons": reasons,
             }
 
         @staticmethod
+        def _hw_log_color_enabled() -> bool:
+            if basefwx.os.getenv("NO_COLOR"):
+                return False
+            stream = getattr(basefwx.sys, "stderr", None)
+            return bool(stream and hasattr(stream, "isatty") and stream.isatty())
+
+        @staticmethod
+        def _hw_color(text: str, code: str) -> str:
+            if not basefwx.MediaCipher._hw_log_color_enabled():
+                return text
+            return f"\033[{code}m{text}\033[0m"
+
+        @staticmethod
         def _log_hw_execution_plan(plan: "dict[str, basefwx.typing.Any]") -> None:
             reason = "; ".join(plan.get("reasons", []))
+            encode = str(plan.get("encode_device", "cpu")).upper()
+            decode = str(plan.get("decode_device", "cpu")).upper()
+            pixels = str(plan.get("pixel_backend", "cpu")).upper()
+            crypto = str(plan.get("crypto_device", "cpu")).upper()
+            aes = str(plan.get("aes_accel_state", "unknown"))
+            header = (
+                f"🎛️ [basefwx.hw] op={plan.get('op_name', 'unknown')} "
+                f"encode={encode} decode={decode} pixels={pixels} crypto={crypto} aes_accel={aes}"
+            )
+            detail = f"   reason: {reason or 'n/a'}"
+            if basefwx.MediaCipher._hw_log_color_enabled():
+                header = (
+                    f"🎛️ {basefwx.MediaCipher._hw_color('[basefwx.hw]', '36;1')} "
+                    f"op={basefwx.MediaCipher._hw_color(str(plan.get('op_name', 'unknown')), '1')} "
+                    f"encode={basefwx.MediaCipher._hw_color(encode, '32;1')} "
+                    f"decode={basefwx.MediaCipher._hw_color(decode, '33;1')} "
+                    f"pixels={basefwx.MediaCipher._hw_color(pixels, '35;1')} "
+                    f"crypto={basefwx.MediaCipher._hw_color(crypto, '34;1')} "
+                    f"aes_accel={basefwx.MediaCipher._hw_color(aes, '36')}"
+                )
+                detail = f"   {basefwx.MediaCipher._hw_color('reason:', '2')} {reason or 'n/a'}"
             msg = (
-                "[basefwx.hw] "
-                f"op={plan.get('op_name', 'unknown')} "
-                f"encode={plan.get('encode_device', 'cpu')} "
-                f"decode={plan.get('decode_device', 'cpu')} "
-                f"pixels={plan.get('pixel_backend', 'cpu')} "
-                f"crypto={plan.get('crypto_device', 'cpu')} "
-                f"aes_accel={plan.get('aes_accel_state', 'unknown')} "
-                f"reason={reason or 'n/a'}"
+                f"{header}\n"
+                f"{detail}"
             )
             try:
                 print(msg, file=basefwx.sys.stderr)
@@ -7786,9 +7827,10 @@ class basefwx:
                         password,
                         security_profile=security_profile,
                     )
+                video_phase = "jmg-video-gpu" if hw_plan.get("pixel_backend") == "cuda" else "jmg-video-cpu"
                 def video_cb(frac: float) -> None:
                     if reporter:
-                        reporter.update(file_index, 0.3 + 0.4 * frac, "jmg-video-cpu", display_path)
+                        reporter.update(file_index, 0.3 + 0.4 * frac, video_phase, display_path)
 
                 def audio_cb(frac: float) -> None:
                     if reporter:
@@ -7803,7 +7845,7 @@ class basefwx:
                     base_key,
                     security_profile=security_profile,
                     progress_cb=video_cb if reporter else None,
-                    workers=basefwx.MediaCipher._media_workers(),
+                    workers=int(hw_plan.get("pixel_workers") or basefwx.MediaCipher._media_workers()),
                     use_gpu_pixels=bool(hw_plan.get("pixel_backend") == "cuda"),
                     gpu_pixels_strict=bool(hw_plan.get("gpu_pixels_strict", False)),
                 )
@@ -8048,10 +8090,11 @@ class basefwx:
                         password,
                         security_profile=security_profile,
                     )
+                video_phase = "unjmg-video-gpu" if hw_plan.get("pixel_backend") == "cuda" else "unjmg-video-cpu"
 
                 def video_cb(frac: float) -> None:
                     if reporter:
-                        reporter.update(file_index, 0.3 + 0.4 * frac, "unjmg-video-cpu", display_path)
+                        reporter.update(file_index, 0.3 + 0.4 * frac, video_phase, display_path)
 
                 def audio_cb(frac: float) -> None:
                     if reporter:
@@ -8066,7 +8109,7 @@ class basefwx:
                     base_key,
                     security_profile=security_profile,
                     progress_cb=video_cb if reporter else None,
-                    workers=basefwx.MediaCipher._media_workers(),
+                    workers=int(hw_plan.get("pixel_workers") or basefwx.MediaCipher._media_workers()),
                     use_gpu_pixels=bool(hw_plan.get("pixel_backend") == "cuda"),
                     gpu_pixels_strict=bool(hw_plan.get("gpu_pixels_strict", False)),
                 )

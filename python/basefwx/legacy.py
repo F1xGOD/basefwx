@@ -6602,6 +6602,11 @@ class basefwx:
             return f"\033[{code}m{text}\033[0m"
 
         @staticmethod
+        def _hw_verbose_enabled() -> bool:
+            raw = basefwx.os.getenv("BASEFWX_VERBOSE", "").strip().lower()
+            return raw in {"1", "true", "yes", "on"}
+
+        @staticmethod
         def _log_hw_execution_plan(plan: "dict[str, basefwx.typing.Any]") -> None:
             reason = "; ".join(plan.get("reasons", []))
             encode = str(plan.get("encode_device", "cpu")).upper()
@@ -6625,10 +6630,10 @@ class basefwx:
                     f"aes_accel={basefwx.MediaCipher._hw_color(aes, '36')}"
                 )
                 detail = f"   {basefwx.MediaCipher._hw_color('reason:', '2')} {reason or 'n/a'}"
-            msg = (
-                f"{header}\n"
-                f"{detail}"
-            )
+            if basefwx.MediaCipher._hw_verbose_enabled():
+                msg = f"{header}\n{detail}"
+            else:
+                msg = header
             try:
                 print(msg, file=basefwx.sys.stderr)
             except Exception:

@@ -44,7 +44,8 @@ python -m basefwx kFMe photo.png -o photo.wav            # image/media -> audio 
 python -m basefwx kFMe track.mp3 -o track.png --bw       # audio -> image carrier
 python -m basefwx kFMd photo.wav -o photo-restored.png   # strict decode
 python -m basefwx kFMd track.png -o track-restored.mp3
-python -m basefwx cryptin fwxaes video.mp4 -p "password" --no-archive
+python -m basefwx cryptin fwxaes video.mp4 -p "password"            # Python default: no-archive
+python -m basefwx cryptin fwxaes video.mp4 -p "password" --archive  # exact-restore trailer
 ```
 
 Notes:
@@ -66,9 +67,9 @@ blob = n10decode_bytes(blob_digits)
 carrier = kFMe("input.mp3", output="input.png", bw_mode=True)
 restored = kFMd("input.png", output="restored.mp3")
 
-# jMG full restore (default) and no-archive mode
-jMGe("clip.mp4", "password", output="clip.jmg.mp4", archive_original=True)
-jMGe("clip.mp4", "password", output="clip.small.mp4", archive_original=False)
+# jMG Python default is no-archive (smaller, non-byte-identical restore)
+jMGe("clip.mp4", "password", output="clip.small.mp4")
+jMGe("clip.mp4", "password", output="clip.exact.mp4", archive_original=True)
 jMGd("clip.small.mp4", "password", output="clip.out.mp4")
 
 # Live packetized stream encryption/decryption
@@ -79,7 +80,26 @@ plain_chunks = []
 for packet in wire:
     plain_chunks.extend(dec.update(packet))
 dec.finalize()
+
+# ffmpeg pipe helpers for live media transport
+from basefwx import fwxAES_live_encrypt_ffmpeg, fwxAES_live_decrypt_ffmpeg
+fwxAES_live_encrypt_ffmpeg(
+    ["ffmpeg", "-hide_banner", "-loglevel", "error", "-i", "input.m4a", "-f", "matroska", "-c", "copy", "-"],
+    "stream.live.fwx",
+    "password",
+    use_master=False,
+)
+fwxAES_live_decrypt_ffmpeg(
+    "stream.live.fwx",
+    ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-f", "matroska", "-i", "-", "-c", "copy", "restored.mkv"],
+    "password",
+    use_master=False,
+)
 ```
+
+Hardware acceleration (Python jMG):
+- `BASEFWX_HWACCEL=auto` (default), `nvenc`, `qsv`, `vaapi`, or `off`
+- `BASEFWX_HWACCEL_STRICT=1` to fail instead of CPU fallback when requested accel is unavailable
 
 Optional extras:
 

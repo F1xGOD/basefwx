@@ -7126,6 +7126,30 @@ class basefwx:
             blocks_y = (height + block_size - 1) // block_size
             total_blocks = blocks_x * blocks_y
             perm = basefwx.MediaCipher._permute_indices(total_blocks, seed)
+            if (
+                basefwx.np is not None
+                and channels > 0
+                and len(frame) == width * height * channels
+                and width % block_size == 0
+                and height % block_size == 0
+            ):
+                try:
+                    arr = basefwx.np.frombuffer(frame, dtype=basefwx.np.uint8).reshape(height, width, channels)
+                    blocks = (
+                        arr.reshape(blocks_y, block_size, blocks_x, block_size, channels)
+                        .transpose(0, 2, 1, 3, 4)
+                        .reshape(total_blocks, block_size, block_size, channels)
+                    )
+                    perm_arr = basefwx.np.asarray(perm, dtype=basefwx.np.intp)
+                    shuffled = blocks[perm_arr]
+                    out_arr = (
+                        shuffled.reshape(blocks_y, blocks_x, block_size, block_size, channels)
+                        .transpose(0, 2, 1, 3, 4)
+                        .reshape(height, width, channels)
+                    )
+                    return out_arr.tobytes()
+                except Exception:
+                    pass
             out = bytearray(len(frame))
             for dest_idx in range(total_blocks):
                 src_idx = perm[dest_idx]
@@ -7155,6 +7179,33 @@ class basefwx:
             blocks_y = (height + block_size - 1) // block_size
             total_blocks = blocks_x * blocks_y
             perm = basefwx.MediaCipher._permute_indices(total_blocks, seed)
+            if (
+                basefwx.np is not None
+                and channels > 0
+                and len(frame) == width * height * channels
+                and width % block_size == 0
+                and height % block_size == 0
+            ):
+                try:
+                    arr = basefwx.np.frombuffer(frame, dtype=basefwx.np.uint8).reshape(height, width, channels)
+                    blocks = (
+                        arr.reshape(blocks_y, block_size, blocks_x, block_size, channels)
+                        .transpose(0, 2, 1, 3, 4)
+                        .reshape(total_blocks, block_size, block_size, channels)
+                    )
+                    inv = basefwx.np.empty(total_blocks, dtype=basefwx.np.intp)
+                    inv[basefwx.np.asarray(perm, dtype=basefwx.np.intp)] = basefwx.np.arange(
+                        total_blocks, dtype=basefwx.np.intp
+                    )
+                    restored = blocks[inv]
+                    out_arr = (
+                        restored.reshape(blocks_y, blocks_x, block_size, block_size, channels)
+                        .transpose(0, 2, 1, 3, 4)
+                        .reshape(height, width, channels)
+                    )
+                    return out_arr.tobytes()
+                except Exception:
+                    pass
             out = bytearray(len(frame))
             for dest_idx in range(total_blocks):
                 src_idx = perm[dest_idx]
@@ -7183,6 +7234,13 @@ class basefwx:
             if samples <= 1:
                 return block + tail
             perm = basefwx.MediaCipher._permute_indices(samples, seed)
+            if basefwx.np is not None:
+                try:
+                    arr = basefwx.np.frombuffer(block, dtype=basefwx.np.dtype("<u2"))
+                    shuffled = arr[basefwx.np.asarray(perm, dtype=basefwx.np.intp)]
+                    return shuffled.tobytes() + tail
+                except Exception:
+                    pass
             out = bytearray(len(block))
             for dest_idx, src_idx in enumerate(perm):
                 src_off = src_idx * 2
@@ -7202,12 +7260,32 @@ class basefwx:
             if samples <= 1:
                 return block + tail
             perm = basefwx.MediaCipher._permute_indices(samples, seed)
+            if basefwx.np is not None:
+                try:
+                    arr = basefwx.np.frombuffer(block, dtype=basefwx.np.dtype("<u2"))
+                    out_arr = basefwx.np.empty(samples, dtype=basefwx.np.dtype("<u2"))
+                    out_arr[basefwx.np.asarray(perm, dtype=basefwx.np.intp)] = arr
+                    return out_arr.tobytes() + tail
+                except Exception:
+                    pass
             out = bytearray(len(block))
             for dest_idx, src_idx in enumerate(perm):
                 src_off = src_idx * 2
                 dst_off = dest_idx * 2
                 out[src_off:src_off + 2] = block[dst_off:dst_off + 2]
             return bytes(out) + tail
+
+        @staticmethod
+        def _video_group_frames(fps: float) -> int:
+            group_frames = max(2, int(round((fps or 30.0) * basefwx.MediaCipher.VIDEO_GROUP_SECONDS)))
+            max_frames = basefwx.MediaCipher.VIDEO_GROUP_MAX_FRAMES
+            raw = basefwx.os.getenv("BASEFWX_VIDEO_GROUP_MAX_FRAMES", "").strip()
+            if raw:
+                try:
+                    max_frames = max(2, min(240, int(raw)))
+                except Exception:
+                    max_frames = basefwx.MediaCipher.VIDEO_GROUP_MAX_FRAMES
+            return min(group_frames, max_frames)
 
         @staticmethod
         def _scramble_video_raw(
@@ -7227,8 +7305,7 @@ class basefwx:
             frame_size = width * height * 3
             if frame_size <= 0:
                 raise ValueError("Invalid video dimensions")
-            group_frames = max(2, int(round((fps or 30.0) * basefwx.MediaCipher.VIDEO_GROUP_SECONDS)))
-            group_frames = min(group_frames, basefwx.MediaCipher.VIDEO_GROUP_MAX_FRAMES)
+            group_frames = basefwx.MediaCipher._video_group_frames(fps)
             total_frames = 0
             if progress_cb:
                 try:
@@ -7340,8 +7417,7 @@ class basefwx:
             frame_size = width * height * 3
             if frame_size <= 0:
                 raise ValueError("Invalid video dimensions")
-            group_frames = max(2, int(round((fps or 30.0) * basefwx.MediaCipher.VIDEO_GROUP_SECONDS)))
-            group_frames = min(group_frames, basefwx.MediaCipher.VIDEO_GROUP_MAX_FRAMES)
+            group_frames = basefwx.MediaCipher._video_group_frames(fps)
             total_frames = 0
             if progress_cb:
                 try:
@@ -7481,8 +7557,7 @@ class basefwx:
             frame_size = width * height * 3
             if frame_size <= 0:
                 raise ValueError("Invalid video dimensions")
-            group_frames = max(2, int(round((fps or 30.0) * basefwx.MediaCipher.VIDEO_GROUP_SECONDS)))
-            group_frames = min(group_frames, basefwx.MediaCipher.VIDEO_GROUP_MAX_FRAMES)
+            group_frames = basefwx.MediaCipher._video_group_frames(fps)
             use_workers = workers or basefwx.MediaCipher._media_workers()
             executor = None
             if use_workers > 1:
@@ -7633,8 +7708,7 @@ class basefwx:
             frame_size = width * height * 3
             if frame_size <= 0:
                 raise ValueError("Invalid video dimensions")
-            group_frames = max(2, int(round((fps or 30.0) * basefwx.MediaCipher.VIDEO_GROUP_SECONDS)))
-            group_frames = min(group_frames, basefwx.MediaCipher.VIDEO_GROUP_MAX_FRAMES)
+            group_frames = basefwx.MediaCipher._video_group_frames(fps)
             use_workers = workers or basefwx.MediaCipher._media_workers()
             executor = None
             if use_workers > 1:

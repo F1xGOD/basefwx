@@ -6175,6 +6175,7 @@ class basefwx:
         JMG_MIN_AUDIO_BPS = 64_000
         JMG_MIN_VIDEO_BPS = 200_000
         TRAILER_FALLBACK_MAX = 64 * 1024 * 1024
+        WORKSPACE_RESERVE_BYTES = 64 * 1024 * 1024
 
         IMAGE_EXTS = {
             ".png", ".jpg", ".jpeg", ".bmp", ".tga", ".gif", ".webp",
@@ -6747,6 +6748,69 @@ class basefwx:
             return (video_bps or None), (audio_bps or None)
 
         @staticmethod
+        def _format_bytes(value: int) -> str:
+            units = ("B", "KiB", "MiB", "GiB", "TiB")
+            amount = float(max(0, int(value)))
+            for unit in units:
+                if amount < 1024.0 or unit == units[-1]:
+                    if unit == "B":
+                        return f"{int(amount)}{unit}"
+                    return f"{amount:.1f}{unit}"
+                amount /= 1024.0
+            return f"{int(value)}B"
+
+        @staticmethod
+        def _workspace_free_bytes(path: "basefwx.pathlib.Path") -> int:
+            try:
+                return int(basefwx.shutil.disk_usage(path).free)
+            except Exception:
+                return -1
+
+        @classmethod
+        def _ensure_workspace_free(
+            cls,
+            workspace: "basefwx.pathlib.Path",
+            required: int,
+            stage: str
+        ) -> None:
+            if required <= 0:
+                return
+            free = cls._workspace_free_bytes(workspace)
+            if free < 0 or free >= required:
+                return
+            raise RuntimeError(
+                f"Insufficient temp workspace for {stage}: "
+                f"need about {cls._format_bytes(required)}, have {cls._format_bytes(free)} free at '{workspace}'. "
+                "This jMG pipeline uses raw media scratch files; reduce input duration/resolution, free disk space, "
+                "or point TMPDIR to a larger filesystem."
+            )
+
+        @classmethod
+        def _estimate_video_workspace_need(
+            cls,
+            info: "dict[str, basefwx.typing.Any]"
+        ) -> int:
+            video = info.get("video") or {}
+            audio = info.get("audio") or {}
+            width = int(video.get("width") or 0)
+            height = int(video.get("height") or 0)
+            fps = float(video.get("fps") or 0.0)
+            duration = float(info.get("duration") or 0.0)
+            if width <= 0 or height <= 0 or fps <= 0.0 or duration <= 0.0:
+                return 0
+            frame_size = width * height * 3
+            frame_count = max(1, int((duration * fps) + 0.999))
+            video_raw = frame_size * frame_count
+            audio_raw = 0
+            sample_rate = int(audio.get("sample_rate") or 0)
+            channels = int(audio.get("channels") or 0)
+            if sample_rate > 0 and channels > 0:
+                audio_raw = int(duration * sample_rate * channels * 2)
+            # Worst-case concurrent raw scratch:
+            # source raw video+audio + scrambled raw video+audio + reserve.
+            return (2 * video_raw) + (2 * audio_raw) + cls.WORKSPACE_RESERVE_BYTES
+
+        @staticmethod
         def _probe_metadata(path: "basefwx.pathlib.Path") -> "dict[str, str]":
             basefwx.MediaCipher._ensure_ffmpeg()
             cmd = [
@@ -7206,6 +7270,15 @@ class basefwx:
                             progress_cb(min(1.0, processed_frames / total_frames))
                         frame_index += len(frames)
                         group_index += 1
+            except OSError as exc:
+                if getattr(exc, "errno", None) == 28:
+                    free = basefwx.MediaCipher._workspace_free_bytes(raw_out.parent)
+                    raise RuntimeError(
+                        "No space left on device while writing video scratch data "
+                        f"('{raw_out.parent}', free={basefwx.MediaCipher._format_bytes(max(0, free))}). "
+                        "jMG currently needs room for both decoded and transformed raw streams."
+                    ) from None
+                raise
             except KeyboardInterrupt:
                 cancelled = True
                 if executor:
@@ -7313,6 +7386,15 @@ class basefwx:
                             progress_cb(min(1.0, processed_frames / total_frames))
                         frame_index += len(restored)
                         group_index += 1
+            except OSError as exc:
+                if getattr(exc, "errno", None) == 28:
+                    free = basefwx.MediaCipher._workspace_free_bytes(raw_out.parent)
+                    raise RuntimeError(
+                        "No space left on device while writing video scratch data "
+                        f"('{raw_out.parent}', free={basefwx.MediaCipher._format_bytes(max(0, free))}). "
+                        "jMG currently needs room for both decoded and transformed raw streams."
+                    ) from None
+                raise
             except KeyboardInterrupt:
                 cancelled = True
                 if executor:
@@ -7886,6 +7968,12 @@ class basefwx:
                 reporter.update(file_index, 0.05, "probe", display_path)
             temp_dir = basefwx.tempfile.TemporaryDirectory(prefix="basefwx-media-")
             try:
+                workspace = basefwx.pathlib.Path(temp_dir.name)
+                basefwx.MediaCipher._ensure_workspace_free(
+                    workspace,
+                    basefwx.MediaCipher._estimate_video_workspace_need(info),
+                    "video raw preflight",
+                )
                 raw_video = basefwx.pathlib.Path(temp_dir.name) / "video.raw"
                 raw_video_out = basefwx.pathlib.Path(temp_dir.name) / "video.scr.raw"
                 cmd_video = ["ffmpeg", "-y"] + decode_video_args + [
@@ -7942,6 +8030,15 @@ class basefwx:
                     channels = channels or 2
                     if reporter:
                         reporter.update(file_index, 0.3, "decode-audio", display_path)
+                required_transform = int(raw_video.stat().st_size)
+                if raw_audio:
+                    required_transform += int(raw_audio.stat().st_size)
+                required_transform += basefwx.MediaCipher.WORKSPACE_RESERVE_BYTES
+                basefwx.MediaCipher._ensure_workspace_free(
+                    workspace,
+                    required_transform,
+                    "video transform scratch",
+                )
 
                 if base_key is None:
                     base_key = basefwx.MediaCipher._derive_base_key(
@@ -8158,6 +8255,12 @@ class basefwx:
                 reporter.update(file_index, 0.05, "probe", display_path)
             temp_dir = basefwx.tempfile.TemporaryDirectory(prefix="basefwx-media-")
             try:
+                workspace = basefwx.pathlib.Path(temp_dir.name)
+                basefwx.MediaCipher._ensure_workspace_free(
+                    workspace,
+                    basefwx.MediaCipher._estimate_video_workspace_need(info),
+                    "video raw preflight",
+                )
                 raw_video = basefwx.pathlib.Path(temp_dir.name) / "video.raw"
                 raw_video_out = basefwx.pathlib.Path(temp_dir.name) / "video.unscr.raw"
                 cmd_video = ["ffmpeg", "-y"] + decode_video_args + [
@@ -8214,6 +8317,15 @@ class basefwx:
                     channels = channels or 2
                     if reporter:
                         reporter.update(file_index, 0.3, "decode-audio", display_path)
+                required_transform = int(raw_video.stat().st_size)
+                if raw_audio:
+                    required_transform += int(raw_audio.stat().st_size)
+                required_transform += basefwx.MediaCipher.WORKSPACE_RESERVE_BYTES
+                basefwx.MediaCipher._ensure_workspace_free(
+                    workspace,
+                    required_transform,
+                    "video transform scratch",
+                )
 
                 if base_key is None:
                     base_key = basefwx.MediaCipher._derive_base_key(

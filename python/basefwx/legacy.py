@@ -6198,6 +6198,9 @@ class basefwx:
         _HWACCEL_ENV_CACHE: "basefwx.typing.Optional[str]" = None
         _ENCODER_CACHE: "basefwx.typing.Optional[set[str]]" = None
         _HWACCELS_CACHE: "basefwx.typing.Optional[set[str]]" = None
+        _CUDA_RUNTIME_READY: "basefwx.typing.Optional[bool]" = None
+        _CUDA_RUNTIME_ERROR: str = ""
+        _CUDA_RUNTIME_ENV_CACHE: "basefwx.typing.Optional[str]" = None
 
         @staticmethod
         def _ensure_ffmpeg() -> None:
@@ -6252,6 +6255,43 @@ class basefwx:
                 hwaccels = set()
             basefwx.MediaCipher._HWACCELS_CACHE = hwaccels
             return hwaccels
+
+        @staticmethod
+        def _cuda_runtime_env_key() -> str:
+            return (
+                f"CUDA_PATH={basefwx.os.getenv('CUDA_PATH', '')}|"
+                f"LD_LIBRARY_PATH={basefwx.os.getenv('LD_LIBRARY_PATH', '')}"
+            )
+
+        @classmethod
+        def _set_cuda_runtime_state(cls, ready: bool, error: str) -> None:
+            cls._CUDA_RUNTIME_READY = ready
+            cls._CUDA_RUNTIME_ERROR = error
+
+        @classmethod
+        def _cuda_runtime_status(cls) -> "tuple[bool, str]":
+            env_key = cls._cuda_runtime_env_key()
+            if cls._CUDA_RUNTIME_ENV_CACHE == env_key and cls._CUDA_RUNTIME_READY is not None:
+                return bool(cls._CUDA_RUNTIME_READY), cls._CUDA_RUNTIME_ERROR
+            cls._CUDA_RUNTIME_ENV_CACHE = env_key
+            if basefwx.cp is None:
+                cls._set_cuda_runtime_state(False, "CuPy is unavailable")
+                return False, cls._CUDA_RUNTIME_ERROR
+            try:
+                count = int(basefwx.cp.cuda.runtime.getDeviceCount())
+            except Exception as exc:
+                msg = str(exc).strip().replace("\n", " ")
+                if len(msg) > 220:
+                    msg = msg[:220] + "..."
+                if "cudaErrorInsufficientDriver" in msg:
+                    msg += " (driver/runtime mismatch; use a matching CuPy build or unset CUDA_PATH/LD_LIBRARY_PATH overrides)"
+                cls._set_cuda_runtime_state(False, msg or exc.__class__.__name__)
+                return False, cls._CUDA_RUNTIME_ERROR
+            if count <= 0:
+                cls._set_cuda_runtime_state(False, "CUDA runtime reports no available devices")
+                return False, cls._CUDA_RUNTIME_ERROR
+            cls._set_cuda_runtime_state(True, "")
+            return True, ""
 
         @staticmethod
         def _hwaccel_strict() -> bool:
@@ -6486,21 +6526,28 @@ class basefwx:
                     reasons.append(
                         f"CUDA pixel path skipped (frame={frame_bytes}B < threshold={min_bytes}B)"
                     )
-                elif basefwx.cp is None:
-                    reasons.append("CUDA pixel path skipped because CuPy is unavailable")
-                    if mode == "cuda" and cls._hwaccel_strict():
-                        raise RuntimeError(
-                            "BASEFWX_GPU_PIXELS=cuda requested but CuPy is unavailable "
-                            "(install cupy or use BASEFWX_GPU_PIXELS=cpu)"
-                        )
                 else:
-                    pixel_backend = "cuda"
-                    if pixel_workers > 1:
-                        # One GPU context with many Python worker threads usually hurts throughput
-                        # and makes Ctrl+C shutdown noisy; pin CUDA masking to one worker.
-                        pixel_workers = 1
-                        reasons.append("CUDA pixel path forces single worker to avoid GPU thread contention")
-                    reasons.append("CUDA pixel path enabled for large-frame masking")
+                    cuda_ready, cuda_error = cls._cuda_runtime_status()
+                    if not cuda_ready:
+                        reasons.append(f"CUDA pixel path skipped because {cuda_error}")
+                        if mode == "cuda" and cls._hwaccel_strict():
+                            raise RuntimeError(
+                                "BASEFWX_GPU_PIXELS=cuda requested but CUDA runtime is unavailable: "
+                                f"{cuda_error}"
+                            )
+                    else:
+                        pixel_backend = "cuda"
+                        if pixel_workers > 1:
+                            # One GPU context with many Python worker threads usually hurts throughput
+                            # and makes Ctrl+C shutdown noisy; pin CUDA masking to one worker.
+                            pixel_workers = 1
+                            reasons.append("CUDA pixel path forces single worker to avoid GPU thread contention")
+                        reasons.append("CUDA pixel path enabled for large-frame masking")
+                if mode == "cuda" and cls._hwaccel_strict() and pixel_backend != "cuda":
+                    # Keep strict behavior explicit when forced CUDA could not be enabled.
+                    raise RuntimeError(
+                        "BASEFWX_GPU_PIXELS=cuda requested but CUDA pixel backend could not be enabled"
+                    )
                 gpu_pixels_strict = bool(mode == "cuda" and cls._hwaccel_strict())
             if prefer_cpu_decode and selected_accel and stream_type == "video":
                 if pixel_backend == "cuda" and gpu_pixels_mode == "cuda":
@@ -6800,16 +6847,35 @@ class basefwx:
                     if cuda_strict:
                         raise RuntimeError("CUDA pixel path requested but CuPy/NumPy is unavailable")
                 else:
-                    try:
-                        np_data = basefwx.np.frombuffer(data, dtype=basefwx.np.uint8).copy()
-                        np_keystream = basefwx.np.frombuffer(keystream, dtype=basefwx.np.uint8)
-                        gpu_data = basefwx.cp.asarray(np_data)
-                        gpu_keystream = basefwx.cp.asarray(np_keystream)
-                        gpu_data ^= (gpu_keystream & mask)
-                        return basefwx.cp.asnumpy(gpu_data).tobytes()
-                    except Exception:
+                    ready, reason = basefwx.MediaCipher._cuda_runtime_status()
+                    if not ready:
                         if cuda_strict:
-                            raise
+                            raise RuntimeError(
+                                "CUDA pixel path requested but CUDA runtime is unavailable: "
+                                f"{reason}"
+                            )
+                        use_cuda = False
+                    if use_cuda:
+                        try:
+                            np_data = basefwx.np.frombuffer(data, dtype=basefwx.np.uint8).copy()
+                            np_keystream = basefwx.np.frombuffer(keystream, dtype=basefwx.np.uint8)
+                            gpu_data = basefwx.cp.asarray(np_data)
+                            gpu_keystream = basefwx.cp.asarray(np_keystream)
+                            gpu_data ^= (gpu_keystream & mask)
+                            return basefwx.cp.asnumpy(gpu_data).tobytes()
+                        except Exception as exc:
+                            err = str(exc).strip().replace("\n", " ")
+                            if len(err) > 220:
+                                err = err[:220] + "..."
+                            basefwx.MediaCipher._set_cuda_runtime_state(
+                                False,
+                                err or exc.__class__.__name__,
+                            )
+                            if cuda_strict:
+                                raise RuntimeError(
+                                    "CUDA pixel path failed during frame transform: "
+                                    f"{err or exc.__class__.__name__}"
+                                ) from None
             out = bytearray(data)
             for i in range(len(out)):
                 out[i] ^= keystream[i] & mask

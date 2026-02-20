@@ -25,6 +25,7 @@ def jMGe(
     output: str | None = None,
     *,
     keep_meta: bool = False,
+    archive_original: bool = True,
     keep_input: bool = False,
 ):
     return basefwx.MediaCipher.encrypt_media(
@@ -32,6 +33,7 @@ def jMGe(
         password,
         output=output,
         keep_meta=keep_meta,
+        archive_original=archive_original,
         keep_input=keep_input,
     )
 

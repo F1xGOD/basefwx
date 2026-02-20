@@ -1447,6 +1447,14 @@ py_jmg_roundtrip() {
     "$PYTHON_BIN" "$PY_HELPER" jmg-roundtrip "$input" "$enc" "$dec" "$PW"
 }
 
+py_jmg_roundtrip_no_archive() {
+    local input="$1"
+    local enc="$2"
+    local dec="$3"
+    log "STEP: python jmg-enc(no-archive) $input"
+    "$PYTHON_BIN" "$PY_HELPER" jmg-roundtrip-no-archive "$input" "$enc" "$dec" "$PW"
+}
+
 pypy_jmg_roundtrip() {
     local input="$1"
     local enc="$2"
@@ -2290,6 +2298,7 @@ import sys
 import time
 import tempfile
 import os
+import io
 import itertools
 import shutil
 from concurrent.futures import ProcessPoolExecutor
@@ -2389,6 +2398,14 @@ def cmd_fwxaes_stream_roundtrip(args: list[str]) -> int:
         basefwx_mod.fwxAES_decrypt_stream(src, dst, pw, use_master=False)
     return 0
 
+def cmd_live_stream_roundtrip(args: list[str]) -> int:
+    inp, enc, dec, pw = args
+    with open(inp, "rb") as src, open(enc, "wb") as dst:
+        basefwx_mod.fwxAES_live_encrypt_stream(src, dst, pw, use_master=False)
+    with open(enc, "rb") as src, open(dec, "wb") as dst:
+        basefwx_mod.fwxAES_live_decrypt_stream(src, dst, pw, use_master=False)
+    return 0
+
 def cmd_text_roundtrip(args: list[str]) -> int:
     method, text_path, out_path, pw = args
     text = read_text(text_path)
@@ -2440,6 +2457,12 @@ def cmd_text_hash(args: list[str]) -> int:
 def cmd_jmg_roundtrip(args: list[str]) -> int:
     inp, enc, dec, pw = args
     basefwx.MediaCipher.encrypt_media(inp, pw, output=enc)
+    basefwx.MediaCipher.decrypt_media(enc, pw, output=dec)
+    return 0
+
+def cmd_jmg_roundtrip_no_archive(args: list[str]) -> int:
+    inp, enc, dec, pw = args
+    basefwx.MediaCipher.encrypt_media(inp, pw, output=enc, archive_original=False)
     basefwx.MediaCipher.decrypt_media(enc, pw, output=dec)
     return 0
 
@@ -2891,6 +2914,24 @@ def cmd_bench_jmg(args: list[str]) -> int:
             _bench(warmup, iters, run)
     return 0
 
+def cmd_bench_live(args: list[str]) -> int:
+    if len(args) < 2:
+        return 2
+    inp, pw = args[:2]
+    data = Path(inp).read_bytes()
+    warmup = _warmup_env()
+    iters = _iters_env()
+    def run() -> int:
+        source = io.BytesIO(data)
+        encrypted = io.BytesIO()
+        basefwx.fwxAES_live_encrypt_stream(source, encrypted, pw, use_master=False)
+        encrypted.seek(0)
+        restored = io.BytesIO()
+        basefwx.fwxAES_live_decrypt_stream(encrypted, restored, pw, use_master=False)
+        return len(restored.getvalue())
+    _bench(warmup, iters, run)
+    return 0
+
 def main() -> int:
     if len(sys.argv) < 2:
         return 2
@@ -2906,6 +2947,8 @@ def main() -> int:
         return cmd_fwxaes_wrong(args)
     if cmd == "fwxaes-stream-roundtrip":
         return cmd_fwxaes_stream_roundtrip(args)
+    if cmd == "live-stream-roundtrip":
+        return cmd_live_stream_roundtrip(args)
     if cmd == "text-roundtrip":
         return cmd_text_roundtrip(args)
     if cmd == "text-encode":
@@ -2920,6 +2963,8 @@ def main() -> int:
         return cmd_text_hash(args)
     if cmd == "jmg-roundtrip":
         return cmd_jmg_roundtrip(args)
+    if cmd == "jmg-roundtrip-no-archive":
+        return cmd_jmg_roundtrip_no_archive(args)
     if cmd == "jmg-enc":
         return cmd_jmg_enc(args)
     if cmd == "jmg-dec":
@@ -2942,6 +2987,8 @@ def main() -> int:
         return cmd_bench_pb512file(args)
     if cmd == "bench-jmg":
         return cmd_bench_jmg(args)
+    if cmd == "bench-live":
+        return cmd_bench_live(args)
     return 2
 
 if __name__ == "__main__":
@@ -3047,6 +3094,13 @@ if [[ "$RUN_PY_TESTS" == "1" ]]; then
     time_cmd "fwxaes_py_stream" "$PYTHON_BIN" "$PY_HELPER" fwxaes-stream-roundtrip \
         "$fwxaes_py_stream_input" "$fwxaes_py_stream_enc" "$fwxaes_py_stream_dec" "$PW"
     add_verify "$ORIG_DIR/$FWXAES_FILE" "$fwxaes_py_stream_dec"
+
+    fwxaes_py_live_input="$(copy_input "fwxaes_py_live_stream" "$FWXAES_FILE")"
+    fwxaes_py_live_enc="$(with_suffix "$fwxaes_py_live_input" ".live.fwx")"
+    fwxaes_py_live_dec="$WORK_DIR/fwxaes_py_live_stream/decoded_${FWXAES_FILE}"
+    time_cmd "fwxaes_py_live_stream" "$PYTHON_BIN" "$PY_HELPER" live-stream-roundtrip \
+        "$fwxaes_py_live_input" "$fwxaes_py_live_enc" "$fwxaes_py_live_dec" "$PW"
+    add_verify "$ORIG_DIR/$FWXAES_FILE" "$fwxaes_py_live_dec"
 fi
 
 if [[ "$RUN_CPP_TESTS" == "1" ]]; then
@@ -3467,6 +3521,14 @@ if (( ${#JMG_CASES[@]} > 0 )) && { [[ "$RUN_PY_TESTS" == "1" ]] || [[ "$RUN_PYPY
             jmg_py_dec="$WORK_DIR/jmg_py_${tag}/dec_${file_name}"
             time_cmd "jmg_py_${tag}" py_jmg_roundtrip "$jmg_py_input" "$jmg_py_enc" "$jmg_py_dec"
             add_verify "$ORIG_DIR/$file_name" "$jmg_py_dec"
+
+            jmg_py_noa_input="$(copy_input "jmg_py_noarchive_${tag}" "$file_name")"
+            jmg_py_noa_enc="$WORK_DIR/jmg_py_noarchive_${tag}/enc_${file_name}"
+            jmg_py_noa_dec="$WORK_DIR/jmg_py_noarchive_${tag}/dec_${file_name}"
+            time_cmd "jmg_py_noarchive_${tag}" py_jmg_roundtrip_no_archive "$jmg_py_noa_input" "$jmg_py_noa_enc" "$jmg_py_noa_dec"
+            if [[ ! -s "$jmg_py_noa_dec" ]]; then
+                FAILURES+=("jmg_py_noarchive_${tag} (decode empty)")
+            fi
         fi
         if [[ "$RUN_PYPY_TESTS" == "1" && "$PYPY_AVAILABLE" == "1" ]]; then
             jmg_pypy_input="$(copy_input "jmg_pypy_${tag}" "$file_name")"
@@ -4282,6 +4344,9 @@ for idx in "${!BENCH_LANGS[@]}"; do
                     BASEFWX_BENCH_ITERS="$BENCH_ITERS_HEAVY" \
                     "$PYTHON_BIN" "$PY_HELPER" bench-fwxaes "$BENCH_BYTES_FILE" "$PW"
             fi
+            time_cmd_bench "fwxaes_live_py_total" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_HEAVY" \
+                BASEFWX_BENCH_ITERS="$BENCH_ITERS_HEAVY" \
+                "$PYTHON_BIN" "$PY_HELPER" bench-live "$BENCH_BYTES_FILE" "$PW"
             for method in "${BENCH_TEXT_METHODS[@]}"; do
                 text_path="$(bench_text_for_method "$method")"
                 iters="$(bench_iters_for_method "$method")"

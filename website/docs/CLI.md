@@ -36,6 +36,7 @@ fwxAES-only flags:
 - `--cover-phrase <text>` cover phrase for normalize
 - `--ignore-media` disable media auto-detection (use normal fwxAES)
 - `--keep-meta` keep media metadata (encrypted) when using jMG
+- `--no-archive` jMG mode: skip embedded full-payload archive (smaller output, non-byte-identical restore)
 
 Examples:
 
@@ -45,6 +46,7 @@ python -m basefwx cryptin aes-light secret.bin.fwx -p "pass"
 
 python -m basefwx cryptin fwxaes photo.jpg -p "pass"
 python -m basefwx cryptin fwxaes video.mp4 -p "pass" --keep-meta
+python -m basefwx cryptin fwxaes video.mp4 -p "pass" --no-archive
 ```
 
 n10 helpers:
@@ -94,6 +96,27 @@ with open("output.fwx", "rb") as src, open("decoded.bin", "wb") as dst:
     fwxAES_decrypt_stream(src, dst, "password", use_master=False)
 ```
 
+Live packetized streaming (transport-agnostic):
+
+```
+from basefwx import LiveEncryptor, LiveDecryptor
+from basefwx import fwxAES_live_encrypt_stream, fwxAES_live_decrypt_stream
+
+enc = LiveEncryptor("password", use_master=False)
+dec = LiveDecryptor("password", use_master=False)
+
+packets = [enc.start(), enc.update(b"frame-1"), enc.update(b"frame-2"), enc.finalize()]
+restored = []
+for packet in packets:
+    restored.extend(dec.update(packet))
+dec.finalize()
+
+with open("input.bin", "rb") as src, open("live.enc", "wb") as dst:
+    fwxAES_live_encrypt_stream(src, dst, "password", use_master=False)
+with open("live.enc", "rb") as src, open("live.out", "wb") as dst:
+    fwxAES_live_decrypt_stream(src, dst, "password", use_master=False)
+```
+
 Bytes helpers for b512/pb512 file containers:
 
 ```
@@ -126,8 +149,9 @@ Media helpers:
 
 ```
 from basefwx import jMGe, jMGd
-jMGe("input.mp4", "password", output="out.mp4")
-jMGd("out.mp4", "password", output="plain.mp4")
+jMGe("input.mp4", "password", output="out.mp4", archive_original=True)
+jMGe("input.mp4", "password", output="out-small.mp4", archive_original=False)
+jMGd("out-small.mp4", "password", output="plain.mp4")
 ```
 
 Use an empty password to rely on the master key only (requires the private key to be available).

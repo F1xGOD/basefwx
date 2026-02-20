@@ -6810,6 +6810,20 @@ class basefwx:
             # source raw video+audio + scrambled raw video+audio + reserve.
             return (2 * video_raw) + (2 * audio_raw) + cls.WORKSPACE_RESERVE_BYTES
 
+        @classmethod
+        def _estimate_audio_workspace_need(
+            cls,
+            info: "dict[str, basefwx.typing.Any]"
+        ) -> int:
+            audio = info.get("audio") or {}
+            duration = float(info.get("duration") or 0.0)
+            sample_rate = int(audio.get("sample_rate") or 0)
+            channels = int(audio.get("channels") or 0)
+            if duration <= 0.0 or sample_rate <= 0 or channels <= 0:
+                return cls.WORKSPACE_RESERVE_BYTES
+            audio_raw = int(duration * sample_rate * channels * 2)
+            return (2 * audio_raw) + cls.WORKSPACE_RESERVE_BYTES
+
         @staticmethod
         def _probe_metadata(path: "basefwx.pathlib.Path") -> "dict[str, str]":
             basefwx.MediaCipher._ensure_ffmpeg()
@@ -6900,10 +6914,10 @@ class basefwx:
             mask = (1 << bits) - 1
             out = bytearray(len(data))
             for i in range(0, len(data), 2):
-                sample = int.from_bytes(data[i:i + 2], "little", signed=True)
+                sample = int.from_bytes(data[i:i + 2], "little", signed=False)
                 ks = keystream[i] | (keystream[i + 1] << 8)
                 sample ^= (ks & mask)
-                out[i:i + 2] = sample.to_bytes(2, "little", signed=True)
+                out[i:i + 2] = sample.to_bytes(2, "little", signed=False)
             return bytes(out) + tail
 
         @staticmethod
@@ -7403,6 +7417,337 @@ class basefwx:
             finally:
                 if executor and not cancelled:
                     executor.shutdown(wait=True)
+
+        @staticmethod
+        def _read_exact(stream: "basefwx.typing.BinaryIO", size: int) -> bytes:
+            if size <= 0:
+                return b""
+            out = bytearray()
+            while len(out) < size:
+                chunk = stream.read(size - len(out))
+                if not chunk:
+                    break
+                out.extend(chunk)
+            return bytes(out)
+
+        @staticmethod
+        def _drain_process_stderr(proc: "basefwx.subprocess.Popen[bytes]") -> str:
+            try:
+                if proc.stderr is None:
+                    return ""
+                data = proc.stderr.read()
+                if not data:
+                    return ""
+                return data.decode("utf-8", "replace")
+            except Exception:
+                return ""
+
+        @staticmethod
+        def _scramble_video_stream(
+            decode_cmd: "list[str]",
+            encode_cmd: "list[str]",
+            width: int,
+            height: int,
+            fps: float,
+            base_key: bytes,
+            *,
+            security_profile: int = 0,
+            progress_cb: "basefwx.typing.Optional[basefwx.typing.Callable[[float], None]]" = None,
+            workers: "basefwx.typing.Optional[int]" = None,
+            use_gpu_pixels: bool = False,
+            gpu_pixels_strict: bool = False,
+            total_frames_hint: int = 0,
+        ) -> None:
+            frame_size = width * height * 3
+            if frame_size <= 0:
+                raise ValueError("Invalid video dimensions")
+            group_frames = max(2, int(round((fps or 30.0) * basefwx.MediaCipher.VIDEO_GROUP_SECONDS)))
+            group_frames = min(group_frames, basefwx.MediaCipher.VIDEO_GROUP_MAX_FRAMES)
+            use_workers = workers or basefwx.MediaCipher._media_workers()
+            executor = None
+            if use_workers > 1:
+                executor = basefwx.concurrent.futures.ThreadPoolExecutor(
+                    max_workers=min(use_workers, group_frames)
+                )
+            frame_label = basefwx.MediaCipher._jmg_profile_label(b"jmg-frame", security_profile)
+            frame_block_label = basefwx.MediaCipher._jmg_profile_label(b"jmg-fblk", security_profile)
+            frame_group_label = basefwx.MediaCipher._jmg_profile_label(b"jmg-fgrp", security_profile)
+            video_mask_bits = basefwx.MediaCipher._jmg_video_mask_bits(security_profile)
+            decode_proc = basefwx.subprocess.Popen(
+                [str(part) for part in decode_cmd],
+                stdout=basefwx.subprocess.PIPE,
+                stderr=basefwx.subprocess.PIPE,
+            )
+            encode_proc = basefwx.subprocess.Popen(
+                [str(part) for part in encode_cmd],
+                stdin=basefwx.subprocess.PIPE,
+                stderr=basefwx.subprocess.PIPE,
+            )
+            cancelled = False
+            try:
+                frame_index = 0
+                group_index = 0
+                processed_frames = 0
+                while True:
+                    group_start_index = frame_index
+                    raw_frames: "list[bytes]" = []
+                    for _ in range(group_frames):
+                        if decode_proc.stdout is None:
+                            break
+                        data = basefwx.MediaCipher._read_exact(decode_proc.stdout, frame_size)
+                        if not data:
+                            break
+                        if len(data) < frame_size:
+                            raise RuntimeError("ffmpeg produced a truncated raw video frame")
+                        raw_frames.append(data)
+                    if not raw_frames:
+                        break
+
+                    def _process(item: tuple[int, bytes]) -> bytes:
+                        idx, frame = item
+                        frame_id = group_start_index + idx
+                        material = basefwx.MediaCipher._unit_material(base_key, frame_label, frame_id, 48)
+                        key = material[:32]
+                        iv = material[32:48]
+                        masked = basefwx.MediaCipher._video_mask_transform(
+                            frame,
+                            key,
+                            iv,
+                            mask_bits=video_mask_bits,
+                            use_cuda=use_gpu_pixels,
+                            cuda_strict=gpu_pixels_strict,
+                        )
+                        seed_bytes = basefwx.MediaCipher._unit_material(base_key, frame_block_label, frame_id, 16)
+                        seed = int.from_bytes(seed_bytes, "big")
+                        return basefwx.MediaCipher._shuffle_frame_blocks(
+                            masked,
+                            width,
+                            height,
+                            3,
+                            seed,
+                            basefwx.MediaCipher.VIDEO_BLOCK_SIZE
+                        )
+
+                    if executor:
+                        frames = list(executor.map(_process, enumerate(raw_frames)))
+                    else:
+                        frames = [_process(item) for item in enumerate(raw_frames)]
+
+                    seed_index = (group_index * 0x9E3779B97F4A7C15) ^ group_start_index
+                    seed_index &= (1 << 64) - 1
+                    seed_bytes = basefwx.MediaCipher._unit_material(base_key, frame_group_label, seed_index, 16)
+                    seed = int.from_bytes(seed_bytes, "big")
+                    perm = basefwx.MediaCipher._permute_indices(len(frames), seed)
+                    if encode_proc.stdin is None:
+                        raise RuntimeError("ffmpeg encode pipe is unavailable")
+                    for idx in perm:
+                        try:
+                            encode_proc.stdin.write(frames[idx])
+                        except (BrokenPipeError, OSError) as exc:
+                            if isinstance(exc, BrokenPipeError) or getattr(exc, "errno", None) == 32:
+                                encode_rc = encode_proc.wait()
+                                encode_err = basefwx.MediaCipher._drain_process_stderr(encode_proc)
+                                raise RuntimeError(
+                                    encode_err.strip()
+                                    or f"ffmpeg video encode pipe closed unexpectedly (rc={encode_rc})"
+                                ) from None
+                            raise
+                    processed_frames += len(frames)
+                    if progress_cb and total_frames_hint > 0:
+                        progress_cb(min(1.0, processed_frames / total_frames_hint))
+                    frame_index += len(frames)
+                    group_index += 1
+                if encode_proc.stdin is not None:
+                    encode_proc.stdin.close()
+                decode_rc = decode_proc.wait()
+                encode_rc = encode_proc.wait()
+                decode_err = basefwx.MediaCipher._drain_process_stderr(decode_proc)
+                encode_err = basefwx.MediaCipher._drain_process_stderr(encode_proc)
+                if decode_rc != 0:
+                    raise RuntimeError(decode_err.strip() or "ffmpeg video decode failed")
+                if encode_rc != 0:
+                    raise RuntimeError(encode_err.strip() or "ffmpeg video encode failed")
+            except OSError as exc:
+                if getattr(exc, "errno", None) == 28:
+                    raise RuntimeError(
+                        "No space left on device while streaming jMG video transform output."
+                    ) from None
+                raise
+            except KeyboardInterrupt:
+                cancelled = True
+                raise
+            finally:
+                if executor and not cancelled:
+                    executor.shutdown(wait=True)
+                if executor and cancelled:
+                    executor.shutdown(wait=False, cancel_futures=True)
+                with basefwx.contextlib.suppress(Exception):
+                    if decode_proc.poll() is None:
+                        decode_proc.terminate()
+                with basefwx.contextlib.suppress(Exception):
+                    if encode_proc.poll() is None:
+                        encode_proc.terminate()
+                with basefwx.contextlib.suppress(Exception):
+                    if decode_proc.poll() is None:
+                        decode_proc.kill()
+                with basefwx.contextlib.suppress(Exception):
+                    if encode_proc.poll() is None:
+                        encode_proc.kill()
+
+        @staticmethod
+        def _unscramble_video_stream(
+            decode_cmd: "list[str]",
+            encode_cmd: "list[str]",
+            width: int,
+            height: int,
+            fps: float,
+            base_key: bytes,
+            *,
+            security_profile: int = 0,
+            progress_cb: "basefwx.typing.Optional[basefwx.typing.Callable[[float], None]]" = None,
+            workers: "basefwx.typing.Optional[int]" = None,
+            use_gpu_pixels: bool = False,
+            gpu_pixels_strict: bool = False,
+            total_frames_hint: int = 0,
+        ) -> None:
+            frame_size = width * height * 3
+            if frame_size <= 0:
+                raise ValueError("Invalid video dimensions")
+            group_frames = max(2, int(round((fps or 30.0) * basefwx.MediaCipher.VIDEO_GROUP_SECONDS)))
+            group_frames = min(group_frames, basefwx.MediaCipher.VIDEO_GROUP_MAX_FRAMES)
+            use_workers = workers or basefwx.MediaCipher._media_workers()
+            executor = None
+            if use_workers > 1:
+                executor = basefwx.concurrent.futures.ThreadPoolExecutor(
+                    max_workers=min(use_workers, group_frames)
+                )
+            frame_label = basefwx.MediaCipher._jmg_profile_label(b"jmg-frame", security_profile)
+            frame_block_label = basefwx.MediaCipher._jmg_profile_label(b"jmg-fblk", security_profile)
+            frame_group_label = basefwx.MediaCipher._jmg_profile_label(b"jmg-fgrp", security_profile)
+            video_mask_bits = basefwx.MediaCipher._jmg_video_mask_bits(security_profile)
+            decode_proc = basefwx.subprocess.Popen(
+                [str(part) for part in decode_cmd],
+                stdout=basefwx.subprocess.PIPE,
+                stderr=basefwx.subprocess.PIPE,
+            )
+            encode_proc = basefwx.subprocess.Popen(
+                [str(part) for part in encode_cmd],
+                stdin=basefwx.subprocess.PIPE,
+                stderr=basefwx.subprocess.PIPE,
+            )
+            cancelled = False
+            try:
+                frame_index = 0
+                group_index = 0
+                processed_frames = 0
+                while True:
+                    group_start_index = frame_index
+                    scrambled_frames: "list[bytes]" = []
+                    for _ in range(group_frames):
+                        if decode_proc.stdout is None:
+                            break
+                        data = basefwx.MediaCipher._read_exact(decode_proc.stdout, frame_size)
+                        if not data:
+                            break
+                        if len(data) < frame_size:
+                            raise RuntimeError("ffmpeg produced a truncated raw video frame")
+                        scrambled_frames.append(data)
+                    if not scrambled_frames:
+                        break
+
+                    seed_index = (group_index * 0x9E3779B97F4A7C15) ^ group_start_index
+                    seed_index &= (1 << 64) - 1
+                    seed_bytes = basefwx.MediaCipher._unit_material(base_key, frame_group_label, seed_index, 16)
+                    seed = int.from_bytes(seed_bytes, "big")
+                    perm = basefwx.MediaCipher._permute_indices(len(scrambled_frames), seed)
+                    ordered: "list[bytes]" = [b""] * len(scrambled_frames)
+                    for dest_idx, src_idx in enumerate(perm):
+                        ordered[src_idx] = scrambled_frames[dest_idx]
+
+                    def _process(item: tuple[int, bytes]) -> bytes:
+                        idx, frame = item
+                        frame_id = group_start_index + idx
+                        seed_bytes_local = basefwx.MediaCipher._unit_material(base_key, frame_block_label, frame_id, 16)
+                        seed_local = int.from_bytes(seed_bytes_local, "big")
+                        unshuffled = basefwx.MediaCipher._unshuffle_frame_blocks(
+                            frame,
+                            width,
+                            height,
+                            3,
+                            seed_local,
+                            basefwx.MediaCipher.VIDEO_BLOCK_SIZE
+                        )
+                        material = basefwx.MediaCipher._unit_material(base_key, frame_label, frame_id, 48)
+                        key = material[:32]
+                        iv = material[32:48]
+                        return basefwx.MediaCipher._video_mask_transform(
+                            unshuffled,
+                            key,
+                            iv,
+                            mask_bits=video_mask_bits,
+                            use_cuda=use_gpu_pixels,
+                            cuda_strict=gpu_pixels_strict,
+                        )
+
+                    if executor:
+                        restored = list(executor.map(_process, enumerate(ordered)))
+                    else:
+                        restored = [_process(item) for item in enumerate(ordered)]
+                    if encode_proc.stdin is None:
+                        raise RuntimeError("ffmpeg encode pipe is unavailable")
+                    for frame in restored:
+                        try:
+                            encode_proc.stdin.write(frame)
+                        except (BrokenPipeError, OSError) as exc:
+                            if isinstance(exc, BrokenPipeError) or getattr(exc, "errno", None) == 32:
+                                encode_rc = encode_proc.wait()
+                                encode_err = basefwx.MediaCipher._drain_process_stderr(encode_proc)
+                                raise RuntimeError(
+                                    encode_err.strip()
+                                    or f"ffmpeg video encode pipe closed unexpectedly (rc={encode_rc})"
+                                ) from None
+                            raise
+                    processed_frames += len(restored)
+                    if progress_cb and total_frames_hint > 0:
+                        progress_cb(min(1.0, processed_frames / total_frames_hint))
+                    frame_index += len(restored)
+                    group_index += 1
+                if encode_proc.stdin is not None:
+                    encode_proc.stdin.close()
+                decode_rc = decode_proc.wait()
+                encode_rc = encode_proc.wait()
+                decode_err = basefwx.MediaCipher._drain_process_stderr(decode_proc)
+                encode_err = basefwx.MediaCipher._drain_process_stderr(encode_proc)
+                if decode_rc != 0:
+                    raise RuntimeError(decode_err.strip() or "ffmpeg video decode failed")
+                if encode_rc != 0:
+                    raise RuntimeError(encode_err.strip() or "ffmpeg video encode failed")
+            except OSError as exc:
+                if getattr(exc, "errno", None) == 28:
+                    raise RuntimeError(
+                        "No space left on device while streaming jMG video transform output."
+                    ) from None
+                raise
+            except KeyboardInterrupt:
+                cancelled = True
+                raise
+            finally:
+                if executor and not cancelled:
+                    executor.shutdown(wait=True)
+                if executor and cancelled:
+                    executor.shutdown(wait=False, cancel_futures=True)
+                with basefwx.contextlib.suppress(Exception):
+                    if decode_proc.poll() is None:
+                        decode_proc.terminate()
+                with basefwx.contextlib.suppress(Exception):
+                    if encode_proc.poll() is None:
+                        encode_proc.terminate()
+                with basefwx.contextlib.suppress(Exception):
+                    if decode_proc.poll() is None:
+                        decode_proc.kill()
+                with basefwx.contextlib.suppress(Exception):
+                    if encode_proc.poll() is None:
+                        encode_proc.kill()
 
         @staticmethod
         def _scramble_audio_raw(
@@ -7971,40 +8316,9 @@ class basefwx:
                 workspace = basefwx.pathlib.Path(temp_dir.name)
                 basefwx.MediaCipher._ensure_workspace_free(
                     workspace,
-                    basefwx.MediaCipher._estimate_video_workspace_need(info),
-                    "video raw preflight",
+                    basefwx.MediaCipher._estimate_audio_workspace_need(info),
+                    "video audio-scratch preflight",
                 )
-                raw_video = basefwx.pathlib.Path(temp_dir.name) / "video.raw"
-                raw_video_out = basefwx.pathlib.Path(temp_dir.name) / "video.scr.raw"
-                cmd_video = ["ffmpeg", "-y"] + decode_video_args + [
-                    "-i", str(path),
-                    "-map", "0:v:0",
-                ]
-                if decode_device != "cpu" and selected_accel == "nvenc":
-                    # NVDEC keeps frames on GPU; explicitly download + convert for raw RGB output.
-                    cmd_video += ["-vf", "hwdownload,format=nv12,format=rgb24"]
-                cmd_video += [
-                    "-f", "rawvideo",
-                    "-pix_fmt", "rgb24",
-                    str(raw_video)
-                ]
-                if reporter:
-                    reporter.update(file_index, 0.06, "decode-video", display_path)
-                if decode_video_args:
-                    decode_video_cpu = [
-                        "ffmpeg", "-y",
-                        "-i", str(path),
-                        "-map", "0:v:0",
-                        "-f", "rawvideo",
-                        "-pix_fmt", "rgb24",
-                        str(raw_video)
-                    ]
-                    basefwx.MediaCipher._run_ffmpeg(cmd_video, fallback_cmd=decode_video_cpu)
-                else:
-                    basefwx.MediaCipher._run_ffmpeg(cmd_video)
-                if reporter:
-                    reporter.update(file_index, 0.2, "decode-video", display_path)
-
                 raw_audio = None
                 raw_audio_out = None
                 sample_rate = 0
@@ -8030,15 +8344,13 @@ class basefwx:
                     channels = channels or 2
                     if reporter:
                         reporter.update(file_index, 0.3, "decode-audio", display_path)
-                required_transform = int(raw_video.stat().st_size)
                 if raw_audio:
-                    required_transform += int(raw_audio.stat().st_size)
-                required_transform += basefwx.MediaCipher.WORKSPACE_RESERVE_BYTES
-                basefwx.MediaCipher._ensure_workspace_free(
-                    workspace,
-                    required_transform,
-                    "video transform scratch",
-                )
+                    required_transform = int(raw_audio.stat().st_size) + basefwx.MediaCipher.WORKSPACE_RESERVE_BYTES
+                    basefwx.MediaCipher._ensure_workspace_free(
+                        workspace,
+                        required_transform,
+                        "video audio transform scratch",
+                    )
 
                 if base_key is None:
                     base_key = basefwx.MediaCipher._derive_base_key(
@@ -8054,19 +8366,6 @@ class basefwx:
                     if reporter:
                         reporter.update(file_index, 0.7 + 0.2 * frac, "jmg-audio-cpu", display_path)
 
-                basefwx.MediaCipher._scramble_video_raw(
-                    raw_video,
-                    raw_video_out,
-                    width,
-                    height,
-                    fps,
-                    base_key,
-                    security_profile=security_profile,
-                    progress_cb=video_cb if reporter else None,
-                    workers=int(hw_plan.get("pixel_workers") or basefwx.MediaCipher._media_workers()),
-                    use_gpu_pixels=bool(hw_plan.get("pixel_backend") == "cuda"),
-                    gpu_pixels_strict=bool(hw_plan.get("gpu_pixels_strict", False)),
-                )
                 if raw_audio and raw_audio_out:
                     basefwx.MediaCipher._scramble_audio_raw(
                         raw_audio,
@@ -8080,12 +8379,12 @@ class basefwx:
                     )
 
                 cmd_base = [
-                    "ffmpeg", "-y",
+                    "ffmpeg", "-loglevel", "error", "-y",
                     "-f", "rawvideo",
                     "-pix_fmt", "rgb24",
                     "-s", f"{width}x{height}",
                     "-r", str(fps or 30),
-                    "-i", str(raw_video_out)
+                    "-i", "pipe:0"
                 ]
                 if raw_audio_out:
                     cmd_base += [
@@ -8108,15 +8407,54 @@ class basefwx:
                     cmd += basefwx.MediaCipher._ffmpeg_audio_codec_args(output_path, audio_bps)
                 cmd += basefwx.MediaCipher._ffmpeg_container_args(output_path)
                 cmd.append(str(output_path))
-                if selected_accel and video_args != cpu_video_args:
-                    fallback = cmd_base + cpu_video_args
-                    if raw_audio_out:
-                        fallback += basefwx.MediaCipher._ffmpeg_audio_codec_args(output_path, audio_bps)
-                    fallback += basefwx.MediaCipher._ffmpeg_container_args(output_path)
-                    fallback.append(str(output_path))
-                    basefwx.MediaCipher._run_ffmpeg(cmd, fallback_cmd=fallback)
-                else:
-                    basefwx.MediaCipher._run_ffmpeg(cmd)
+                decode_cmd = ["ffmpeg", "-loglevel", "error", "-y"] + decode_video_args + [
+                    "-i", str(path),
+                    "-map", "0:v:0",
+                ]
+                if decode_device != "cpu" and selected_accel == "nvenc":
+                    decode_cmd += ["-vf", "hwdownload,format=nv12,format=rgb24"]
+                decode_cmd += ["-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1"]
+                decode_cmd_cpu = [
+                    "ffmpeg", "-loglevel", "error", "-y",
+                    "-i", str(path),
+                    "-map", "0:v:0",
+                    "-f", "rawvideo",
+                    "-pix_fmt", "rgb24",
+                    "pipe:1",
+                ]
+                if reporter:
+                    reporter.update(file_index, 0.06, "decode-video", display_path)
+                total_frames_hint = max(1, int(round((float(info.get("duration") or 0.0) * (fps or 30.0)))))
+                fallback_cmd = cmd_base + cpu_video_args
+                if raw_audio_out:
+                    fallback_cmd += basefwx.MediaCipher._ffmpeg_audio_codec_args(output_path, audio_bps)
+                fallback_cmd += basefwx.MediaCipher._ffmpeg_container_args(output_path)
+                fallback_cmd.append(str(output_path))
+
+                def _run_stream(decode_use: "list[str]", encode_use: "list[str]") -> None:
+                    basefwx.MediaCipher._scramble_video_stream(
+                        decode_use,
+                        encode_use,
+                        width,
+                        height,
+                        fps,
+                        base_key,
+                        security_profile=security_profile,
+                        progress_cb=video_cb if reporter else None,
+                        workers=int(hw_plan.get("pixel_workers") or basefwx.MediaCipher._media_workers()),
+                        use_gpu_pixels=bool(hw_plan.get("pixel_backend") == "cuda"),
+                        gpu_pixels_strict=bool(hw_plan.get("gpu_pixels_strict", False)),
+                        total_frames_hint=total_frames_hint,
+                    )
+
+                should_try_fallback = bool(selected_accel and video_args != cpu_video_args and not basefwx.MediaCipher._hwaccel_strict())
+                try:
+                    _run_stream(decode_cmd if decode_video_args else decode_cmd_cpu, cmd)
+                except RuntimeError as exc:
+                    if should_try_fallback and "No space left on device" not in str(exc):
+                        _run_stream(decode_cmd_cpu, fallback_cmd)
+                    else:
+                        raise
                 if reporter:
                     reporter.update(file_index, 0.95, "encode", display_path)
             finally:
@@ -8258,40 +8596,9 @@ class basefwx:
                 workspace = basefwx.pathlib.Path(temp_dir.name)
                 basefwx.MediaCipher._ensure_workspace_free(
                     workspace,
-                    basefwx.MediaCipher._estimate_video_workspace_need(info),
-                    "video raw preflight",
+                    basefwx.MediaCipher._estimate_audio_workspace_need(info),
+                    "video audio-scratch preflight",
                 )
-                raw_video = basefwx.pathlib.Path(temp_dir.name) / "video.raw"
-                raw_video_out = basefwx.pathlib.Path(temp_dir.name) / "video.unscr.raw"
-                cmd_video = ["ffmpeg", "-y"] + decode_video_args + [
-                    "-i", str(path),
-                    "-map", "0:v:0",
-                ]
-                if decode_device != "cpu" and selected_accel == "nvenc":
-                    # NVDEC keeps frames on GPU; explicitly download + convert for raw RGB output.
-                    cmd_video += ["-vf", "hwdownload,format=nv12,format=rgb24"]
-                cmd_video += [
-                    "-f", "rawvideo",
-                    "-pix_fmt", "rgb24",
-                    str(raw_video)
-                ]
-                if reporter:
-                    reporter.update(file_index, 0.06, "decode-video", display_path)
-                if decode_video_args:
-                    decode_video_cpu = [
-                        "ffmpeg", "-y",
-                        "-i", str(path),
-                        "-map", "0:v:0",
-                        "-f", "rawvideo",
-                        "-pix_fmt", "rgb24",
-                        str(raw_video)
-                    ]
-                    basefwx.MediaCipher._run_ffmpeg(cmd_video, fallback_cmd=decode_video_cpu)
-                else:
-                    basefwx.MediaCipher._run_ffmpeg(cmd_video)
-                if reporter:
-                    reporter.update(file_index, 0.2, "decode-video", display_path)
-
                 raw_audio = None
                 raw_audio_out = None
                 sample_rate = 0
@@ -8317,15 +8624,13 @@ class basefwx:
                     channels = channels or 2
                     if reporter:
                         reporter.update(file_index, 0.3, "decode-audio", display_path)
-                required_transform = int(raw_video.stat().st_size)
                 if raw_audio:
-                    required_transform += int(raw_audio.stat().st_size)
-                required_transform += basefwx.MediaCipher.WORKSPACE_RESERVE_BYTES
-                basefwx.MediaCipher._ensure_workspace_free(
-                    workspace,
-                    required_transform,
-                    "video transform scratch",
-                )
+                    required_transform = int(raw_audio.stat().st_size) + basefwx.MediaCipher.WORKSPACE_RESERVE_BYTES
+                    basefwx.MediaCipher._ensure_workspace_free(
+                        workspace,
+                        required_transform,
+                        "video audio transform scratch",
+                    )
 
                 if base_key is None:
                     base_key = basefwx.MediaCipher._derive_base_key(
@@ -8342,19 +8647,6 @@ class basefwx:
                     if reporter:
                         reporter.update(file_index, 0.7 + 0.2 * frac, "unjmg-audio-cpu", display_path)
 
-                basefwx.MediaCipher._unscramble_video_raw(
-                    raw_video,
-                    raw_video_out,
-                    width,
-                    height,
-                    fps,
-                    base_key,
-                    security_profile=security_profile,
-                    progress_cb=video_cb if reporter else None,
-                    workers=int(hw_plan.get("pixel_workers") or basefwx.MediaCipher._media_workers()),
-                    use_gpu_pixels=bool(hw_plan.get("pixel_backend") == "cuda"),
-                    gpu_pixels_strict=bool(hw_plan.get("gpu_pixels_strict", False)),
-                )
                 if raw_audio and raw_audio_out:
                     basefwx.MediaCipher._unscramble_audio_raw(
                         raw_audio,
@@ -8368,12 +8660,12 @@ class basefwx:
                     )
 
                 cmd_base = [
-                    "ffmpeg", "-y",
+                    "ffmpeg", "-loglevel", "error", "-y",
                     "-f", "rawvideo",
                     "-pix_fmt", "rgb24",
                     "-s", f"{width}x{height}",
                     "-r", str(fps or 30),
-                    "-i", str(raw_video_out)
+                    "-i", "pipe:0"
                 ]
                 if raw_audio_out:
                     cmd_base += [
@@ -8397,15 +8689,54 @@ class basefwx:
                     cmd += basefwx.MediaCipher._ffmpeg_audio_codec_args(output_path, audio_bps)
                 cmd += basefwx.MediaCipher._ffmpeg_container_args(output_path)
                 cmd.append(str(output_path))
-                if selected_accel and video_args != cpu_video_args:
-                    fallback = cmd_base + cpu_video_args
-                    if raw_audio_out:
-                        fallback += basefwx.MediaCipher._ffmpeg_audio_codec_args(output_path, audio_bps)
-                    fallback += basefwx.MediaCipher._ffmpeg_container_args(output_path)
-                    fallback.append(str(output_path))
-                    basefwx.MediaCipher._run_ffmpeg(cmd, fallback_cmd=fallback)
-                else:
-                    basefwx.MediaCipher._run_ffmpeg(cmd)
+                decode_cmd = ["ffmpeg", "-loglevel", "error", "-y"] + decode_video_args + [
+                    "-i", str(path),
+                    "-map", "0:v:0",
+                ]
+                if decode_device != "cpu" and selected_accel == "nvenc":
+                    decode_cmd += ["-vf", "hwdownload,format=nv12,format=rgb24"]
+                decode_cmd += ["-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1"]
+                decode_cmd_cpu = [
+                    "ffmpeg", "-loglevel", "error", "-y",
+                    "-i", str(path),
+                    "-map", "0:v:0",
+                    "-f", "rawvideo",
+                    "-pix_fmt", "rgb24",
+                    "pipe:1",
+                ]
+                if reporter:
+                    reporter.update(file_index, 0.06, "decode-video", display_path)
+                total_frames_hint = max(1, int(round((float(info.get("duration") or 0.0) * (fps or 30.0)))))
+                fallback_cmd = cmd_base + cpu_video_args
+                if raw_audio_out:
+                    fallback_cmd += basefwx.MediaCipher._ffmpeg_audio_codec_args(output_path, audio_bps)
+                fallback_cmd += basefwx.MediaCipher._ffmpeg_container_args(output_path)
+                fallback_cmd.append(str(output_path))
+
+                def _run_stream(decode_use: "list[str]", encode_use: "list[str]") -> None:
+                    basefwx.MediaCipher._unscramble_video_stream(
+                        decode_use,
+                        encode_use,
+                        width,
+                        height,
+                        fps,
+                        base_key,
+                        security_profile=security_profile,
+                        progress_cb=video_cb if reporter else None,
+                        workers=int(hw_plan.get("pixel_workers") or basefwx.MediaCipher._media_workers()),
+                        use_gpu_pixels=bool(hw_plan.get("pixel_backend") == "cuda"),
+                        gpu_pixels_strict=bool(hw_plan.get("gpu_pixels_strict", False)),
+                        total_frames_hint=total_frames_hint,
+                    )
+
+                should_try_fallback = bool(selected_accel and video_args != cpu_video_args and not basefwx.MediaCipher._hwaccel_strict())
+                try:
+                    _run_stream(decode_cmd if decode_video_args else decode_cmd_cpu, cmd)
+                except RuntimeError as exc:
+                    if should_try_fallback and "No space left on device" not in str(exc):
+                        _run_stream(decode_cmd_cpu, fallback_cmd)
+                    else:
+                        raise
                 if reporter:
                     reporter.update(file_index, 0.95, "encode", display_path)
             finally:

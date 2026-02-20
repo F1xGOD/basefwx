@@ -1852,6 +1852,20 @@ HwAccel SelectHwAccel() {
         cached = HwAccel::None;
         return cached.value();
     }
+    bool has_nvidia_runtime = false;
+    std::string nvidia_visible = ToLower(basefwx::env::Get("NVIDIA_VISIBLE_DEVICES"));
+    if (!nvidia_visible.empty() && nvidia_visible != "void" && nvidia_visible != "none") {
+        has_nvidia_runtime = true;
+    } else if (basefwx::env::IsEnabled("BASEFWX_ASSUME_NVIDIA", false)) {
+        has_nvidia_runtime = true;
+    } else {
+        try {
+            std::string smi = RunCommandCapture({"nvidia-smi", "-L"});
+            has_nvidia_runtime = smi.find("GPU ") != std::string::npos;
+        } catch (const std::exception&) {
+            has_nvidia_runtime = false;
+        }
+    }
     std::string encoders;
     try {
         encoders = RunCommandCapture({"ffmpeg", "-hide_banner", "-encoders"});
@@ -1864,13 +1878,13 @@ HwAccel SelectHwAccel() {
     bool has_vaapi = encoders.find("h264_vaapi") != std::string::npos;
     HwAccel selected = HwAccel::None;
     if (mode == "cuda" || mode == "nvenc" || mode == "nvidia") {
-        selected = has_nvenc ? HwAccel::Nvenc : HwAccel::None;
+        selected = (has_nvenc && has_nvidia_runtime) ? HwAccel::Nvenc : HwAccel::None;
     } else if (mode == "qsv" || mode == "intel") {
         selected = has_qsv ? HwAccel::Qsv : HwAccel::None;
     } else if (mode == "vaapi") {
         selected = has_vaapi ? HwAccel::Vaapi : HwAccel::None;
     } else {
-        if (has_nvenc) {
+        if (has_nvenc && has_nvidia_runtime) {
             selected = HwAccel::Nvenc;
         } else if (has_qsv) {
             selected = HwAccel::Qsv;
@@ -2628,6 +2642,23 @@ std::vector<std::string> VideoCodecArgs(const std::filesystem::path& output_path
     return {"-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-pix_fmt", "yuv420p"};
 }
 
+std::vector<std::string> VideoDecodeArgs(HwAccel accel) {
+    if (accel == HwAccel::Nvenc) {
+        return {"-hwaccel", "cuda", "-hwaccel_output_format", "cuda"};
+    }
+    if (accel == HwAccel::Qsv) {
+        return {"-hwaccel", "qsv"};
+    }
+    if (accel == HwAccel::Vaapi) {
+        std::string device = basefwx::env::Get("BASEFWX_VAAPI_DEVICE");
+        if (device.empty()) {
+            device = "/dev/dri/renderD128";
+        }
+        return {"-hwaccel", "vaapi", "-hwaccel_device", device};
+    }
+    return {};
+}
+
 std::vector<std::string> AudioCodecArgs(const std::filesystem::path& output_path,
                                         std::optional<std::uint64_t> target_bps) {
     std::string ext = ToLower(output_path.extension().string());
@@ -2721,6 +2752,7 @@ std::string EncryptMedia(const std::string& path,
     }
 
     BitrateTargets targets = EstimateBitrates(input_path, video, audio);
+    HwAccel accel = SelectHwAccel();
     std::filesystem::path temp_dir = CreateTempDir("basefwx-media");
     try {
         std::filesystem::path raw_video = temp_dir / "video.raw";
@@ -2729,13 +2761,33 @@ std::string EncryptMedia(const std::string& path,
         std::filesystem::path raw_audio_out = temp_dir / "audio.scr.raw";
         if (video.valid) {
             progress.Update(0.05, "decode-video", input_path);
-            RunCommand({
-                "ffmpeg", "-y", "-i", input_path.string(),
+            std::vector<std::string> decode_video = {"ffmpeg", "-y"};
+            auto hwdecode = VideoDecodeArgs(accel);
+            decode_video.insert(decode_video.end(), hwdecode.begin(), hwdecode.end());
+            decode_video.insert(decode_video.end(), {
+                "-i", input_path.string(),
                 "-map", "0:v:0",
                 "-f", "rawvideo",
                 "-pix_fmt", "rgb24",
                 raw_video.string()
             });
+            if (!hwdecode.empty()) {
+                try {
+                    RunCommand(decode_video);
+                } catch (const std::exception&) {
+                    std::vector<std::string> decode_video_cpu = {
+                        "ffmpeg", "-y",
+                        "-i", input_path.string(),
+                        "-map", "0:v:0",
+                        "-f", "rawvideo",
+                        "-pix_fmt", "rgb24",
+                        raw_video.string()
+                    };
+                    RunCommand(decode_video_cpu);
+                }
+            } else {
+                RunCommand(decode_video);
+            }
         }
         if (audio.valid) {
             progress.Update(0.15, "decode-audio", input_path);
@@ -2778,7 +2830,6 @@ std::string EncryptMedia(const std::string& path,
             ScrambleAudioRaw(raw_audio, raw_audio_out, audio, base_key, audio_cb);
         }
 
-        HwAccel accel = SelectHwAccel();
         std::vector<std::string> cmd_base = {
             "ffmpeg", "-y"
         };
@@ -3020,6 +3071,7 @@ std::string DecryptMedia(const std::string& path,
     }
 
     BitrateTargets targets = EstimateBitrates(input_path, video, audio);
+    HwAccel accel = SelectHwAccel();
     std::filesystem::path temp_dir = CreateTempDir("basefwx-media");
     try {
         std::filesystem::path raw_video = temp_dir / "video.raw";
@@ -3028,13 +3080,33 @@ std::string DecryptMedia(const std::string& path,
         std::filesystem::path raw_audio_out = temp_dir / "audio.unscr.raw";
         if (video.valid) {
             progress.Update(0.05, "decode-video", input_path);
-            RunCommand({
-                "ffmpeg", "-y", "-i", input_path.string(),
+            std::vector<std::string> decode_video = {"ffmpeg", "-y"};
+            auto hwdecode = VideoDecodeArgs(accel);
+            decode_video.insert(decode_video.end(), hwdecode.begin(), hwdecode.end());
+            decode_video.insert(decode_video.end(), {
+                "-i", input_path.string(),
                 "-map", "0:v:0",
                 "-f", "rawvideo",
                 "-pix_fmt", "rgb24",
                 raw_video.string()
             });
+            if (!hwdecode.empty()) {
+                try {
+                    RunCommand(decode_video);
+                } catch (const std::exception&) {
+                    std::vector<std::string> decode_video_cpu = {
+                        "ffmpeg", "-y",
+                        "-i", input_path.string(),
+                        "-map", "0:v:0",
+                        "-f", "rawvideo",
+                        "-pix_fmt", "rgb24",
+                        raw_video.string()
+                    };
+                    RunCommand(decode_video_cpu);
+                }
+            } else {
+                RunCommand(decode_video);
+            }
         }
         if (audio.valid) {
             progress.Update(0.15, "decode-audio", input_path);
@@ -3063,7 +3135,6 @@ std::string DecryptMedia(const std::string& path,
             UnscrambleAudioRaw(raw_audio, raw_audio_out, audio, base_key, audio_cb);
         }
 
-        HwAccel accel = SelectHwAccel();
         std::vector<std::string> cmd_base = {
             "ffmpeg", "-y"
         };

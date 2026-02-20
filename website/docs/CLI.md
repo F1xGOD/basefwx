@@ -208,6 +208,7 @@ Notes:
 - `jmge --no-archive` writes a key-only `JMG1` trailer (smaller output, decode may not be byte-identical).
 - `fwxaes-live-*` implements the packetized `LIVE` v1 stream format used by Python/Java.
 - `fwxaes-live-*` supports `-` for stdin/stdout, so you can pipe media streams (for example with `ffmpeg`).
+- Optional NVIDIA acceleration for jMG: set `BASEFWX_HWACCEL=nvenc` (auto fallback to CPU if unavailable).
 
 Example live audio pipe (C++):
 

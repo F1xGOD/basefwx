@@ -27,7 +27,7 @@ It provides:
 - Packetized live fwxAES stream API for transport-agnostic real-time pipelines
 - b512/pb512 reversible encodings and file modes
 - kFM carrier codecs (auto media/audio encode + strict carrier decode)
-- jMG media cipher for images, video, and audio with metadata control (`archive_original` toggle)
+- jMG media cipher for images/audio with metadata control (`archive_original` toggle). Video path is temporarily disabled in Python unless `BASEFWX_ENABLE_JMG_VIDEO=1`.
 - C++ library and CLI with Python/C++/Java format parity
 - Java (JVM) library and CLI for cross-compatible fwxAES/b512/pb512/b256/jMG/kFM
 
@@ -51,6 +51,9 @@ python -m basefwx cryptin fwxaes video.mp4 -p "password" --archive  # exact-rest
 Notes:
 - `kFMd` only decodes BaseFWX carriers; it refuses plain WAV/PNG/MP3/M4A files.
 - `kFAe` / `kFAd` remain available as deprecated aliases to `kFMe` / `kFMd`.
+- Optional kFM/kFA acceleration:
+  - `BASEFWX_KFM_ACCEL=auto|cuda|cpu` (default `auto`)
+  - `BASEFWX_KFM_ACCEL_MIN_BYTES=<bytes>` (default `1048576`, auto mode threshold)
 
 Python API quick refs:
 
@@ -68,9 +71,9 @@ carrier = kFMe("input.mp3", output="input.png", bw_mode=True)
 restored = kFMd("input.png", output="restored.mp3")
 
 # jMG Python default is no-archive (smaller, non-byte-identical restore)
-jMGe("clip.mp4", "password", output="clip.small.mp4")
-jMGe("clip.mp4", "password", output="clip.exact.mp4", archive_original=True)
-jMGd("clip.small.mp4", "password", output="clip.out.mp4")
+jMGe("clip.m4a", "password", output="clip.small.m4a")
+jMGe("cover.png", "password", output="cover.exact.png", archive_original=True)
+jMGd("clip.small.m4a", "password", output="clip.out.m4a")
 
 # Live packetized stream encryption/decryption
 enc = LiveEncryptor("password", use_master=False)

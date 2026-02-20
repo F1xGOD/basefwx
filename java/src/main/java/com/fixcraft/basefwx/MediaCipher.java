@@ -40,9 +40,11 @@ public final class MediaCipher {
     private static final int VIDEO_GROUP_MAX_FRAMES = 12;
     private static final int VIDEO_BLOCK_SIZE = 2;
     private static final int VIDEO_MASK_BITS = 6;
+    private static final int VIDEO_MASK_BITS_MAX = 8;
     private static final double AUDIO_BLOCK_SECONDS = 0.15;
     private static final double AUDIO_GROUP_SECONDS = 1.0;
     private static final int AUDIO_MASK_BITS = 13;
+    private static final int AUDIO_MASK_BITS_MAX = 16;
     private static final double JMG_TARGET_GROWTH = 1.1;
     private static final double JMG_MAX_GROWTH = 2.0;
     private static final long JMG_MIN_AUDIO_BPS = 64_000;
@@ -99,6 +101,7 @@ public final class MediaCipher {
         boolean appendKeyTrailer = false;
         byte[] archiveKey = null;
         byte[] trailerHeader = new byte[0];
+        int trailerProfile = Constants.JMG_SECURITY_PROFILE_LEGACY;
         File result;
         if (IMAGE_EXTS.contains(ext)) {
             result = encryptImage(input, tempOutput, pw, useMaster, true, archiveOriginal);
@@ -111,17 +114,19 @@ public final class MediaCipher {
             }
             if (info.video != null) {
                 JmgKeys keys = prepareJmgKeys(pw, useMaster);
-                scrambleVideo(input, tempOutput, password, keepMeta, keys.baseKey, info);
+                scrambleVideo(input, tempOutput, password, keepMeta, keys.baseKey, keys.profileId, info);
                 archiveKey = keys.archiveKey;
                 trailerHeader = keys.header;
+                trailerProfile = keys.profileId;
                 appendArchiveTrailer = archiveOriginal;
                 appendKeyTrailer = !archiveOriginal;
                 result = tempOutput;
             } else if (info.audio != null) {
                 JmgKeys keys = prepareJmgKeys(pw, useMaster);
-                scrambleAudio(input, tempOutput, password, keepMeta, keys.baseKey, info);
+                scrambleAudio(input, tempOutput, password, keepMeta, keys.baseKey, keys.profileId, info);
                 archiveKey = keys.archiveKey;
                 trailerHeader = keys.header;
+                trailerProfile = keys.profileId;
                 appendArchiveTrailer = archiveOriginal;
                 appendKeyTrailer = !archiveOriginal;
                 result = tempOutput;
@@ -133,7 +138,15 @@ public final class MediaCipher {
         }
 
         if (appendArchiveTrailer) {
-            appendTrailerStream(result, pw, useMaster, input, archiveKey, trailerHeader);
+            appendTrailerStream(
+                result,
+                pw,
+                useMaster,
+                input,
+                archiveKey,
+                trailerHeader,
+                jmgArchiveInfoForProfile(trailerProfile)
+            );
         } else if (appendKeyTrailer) {
             appendKeyTrailer(result, trailerHeader);
         }
@@ -183,18 +196,35 @@ public final class MediaCipher {
                     } catch (RuntimeException exc) {
                         info = new MediaInfo();
                     }
-                    byte[] baseKeyFromTrailer = loadBaseKeyFromKeyTrailer(input, pw, useMaster);
+                    int[] trailerProfileHolder = new int[] {Constants.JMG_SECURITY_PROFILE_LEGACY};
+                    byte[] baseKeyFromTrailer = loadBaseKeyFromKeyTrailer(input, pw, useMaster, trailerProfileHolder);
                     if (baseKeyFromTrailer == null && input.length() <= TRAILER_FALLBACK_MAX) {
-                        baseKeyFromTrailer = loadBaseKeyFromKeyTrailerBytes(readFileBytes(input), pw, useMaster);
+                        baseKeyFromTrailer = loadBaseKeyFromKeyTrailerBytes(
+                            readFileBytes(input), pw, useMaster, trailerProfileHolder
+                        );
                     }
                     if (baseKeyFromTrailer != null) {
                         warnNoArchivePayload();
                     }
                     if (info.video != null) {
-                        unscrambleVideo(input, tempOutput, password, info, baseKeyFromTrailer);
+                        unscrambleVideo(
+                            input,
+                            tempOutput,
+                            password,
+                            info,
+                            baseKeyFromTrailer,
+                            trailerProfileHolder[0]
+                        );
                         result = tempOutput;
                     } else if (info.audio != null) {
-                        unscrambleAudio(input, tempOutput, password, info, baseKeyFromTrailer);
+                        unscrambleAudio(
+                            input,
+                            tempOutput,
+                            password,
+                            info,
+                            baseKeyFromTrailer,
+                            trailerProfileHolder[0]
+                        );
                         result = tempOutput;
                     } else if (looksLikeFwx(input)) {
                         File fallbackOut = output != null ? output : stripFwxSuffix(input);
@@ -231,11 +261,13 @@ public final class MediaCipher {
         byte[] materialOverride = null;
         byte[] archiveKey = null;
         byte[] trailerHeader = new byte[0];
+        int trailerProfile = Constants.JMG_SECURITY_PROFILE_LEGACY;
         if (includeTrailer) {
             JmgKeys keys = prepareJmgKeys(password, useMaster);
             materialOverride = keys.material;
             archiveKey = keys.archiveKey;
             trailerHeader = keys.header;
+            trailerProfile = keys.profileId;
         }
 
         MaskState state = buildMaskState(password, numPixels, data.channels, materialOverride);
@@ -249,7 +281,11 @@ public final class MediaCipher {
 
         if (includeTrailer) {
             if (archiveOriginal) {
-                byte[] archiveBlob = Crypto.aesGcmEncrypt(archiveKey, original, Constants.IMAGECIPHER_ARCHIVE_INFO);
+                byte[] archiveBlob = Crypto.aesGcmEncrypt(
+                    archiveKey,
+                    original,
+                    jmgArchiveInfoForProfile(trailerProfile)
+                );
                 byte[] trailerBlob = concat(trailerHeader, archiveBlob);
                 appendBalancedTrailer(output, Constants.IMAGECIPHER_TRAILER_MAGIC, trailerBlob);
             } else {
@@ -279,12 +315,14 @@ public final class MediaCipher {
         if (trailer != null) {
             byte[] archiveKey = null;
             int headerLen = 0;
+            byte[] archiveInfo = Constants.IMAGECIPHER_ARCHIVE_INFO;
             JmgHeader header = parseJmgHeader(trailer, password, useMaster);
             byte[] archiveBlob;
             if (header != null) {
                 headerLen = header.headerLen;
                 archiveKey = header.archiveKey;
                 materialOverride = header.material;
+                archiveInfo = jmgArchiveInfoForProfile(header.profileId);
                 archiveBlob = Arrays.copyOfRange(trailer, headerLen, trailer.length);
             } else {
                 byte[] material = deriveMediaMaterial(password);
@@ -292,7 +330,7 @@ public final class MediaCipher {
                 archiveBlob = trailer;
             }
             try {
-                byte[] original = Crypto.aesGcmDecrypt(archiveKey, archiveBlob, Constants.IMAGECIPHER_ARCHIVE_INFO);
+                byte[] original = Crypto.aesGcmDecrypt(archiveKey, archiveBlob, archiveInfo);
                 writeFileBytes(output, original);
                 return output;
             } catch (RuntimeException exc) {
@@ -331,6 +369,7 @@ public final class MediaCipher {
                                       String password,
                                       boolean keepMeta,
                                       byte[] baseKey,
+                                      int securityProfile,
                                       MediaInfo info) {
         if (info.video == null) {
             throw new IllegalArgumentException("No video stream found");
@@ -368,9 +407,9 @@ public final class MediaCipher {
                 runFfmpeg(cmdAudio, null);
             }
 
-            scrambleVideoRaw(rawVideo, rawVideoOut, width, height, fps, baseKey);
+            scrambleVideoRaw(rawVideo, rawVideoOut, width, height, fps, baseKey, securityProfile);
             if (rawAudio != null && rawAudioOut != null) {
-                scrambleAudioRaw(rawAudio, rawAudioOut, sampleRate, channels, baseKey);
+                scrambleAudioRaw(rawAudio, rawAudioOut, sampleRate, channels, baseKey, securityProfile);
             }
 
             List<String> cmdBase = ffmpegBaseCommand();
@@ -422,6 +461,7 @@ public final class MediaCipher {
                                       String password,
                                       boolean keepMeta,
                                       byte[] baseKey,
+                                      int securityProfile,
                                       MediaInfo info) {
         if (info.audio == null) {
             throw new IllegalArgumentException("No audio stream found");
@@ -442,7 +482,7 @@ public final class MediaCipher {
                 rawAudio.getPath()));
             runFfmpeg(cmdAudio, null);
 
-            scrambleAudioRaw(rawAudio, rawAudioOut, sampleRate, channels, baseKey);
+            scrambleAudioRaw(rawAudio, rawAudioOut, sampleRate, channels, baseKey, securityProfile);
 
             List<String> cmd = ffmpegBaseCommand();
             cmd.addAll(Arrays.asList("-f", "s16le", "-ar", String.valueOf(sampleRate), "-ac",
@@ -468,7 +508,8 @@ public final class MediaCipher {
                                         File output,
                                         String password,
                                         MediaInfo info,
-                                        byte[] baseKeyOverride) {
+                                        byte[] baseKeyOverride,
+                                        int securityProfile) {
         if (info.video == null) {
             throw new IllegalArgumentException("No video stream found");
         }
@@ -506,9 +547,9 @@ public final class MediaCipher {
             }
 
             byte[] baseKey = baseKeyOverride != null ? Arrays.copyOf(baseKeyOverride, baseKeyOverride.length) : deriveBaseKey(password);
-            unscrambleVideoRaw(rawVideo, rawVideoOut, width, height, fps, baseKey);
+            unscrambleVideoRaw(rawVideo, rawVideoOut, width, height, fps, baseKey, securityProfile);
             if (rawAudio != null && rawAudioOut != null) {
-                unscrambleAudioRaw(rawAudio, rawAudioOut, sampleRate, channels, baseKey);
+                unscrambleAudioRaw(rawAudio, rawAudioOut, sampleRate, channels, baseKey, securityProfile);
             }
 
             List<String> cmdBase = ffmpegBaseCommand();
@@ -559,7 +600,8 @@ public final class MediaCipher {
                                         File output,
                                         String password,
                                         MediaInfo info,
-                                        byte[] baseKeyOverride) {
+                                        byte[] baseKeyOverride,
+                                        int securityProfile) {
         if (info.audio == null) {
             throw new IllegalArgumentException("No audio stream found");
         }
@@ -580,7 +622,7 @@ public final class MediaCipher {
             runFfmpeg(cmdAudio, null);
 
             byte[] baseKey = baseKeyOverride != null ? Arrays.copyOf(baseKeyOverride, baseKeyOverride.length) : deriveBaseKey(password);
-            unscrambleAudioRaw(rawAudio, rawAudioOut, sampleRate, channels, baseKey);
+            unscrambleAudioRaw(rawAudio, rawAudioOut, sampleRate, channels, baseKey, securityProfile);
 
             List<String> cmd = ffmpegBaseCommand();
             cmd.addAll(Arrays.asList("-f", "s16le", "-ar", String.valueOf(sampleRate), "-ac",
@@ -608,13 +650,18 @@ public final class MediaCipher {
                                          int width,
                                          int height,
                                          double fps,
-                                         byte[] baseKey) {
+                                         byte[] baseKey,
+                                         int securityProfile) {
         int frameSize = width * height * 3;
         if (frameSize <= 0) {
             throw new IllegalArgumentException("Invalid video dimensions");
         }
         int groupFrames = Math.max(2, (int) Math.round((fps > 0.0 ? fps : 30.0) * VIDEO_GROUP_SECONDS));
         groupFrames = Math.min(groupFrames, VIDEO_GROUP_MAX_FRAMES);
+        final String frameLabel = jmgProfileLabel("jmg-frame", securityProfile);
+        final String frameBlockLabel = jmgProfileLabel("jmg-fblk", securityProfile);
+        final String frameGroupLabel = jmgProfileLabel("jmg-fgrp", securityProfile);
+        final int videoMaskBits = jmgVideoMaskBits(securityProfile);
 
         int workers = mediaWorkers();
         ExecutorService pool = workers > 1 ? Executors.newFixedThreadPool(Math.min(workers, groupFrames)) : null;
@@ -641,17 +688,17 @@ public final class MediaCipher {
                 byte[][] processed = new byte[frames.size()][];
                 processParallel(pool, frames.size(), idx -> {
                     long frameId = groupStart + idx;
-                    byte[] material = unitMaterial(baseKey, "jmg-frame", frameId, 48);
+                    byte[] material = unitMaterial(baseKey, frameLabel, frameId, 48);
                     byte[] key = Arrays.copyOfRange(material, 0, 32);
                     byte[] iv = Arrays.copyOfRange(material, 32, 48);
-                    byte[] masked = videoMaskTransform(frames.get(idx), key, iv);
-                    byte[] seedBytes = unitMaterial(baseKey, "jmg-fblk", frameId, 16);
+                    byte[] masked = videoMaskTransform(frames.get(idx), key, iv, videoMaskBits);
+                    byte[] seedBytes = unitMaterial(baseKey, frameBlockLabel, frameId, 16);
                     long seed = bytesToSeed(seedBytes);
                     processed[idx] = shuffleFrameBlocks(masked, width, height, 3, seed, VIDEO_BLOCK_SIZE);
                 });
 
                 long seedIndex = (groupIndex * 0x9E3779B97F4A7C15L) ^ groupStart;
-                byte[] seedBytes = unitMaterial(baseKey, "jmg-fgrp", seedIndex, 16);
+                byte[] seedBytes = unitMaterial(baseKey, frameGroupLabel, seedIndex, 16);
                 long seed = bytesToSeed(seedBytes);
                 int[] perm = permuteIndices(processed.length, seed);
                 for (int idx : perm) {
@@ -671,13 +718,18 @@ public final class MediaCipher {
                                            int width,
                                            int height,
                                            double fps,
-                                           byte[] baseKey) {
+                                           byte[] baseKey,
+                                           int securityProfile) {
         int frameSize = width * height * 3;
         if (frameSize <= 0) {
             throw new IllegalArgumentException("Invalid video dimensions");
         }
         int groupFrames = Math.max(2, (int) Math.round((fps > 0.0 ? fps : 30.0) * VIDEO_GROUP_SECONDS));
         groupFrames = Math.min(groupFrames, VIDEO_GROUP_MAX_FRAMES);
+        final String frameLabel = jmgProfileLabel("jmg-frame", securityProfile);
+        final String frameBlockLabel = jmgProfileLabel("jmg-fblk", securityProfile);
+        final String frameGroupLabel = jmgProfileLabel("jmg-fgrp", securityProfile);
+        final int videoMaskBits = jmgVideoMaskBits(securityProfile);
 
         int workers = mediaWorkers();
         ExecutorService pool = workers > 1 ? Executors.newFixedThreadPool(Math.min(workers, groupFrames)) : null;
@@ -702,7 +754,7 @@ public final class MediaCipher {
 
                 long groupStart = frameIndex - frames.size();
                 long seedIndex = (groupIndex * 0x9E3779B97F4A7C15L) ^ groupStart;
-                byte[] seedBytes = unitMaterial(baseKey, "jmg-fgrp", seedIndex, 16);
+                byte[] seedBytes = unitMaterial(baseKey, frameGroupLabel, seedIndex, 16);
                 long seed = bytesToSeed(seedBytes);
                 int[] perm = permuteIndices(frames.size(), seed);
                 byte[][] ordered = new byte[frames.size()][];
@@ -714,13 +766,13 @@ public final class MediaCipher {
                 byte[][] restored = new byte[ordered.length][];
                 processParallel(pool, ordered.length, idx -> {
                     long frameId = groupStart + idx;
-                    byte[] seedLocal = unitMaterial(baseKey, "jmg-fblk", frameId, 16);
+                    byte[] seedLocal = unitMaterial(baseKey, frameBlockLabel, frameId, 16);
                     long seedBlock = bytesToSeed(seedLocal);
                     byte[] unshuffled = unshuffleFrameBlocks(ordered[idx], width, height, 3, seedBlock, VIDEO_BLOCK_SIZE);
-                    byte[] material = unitMaterial(baseKey, "jmg-frame", frameId, 48);
+                    byte[] material = unitMaterial(baseKey, frameLabel, frameId, 48);
                     byte[] key = Arrays.copyOfRange(material, 0, 32);
                     byte[] iv = Arrays.copyOfRange(material, 32, 48);
-                    restored[idx] = videoMaskTransform(unshuffled, key, iv);
+                    restored[idx] = videoMaskTransform(unshuffled, key, iv, videoMaskBits);
                 });
                 for (byte[] frame : restored) {
                     out.write(frame);
@@ -738,13 +790,18 @@ public final class MediaCipher {
                                          File output,
                                          int sampleRate,
                                          int channels,
-                                         byte[] baseKey) {
+                                         byte[] baseKey,
+                                         int securityProfile) {
         if (sampleRate <= 0 || channels <= 0) {
             throw new IllegalArgumentException("Invalid audio stream parameters");
         }
         int samplesPerBlock = Math.max(1, (int) Math.round(sampleRate * AUDIO_BLOCK_SECONDS));
         int blockSize = samplesPerBlock * channels * 2;
         int groupBlocks = Math.max(2, (int) Math.round(AUDIO_GROUP_SECONDS / AUDIO_BLOCK_SECONDS));
+        final String audioBlockLabel = jmgProfileLabel("jmg-ablock", securityProfile);
+        final String audioSampleLabel = jmgProfileLabel("jmg-asamp", securityProfile);
+        final String audioGroupLabel = jmgProfileLabel("jmg-agrp", securityProfile);
+        final int audioMaskBits = jmgAudioMaskBits(securityProfile);
 
         int workers = mediaWorkers();
         ExecutorService pool = workers > 1 ? Executors.newFixedThreadPool(Math.min(workers, groupBlocks)) : null;
@@ -774,17 +831,17 @@ public final class MediaCipher {
                 byte[][] processed = new byte[blocks.size()][];
                 processParallel(pool, blocks.size(), idx -> {
                     long blockId = groupStart + idx;
-                    byte[] material = unitMaterial(baseKey, "jmg-ablock", blockId, 48);
+                    byte[] material = unitMaterial(baseKey, audioBlockLabel, blockId, 48);
                     byte[] key = Arrays.copyOfRange(material, 0, 32);
                     byte[] iv = Arrays.copyOfRange(material, 32, 48);
-                    byte[] masked = audioMaskTransform(blocks.get(idx), key, iv);
-                    byte[] seedBytes = unitMaterial(baseKey, "jmg-asamp", blockId, 16);
+                    byte[] masked = audioMaskTransform(blocks.get(idx), key, iv, audioMaskBits);
+                    byte[] seedBytes = unitMaterial(baseKey, audioSampleLabel, blockId, 16);
                     long seed = bytesToSeed(seedBytes);
                     processed[idx] = shuffleAudioSamples(masked, seed);
                 });
 
                 long seedIndex = (groupIndex * 0x9E3779B97F4A7C15L) ^ groupStart;
-                byte[] seedBytes = unitMaterial(baseKey, "jmg-agrp", seedIndex, 16);
+                byte[] seedBytes = unitMaterial(baseKey, audioGroupLabel, seedIndex, 16);
                 long seed = bytesToSeed(seedBytes);
                 int[] perm = permuteIndices(processed.length, seed);
                 for (int idx : perm) {
@@ -803,13 +860,18 @@ public final class MediaCipher {
                                            File output,
                                            int sampleRate,
                                            int channels,
-                                           byte[] baseKey) {
+                                           byte[] baseKey,
+                                           int securityProfile) {
         if (sampleRate <= 0 || channels <= 0) {
             throw new IllegalArgumentException("Invalid audio stream parameters");
         }
         int samplesPerBlock = Math.max(1, (int) Math.round(sampleRate * AUDIO_BLOCK_SECONDS));
         int blockSize = samplesPerBlock * channels * 2;
         int groupBlocks = Math.max(2, (int) Math.round(AUDIO_GROUP_SECONDS / AUDIO_BLOCK_SECONDS));
+        final String audioBlockLabel = jmgProfileLabel("jmg-ablock", securityProfile);
+        final String audioSampleLabel = jmgProfileLabel("jmg-asamp", securityProfile);
+        final String audioGroupLabel = jmgProfileLabel("jmg-agrp", securityProfile);
+        final int audioMaskBits = jmgAudioMaskBits(securityProfile);
 
         int workers = mediaWorkers();
         ExecutorService pool = workers > 1 ? Executors.newFixedThreadPool(Math.min(workers, groupBlocks)) : null;
@@ -837,7 +899,7 @@ public final class MediaCipher {
 
                 long groupStart = blockIndex - blocks.size();
                 long seedIndex = (groupIndex * 0x9E3779B97F4A7C15L) ^ groupStart;
-                byte[] seedBytes = unitMaterial(baseKey, "jmg-agrp", seedIndex, 16);
+                byte[] seedBytes = unitMaterial(baseKey, audioGroupLabel, seedIndex, 16);
                 long seed = bytesToSeed(seedBytes);
                 int[] perm = permuteIndices(blocks.size(), seed);
                 byte[][] ordered = new byte[blocks.size()][];
@@ -849,13 +911,13 @@ public final class MediaCipher {
                 byte[][] restored = new byte[ordered.length][];
                 processParallel(pool, ordered.length, idx -> {
                     long blockId = groupStart + idx;
-                    byte[] seedLocal = unitMaterial(baseKey, "jmg-asamp", blockId, 16);
+                    byte[] seedLocal = unitMaterial(baseKey, audioSampleLabel, blockId, 16);
                     long seedBlock = bytesToSeed(seedLocal);
                     byte[] unshuffled = unshuffleAudioSamples(ordered[idx], seedBlock);
-                    byte[] material = unitMaterial(baseKey, "jmg-ablock", blockId, 48);
+                    byte[] material = unitMaterial(baseKey, audioBlockLabel, blockId, 48);
                     byte[] key = Arrays.copyOfRange(material, 0, 32);
                     byte[] iv = Arrays.copyOfRange(material, 32, 48);
-                    restored[idx] = audioMaskTransform(unshuffled, key, iv);
+                    restored[idx] = audioMaskTransform(unshuffled, key, iv, audioMaskBits);
                 });
                 for (byte[] block : restored) {
                     out.write(block);
@@ -874,10 +936,14 @@ public final class MediaCipher {
                                             boolean useMaster,
                                             File original,
                                             byte[] archiveKey,
-                                            byte[] keyHeader) {
+                                            byte[] keyHeader,
+                                            byte[] archiveInfo) {
+        if (archiveInfo == null || archiveInfo.length == 0) {
+            archiveInfo = Constants.IMAGECIPHER_ARCHIVE_INFO;
+        }
         if (archiveKey == null) {
             byte[] material = deriveMediaMaterial(password);
-            archiveKey = Crypto.hkdfSha256(material, Constants.IMAGECIPHER_ARCHIVE_INFO, 32);
+            archiveKey = Crypto.hkdfSha256(material, archiveInfo, 32);
         }
         long size = original.length();
         long blobLen = (long) keyHeader.length + Constants.AEAD_NONCE_LEN + size + Constants.AEAD_TAG_LEN;
@@ -899,7 +965,7 @@ public final class MediaCipher {
 
             CryptoBackend backend = CryptoBackends.get();
             try (CryptoBackend.AeadEncryptor enc = backend.newGcmEncryptor(
-                archiveKey, nonce, Constants.IMAGECIPHER_ARCHIVE_INFO)) {
+                archiveKey, nonce, archiveInfo)) {
                 byte[] inBuf = new byte[Constants.STREAM_CHUNK_SIZE];
                 byte[] outBuf = new byte[Constants.STREAM_CHUNK_SIZE + Constants.AEAD_TAG_LEN];
                 int read;
@@ -967,6 +1033,7 @@ public final class MediaCipher {
             raf.readFully(prefix);
 
             byte[] archiveKey;
+            byte[] archiveInfo = Constants.IMAGECIPHER_ARCHIVE_INFO;
             long headerBytes = 0;
             byte[] nonce;
             long cipherBodyLen;
@@ -976,7 +1043,7 @@ public final class MediaCipher {
                 if (version < 0) {
                     return false;
                 }
-                if (version != Constants.JMG_KEY_VERSION) {
+                if (version != Constants.JMG_KEY_VERSION_LEGACY && version != Constants.JMG_KEY_VERSION) {
                     throw new IllegalArgumentException("Unsupported JMG key header version");
                 }
                 byte[] payloadLenBytes = new byte[4];
@@ -985,10 +1052,20 @@ public final class MediaCipher {
                 headerBytes = Constants.JMG_KEY_MAGIC.length + 1 + 4 + payloadLen;
                 byte[] payload = new byte[(int) payloadLen];
                 raf.readFully(payload);
-                List<byte[]> parts = Format.unpackLengthPrefixed(payload, 2);
+                int profileId = Constants.JMG_SECURITY_PROFILE_LEGACY;
+                byte[] keyPayload = payload;
+                if (version == Constants.JMG_KEY_VERSION) {
+                    if (payload.length < 1) {
+                        throw new IllegalArgumentException("Truncated JMG key header profile");
+                    }
+                    profileId = normalizeJmgProfile(payload[0] & 0xFF);
+                    keyPayload = Arrays.copyOfRange(payload, 1, payload.length);
+                }
+                List<byte[]> parts = Format.unpackLengthPrefixed(keyPayload, 2);
                 byte[] maskKey = KeyWrap.recoverMaskKey(parts.get(0), parts.get(1), password, useMaster,
                     Constants.JMG_MASK_INFO, Constants.MASK_AAD_JMG, new KeyWrap.KdfOptions("pbkdf2", Constants.USER_KDF_ITERATIONS));
-                archiveKey = Crypto.hkdfSha256(maskKey, Constants.IMAGECIPHER_ARCHIVE_INFO, 32);
+                archiveInfo = jmgArchiveInfoForProfile(profileId);
+                archiveKey = Crypto.hkdfSha256(maskKey, archiveInfo, 32);
                 nonce = new byte[Constants.AEAD_NONCE_LEN];
                 raf.readFully(nonce);
                 cipherBodyLen = blobLen - headerBytes - Constants.AEAD_NONCE_LEN - Constants.AEAD_TAG_LEN;
@@ -1005,7 +1082,7 @@ public final class MediaCipher {
 
             CryptoBackend backend = CryptoBackends.get();
             try (CryptoBackend.AeadDecryptor dec = backend.newGcmDecryptor(
-                archiveKey, nonce, Constants.IMAGECIPHER_ARCHIVE_INFO)) {
+                archiveKey, nonce, archiveInfo)) {
                 try (BufferedOutputStream out = new BufferedOutputStream(new FileOutputStream(output),
                     Constants.STREAM_CHUNK_SIZE)) {
                     byte[] inBuf = new byte[Constants.STREAM_CHUNK_SIZE];
@@ -1050,16 +1127,18 @@ public final class MediaCipher {
         byte[] trailer = split.trailer;
         JmgHeader header = parseJmgHeader(trailer, password, useMaster);
         byte[] archiveKey;
+        byte[] archiveInfo = Constants.IMAGECIPHER_ARCHIVE_INFO;
         byte[] archiveBlob;
         if (header != null) {
             archiveKey = header.archiveKey;
+            archiveInfo = jmgArchiveInfoForProfile(header.profileId);
             archiveBlob = Arrays.copyOfRange(trailer, header.headerLen, trailer.length);
         } else {
             archiveKey = Crypto.hkdfSha256(deriveMediaMaterial(password), Constants.IMAGECIPHER_ARCHIVE_INFO, 32);
             archiveBlob = trailer;
         }
         try {
-            return Crypto.aesGcmDecrypt(archiveKey, archiveBlob, Constants.IMAGECIPHER_ARCHIVE_INFO);
+            return Crypto.aesGcmDecrypt(archiveKey, archiveBlob, archiveInfo);
         } catch (RuntimeException exc) {
             return null;
         }
@@ -1114,7 +1193,8 @@ public final class MediaCipher {
 
     private static byte[] loadBaseKeyFromKeyTrailer(File path,
                                                     byte[] password,
-                                                    boolean useMaster) {
+                                                    boolean useMaster,
+                                                    int[] profileOut) {
         TrailerInfo info = extractBalancedTrailerInfo(path, Constants.IMAGECIPHER_KEY_TRAILER_MAGIC);
         if (info == null) {
             return null;
@@ -1133,12 +1213,16 @@ public final class MediaCipher {
         if (header.headerLen != blob.length) {
             throw new IllegalArgumentException("Invalid JMG key trailer payload");
         }
+        if (profileOut != null && profileOut.length > 0) {
+            profileOut[0] = header.profileId;
+        }
         return header.baseKey;
     }
 
     private static byte[] loadBaseKeyFromKeyTrailerBytes(byte[] fileBytes,
                                                          byte[] password,
-                                                         boolean useMaster) {
+                                                         boolean useMaster,
+                                                         int[] profileOut) {
         TrailerSplit split = splitTrailerForMagic(fileBytes, Constants.IMAGECIPHER_KEY_TRAILER_MAGIC);
         if (split.trailer == null) {
             return null;
@@ -1149,6 +1233,9 @@ public final class MediaCipher {
         }
         if (header.headerLen != split.trailer.length) {
             throw new IllegalArgumentException("Invalid JMG key trailer payload");
+        }
+        if (profileOut != null && profileOut.length > 0) {
+            profileOut[0] = header.profileId;
         }
         return header.baseKey;
     }
@@ -1191,14 +1278,67 @@ public final class MediaCipher {
         }
     }
 
+    private static int normalizeJmgProfile(int profileId) {
+        if (profileId == Constants.JMG_SECURITY_PROFILE_LEGACY
+            || profileId == Constants.JMG_SECURITY_PROFILE_MAX) {
+            return profileId;
+        }
+        throw new IllegalArgumentException("Unsupported JMG security profile id");
+    }
+
+    private static byte[] jmgStreamInfoForProfile(int profileId) {
+        profileId = normalizeJmgProfile(profileId);
+        if (profileId == Constants.JMG_SECURITY_PROFILE_MAX) {
+            return "basefwx.imagecipher.stream.v1.max".getBytes(StandardCharsets.US_ASCII);
+        }
+        return Constants.IMAGECIPHER_STREAM_INFO;
+    }
+
+    private static byte[] jmgArchiveInfoForProfile(int profileId) {
+        profileId = normalizeJmgProfile(profileId);
+        if (profileId == Constants.JMG_SECURITY_PROFILE_MAX) {
+            return "basefwx.imagecipher.archive.v1.max".getBytes(StandardCharsets.US_ASCII);
+        }
+        return Constants.IMAGECIPHER_ARCHIVE_INFO;
+    }
+
+    private static String jmgProfileLabel(String label, int profileId) {
+        profileId = normalizeJmgProfile(profileId);
+        if (profileId == Constants.JMG_SECURITY_PROFILE_MAX) {
+            return label + ".max";
+        }
+        return label;
+    }
+
+    private static int jmgVideoMaskBits(int profileId) {
+        profileId = normalizeJmgProfile(profileId);
+        if (profileId == Constants.JMG_SECURITY_PROFILE_MAX) {
+            return VIDEO_MASK_BITS_MAX;
+        }
+        return VIDEO_MASK_BITS;
+    }
+
+    private static int jmgAudioMaskBits(int profileId) {
+        profileId = normalizeJmgProfile(profileId);
+        if (profileId == Constants.JMG_SECURITY_PROFILE_MAX) {
+            return AUDIO_MASK_BITS_MAX;
+        }
+        return AUDIO_MASK_BITS;
+    }
+
     private static JmgKeys prepareJmgKeys(byte[] password, boolean useMaster) {
+        return prepareJmgKeys(password, useMaster, Constants.JMG_SECURITY_PROFILE_DEFAULT);
+    }
+
+    private static JmgKeys prepareJmgKeys(byte[] password, boolean useMaster, int securityProfile) {
+        securityProfile = normalizeJmgProfile(securityProfile);
         KeyWrap.MaskKeyResult mask = KeyWrap.prepareMaskKey(password, useMaster, Constants.JMG_MASK_INFO,
             false, Constants.MASK_AAD_JMG, new KeyWrap.KdfOptions("pbkdf2", Constants.USER_KDF_ITERATIONS));
-        byte[] material = Crypto.hkdfSha256(mask.maskKey, Constants.IMAGECIPHER_STREAM_INFO, 64);
+        byte[] material = Crypto.hkdfSha256(mask.maskKey, jmgStreamInfoForProfile(securityProfile), 64);
         byte[] baseKey = Arrays.copyOfRange(material, 0, 32);
-        byte[] archiveKey = Crypto.hkdfSha256(mask.maskKey, Constants.IMAGECIPHER_ARCHIVE_INFO, 32);
-        byte[] header = buildJmgHeader(mask.userBlob, mask.masterBlob);
-        return new JmgKeys(baseKey, archiveKey, material, header);
+        byte[] archiveKey = Crypto.hkdfSha256(mask.maskKey, jmgArchiveInfoForProfile(securityProfile), 32);
+        byte[] header = buildJmgHeader(mask.userBlob, mask.masterBlob, securityProfile);
+        return new JmgKeys(baseKey, archiveKey, material, header, securityProfile);
     }
 
     private static JmgHeader parseJmgHeader(byte[] blob, byte[] password, boolean useMaster) {
@@ -1210,7 +1350,7 @@ public final class MediaCipher {
             return null;
         }
         int version = blob[Constants.JMG_KEY_MAGIC.length] & 0xFF;
-        if (version != Constants.JMG_KEY_VERSION) {
+        if (version != Constants.JMG_KEY_VERSION_LEGACY && version != Constants.JMG_KEY_VERSION) {
             throw new IllegalArgumentException("Unsupported JMG key header version");
         }
         long payloadLen = readU32(blob, Constants.JMG_KEY_MAGIC.length + 1);
@@ -1219,17 +1359,30 @@ public final class MediaCipher {
             throw new IllegalArgumentException("Truncated JMG key header");
         }
         byte[] payload = Arrays.copyOfRange(blob, headerMin, headerLen);
-        List<byte[]> parts = Format.unpackLengthPrefixed(payload, 2);
+        int profileId = Constants.JMG_SECURITY_PROFILE_LEGACY;
+        byte[] keyPayload = payload;
+        if (version == Constants.JMG_KEY_VERSION) {
+            if (payload.length < 1) {
+                throw new IllegalArgumentException("Truncated JMG key header profile");
+            }
+            profileId = normalizeJmgProfile(payload[0] & 0xFF);
+            keyPayload = Arrays.copyOfRange(payload, 1, payload.length);
+        }
+        List<byte[]> parts = Format.unpackLengthPrefixed(keyPayload, 2);
         byte[] maskKey = KeyWrap.recoverMaskKey(parts.get(0), parts.get(1), password, useMaster,
             Constants.JMG_MASK_INFO, Constants.MASK_AAD_JMG, new KeyWrap.KdfOptions("pbkdf2", Constants.USER_KDF_ITERATIONS));
-        byte[] material = Crypto.hkdfSha256(maskKey, Constants.IMAGECIPHER_STREAM_INFO, 64);
+        byte[] material = Crypto.hkdfSha256(maskKey, jmgStreamInfoForProfile(profileId), 64);
         byte[] baseKey = Arrays.copyOfRange(material, 0, 32);
-        byte[] archiveKey = Crypto.hkdfSha256(maskKey, Constants.IMAGECIPHER_ARCHIVE_INFO, 32);
-        return new JmgHeader(headerLen, baseKey, archiveKey, material);
+        byte[] archiveKey = Crypto.hkdfSha256(maskKey, jmgArchiveInfoForProfile(profileId), 32);
+        return new JmgHeader(headerLen, baseKey, archiveKey, material, profileId);
     }
 
-    private static byte[] buildJmgHeader(byte[] userBlob, byte[] masterBlob) {
-        byte[] payload = Format.packLengthPrefixed(Arrays.asList(userBlob, masterBlob));
+    private static byte[] buildJmgHeader(byte[] userBlob, byte[] masterBlob, int securityProfile) {
+        securityProfile = normalizeJmgProfile(securityProfile);
+        byte[] packed = Format.packLengthPrefixed(Arrays.asList(userBlob, masterBlob));
+        byte[] payload = new byte[packed.length + 1];
+        payload[0] = (byte) securityProfile;
+        System.arraycopy(packed, 0, payload, 1, packed.length);
         int total = Constants.JMG_KEY_MAGIC.length + 1 + 4 + payload.length;
         byte[] out = new byte[total];
         int offset = 0;
@@ -1490,7 +1643,7 @@ public final class MediaCipher {
         return out;
     }
 
-    private static byte[] audioMaskTransform(byte[] data, byte[] key, byte[] iv) {
+    private static byte[] audioMaskTransform(byte[] data, byte[] key, byte[] iv, int maskBits) {
         if (data.length == 0) {
             return data;
         }
@@ -1503,7 +1656,12 @@ public final class MediaCipher {
             head = Arrays.copyOf(data, evenLen);
         }
         byte[] keystream = aesCtrTransform(key, iv, new byte[evenLen]);
-        int mask = (1 << AUDIO_MASK_BITS) - 1;
+        if (maskBits < 0) {
+            maskBits = 0;
+        } else if (maskBits > 16) {
+            maskBits = 16;
+        }
+        int mask = maskBits == 16 ? 0xFFFF : (1 << maskBits) - 1;
         for (int i = 0; i < evenLen; i += 2) {
             int sample = (head[i] & 0xFF) | ((head[i + 1] & 0xFF) << 8);
             int ks = (keystream[i] & 0xFF) | ((keystream[i + 1] & 0xFF) << 8);
@@ -1520,13 +1678,18 @@ public final class MediaCipher {
         return out;
     }
 
-    private static byte[] videoMaskTransform(byte[] data, byte[] key, byte[] iv) {
+    private static byte[] videoMaskTransform(byte[] data, byte[] key, byte[] iv, int maskBits) {
         if (data.length == 0) {
             return data;
         }
         byte[] keystream = aesCtrTransform(key, iv, new byte[data.length]);
         byte[] out = Arrays.copyOf(data, data.length);
-        int mask = (1 << VIDEO_MASK_BITS) - 1;
+        if (maskBits < 0) {
+            maskBits = 0;
+        } else if (maskBits > 8) {
+            maskBits = 8;
+        }
+        int mask = maskBits == 8 ? 0xFF : (1 << maskBits) - 1;
         for (int i = 0; i < out.length; i++) {
             out[i] = (byte) (out[i] ^ (keystream[i] & mask));
         }
@@ -2485,12 +2648,14 @@ public final class MediaCipher {
         final byte[] archiveKey;
         final byte[] material;
         final byte[] header;
+        final int profileId;
 
-        JmgKeys(byte[] baseKey, byte[] archiveKey, byte[] material, byte[] header) {
+        JmgKeys(byte[] baseKey, byte[] archiveKey, byte[] material, byte[] header, int profileId) {
             this.baseKey = baseKey;
             this.archiveKey = archiveKey;
             this.material = material;
             this.header = header;
+            this.profileId = profileId;
         }
     }
 
@@ -2499,12 +2664,14 @@ public final class MediaCipher {
         final byte[] baseKey;
         final byte[] archiveKey;
         final byte[] material;
+        final int profileId;
 
-        JmgHeader(int headerLen, byte[] baseKey, byte[] archiveKey, byte[] material) {
+        JmgHeader(int headerLen, byte[] baseKey, byte[] archiveKey, byte[] material, int profileId) {
             this.headerLen = headerLen;
             this.archiveKey = archiveKey;
             this.baseKey = baseKey;
             this.material = material;
+            this.profileId = profileId;
         }
     }
 

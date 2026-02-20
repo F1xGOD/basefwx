@@ -74,4 +74,7 @@ jobs:
           "$PY_BIN" -m unittest \
             python.tests.test_basefwx.BaseFWXUnitTests.test_live_stream_roundtrip_chunked \
             python.tests.test_basefwx.BaseFWXUnitTests.test_live_stream_tamper_rejected \
-            python.tests.test_basefwx.BaseFWXUnitTests.test_jmg_image_no_archive_roundtrip_valid_image
+            python.tests.test_basefwx.BaseFWXUnitTests.test_jmg_image_no_archive_roundtrip_valid_image \
+            python.tests.test_basefwx.BaseFWXUnitTests.test_jmg_video_disabled_by_default \
+            python.tests.test_basefwx.BaseFWXUnitTests.test_ffmpeg_video_codec_args_clamps_huge_bitrate \
+            python.tests.test_basefwx.BaseFWXUnitTests.test_kfm_xor_auto_falls_back_without_cupy

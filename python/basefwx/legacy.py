@@ -6460,13 +6460,13 @@ class basefwx:
                 reasons.append("non-video pipeline uses CPU-only media path")
             encode_device = selected_accel or "cpu"
             decode_device = "cpu" if prefer_cpu_decode else encode_device
-            if prefer_cpu_decode and selected_accel and stream_type == "video":
-                reasons.append("decode pinned to CPU to avoid hwdownload for CPU-side transforms")
             pixel_backend = "cpu"
             gpu_pixels_strict = False
             pixel_workers = cls._media_workers()
+            gpu_pixels_mode = "cpu"
             if allow_pixel_gpu:
                 mode, min_bytes = cls._gpu_pixels_policy()
+                gpu_pixels_mode = mode
                 if mode == "cuda":
                     min_bytes = 0
                 if mode == "cpu":
@@ -6502,6 +6502,12 @@ class basefwx:
                         reasons.append("CUDA pixel path forces single worker to avoid GPU thread contention")
                     reasons.append("CUDA pixel path enabled for large-frame masking")
                 gpu_pixels_strict = bool(mode == "cuda" and cls._hwaccel_strict())
+            if prefer_cpu_decode and selected_accel and stream_type == "video":
+                if pixel_backend == "cuda" and gpu_pixels_mode == "cuda":
+                    decode_device = encode_device
+                    reasons.append("forced CUDA pixel mode enables GPU decode path for throughput")
+                else:
+                    reasons.append("decode pinned to CPU to avoid hwdownload for CPU-side transforms")
             aes_accel_state = cls._detect_aes_accel_state()
             reasons.append("AES operations remain on CPU (OpenSSL/cryptography path)")
             if stream_type == "live":
@@ -7721,14 +7727,36 @@ class basefwx:
             cmd: "list[str]",
             fallback_cmd: "basefwx.typing.Optional[list[str]]" = None
         ) -> None:
-            result = basefwx.subprocess.run(cmd, capture_output=True, text=True)
-            if result.returncode != 0:
+            def _run_once(run_cmd: "list[str]") -> "tuple[int, str, str]":
+                proc = basefwx.subprocess.Popen(
+                    [str(part) for part in run_cmd],
+                    stdout=basefwx.subprocess.PIPE,
+                    stderr=basefwx.subprocess.PIPE,
+                    text=True,
+                )
+                try:
+                    stdout, stderr = proc.communicate()
+                    return proc.returncode, stdout or "", stderr or ""
+                except KeyboardInterrupt:
+                    with basefwx.contextlib.suppress(Exception):
+                        proc.terminate()
+                    with basefwx.contextlib.suppress(Exception):
+                        proc.wait(timeout=1.5)
+                    with basefwx.contextlib.suppress(Exception):
+                        if proc.poll() is None:
+                            proc.kill()
+                    with basefwx.contextlib.suppress(Exception):
+                        proc.wait(timeout=1.0)
+                    raise
+
+            code, _stdout, stderr = _run_once(cmd)
+            if code != 0:
                 if fallback_cmd and not basefwx.MediaCipher._hwaccel_strict():
-                    retry = basefwx.subprocess.run(fallback_cmd, capture_output=True, text=True)
-                    if retry.returncode != 0:
-                        raise RuntimeError(retry.stderr.strip() or "ffmpeg failed")
+                    retry_code, _retry_stdout, retry_stderr = _run_once(fallback_cmd)
+                    if retry_code != 0:
+                        raise RuntimeError(retry_stderr.strip() or "ffmpeg failed")
                     return
-                raise RuntimeError(result.stderr.strip() or "ffmpeg failed")
+                raise RuntimeError(stderr.strip() or "ffmpeg failed")
 
         @staticmethod
         def _scramble_video(
@@ -7783,6 +7811,8 @@ class basefwx:
                     "-pix_fmt", "rgb24",
                     str(raw_video)
                 ]
+                if reporter:
+                    reporter.update(file_index, 0.06, "decode-video", display_path)
                 if decode_video_args:
                     decode_video_cpu = [
                         "ffmpeg", "-y",
@@ -7816,6 +7846,8 @@ class basefwx:
                         "-ac", str(channels or 2),
                         str(raw_audio)
                     ]
+                    if reporter:
+                        reporter.update(file_index, 0.21, "decode-audio", display_path)
                     basefwx.MediaCipher._run_ffmpeg(cmd_audio)
                     sample_rate = sample_rate or 48000
                     channels = channels or 2
@@ -8046,6 +8078,8 @@ class basefwx:
                     "-pix_fmt", "rgb24",
                     str(raw_video)
                 ]
+                if reporter:
+                    reporter.update(file_index, 0.06, "decode-video", display_path)
                 if decode_video_args:
                     decode_video_cpu = [
                         "ffmpeg", "-y",
@@ -8079,6 +8113,8 @@ class basefwx:
                         "-ac", str(channels or 2),
                         str(raw_audio)
                     ]
+                    if reporter:
+                        reporter.update(file_index, 0.21, "decode-audio", display_path)
                     basefwx.MediaCipher._run_ffmpeg(cmd_audio)
                     sample_rate = sample_rate or 48000
                     channels = channels or 2

@@ -67,6 +67,25 @@ jobs:
           chmod +x scripts/test_all.sh
           ./scripts/test_all.sh --fbench
 
+      - name: Verify live benchmark coverage
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          bench_path = Path("results/benchmarks-latest.json")
+          if not bench_path.exists():
+              raise SystemExit("Missing results/benchmarks-latest.json")
+
+          data = json.loads(bench_path.read_text(encoding="utf-8"))
+          labels = {entry.get("label") for entry in data.get("tests", [])}
+          required = {"fwxaes_live_py_total", "kfae_py_total"}
+          missing = sorted(label for label in required if label not in labels)
+          if missing:
+              raise SystemExit(f"Missing benchmark labels: {', '.join(missing)}")
+          print("Live benchmark coverage OK:", ", ".join(sorted(required)))
+          PY
+
       - name: Publish benchmark results to DEV
         run: |
           set -euo pipefail

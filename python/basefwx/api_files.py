@@ -62,6 +62,7 @@ def fwxAES(
     legacy: bool = False,
     ignore_media: bool = False,
     keep_meta: bool = False,
+    archive_original: bool = True,
     keep_input: bool = False,
 ):
     if legacy:
@@ -84,6 +85,7 @@ def fwxAES(
         cover_phrase=cover_phrase,
         ignore_media=ignore_media,
         keep_meta=keep_meta,
+        archive_original=archive_original,
         keep_input=keep_input,
     )
 
@@ -120,6 +122,66 @@ def fwxAES_decrypt_stream(
     chunk_size: int | None = None,
 ):
     return basefwx.fwxAES_decrypt_stream(
+        source,
+        dest,
+        password,
+        use_master=use_master,
+        chunk_size=chunk_size,
+    )
+
+
+LiveEncryptor = basefwx.LiveEncryptor
+LiveDecryptor = basefwx.LiveDecryptor
+
+
+def fwxAES_live_encrypt_chunks(
+    chunks,
+    password: str | bytes,
+    use_master: bool = True,
+):
+    return basefwx.fwxAES_live_encrypt_chunks(
+        chunks,
+        password,
+        use_master=use_master,
+    )
+
+
+def fwxAES_live_decrypt_chunks(
+    chunks,
+    password: str | bytes,
+    use_master: bool = True,
+):
+    return basefwx.fwxAES_live_decrypt_chunks(
+        chunks,
+        password,
+        use_master=use_master,
+    )
+
+
+def fwxAES_live_encrypt_stream(
+    source,
+    dest,
+    password: str | bytes,
+    use_master: bool = True,
+    chunk_size: int | None = None,
+):
+    return basefwx.fwxAES_live_encrypt_stream(
+        source,
+        dest,
+        password,
+        use_master=use_master,
+        chunk_size=chunk_size,
+    )
+
+
+def fwxAES_live_decrypt_stream(
+    source,
+    dest,
+    password: str | bytes,
+    use_master: bool = True,
+    chunk_size: int | None = None,
+):
+    return basefwx.fwxAES_live_decrypt_stream(
         source,
         dest,
         password,
@@ -209,6 +271,12 @@ __all__ = [
     "fwxAES_decrypt_stream",
     "fwxAES_encrypt_raw",
     "fwxAES_encrypt_stream",
+    "fwxAES_live_decrypt_chunks",
+    "fwxAES_live_decrypt_stream",
+    "fwxAES_live_encrypt_chunks",
+    "fwxAES_live_encrypt_stream",
+    "LiveDecryptor",
+    "LiveEncryptor",
     "normalize_unwrap",
     "normalize_wrap",
     "pb512file_decode_bytes",

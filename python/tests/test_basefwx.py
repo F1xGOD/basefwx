@@ -2,12 +2,14 @@ import collections
 import io
 import math
 import os
+import random
 import shutil
 import site
 import subprocess
 import sys
 import tempfile
 import unittest
+import warnings
 import wave
 from unittest.mock import patch
 from contextlib import redirect_stdout
@@ -316,6 +318,176 @@ class BaseFWXUnitTests(unittest.TestCase):
             self.skipTest(f"ffmpeg m4a encode unavailable: {result.stderr.strip()}")
         with self.assertRaisesRegex(ValueError, "not a BaseFWX kFM carrier"):
             basefwx.kFMd(str(m4a_path))
+
+    def _make_png_fixture(self, name: str = "fixture.png", size: tuple[int, int] = (48, 48)) -> Path:
+        if basefwx.Image is None:
+            self.skipTest("Pillow unavailable")
+        path = self.tmp_path / name
+        img = basefwx.Image.frombytes("RGB", size, os.urandom(size[0] * size[1] * 3))
+        img.save(path)
+        return path
+
+    def _split_live_frames(self, blob: bytes) -> list[bytes]:
+        frames: list[bytes] = []
+        offset = 0
+        header_len = basefwx.LIVE_FRAME_HEADER_STRUCT.size
+        while offset < len(blob):
+            self.assertGreaterEqual(len(blob) - offset, header_len)
+            magic, version, _frame_type, _seq, body_len = basefwx.LIVE_FRAME_HEADER_STRUCT.unpack(
+                blob[offset:offset + header_len]
+            )
+            self.assertEqual(magic, basefwx.LIVE_FRAME_MAGIC)
+            self.assertEqual(version, basefwx.LIVE_FRAME_VERSION)
+            frame_end = offset + header_len + body_len
+            self.assertLessEqual(frame_end, len(blob))
+            frames.append(blob[offset:frame_end])
+            offset = frame_end
+        self.assertEqual(offset, len(blob))
+        return frames
+
+    def test_jmg_image_archive_roundtrip_exact(self):
+        src = self._make_png_fixture("jmg_src.png")
+        original = src.read_bytes()
+        enc = self.tmp_path / "jmg_enc.png"
+        dec = self.tmp_path / "jmg_dec.png"
+        basefwx.MediaCipher.encrypt_media(
+            str(src),
+            "pw",
+            output=str(enc),
+            keep_input=True,
+            archive_original=True,
+        )
+        basefwx.MediaCipher.decrypt_media(str(enc), "pw", output=str(dec))
+        self.assertEqual(dec.read_bytes(), original)
+
+    def test_jmg_image_no_archive_roundtrip_valid_image(self):
+        src = self._make_png_fixture("jmg_src_no_archive.png")
+        enc = self.tmp_path / "jmg_enc_no_archive.png"
+        dec = self.tmp_path / "jmg_dec_no_archive.png"
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            basefwx.MediaCipher.encrypt_media(
+                str(src),
+                "pw",
+                output=str(enc),
+                keep_input=True,
+                archive_original=False,
+            )
+        self.assertTrue(any("archive_original=False" in str(w.message) for w in caught))
+        self.assertIn(basefwx.IMAGECIPHER_KEY_TRAILER_MAGIC, enc.read_bytes())
+        with warnings.catch_warnings(record=True) as caught_dec:
+            warnings.simplefilter("always")
+            basefwx.MediaCipher.decrypt_media(str(enc), "pw", output=str(dec))
+        self.assertTrue(any("no-archive payload" in str(w.message) for w in caught_dec))
+        self.assertTrue(dec.exists())
+        opened = basefwx.Image.open(dec)
+        self.assertGreater(opened.size[0], 0)
+        self.assertGreater(opened.size[1], 0)
+        opened.close()
+
+    def test_jmg_image_no_archive_master_only_roundtrip(self):
+        if ml_kem_768 is None:
+            self.skipTest("pqcrypto unavailable")
+        public_key, private_key = ml_kem_768.generate_keypair()
+        basefwx._set_master_pubkey_override(public_key)
+        basefwx._load_master_pq_private = staticmethod(lambda: private_key)
+        src = self._make_png_fixture("jmg_master.png")
+        enc = self.tmp_path / "jmg_master_enc.png"
+        dec = self.tmp_path / "jmg_master_dec.png"
+        basefwx.MediaCipher.encrypt_media(
+            str(src),
+            "",
+            output=str(enc),
+            keep_input=True,
+            archive_original=False,
+        )
+        basefwx.MediaCipher.decrypt_media(str(enc), "", output=str(dec))
+        self.assertTrue(dec.exists())
+        self.assertGreater(dec.stat().st_size, 0)
+
+    def test_unscramble_video_bitrate_regression(self):
+        src = self.tmp_path / "video_stub.mp4"
+        src.write_bytes(b"stub")
+        out = self.tmp_path / "video_stub_out.mp4"
+        info = {
+            "bit_rate": 1_000_000,
+            "duration": 1.0,
+            "video": {"width": 2, "height": 2, "fps": 30.0, "bit_rate": 900_000},
+            "audio": None,
+        }
+
+        def fake_ffmpeg(cmd, fallback_cmd=None):
+            target = Path(cmd[-1])
+            target.parent.mkdir(parents=True, exist_ok=True)
+            if target.suffix == ".raw":
+                if "video" in target.name:
+                    target.write_bytes(os.urandom(2 * 2 * 3 * 2))
+                else:
+                    target.write_bytes(b"")
+            else:
+                target.write_bytes(b"ok")
+
+        with patch.object(basefwx.MediaCipher, "_probe_streams", return_value=info), \
+                patch.object(basefwx.MediaCipher, "_run_ffmpeg", side_effect=fake_ffmpeg), \
+                patch.object(basefwx.MediaCipher, "_probe_metadata", return_value={}), \
+                patch.object(basefwx.MediaCipher, "_decrypt_metadata", return_value=[]):
+            basefwx.MediaCipher._unscramble_video(
+                src,
+                out,
+                "pw",
+                base_key=b"\x11" * 32,
+            )
+        self.assertTrue(out.exists())
+
+    def test_live_stream_roundtrip_chunked(self):
+        payload = os.urandom(96 * 1024)
+        chunks = [payload[i:i + 4096] for i in range(0, len(payload), 4096)]
+        encrypted_frames = basefwx.fwxAES_live_encrypt_chunks(chunks, "pw", use_master=False)
+        encrypted_stream = b"".join(encrypted_frames)
+        random.seed(1337)
+        parts: list[bytes] = []
+        cursor = 0
+        while cursor < len(encrypted_stream):
+            span = random.randint(1, 307)
+            parts.append(encrypted_stream[cursor:cursor + span])
+            cursor += span
+        recovered = b"".join(basefwx.fwxAES_live_decrypt_chunks(parts, "pw", use_master=False))
+        self.assertEqual(recovered, payload)
+
+    def test_live_stream_tamper_rejected(self):
+        payload = os.urandom(12 * 1024)
+        enc = basefwx.LiveEncryptor("pw", use_master=False)
+        blob = enc.start() + enc.update(payload) + enc.finalize()
+        frames = self._split_live_frames(blob)
+        self.assertGreaterEqual(len(frames), 3)
+        tampered_data_frame = bytearray(frames[1])
+        tampered_data_frame[-1] ^= 0x01
+        tampered_blob = frames[0] + bytes(tampered_data_frame) + frames[2]
+        dec = basefwx.LiveDecryptor("pw", use_master=False)
+        with self.assertRaises(ValueError):
+            dec.update(tampered_blob)
+
+    def test_live_stream_sequence_replay_rejected(self):
+        enc = basefwx.LiveEncryptor("pw", use_master=False)
+        blob = enc.start()
+        blob += enc.update(b"A" * 1024)
+        blob += enc.update(b"B" * 1024)
+        blob += enc.finalize()
+        frames = self._split_live_frames(blob)
+        replay_blob = frames[0] + frames[1] + frames[1] + frames[2] + frames[3]
+        dec = basefwx.LiveDecryptor("pw", use_master=False)
+        with self.assertRaises(ValueError):
+            dec.update(replay_blob)
+
+    def test_live_stream_file_wrappers(self):
+        payload = os.urandom(32 * 1024)
+        source = io.BytesIO(payload)
+        encrypted = io.BytesIO()
+        basefwx.fwxAES_live_encrypt_stream(source, encrypted, "pw", use_master=False, chunk_size=1024)
+        encrypted.seek(0)
+        recovered = io.BytesIO()
+        basefwx.fwxAES_live_decrypt_stream(encrypted, recovered, "pw", use_master=False, chunk_size=777)
+        self.assertEqual(recovered.getvalue(), payload)
 
     def test_aes_roundtrip_without_master(self):
         original = "Symmetric data"

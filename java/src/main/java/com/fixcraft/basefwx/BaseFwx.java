@@ -1621,7 +1621,17 @@ public final class BaseFwx {
                                       boolean useMaster,
                                       boolean keepMeta,
                                       boolean keepInput) {
-        return MediaCipher.encryptMedia(input, output, password, keepMeta, keepInput, useMaster);
+        return jmgEncryptFile(input, output, password, useMaster, keepMeta, keepInput, true);
+    }
+
+    public static File jmgEncryptFile(File input,
+                                      File output,
+                                      String password,
+                                      boolean useMaster,
+                                      boolean keepMeta,
+                                      boolean keepInput,
+                                      boolean archiveOriginal) {
+        return MediaCipher.encryptMedia(input, output, password, keepMeta, keepInput, useMaster, archiveOriginal);
     }
 
     public static File jmgDecryptFile(File input,
@@ -1629,6 +1639,56 @@ public final class BaseFwx {
                                       String password,
                                       boolean useMaster) {
         return MediaCipher.decryptMedia(input, output, password, useMaster);
+    }
+
+    public static LiveCipher.LiveEncryptor newLiveEncryptor(String password, boolean useMaster) {
+        return new LiveCipher.LiveEncryptor(password, useMaster);
+    }
+
+    public static LiveCipher.LiveDecryptor newLiveDecryptor(String password, boolean useMaster) {
+        return new LiveCipher.LiveDecryptor(password, useMaster);
+    }
+
+    public static List<byte[]> fwxAesLiveEncryptChunks(Iterable<byte[]> chunks,
+                                                       String password,
+                                                       boolean useMaster) {
+        return LiveCipher.fwxAesLiveEncryptChunks(chunks, password, useMaster);
+    }
+
+    public static List<byte[]> fwxAesLiveDecryptChunks(Iterable<byte[]> chunks,
+                                                       String password,
+                                                       boolean useMaster) {
+        return LiveCipher.fwxAesLiveDecryptChunks(chunks, password, useMaster);
+    }
+
+    public static long fwxAesLiveEncryptStream(InputStream source,
+                                               OutputStream dest,
+                                               String password,
+                                               boolean useMaster) {
+        return LiveCipher.fwxAesLiveEncryptStream(source, dest, password, useMaster, Constants.STREAM_CHUNK_SIZE);
+    }
+
+    public static long fwxAesLiveEncryptStream(InputStream source,
+                                               OutputStream dest,
+                                               String password,
+                                               boolean useMaster,
+                                               int chunkSize) {
+        return LiveCipher.fwxAesLiveEncryptStream(source, dest, password, useMaster, chunkSize);
+    }
+
+    public static long fwxAesLiveDecryptStream(InputStream source,
+                                               OutputStream dest,
+                                               String password,
+                                               boolean useMaster) {
+        return LiveCipher.fwxAesLiveDecryptStream(source, dest, password, useMaster, Constants.STREAM_CHUNK_SIZE);
+    }
+
+    public static long fwxAesLiveDecryptStream(InputStream source,
+                                               OutputStream dest,
+                                               String password,
+                                               boolean useMaster,
+                                               int chunkSize) {
+        return LiveCipher.fwxAesLiveDecryptStream(source, dest, password, useMaster, chunkSize);
     }
 
     public static void fwxAesEncryptFile(File input, File output, String password, boolean useMaster) {

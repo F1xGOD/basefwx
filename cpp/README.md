@@ -45,6 +45,12 @@ cmake --build cpp/build
 ./cpp/build/basefwx_cpp pb512file-dec secret.bin.fwx -p "pw"
 ./cpp/build/basefwx_cpp fwxaes-enc secret.bin -p "pw" --normalize
 ./cpp/build/basefwx_cpp fwxaes-dec secret.bin.fwx -p "pw"
+./cpp/build/basefwx_cpp fwxaes-live-enc secret.bin -p "pw" --out secret.live.fwx
+./cpp/build/basefwx_cpp fwxaes-live-dec secret.live.fwx -p "pw" --out secret.bin
+ffmpeg -hide_banner -loglevel error -i input.m4a -vn -ac 1 -ar 16000 -f wav pipe:1 \
+  | ./cpp/build/basefwx_cpp fwxaes-live-enc - -p "pw" --no-master --out - \
+  | ./cpp/build/basefwx_cpp fwxaes-live-dec - -p "pw" --no-master --out - > restored.wav
+./cpp/build/basefwx_cpp jmge input.mp4 -p "pw" --no-archive --out out-small.mp4
 ```
 
 This prints the length-prefixed sections and attempts to decode metadata if the
@@ -66,6 +72,12 @@ payload matches the AES file format.
 - `kFAe` / `kFAd` are kept as compatibility aliases but are deprecated.
 - The fwxaes raw format uses the FWX1 header and PBKDF2 + AES-256-GCM, with an
   optional normalize wrapper that hides bytes in zero-width Unicode markers.
+- Live streaming uses packetized `LIVE` v1 AES-GCM frames and is cross-compatible
+  with Python/Java `fwxAES_live_*` APIs.
+- `fwxaes-live-enc` / `fwxaes-live-dec` accept `-` for stdin/stdout so they can be
+  used in piping workflows (for example with `ffmpeg` audio/video streams).
+- `jmge --no-archive` stores a key-only `JMG1` trailer (smaller output, but decode
+  may not be byte-identical to the source media).
 - Current C++ codec support covers b256/b512/pb512 plus b512file/pb512file
   (AES-heavy) and fwxaes. Argon2id + ML-KEM-768 support is enabled when the
   dependencies are installed.
@@ -100,4 +112,13 @@ std::string text = basefwx::N10Decode(digits);
 // kFM API (auto media/audio encode + strict decode)
 std::string carrier = basefwx::Kfme("input.mp3", "input.png", true);
 std::string restored = basefwx::Kfmd("input.png", "restored.mp3");
+
+// jMG API
+std::string media = basefwx::Jmge("input.mp4", "password", "out.mp4", false, false, true);
+std::string media_small = basefwx::Jmge("input.mp4", "password", "out-small.mp4", false, false, false);
+
+// Live stream API
+std::ifstream src("input.bin", std::ios::binary);
+std::ofstream live("out.live", std::ios::binary);
+basefwx::FwxAesLiveEncryptStream(src, live, "password", false);
 ```

@@ -522,7 +522,7 @@ class BaseFWXUnitTests(unittest.TestCase):
                 plan = basefwx.MediaCipher._build_hw_execution_plan(
                     "jMGe",
                     stream_type="video",
-                    frame_bytes=1024 * 1024,
+                    frame_bytes=16 * 1024 * 1024,
                     allow_pixel_gpu=True,
                     prefer_cpu_decode=True,
                 )

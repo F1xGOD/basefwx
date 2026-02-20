@@ -54,9 +54,22 @@ public final class Constants {
     public static final byte[] IMAGECIPHER_STREAM_INFO = "basefwx.imagecipher.stream.v1".getBytes(StandardCharsets.US_ASCII);
     public static final byte[] IMAGECIPHER_ARCHIVE_INFO = "basefwx.imagecipher.archive.v1".getBytes(StandardCharsets.US_ASCII);
     public static final byte[] IMAGECIPHER_TRAILER_MAGIC = "JMG0".getBytes(StandardCharsets.US_ASCII);
+    public static final byte[] IMAGECIPHER_KEY_TRAILER_MAGIC = "JMG1".getBytes(StandardCharsets.US_ASCII);
     public static final byte[] JMG_KEY_MAGIC = "JMGK".getBytes(StandardCharsets.US_ASCII);
     public static final int JMG_KEY_VERSION = 1;
     public static final byte[] JMG_MASK_INFO = "basefwx.jmg.mask.v1".getBytes(StandardCharsets.US_ASCII);
+
+    public static final byte[] LIVE_FRAME_MAGIC = "LIVE".getBytes(StandardCharsets.US_ASCII);
+    public static final int LIVE_FRAME_VERSION = 1;
+    public static final int LIVE_FRAME_TYPE_HEADER = 1;
+    public static final int LIVE_FRAME_TYPE_DATA = 2;
+    public static final int LIVE_FRAME_TYPE_FIN = 3;
+    public static final int LIVE_KEYMODE_PBKDF2 = 1;
+    public static final int LIVE_KEYMODE_WRAP = 2;
+    public static final int LIVE_NONCE_PREFIX_LEN = 4;
+    public static final int LIVE_FRAME_HEADER_LEN = 18; // magic(4) + ver(1) + type(1) + seq(8) + body_len(4)
+    public static final int LIVE_HEADER_FIXED_LEN = 12; // key_mode(1) + salt_len(1) + nonce_len(1) + reserved(1) + key_hdr_len(4) + iters(4)
+    public static final int LIVE_MAX_BODY = 1_073_741_824;
 
     public static final String FWX_DELIM = "\u001f\u001e";
     public static final String FWX_HEAVY_DELIM = "\u001f\u001d";

@@ -41,7 +41,7 @@ Image encryption without trailers is deterministic and reuses keystream material
 
 ## Live Stream Framing
 
-Python provides a packetized live AEAD stream API (`LiveEncryptor`/`LiveDecryptor` and `fwxAES_live_*` wrappers):
+Python, Java, and C++ provide a packetized live AEAD stream API (`LiveEncryptor`/`LiveDecryptor` and `fwxAES_live_*` wrappers):
 
 - Each frame is authenticated (AES-GCM) with per-frame nonces derived from a nonce prefix + sequence number.
 - AAD binds frame type, sequence number, and plaintext length to prevent structural tampering.

@@ -5,6 +5,7 @@ This module provides a Java implementation of the core BaseFWX codecs so it can 
 ## Scope (v1)
 - fwxAES raw encrypt/decrypt (PBKDF2 mode + EC master-key wrap)
 - fwxAES streaming encrypt/decrypt (InputStream/OutputStream)
+- fwxAES live packet streaming encrypt/decrypt (frame-based, transport-agnostic)
 - jMG media cipher for images, video, and audio (ffmpeg/ffprobe required)
 - b512 / pb512 encode/decode (PBKDF2 + optional EC master-key wrap)
 - b256 encode/decode
@@ -47,6 +48,8 @@ java -jar build/libs/basefwx-java.jar fwxaes-enc <in> <out> <password>
 java -jar build/libs/basefwx-java.jar fwxaes-dec <in> <out> <password>
 java -jar build/libs/basefwx-java.jar fwxaes-stream-enc <in> <out> <password>
 java -jar build/libs/basefwx-java.jar fwxaes-stream-dec <in> <out> <password>
+java -jar build/libs/basefwx-java.jar fwxaes-live-enc <in> <out> <password>
+java -jar build/libs/basefwx-java.jar fwxaes-live-dec <in> <out> <password>
 
 java -jar build/libs/basefwx-java.jar b512-enc <text> <password>
 java -jar build/libs/basefwx-java.jar b512-dec <text> <password>
@@ -60,7 +63,7 @@ java -jar build/libs/basefwx-java.jar b512file-dec <in> <out> <password>
 java -jar build/libs/basefwx-java.jar pb512file-enc <in> <out> <password>
 java -jar build/libs/basefwx-java.jar pb512file-dec <in> <out> <password>
 
-java -jar build/libs/basefwx-java.jar jmge <in> <out> <password>
+java -jar build/libs/basefwx-java.jar jmge <in> <out> <password> [--no-archive]
 java -jar build/libs/basefwx-java.jar jmgd <in> <out> <password>
 
 java -jar build/libs/basefwx-java.jar b64-enc <text>
@@ -91,7 +94,8 @@ java -jar build/libs/basefwx-java.jar b256-dec <text>
 
 Notes:
 - jMG requires `ffmpeg` and `ffprobe` on PATH.
-- `jmge` supports `--keep-meta` and `--keep-input` for metadata/input preservation.
+- `jmge` supports `--keep-meta`, `--keep-input`, and `--no-archive`.
+- `--no-archive` stores only key material (`JMG1`) instead of a full embedded original payload (`JMG0`), so decode output may not be byte-identical.
 - `kFMd` only decodes BaseFWX carriers and refuses plain WAV/PNG/MP3/M4A inputs.
 
 ## Cross-compat notes
@@ -116,6 +120,27 @@ String text = BaseFwx.n10Decode(digits);
 // kFM API (auto media/audio encode + strict decode)
 File carrier = BaseFwx.kFMe(new File("input.mp3"), new File("input.png"), true);
 File restored = BaseFwx.kFMd(new File("input.png"), new File("restored.mp3"));
+
+// jMG API (archive_original defaults to true)
+BaseFwx.jmgEncryptFile(
+    new File("input.mp4"),
+    new File("out.mp4"),
+    "password",
+    true,
+    false,
+    true,
+    false // archiveOriginal=false (no-archive mode)
+);
+
+// Live stream API (transport-agnostic framing)
+try (InputStream src = new FileInputStream("in.bin");
+     OutputStream enc = new FileOutputStream("out.live")) {
+    BaseFwx.fwxAesLiveEncryptStream(src, enc, "password", true);
+}
+try (InputStream enc = new FileInputStream("out.live");
+     OutputStream dec = new FileOutputStream("out.bin")) {
+    BaseFwx.fwxAesLiveDecryptStream(enc, dec, "password", true);
+}
 ```
 
 ### Master key paths (EC)

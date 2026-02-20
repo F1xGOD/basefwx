@@ -440,12 +440,16 @@ void WriteImage(const std::filesystem::path& path,
     }
 }
 
-void AppendTrailer(const std::filesystem::path& path, const Bytes& blob) {
+void AppendBalancedTrailer(const std::filesystem::path& path,
+                          std::string_view magic,
+                          const Bytes& blob) {
+    if (blob.empty()) {
+        return;
+    }
     std::ofstream out(path, std::ios::binary | std::ios::app);
     if (!out) {
         throw std::runtime_error("Failed to append trailer: " + path.string());
     }
-    const auto magic = basefwx::constants::kImageCipherTrailerMagic;
     out.write(magic.data(), static_cast<std::streamsize>(magic.size()));
     std::array<std::uint8_t, 4> len_bytes{};
     std::uint32_t len = static_cast<std::uint32_t>(blob.size());
@@ -464,6 +468,10 @@ void AppendTrailer(const std::filesystem::path& path, const Bytes& blob) {
     if (!out) {
         throw std::runtime_error("Failed to append trailer: " + path.string());
     }
+}
+
+void AppendTrailer(const std::filesystem::path& path, const Bytes& blob) {
+    AppendBalancedTrailer(path, basefwx::constants::kImageCipherTrailerMagic, blob);
 }
 
 void AppendTrailerStream(const std::filesystem::path& output_path,
@@ -794,8 +802,10 @@ bool TryDecryptTrailerStream(const std::filesystem::path& input_path,
     }
 }
 
-bool ExtractTrailer(const Bytes& data, Bytes& payload, Bytes& trailer) {
-    auto magic = basefwx::constants::kImageCipherTrailerMagic;
+bool ExtractTrailerWithMagic(const Bytes& data,
+                             std::string_view magic,
+                             Bytes& payload,
+                             Bytes& trailer) {
     const std::size_t magic_len = magic.size();
     const std::size_t footer_len = magic_len + 4;
     payload = data;
@@ -853,6 +863,150 @@ bool ExtractTrailer(const Bytes& data, Bytes& payload, Bytes& trailer) {
         return true;
     }
     return false;
+}
+
+bool ExtractTrailer(const Bytes& data, Bytes& payload, Bytes& trailer) {
+    return ExtractTrailerWithMagic(data, basefwx::constants::kImageCipherTrailerMagic, payload, trailer);
+}
+
+struct TrailerInfo {
+    std::uint64_t blob_start = 0;
+    std::uint64_t blob_len = 0;
+    std::uint64_t trailer_start = 0;
+};
+
+std::optional<TrailerInfo> ExtractBalancedTrailerInfo(const std::filesystem::path& path,
+                                                      std::string_view magic) {
+    const std::size_t footer_len = magic.size() + 4;
+    std::error_code ec;
+    std::uint64_t size = std::filesystem::file_size(path, ec);
+    if (ec || size < footer_len) {
+        return std::nullopt;
+    }
+    auto read_u32 = [](const std::uint8_t* ptr) -> std::uint32_t {
+        return (static_cast<std::uint32_t>(ptr[0]) << 24)
+            | (static_cast<std::uint32_t>(ptr[1]) << 16)
+            | (static_cast<std::uint32_t>(ptr[2]) << 8)
+            | static_cast<std::uint32_t>(ptr[3]);
+    };
+    std::ifstream input(path, std::ios::binary);
+    if (!input) {
+        return std::nullopt;
+    }
+    input.seekg(static_cast<std::streamoff>(size - footer_len), std::ios::beg);
+    std::vector<std::uint8_t> footer(footer_len);
+    input.read(reinterpret_cast<char*>(footer.data()), static_cast<std::streamsize>(footer.size()));
+    if (input.gcount() != static_cast<std::streamsize>(footer.size())) {
+        return std::nullopt;
+    }
+    if (std::memcmp(footer.data(), magic.data(), magic.size()) != 0) {
+        return std::nullopt;
+    }
+    std::uint64_t blob_len = read_u32(footer.data() + magic.size());
+    std::uint64_t trailer_start = size - footer_len - blob_len - footer_len;
+    if (trailer_start > size) {
+        return std::nullopt;
+    }
+    input.seekg(static_cast<std::streamoff>(trailer_start), std::ios::beg);
+    std::vector<std::uint8_t> header(footer_len);
+    input.read(reinterpret_cast<char*>(header.data()), static_cast<std::streamsize>(header.size()));
+    if (input.gcount() != static_cast<std::streamsize>(header.size())) {
+        return std::nullopt;
+    }
+    if (std::memcmp(header.data(), magic.data(), magic.size()) != 0) {
+        return std::nullopt;
+    }
+    if (read_u32(header.data() + magic.size()) != blob_len) {
+        return std::nullopt;
+    }
+    TrailerInfo info;
+    info.blob_start = trailer_start + footer_len;
+    info.blob_len = blob_len;
+    info.trailer_start = trailer_start;
+    return info;
+}
+
+struct JmgResolvedKeys {
+    std::size_t header_len = 0;
+    Bytes material;
+    Bytes base_key;
+    Bytes archive_key;
+};
+
+std::optional<JmgResolvedKeys> ResolveJmgHeaderKeys(const Bytes& blob, const std::string& password) {
+    std::size_t header_len = 0;
+    Bytes user_blob;
+    Bytes master_blob;
+    if (!ParseJmgHeader(blob, header_len, user_blob, master_blob)) {
+        return std::nullopt;
+    }
+    basefwx::pb512::KdfOptions kdf;
+    Bytes mask_key = basefwx::keywrap::RecoverMaskKey(
+        user_blob,
+        master_blob,
+        password,
+        true,
+        basefwx::constants::kJmgMaskInfo,
+        basefwx::constants::kMaskAadJmg,
+        kdf
+    );
+    JmgResolvedKeys keys;
+    keys.header_len = header_len;
+    keys.material = DeriveMaterialFromMask(mask_key);
+    keys.base_key = BaseKeyFromMask(mask_key);
+    keys.archive_key = ArchiveKeyFromMask(mask_key);
+    return keys;
+}
+
+Bytes LoadBaseKeyFromKeyTrailerFile(const std::filesystem::path& input_path, const std::string& password) {
+    auto trailer_info = ExtractBalancedTrailerInfo(input_path, basefwx::constants::kImageCipherKeyTrailerMagic);
+    if (!trailer_info.has_value() || trailer_info->blob_len == 0) {
+        return {};
+    }
+    if (trailer_info->blob_len > static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max())) {
+        throw std::runtime_error("JMG key trailer too large");
+    }
+    Bytes blob(static_cast<std::size_t>(trailer_info->blob_len));
+    std::ifstream input(input_path, std::ios::binary);
+    if (!input) {
+        throw std::runtime_error("Failed to open key trailer stream");
+    }
+    input.seekg(static_cast<std::streamoff>(trailer_info->blob_start), std::ios::beg);
+    input.read(reinterpret_cast<char*>(blob.data()), static_cast<std::streamsize>(blob.size()));
+    if (input.gcount() != static_cast<std::streamsize>(blob.size())) {
+        throw std::runtime_error("Failed to read JMG key trailer");
+    }
+    auto keys = ResolveJmgHeaderKeys(blob, password);
+    if (!keys.has_value()) {
+        throw std::runtime_error("Invalid JMG key trailer");
+    }
+    if (keys->header_len != blob.size()) {
+        throw std::runtime_error("Invalid JMG key trailer payload");
+    }
+    return keys->base_key;
+}
+
+Bytes LoadBaseKeyFromKeyTrailerBytes(const Bytes& file_bytes, const std::string& password) {
+    Bytes payload;
+    Bytes trailer;
+    if (!ExtractTrailerWithMagic(file_bytes, basefwx::constants::kImageCipherKeyTrailerMagic, payload, trailer)
+        || trailer.empty()) {
+        return {};
+    }
+    auto keys = ResolveJmgHeaderKeys(trailer, password);
+    if (!keys.has_value()) {
+        throw std::runtime_error("Invalid JMG key trailer");
+    }
+    if (keys->header_len != trailer.size()) {
+        throw std::runtime_error("Invalid JMG key trailer payload");
+    }
+    return keys->base_key;
+}
+
+void WarnNoArchivePayload() {
+    std::cerr
+        << "WARNING: jMG no-archive payload detected; restored media may not be byte-identical to the original input."
+        << std::endl;
 }
 
 void BuildMaskAndShuffle(const std::string& password,
@@ -972,7 +1126,8 @@ void ApplyMask(std::vector<std::uint8_t>& data, const std::vector<std::uint8_t>&
 std::string EncryptImageInv(const std::string& path,
                             const std::string& password,
                             const std::string& output,
-                            bool include_trailer) {
+                            bool include_trailer,
+                            bool archive_original) {
     std::string resolved = basefwx::ResolvePassword(password);
     if (!include_trailer) {
         if (basefwx::env::Get("BASEFWX_ALLOW_INSECURE_IMAGE_OBFUSCATION") != "1") {
@@ -1035,12 +1190,16 @@ std::string EncryptImageInv(const std::string& path,
     WriteImage(output_path, image, fmt);
 
     if (include_trailer) {
-        Bytes aad(basefwx::constants::kImageCipherArchiveInfo.begin(),
-                  basefwx::constants::kImageCipherArchiveInfo.end());
-        Bytes archive_blob = basefwx::crypto::AeadEncrypt(archive_key, original_bytes, aad);
-        Bytes trailer = trailer_header;
-        trailer.insert(trailer.end(), archive_blob.begin(), archive_blob.end());
-        AppendTrailer(output_path, trailer);
+        if (archive_original) {
+            Bytes aad(basefwx::constants::kImageCipherArchiveInfo.begin(),
+                      basefwx::constants::kImageCipherArchiveInfo.end());
+            Bytes archive_blob = basefwx::crypto::AeadEncrypt(archive_key, original_bytes, aad);
+            Bytes trailer = trailer_header;
+            trailer.insert(trailer.end(), archive_blob.begin(), archive_blob.end());
+            AppendBalancedTrailer(output_path, basefwx::constants::kImageCipherTrailerMagic, trailer);
+        } else {
+            AppendBalancedTrailer(output_path, basefwx::constants::kImageCipherKeyTrailerMagic, trailer_header);
+        }
     }
 
     return output_path.string();
@@ -1058,55 +1217,76 @@ std::string DecryptImageInv(const std::string& path,
     Bytes file_bytes = ReadFileBytes(input_path);
     Bytes payload;
     Bytes trailer;
-    bool has_trailer = ExtractTrailer(file_bytes, payload, trailer);
+    Bytes key_trailer;
+    bool has_archive_trailer = ExtractTrailerWithMagic(
+        file_bytes,
+        basefwx::constants::kImageCipherTrailerMagic,
+        payload,
+        trailer
+    );
+    bool has_key_trailer = false;
+    if (!has_archive_trailer) {
+        has_key_trailer = ExtractTrailerWithMagic(
+            file_bytes,
+            basefwx::constants::kImageCipherKeyTrailerMagic,
+            payload,
+            key_trailer
+        );
+    }
 
     std::filesystem::path output_path = output.empty() ? input_path : NormalizePath(output);
-    if (has_trailer && !trailer.empty()) {
-        bool header_seen = false;
+    Bytes material_override;
+    bool have_material_override = false;
+    if (has_archive_trailer && !trailer.empty()) {
+        bool header_detected = false;
         try {
-            std::size_t header_len = 0;
-            Bytes user_blob;
-            Bytes master_blob;
             std::size_t magic_len = basefwx::constants::kJmgKeyMagic.size();
             if (trailer.size() >= magic_len
                 && std::memcmp(trailer.data(), basefwx::constants::kJmgKeyMagic.data(), magic_len) == 0) {
-                header_seen = true;
+                header_detected = true;
             }
-            bool header_parsed = ParseJmgHeader(trailer, header_len, user_blob, master_blob);
-            if (header_seen && !header_parsed) {
+            std::optional<JmgResolvedKeys> header_keys = ResolveJmgHeaderKeys(trailer, resolved);
+            if (header_detected && !header_keys.has_value()) {
                 throw std::runtime_error("Invalid JMG key header");
             }
-            header_seen = header_seen || header_parsed;
             Bytes archive_key;
-            if (header_seen) {
-                basefwx::pb512::KdfOptions kdf;
-                Bytes mask_key = basefwx::keywrap::RecoverMaskKey(
-                    user_blob,
-                    master_blob,
-                    resolved,
-                    true,
-                    basefwx::constants::kJmgMaskInfo,
-                    basefwx::constants::kMaskAadJmg,
-                    kdf
+            Bytes archive_blob;
+            if (header_keys.has_value()) {
+                archive_key = header_keys->archive_key;
+                material_override = header_keys->material;
+                have_material_override = true;
+                archive_blob.assign(
+                    trailer.begin() + static_cast<std::ptrdiff_t>(header_keys->header_len),
+                    trailer.end()
                 );
-                archive_key = ArchiveKeyFromMask(mask_key);
             } else {
                 Bytes material = DeriveMaterial(resolved);
                 archive_key = basefwx::crypto::HkdfSha256(material, basefwx::constants::kImageCipherArchiveInfo, 32);
+                archive_blob = trailer;
             }
             Bytes aad(basefwx::constants::kImageCipherArchiveInfo.begin(),
                       basefwx::constants::kImageCipherArchiveInfo.end());
-            Bytes archive_blob = header_seen
-                ? Bytes(trailer.begin() + static_cast<std::ptrdiff_t>(header_len), trailer.end())
-                : trailer;
             Bytes original_bytes = basefwx::crypto::AeadDecrypt(archive_key, archive_blob, aad);
             WriteFileBytes(output_path, original_bytes);
             return output_path.string();
         } catch (const std::exception&) {
-            if (header_seen) {
+            if (header_detected) {
                 throw;
             }
         }
+    }
+
+    if (has_key_trailer && !key_trailer.empty()) {
+        auto header_keys = ResolveJmgHeaderKeys(key_trailer, resolved);
+        if (!header_keys.has_value()) {
+            throw std::runtime_error("Invalid JMG key trailer");
+        }
+        if (header_keys->header_len != key_trailer.size()) {
+            throw std::runtime_error("Invalid JMG key trailer payload");
+        }
+        material_override = header_keys->material;
+        have_material_override = true;
+        WarnNoArchivePayload();
     }
 
     ImageBuffer image = DecodeImage(payload.empty() ? file_bytes : payload, input_path);
@@ -1115,7 +1295,16 @@ std::string DecryptImageInv(const std::string& path,
     std::vector<std::uint8_t> rotations;
     std::vector<std::size_t> perm;
     Bytes material_unused;
-    BuildMaskAndShuffle(resolved, num_pixels, image.channels, mask, rotations, perm, material_unused);
+    BuildMaskAndShuffle(
+        resolved,
+        num_pixels,
+        image.channels,
+        mask,
+        rotations,
+        perm,
+        material_unused,
+        have_material_override ? &material_override : nullptr
+    );
 
     ApplyPermutation(image.pixels, num_pixels, image.channels, perm, true);
     ApplyRotation(image.pixels, num_pixels, image.channels, rotations, true);
@@ -2478,7 +2667,8 @@ std::string EncryptMedia(const std::string& path,
                          const std::string& password,
                          const std::string& output,
                          bool keep_meta,
-                         bool keep_input) {
+                         bool keep_input,
+                         bool archive_original) {
     std::string resolved = basefwx::ResolvePassword(password);
     std::filesystem::path input_path = NormalizePath(path);
     if (!std::filesystem::exists(input_path)) {
@@ -2490,7 +2680,13 @@ std::string EncryptMedia(const std::string& path,
         temp_output = output_path.parent_path() / (output_path.stem().string() + "._jmg" + output_path.extension().string());
     }
     if (IsImageExt(input_path)) {
-        std::string result = EncryptImageInv(input_path.string(), resolved, temp_output.string(), true);
+        std::string result = EncryptImageInv(
+            input_path.string(),
+            resolved,
+            temp_output.string(),
+            true,
+            archive_original
+        );
         std::filesystem::path result_path = NormalizePath(result);
         if (result_path != temp_output) {
             temp_output = result_path;
@@ -2564,7 +2760,10 @@ std::string EncryptMedia(const std::string& path,
             kdf
         );
         Bytes base_key = BaseKeyFromMask(mask_key.mask_key);
-        Bytes archive_key = ArchiveKeyFromMask(mask_key.mask_key);
+        Bytes archive_key;
+        if (archive_original) {
+            archive_key = ArchiveKeyFromMask(mask_key.mask_key);
+        }
         Bytes trailer_header = BuildJmgHeader(mask_key.user_blob, mask_key.master_blob);
         if (video.valid) {
             auto video_cb = [&](double frac) {
@@ -2651,10 +2850,14 @@ std::string EncryptMedia(const std::string& path,
         } else {
             RunCommand(cmd);
         }
-        auto archive_cb = [&](double frac) {
-            progress.Update(0.95 + 0.04 * frac, "archive", input_path);
-        };
-        AppendTrailerStream(temp_output, input_path, resolved, archive_cb, archive_key, trailer_header);
+        if (archive_original) {
+            auto archive_cb = [&](double frac) {
+                progress.Update(0.95 + 0.04 * frac, "archive", input_path);
+            };
+            AppendTrailerStream(temp_output, input_path, resolved, archive_cb, archive_key, trailer_header);
+        } else {
+            AppendBalancedTrailer(temp_output, basefwx::constants::kImageCipherKeyTrailerMagic, trailer_header);
+        }
         progress.Update(1.0, "done", input_path);
     } catch (...) {
         std::error_code ec;
@@ -2707,13 +2910,32 @@ std::string DecryptMedia(const std::string& path,
         progress.Finish();
         return temp_output.string();
     }
+
+    Bytes base_key_override = LoadBaseKeyFromKeyTrailerFile(input_path, resolved);
+    bool has_base_key_override = !base_key_override.empty();
+    if (has_base_key_override) {
+        WarnNoArchivePayload();
+    }
+
     std::uint64_t fallback_limit = 64ull * 1024ull * 1024ull;
     auto file_size = std::filesystem::file_size(input_path, ec);
     if (!ec && file_size <= fallback_limit) {
         Bytes file_bytes = ReadFileBytes(input_path);
+        if (!has_base_key_override) {
+            base_key_override = LoadBaseKeyFromKeyTrailerBytes(file_bytes, resolved);
+            has_base_key_override = !base_key_override.empty();
+            if (has_base_key_override) {
+                WarnNoArchivePayload();
+            }
+        }
         Bytes payload;
         Bytes trailer;
-        bool has_trailer = ExtractTrailer(file_bytes, payload, trailer);
+        bool has_trailer = ExtractTrailerWithMagic(
+            file_bytes,
+            basefwx::constants::kImageCipherTrailerMagic,
+            payload,
+            trailer
+        );
         if (has_trailer && !trailer.empty()) {
             bool header_seen = false;
             try {
@@ -2827,7 +3049,7 @@ std::string DecryptMedia(const std::string& path,
             });
         }
 
-        Bytes base_key = BaseKeyFromPassword(resolved);
+        Bytes base_key = has_base_key_override ? base_key_override : BaseKeyFromPassword(resolved);
         if (video.valid) {
             auto video_cb = [&](double frac) {
                 progress.Update(0.25 + 0.45 * frac, "unjmg-video", input_path);

@@ -887,6 +887,37 @@ std::string QuoteShellArg(const std::string& value) {
 #endif
 }
 
+std::string KfmFfmpegHwAccelArgs() {
+    std::string mode;
+    if (const char* raw = std::getenv("BASEFWX_HWACCEL")) {
+        mode = raw;
+    }
+    for (char& ch : mode) {
+        ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+    }
+    if (mode.empty()) {
+        if (const char* visible = std::getenv("NVIDIA_VISIBLE_DEVICES")) {
+            std::string v = visible;
+            for (char& ch : v) {
+                ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+            }
+            if (!v.empty() && v != "none" && v != "void") {
+                mode = "nvidia";
+            }
+        }
+    }
+    if (mode == "cuda" || mode == "nvenc" || mode == "nvidia") {
+        return " -hwaccel cuda";
+    }
+    if (mode == "qsv" || mode == "intel") {
+        return " -hwaccel qsv";
+    }
+    if (mode == "vaapi") {
+        return " -hwaccel vaapi";
+    }
+    return "";
+}
+
 std::filesystem::path MakeKfmTempPath(const std::string& suffix) {
     const auto now = static_cast<std::uint64_t>(
         std::chrono::high_resolution_clock::now().time_since_epoch().count());
@@ -915,7 +946,9 @@ std::vector<std::uint8_t> DecodeAudioViaFfmpeg(const std::filesystem::path& path
     } cleanup{temp_raw};
 
     std::string command = QuoteShellArg(ffmpeg_bin)
-        + " -v error -y -i " + QuoteShellArg(path.string())
+        + " -v error -y"
+        + KfmFfmpegHwAccelArgs()
+        + " -i " + QuoteShellArg(path.string())
         + " -f s16le -ac 1 -ar " + std::to_string(kKfmAudioRate)
         + " " + QuoteShellArg(temp_raw.string());
 #ifdef _WIN32

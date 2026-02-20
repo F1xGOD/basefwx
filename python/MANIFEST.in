@@ -1,5 +1,6 @@
 include pyproject.toml
 include setup.py
+include README.md
 
 recursive-include basefwx *.py
 recursive-exclude basefwx __pycache__ *.pyc *.pyo

@@ -241,6 +241,7 @@ class basefwx:
     IMAGECIPHER_STREAM_INFO = b'basefwx.imagecipher.stream.v1'
     IMAGECIPHER_ARCHIVE_INFO = b'basefwx.imagecipher.archive.v1'
     IMAGECIPHER_TRAILER_MAGIC = b'JMG0'
+    IMAGECIPHER_KEY_TRAILER_MAGIC = b'JMG1'
     JMG_KEY_MAGIC = b'JMGK'
     JMG_KEY_VERSION = 1
     JMG_MASK_INFO = b'basefwx.jmg.mask.v1'
@@ -365,6 +366,16 @@ class basefwx:
     FWXAES_AAD = b"fwxAES"
     FWXAES_MASK_INFO = b"basefwx.fwxaes.mask.v1"
     FWXAES_KEY_INFO = b"basefwx.fwxaes.key.v1"
+    LIVE_FRAME_MAGIC = b"LIVE"
+    LIVE_FRAME_VERSION = 1
+    LIVE_FRAME_TYPE_HEADER = 1
+    LIVE_FRAME_TYPE_DATA = 2
+    LIVE_FRAME_TYPE_FIN = 3
+    LIVE_KEYMODE_PBKDF2 = 1
+    LIVE_KEYMODE_WRAP = 2
+    LIVE_NONCE_PREFIX_LEN = 4
+    LIVE_HEADER_STRUCT = struct.Struct(">BBBBII")
+    LIVE_FRAME_HEADER_STRUCT = struct.Struct(">4sBBQI")
     NORMALIZE_THRESHOLD = 8 * 1024
     ZW0 = "\u200b"
     ZW1 = "\u200c"
@@ -1916,7 +1927,7 @@ class basefwx:
         blob: bytes,
         password: "basefwx.typing.Union[str, bytes, bytearray, memoryview]",
         use_master: bool
-    ) -> "basefwx.typing.Optional[tuple[int, bytes, bytes]]":
+    ) -> "basefwx.typing.Optional[tuple[int, bytes, bytes, bytes]]":
         header_min = len(basefwx.JMG_KEY_MAGIC) + 1 + 4
         if len(blob) < header_min or not blob.startswith(basefwx.JMG_KEY_MAGIC):
             return None
@@ -1937,17 +1948,18 @@ class basefwx:
             mask_info=basefwx.JMG_MASK_INFO,
             aad=basefwx.JMG_MASK_AAD
         )
-        base_key = basefwx._hkdf_sha256(
+        material = basefwx._hkdf_sha256(
             mask_key,
             info=basefwx.IMAGECIPHER_STREAM_INFO,
-            length=32
+            length=64
         )
+        base_key = material[:32]
         archive_key = basefwx._hkdf_sha256(
             mask_key,
             info=basefwx.IMAGECIPHER_ARCHIVE_INFO,
             length=32
         )
-        return header_len, base_key, archive_key
+        return header_len, base_key, archive_key, material
 
     @staticmethod
     def _jmg_prepare_keys(
@@ -1974,6 +1986,81 @@ class basefwx:
             length=32
         )
         return base_key, archive_key, material, header
+
+    @staticmethod
+    def _append_balanced_trailer(
+        output_path: "basefwx.pathlib.Path",
+        magic: bytes,
+        payload: bytes
+    ) -> None:
+        if not payload:
+            return
+        if len(payload) > 0xFFFFFFFF:
+            raise ValueError("Trailer payload too large")
+        with open(output_path, "ab") as handle:
+            handle.write(magic)
+            handle.write(len(payload).to_bytes(4, "big"))
+            handle.write(payload)
+            handle.write(magic)
+            handle.write(len(payload).to_bytes(4, "big"))
+
+    @staticmethod
+    def _extract_balanced_trailer_from_bytes(
+        file_bytes: bytes,
+        magic: bytes
+    ) -> "basefwx.typing.Optional[tuple[bytes, bytes]]":
+        footer_len = len(magic) + 4
+        if len(file_bytes) < footer_len:
+            return None
+        footer_idx = len(file_bytes) - footer_len
+        if file_bytes[footer_idx:footer_idx + len(magic)] == magic:
+            length = int.from_bytes(file_bytes[footer_idx + len(magic):footer_idx + footer_len], "big")
+            trailer_start = len(file_bytes) - footer_len - length - footer_len
+            if trailer_start >= 0:
+                header = file_bytes[trailer_start:trailer_start + footer_len]
+                if header[:len(magic)] == magic and int.from_bytes(header[len(magic):], "big") == length:
+                    blob_start = trailer_start + footer_len
+                    blob_end = blob_start + length
+                    return file_bytes[blob_start:blob_end], file_bytes[:trailer_start]
+        marker_idx = file_bytes.rfind(magic)
+        if marker_idx < 0 or marker_idx + len(magic) + 4 > len(file_bytes):
+            return None
+        length = int.from_bytes(file_bytes[marker_idx + len(magic):marker_idx + len(magic) + 4], "big")
+        blob_start = marker_idx + len(magic) + 4
+        blob_end = blob_start + length
+        if blob_end != len(file_bytes):
+            return None
+        return file_bytes[blob_start:blob_end], file_bytes[:marker_idx]
+
+    @staticmethod
+    def _extract_balanced_trailer_info(
+        path: "basefwx.pathlib.Path",
+        magic: bytes
+    ) -> "basefwx.typing.Optional[tuple[int, int, int]]":
+        footer_len = len(magic) + 4
+        try:
+            size = path.stat().st_size
+        except Exception:
+            return None
+        if size < footer_len:
+            return None
+        with open(path, "rb") as handle:
+            handle.seek(size - footer_len)
+            footer = handle.read(footer_len)
+            if len(footer) != footer_len or footer[:len(magic)] != magic:
+                return None
+            blob_len = int.from_bytes(footer[len(magic):], "big")
+            trailer_start = size - footer_len - blob_len - footer_len
+            if trailer_start < 0:
+                return None
+            handle.seek(trailer_start)
+            header = handle.read(footer_len)
+            if len(header) != footer_len or header[:len(magic)] != magic:
+                return None
+            if int.from_bytes(header[len(magic):], "big") != blob_len:
+                return None
+            blob_start = trailer_start + footer_len
+            return blob_start, blob_len, trailer_start
 
     @staticmethod
     def _kem_shared_to_digits(shared: bytes, digits: int = 16) -> str:
@@ -2992,6 +3079,372 @@ class basefwx:
                 pass
 
     @staticmethod
+    def _live_nonce(prefix: bytes, sequence: int) -> bytes:
+        if len(prefix) != basefwx.LIVE_NONCE_PREFIX_LEN:
+            raise ValueError("Invalid live nonce prefix")
+        if sequence < 0 or sequence >= (1 << 64):
+            raise ValueError("Live stream sequence overflow")
+        return prefix + sequence.to_bytes(8, "big")
+
+    @staticmethod
+    def _live_aad(frame_type: int, sequence: int, plain_len: int) -> bytes:
+        if plain_len < 0:
+            raise ValueError("Invalid live frame length")
+        return basefwx.struct.pack(
+            ">4sBBQI",
+            basefwx.LIVE_FRAME_MAGIC,
+            basefwx.LIVE_FRAME_VERSION,
+            frame_type & 0xFF,
+            sequence & ((1 << 64) - 1),
+            plain_len & 0xFFFFFFFF
+        )
+
+    @staticmethod
+    def _live_pack_frame(frame_type: int, sequence: int, body: bytes) -> bytes:
+        if len(body) > 0xFFFFFFFF:
+            raise ValueError("Live frame body too large")
+        header = basefwx.LIVE_FRAME_HEADER_STRUCT.pack(
+            basefwx.LIVE_FRAME_MAGIC,
+            basefwx.LIVE_FRAME_VERSION,
+            frame_type & 0xFF,
+            sequence & ((1 << 64) - 1),
+            len(body)
+        )
+        return header + body
+
+    class LiveEncryptor:
+        """Packetized live AEAD encryptor for arbitrary byte streams."""
+
+        def __init__(
+            self,
+            password: "basefwx.typing.Union[str, bytes, bytearray, memoryview]",
+            *,
+            use_master: bool = True
+        ) -> None:
+            self._password = basefwx._resolve_password(password, use_master=use_master)
+            self._use_master = bool(use_master)
+            self._started = False
+            self._finalized = False
+            self._sequence = 1
+            self._key = b""
+            self._nonce_prefix = b""
+
+        def _init_session(self) -> bytes:
+            pw = basefwx._coerce_password_bytes(self._password)
+            key_mode = basefwx.LIVE_KEYMODE_PBKDF2
+            key_header = b""
+            salt = b""
+            iters = 0
+            mask_key = b""
+            use_wrap = False
+            if self._use_master:
+                try:
+                    mask_key, user_blob, master_blob, use_master_effective = basefwx._prepare_mask_key(
+                        self._password,
+                        self._use_master,
+                        mask_info=basefwx.FWXAES_MASK_INFO,
+                        require_password=False,
+                        aad=basefwx.FWXAES_AAD
+                    )
+                    use_wrap = use_master_effective or not pw
+                    if use_wrap:
+                        key_header = basefwx._pack_length_prefixed(user_blob, master_blob)
+                except Exception:
+                    if not pw:
+                        raise
+                    use_wrap = False
+            if use_wrap:
+                key_mode = basefwx.LIVE_KEYMODE_WRAP
+                self._key = basefwx._hkdf_sha256(
+                    mask_key,
+                    info=basefwx.FWXAES_KEY_INFO,
+                    length=basefwx.FWXAES_KEY_LEN
+                )
+            else:
+                if not pw:
+                    raise ValueError("Password required when live stream master key wrapping is disabled")
+                salt = basefwx.os.urandom(basefwx.FWXAES_SALT_LEN)
+                iters = basefwx._fwxaes_iterations(pw)
+                self._key = basefwx._kdf_pbkdf2_raw(pw, salt, iters)
+            self._nonce_prefix = basefwx.os.urandom(basefwx.LIVE_NONCE_PREFIX_LEN)
+            body = basefwx.LIVE_HEADER_STRUCT.pack(
+                key_mode,
+                len(salt),
+                len(self._nonce_prefix),
+                0,
+                len(key_header),
+                iters
+            ) + key_header + salt + self._nonce_prefix
+            return basefwx._live_pack_frame(basefwx.LIVE_FRAME_TYPE_HEADER, 0, body)
+
+        def start(self) -> bytes:
+            if self._started:
+                raise ValueError("LiveEncryptor already started")
+            if self._finalized:
+                raise ValueError("LiveEncryptor already finalized")
+            frame = self._init_session()
+            self._started = True
+            return frame
+
+        def update(self, chunk: bytes) -> bytes:
+            if not self._started:
+                raise ValueError("LiveEncryptor.start() must be called before update()")
+            if self._finalized:
+                raise ValueError("LiveEncryptor already finalized")
+            payload = bytes(chunk)
+            if not payload:
+                return b""
+            nonce = basefwx._live_nonce(self._nonce_prefix, self._sequence)
+            aad = basefwx._live_aad(basefwx.LIVE_FRAME_TYPE_DATA, self._sequence, len(payload))
+            ct = basefwx.AESGCM(self._key).encrypt(nonce, payload, aad)
+            body = basefwx.struct.pack(">I", len(payload)) + ct
+            frame = basefwx._live_pack_frame(basefwx.LIVE_FRAME_TYPE_DATA, self._sequence, body)
+            self._sequence += 1
+            return frame
+
+        def finalize(self) -> bytes:
+            if not self._started:
+                raise ValueError("LiveEncryptor.start() must be called before finalize()")
+            if self._finalized:
+                raise ValueError("LiveEncryptor already finalized")
+            nonce = basefwx._live_nonce(self._nonce_prefix, self._sequence)
+            aad = basefwx._live_aad(basefwx.LIVE_FRAME_TYPE_FIN, self._sequence, 0)
+            fin_blob = basefwx.AESGCM(self._key).encrypt(nonce, b"", aad)
+            frame = basefwx._live_pack_frame(basefwx.LIVE_FRAME_TYPE_FIN, self._sequence, fin_blob)
+            self._sequence += 1
+            self._finalized = True
+            return frame
+
+    class LiveDecryptor:
+        """Incremental parser/decryptor for packetized live AEAD frames."""
+
+        def __init__(
+            self,
+            password: "basefwx.typing.Union[str, bytes, bytearray, memoryview]",
+            *,
+            use_master: bool = True
+        ) -> None:
+            self._password = basefwx._resolve_password(password, use_master=use_master)
+            self._use_master = bool(use_master)
+            self._buffer = bytearray()
+            self._started = False
+            self._finished = False
+            self._expected_sequence = 0
+            self._key = b""
+            self._nonce_prefix = b""
+
+        def _parse_header(self, body: bytes) -> None:
+            fixed_len = basefwx.LIVE_HEADER_STRUCT.size
+            if len(body) < fixed_len:
+                raise ValueError("Truncated live stream header")
+            key_mode, salt_len, nonce_len, _reserved, key_header_len, iters = basefwx.LIVE_HEADER_STRUCT.unpack(
+                body[:fixed_len]
+            )
+            offset = fixed_len
+            need = fixed_len + key_header_len + salt_len + nonce_len
+            if len(body) != need:
+                raise ValueError("Invalid live stream header length")
+            key_header = body[offset:offset + key_header_len]
+            offset += key_header_len
+            salt = body[offset:offset + salt_len]
+            offset += salt_len
+            nonce_prefix = body[offset:offset + nonce_len]
+            if len(nonce_prefix) != basefwx.LIVE_NONCE_PREFIX_LEN:
+                raise ValueError("Invalid live stream nonce prefix")
+            if key_mode == basefwx.LIVE_KEYMODE_WRAP:
+                if not key_header:
+                    raise ValueError("Missing live key header")
+                user_blob, master_blob = basefwx._unpack_length_prefixed(key_header, 2)
+                mask_key = basefwx._recover_mask_key_from_blob(
+                    user_blob,
+                    master_blob,
+                    self._password,
+                    self._use_master,
+                    mask_info=basefwx.FWXAES_MASK_INFO,
+                    aad=basefwx.FWXAES_AAD
+                )
+                key = basefwx._hkdf_sha256(mask_key, info=basefwx.FWXAES_KEY_INFO, length=basefwx.FWXAES_KEY_LEN)
+            elif key_mode == basefwx.LIVE_KEYMODE_PBKDF2:
+                pw = basefwx._coerce_password_bytes(self._password)
+                if not pw:
+                    raise ValueError("Password required for PBKDF2 live stream")
+                if not salt:
+                    raise ValueError("Missing live stream PBKDF2 salt")
+                if iters <= 0:
+                    raise ValueError("Invalid live stream PBKDF2 iterations")
+                key = basefwx._kdf_pbkdf2_raw(pw, salt, iters)
+            else:
+                raise ValueError("Unsupported live key mode")
+            self._key = key
+            self._nonce_prefix = nonce_prefix
+            self._started = True
+            self._expected_sequence = 1
+
+        def _decrypt_data_frame(self, sequence: int, body: bytes) -> bytes:
+            if len(body) < 4 + basefwx.AEAD_TAG_LEN:
+                raise ValueError("Truncated live data frame")
+            plain_len = basefwx.struct.unpack(">I", body[:4])[0]
+            ct = body[4:]
+            nonce = basefwx._live_nonce(self._nonce_prefix, sequence)
+            aad = basefwx._live_aad(basefwx.LIVE_FRAME_TYPE_DATA, sequence, plain_len)
+            try:
+                plain = basefwx.AESGCM(self._key).decrypt(nonce, ct, aad)
+            except Exception as exc:
+                raise ValueError("Live frame authentication failed") from exc
+            if len(plain) != plain_len:
+                raise ValueError("Live frame length mismatch")
+            return plain
+
+        def _decrypt_fin_frame(self, sequence: int, body: bytes) -> None:
+            if len(body) < basefwx.AEAD_TAG_LEN:
+                raise ValueError("Truncated live FIN frame")
+            nonce = basefwx._live_nonce(self._nonce_prefix, sequence)
+            aad = basefwx._live_aad(basefwx.LIVE_FRAME_TYPE_FIN, sequence, 0)
+            try:
+                plain = basefwx.AESGCM(self._key).decrypt(nonce, body, aad)
+            except Exception as exc:
+                raise ValueError("Live FIN authentication failed") from exc
+            if plain:
+                raise ValueError("Live FIN frame carries unexpected payload")
+            self._finished = True
+
+        def update(self, data: bytes) -> "list[bytes]":
+            if self._finished and data:
+                raise ValueError("Live stream already finalized")
+            if data:
+                self._buffer.extend(data)
+            outputs: "list[bytes]" = []
+            header_len = basefwx.LIVE_FRAME_HEADER_STRUCT.size
+            while len(self._buffer) >= header_len:
+                magic, version, frame_type, sequence, body_len = basefwx.LIVE_FRAME_HEADER_STRUCT.unpack(
+                    bytes(self._buffer[:header_len])
+                )
+                if magic != basefwx.LIVE_FRAME_MAGIC:
+                    raise ValueError("Invalid live frame magic")
+                if version != basefwx.LIVE_FRAME_VERSION:
+                    raise ValueError("Unsupported live frame version")
+                if body_len > basefwx.KFM_MAX_PAYLOAD:
+                    raise ValueError("Live frame too large")
+                frame_len = header_len + body_len
+                if len(self._buffer) < frame_len:
+                    break
+                body = bytes(self._buffer[header_len:frame_len])
+                del self._buffer[:frame_len]
+                if not self._started:
+                    if frame_type != basefwx.LIVE_FRAME_TYPE_HEADER or sequence != 0:
+                        raise ValueError("Live stream must start with header frame")
+                    self._parse_header(body)
+                    continue
+                if sequence != self._expected_sequence:
+                    raise ValueError("Live frame sequence mismatch")
+                if frame_type == basefwx.LIVE_FRAME_TYPE_DATA:
+                    plain = self._decrypt_data_frame(sequence, body)
+                    if plain:
+                        outputs.append(plain)
+                elif frame_type == basefwx.LIVE_FRAME_TYPE_FIN:
+                    self._decrypt_fin_frame(sequence, body)
+                else:
+                    raise ValueError("Unexpected live frame type")
+                self._expected_sequence += 1
+            return outputs
+
+        def finalize(self) -> None:
+            if not self._started:
+                raise ValueError("Missing live stream header frame")
+            if not self._finished:
+                raise ValueError("Live stream ended without FIN frame")
+            if self._buffer:
+                raise ValueError("Trailing bytes after live stream FIN")
+
+    @staticmethod
+    def fwxAES_live_encrypt_chunks(
+        chunks: "basefwx.typing.Iterable[bytes]",
+        password: "basefwx.typing.Union[str, bytes, bytearray, memoryview]",
+        *,
+        use_master: bool = True
+    ) -> "list[bytes]":
+        encryptor = basefwx.LiveEncryptor(password, use_master=use_master)
+        out: "list[bytes]" = [encryptor.start()]
+        for chunk in chunks:
+            frame = encryptor.update(bytes(chunk))
+            if frame:
+                out.append(frame)
+        out.append(encryptor.finalize())
+        return out
+
+    @staticmethod
+    def fwxAES_live_decrypt_chunks(
+        chunks: "basefwx.typing.Iterable[bytes]",
+        password: "basefwx.typing.Union[str, bytes, bytearray, memoryview]",
+        *,
+        use_master: bool = True
+    ) -> "list[bytes]":
+        decryptor = basefwx.LiveDecryptor(password, use_master=use_master)
+        out: "list[bytes]" = []
+        for chunk in chunks:
+            out.extend(decryptor.update(bytes(chunk)))
+        decryptor.finalize()
+        return out
+
+    @staticmethod
+    def fwxAES_live_encrypt_stream(
+        source,
+        dest,
+        password: "basefwx.typing.Union[str, bytes, bytearray, memoryview]",
+        *,
+        use_master: bool = True,
+        chunk_size: int | None = None
+    ) -> int:
+        encryptor = basefwx.LiveEncryptor(password, use_master=use_master)
+        total = 0
+        first = encryptor.start()
+        dest.write(first)
+        total += len(first)
+        chunk = basefwx.STREAM_CHUNK_SIZE if chunk_size is None else max(1, int(chunk_size))
+        while True:
+            buf = source.read(chunk)
+            if not buf:
+                break
+            frame = encryptor.update(buf)
+            if frame:
+                dest.write(frame)
+                total += len(frame)
+        final = encryptor.finalize()
+        dest.write(final)
+        total += len(final)
+        try:
+            dest.flush()
+        except Exception:
+            pass
+        return total
+
+    @staticmethod
+    def fwxAES_live_decrypt_stream(
+        source,
+        dest,
+        password: "basefwx.typing.Union[str, bytes, bytearray, memoryview]",
+        *,
+        use_master: bool = True,
+        chunk_size: int | None = None
+    ) -> int:
+        decryptor = basefwx.LiveDecryptor(password, use_master=use_master)
+        chunk = basefwx.STREAM_CHUNK_SIZE if chunk_size is None else max(1, int(chunk_size))
+        written = 0
+        while True:
+            buf = source.read(chunk)
+            if not buf:
+                break
+            for plain in decryptor.update(buf):
+                dest.write(plain)
+                written += len(plain)
+        decryptor.finalize()
+        try:
+            dest.flush()
+        except Exception:
+            pass
+        return written
+
+    @staticmethod
     def _bytes_to_bits(data: bytes) -> str:
         return "".join(f"{b:08b}" for b in data)
 
@@ -3075,6 +3528,7 @@ class basefwx:
         compress: bool = False,
         ignore_media: bool = False,
         keep_meta: bool = False,
+        archive_original: bool = True,
         keep_input: bool = False
     ) -> str:
         password = basefwx._resolve_password(password, use_master=use_master)
@@ -3118,6 +3572,7 @@ class basefwx:
                         password,
                         output=output,
                         keep_meta=keep_meta,
+                        archive_original=archive_original,
                         keep_input=keep_input
                     )
             except Exception:
@@ -5220,7 +5675,8 @@ class basefwx:
             password: "basefwx.typing.Union[str, bytes, bytearray, memoryview]",
             output: str | None = None,
             *,
-            include_trailer: bool = True
+            include_trailer: bool = True,
+            archive_original: bool = True
         ) -> str:
             path_obj = basefwx.pathlib.Path(path)
             basefwx._ensure_existing_file(path_obj)
@@ -5276,14 +5732,16 @@ class basefwx:
             image.close()
             basefwx.os.replace(temp_path, output_path)
             if include_trailer:
-                archive_blob = basefwx._aead_encrypt(archive_key, original_bytes, basefwx.IMAGECIPHER_ARCHIVE_INFO)
-                trailer_blob = trailer_header + archive_blob
-                with open(output_path, 'ab') as handle:
-                    handle.write(basefwx.IMAGECIPHER_TRAILER_MAGIC)
-                    handle.write(len(trailer_blob).to_bytes(4, 'big'))
-                    handle.write(trailer_blob)
-                    handle.write(basefwx.IMAGECIPHER_TRAILER_MAGIC)
-                    handle.write(len(trailer_blob).to_bytes(4, 'big'))
+                if archive_original:
+                    archive_blob = basefwx._aead_encrypt(archive_key, original_bytes, basefwx.IMAGECIPHER_ARCHIVE_INFO)
+                    trailer_blob = trailer_header + archive_blob
+                    basefwx._append_balanced_trailer(output_path, basefwx.IMAGECIPHER_TRAILER_MAGIC, trailer_blob)
+                else:
+                    basefwx._append_balanced_trailer(
+                        output_path,
+                        basefwx.IMAGECIPHER_KEY_TRAILER_MAGIC,
+                        trailer_header
+                    )
 
             basefwx._del('mask')
             basefwx._del('rotations')
@@ -5310,31 +5768,19 @@ class basefwx:
             password = basefwx._resolve_password(password, use_master=True)
             output_path = basefwx.pathlib.Path(output) if output else basefwx.ImageCipher._default_decrypted_path(path_obj)
             file_bytes = path_obj.read_bytes()
-            magic = basefwx.IMAGECIPHER_TRAILER_MAGIC
             orig_blob = None
+            key_blob = None
             payload_bytes = file_bytes
-            footer_len = len(magic) + 4
-            if len(file_bytes) >= footer_len:
-                footer_idx = len(file_bytes) - footer_len
-                if file_bytes[footer_idx:footer_idx + len(magic)] == magic:
-                    length = int.from_bytes(file_bytes[footer_idx + len(magic):footer_idx + footer_len], 'big')
-                    trailer_start = len(file_bytes) - footer_len - length - footer_len
-                    if trailer_start >= 0:
-                        header = file_bytes[trailer_start:trailer_start + footer_len]
-                        if header[:len(magic)] == magic and int.from_bytes(header[len(magic):], 'big') == length:
-                            blob_start = trailer_start + footer_len
-                            blob_end = blob_start + length
-                            orig_blob = file_bytes[blob_start:blob_end]
-                            payload_bytes = file_bytes[:trailer_start]
-            if orig_blob is None:
-                marker_idx = file_bytes.rfind(magic)
-                if marker_idx >= 0 and marker_idx + len(magic) + 4 <= len(file_bytes):
-                    length = int.from_bytes(file_bytes[marker_idx + len(magic):marker_idx + len(magic) + 4], 'big')
-                    blob_start = marker_idx + len(magic) + 4
-                    blob_end = blob_start + length
-                    if blob_end == len(file_bytes):
-                        orig_blob = file_bytes[blob_start:blob_end]
-                        payload_bytes = file_bytes[:marker_idx]
+            trailer = basefwx._extract_balanced_trailer_from_bytes(file_bytes, basefwx.IMAGECIPHER_TRAILER_MAGIC)
+            if trailer is not None:
+                orig_blob, payload_bytes = trailer
+            else:
+                key_trailer = basefwx._extract_balanced_trailer_from_bytes(
+                    file_bytes,
+                    basefwx.IMAGECIPHER_KEY_TRAILER_MAGIC
+                )
+                if key_trailer is not None:
+                    key_blob, payload_bytes = key_trailer
             arr, mode, fmt = basefwx.ImageCipher._load_image(path_obj, payload_bytes)
             shape = arr.shape
             if arr.ndim == 2:
@@ -5344,10 +5790,11 @@ class basefwx:
                 channels = shape[2]
                 flat = arr.reshape(-1, channels).astype(basefwx.np.uint8, copy=True)
             num_pixels = flat.shape[0]
+            material_override = None
             if orig_blob is not None:
                 header = basefwx._jmg_parse_key_header(orig_blob, password, use_master=True)
                 if header is not None:
-                    header_len, _, archive_key = header
+                    header_len, _, archive_key, material_override = header
                     archive_blob = orig_blob[header_len:]
                 else:
                     if not password:
@@ -5375,7 +5822,24 @@ class basefwx:
                     return str(output_path)
                 except Exception:
                     pass
-            mask, rotations, perm, material = basefwx.ImageCipher._image_primitives(password, num_pixels, channels)
+            if key_blob is not None:
+                header = basefwx._jmg_parse_key_header(key_blob, password, use_master=True)
+                if header is None:
+                    raise ValueError("Invalid JMG key trailer")
+                header_len, _, _, material_override = header
+                if header_len != len(key_blob):
+                    raise ValueError("Invalid JMG key trailer payload")
+                _warnings_module.warn(
+                    "jMG no-archive payload detected; restored media may not be byte-identical "
+                    "to the original input.",
+                    UserWarning
+                )
+            mask, rotations, perm, material = basefwx.ImageCipher._image_primitives(
+                password,
+                num_pixels,
+                channels,
+                material=material_override
+            )
             inv_perm = basefwx.np.empty_like(perm)
             inv_perm[perm] = basefwx.np.arange(num_pixels, dtype=perm.dtype)
             flat = flat.take(inv_perm, axis=0)
@@ -6293,12 +6757,7 @@ class basefwx:
                 archive_key = basefwx._hkdf_sha256(material, info=basefwx.IMAGECIPHER_ARCHIVE_INFO, length=32)
             archive_blob = basefwx._aead_encrypt(archive_key, original_bytes, basefwx.IMAGECIPHER_ARCHIVE_INFO)
             trailer_blob = key_header + archive_blob
-            with open(output_path, "ab") as handle:
-                handle.write(basefwx.IMAGECIPHER_TRAILER_MAGIC)
-                handle.write(len(trailer_blob).to_bytes(4, "big"))
-                handle.write(trailer_blob)
-                handle.write(basefwx.IMAGECIPHER_TRAILER_MAGIC)
-                handle.write(len(trailer_blob).to_bytes(4, "big"))
+            basefwx._append_balanced_trailer(output_path, basefwx.IMAGECIPHER_TRAILER_MAGIC, trailer_blob)
 
         @staticmethod
         def _append_trailer_stream(
@@ -6344,43 +6803,69 @@ class basefwx:
                 out_handle.write(blob_len.to_bytes(4, "big"))
 
         @staticmethod
+        def _append_key_trailer(
+            output_path: "basefwx.pathlib.Path",
+            key_header: bytes
+        ) -> None:
+            if not key_header:
+                raise ValueError("Missing JMG key header for no-archive mode")
+            basefwx._append_balanced_trailer(output_path, basefwx.IMAGECIPHER_KEY_TRAILER_MAGIC, key_header)
+
+        @staticmethod
+        def _load_base_key_from_key_trailer(
+            path: "basefwx.pathlib.Path",
+            password: "basefwx.typing.Union[str, bytes, bytearray, memoryview]"
+        ) -> "basefwx.typing.Optional[bytes]":
+            info = basefwx._extract_balanced_trailer_info(path, basefwx.IMAGECIPHER_KEY_TRAILER_MAGIC)
+            if info is None:
+                return None
+            blob_start, blob_len, _ = info
+            with open(path, "rb") as handle:
+                handle.seek(blob_start)
+                blob = handle.read(blob_len)
+            header = basefwx._jmg_parse_key_header(blob, password, use_master=True)
+            if header is None:
+                raise ValueError("Invalid JMG key trailer")
+            header_len, base_key, _, _ = header
+            if header_len != len(blob):
+                raise ValueError("Invalid JMG key trailer payload")
+            return base_key
+
+        @staticmethod
+        def _load_base_key_from_key_trailer_bytes(
+            file_bytes: bytes,
+            password: "basefwx.typing.Union[str, bytes, bytearray, memoryview]"
+        ) -> "basefwx.typing.Optional[bytes]":
+            trailer = basefwx._extract_balanced_trailer_from_bytes(
+                file_bytes,
+                basefwx.IMAGECIPHER_KEY_TRAILER_MAGIC
+            )
+            if trailer is None:
+                return None
+            blob, _ = trailer
+            header = basefwx._jmg_parse_key_header(blob, password, use_master=True)
+            if header is None:
+                raise ValueError("Invalid JMG key trailer")
+            header_len, base_key, _, _ = header
+            if header_len != len(blob):
+                raise ValueError("Invalid JMG key trailer payload")
+            return base_key
+
+        @staticmethod
         def _decrypt_trailer(
             file_bytes: bytes,
             password: "basefwx.typing.Union[str, bytes, bytearray, memoryview]"
         ) -> "basefwx.typing.Optional[bytes]":
-            magic = basefwx.IMAGECIPHER_TRAILER_MAGIC
-            footer_len = len(magic) + 4
-            blob = None
-            if len(file_bytes) >= footer_len:
-                footer_idx = len(file_bytes) - footer_len
-                if file_bytes[footer_idx:footer_idx + len(magic)] == magic:
-                    length = int.from_bytes(
-                        file_bytes[footer_idx + len(magic):footer_idx + footer_len],
-                        "big"
-                    )
-                    trailer_start = len(file_bytes) - footer_len - length - footer_len
-                    if trailer_start >= 0:
-                        header = file_bytes[trailer_start:trailer_start + footer_len]
-                        if header[:len(magic)] == magic and int.from_bytes(header[len(magic):], "big") == length:
-                            blob_start = trailer_start + footer_len
-                            blob_end = blob_start + length
-                            blob = file_bytes[blob_start:blob_end]
-            if blob is None:
-                marker_idx = file_bytes.rfind(magic)
-                if marker_idx < 0 or marker_idx + len(magic) + 4 > len(file_bytes):
-                    return None
-                length = int.from_bytes(
-                    file_bytes[marker_idx + len(magic):marker_idx + len(magic) + 4],
-                    "big"
-                )
-                blob_start = marker_idx + len(magic) + 4
-                blob_end = blob_start + length
-                if blob_end != len(file_bytes):
-                    return None
-                blob = file_bytes[blob_start:blob_end]
+            trailer = basefwx._extract_balanced_trailer_from_bytes(
+                file_bytes,
+                basefwx.IMAGECIPHER_TRAILER_MAGIC
+            )
+            if trailer is None:
+                return None
+            blob, _ = trailer
             header = basefwx._jmg_parse_key_header(blob, password, use_master=True)
             if header is not None:
-                header_len, _, archive_key = header
+                header_len, _, archive_key, _ = header
                 archive_blob = blob[header_len:]
             else:
                 material = basefwx.MediaCipher._derive_media_material(password)
@@ -6744,6 +7229,7 @@ class basefwx:
             path: "basefwx.pathlib.Path",
             output_path: "basefwx.pathlib.Path",
             password: "basefwx.typing.Union[str, bytes, bytearray, memoryview]",
+            base_key: "basefwx.typing.Optional[bytes]" = None,
             reporter: "basefwx.typing.Optional[basefwx._ProgressReporter]" = None,
             file_index: int = 0,
             display_path: "basefwx.typing.Optional[basefwx.pathlib.Path]" = None
@@ -6757,6 +7243,7 @@ class basefwx:
             height = int(video.get("height") or 0)
             fps = float(video.get("fps") or 0.0)
             audio = info.get("audio")
+            video_bps, audio_bps = basefwx.MediaCipher._estimate_bitrates(path, info)
 
             if reporter:
                 reporter.update(file_index, 0.05, "probe", display_path)
@@ -6799,7 +7286,8 @@ class basefwx:
                     if reporter:
                         reporter.update(file_index, 0.3, "decode-audio", display_path)
 
-                base_key = basefwx.MediaCipher._derive_base_key(password)
+                if base_key is None:
+                    base_key = basefwx.MediaCipher._derive_base_key(password)
 
                 def video_cb(frac: float) -> None:
                     if reporter:
@@ -6883,6 +7371,7 @@ class basefwx:
             path: "basefwx.pathlib.Path",
             output_path: "basefwx.pathlib.Path",
             password: "basefwx.typing.Union[str, bytes, bytearray, memoryview]",
+            base_key: "basefwx.typing.Optional[bytes]" = None,
             reporter: "basefwx.typing.Optional[basefwx._ProgressReporter]" = None,
             file_index: int = 0,
             display_path: "basefwx.typing.Optional[basefwx.pathlib.Path]" = None
@@ -6916,7 +7405,8 @@ class basefwx:
                 basefwx.MediaCipher._run_ffmpeg(cmd_audio)
                 if reporter:
                     reporter.update(file_index, 0.2, "decode-audio", display_path)
-                base_key = basefwx.MediaCipher._derive_base_key(password)
+                if base_key is None:
+                    base_key = basefwx.MediaCipher._derive_base_key(password)
 
                 def audio_cb(frac: float) -> None:
                     if reporter:
@@ -6965,6 +7455,7 @@ class basefwx:
             output: str | None = None,
             *,
             keep_meta: bool = False,
+            archive_original: bool = True,
             keep_input: bool = False,
             reporter: "basefwx.typing.Optional[basefwx._ProgressReporter]" = None,
             file_index: int = 0,
@@ -6984,14 +7475,22 @@ class basefwx:
             if local_reporter is None and not basefwx._SILENT_MODE:
                 local_reporter = basefwx._ProgressReporter(1)
                 created_reporter = True
+            if not archive_original:
+                _warnings_module.warn(
+                    "jMG archive_original=False omits embedded original payload; "
+                    "decrypted output may not be byte-identical to the input.",
+                    UserWarning
+                )
             try:
-                append_trailer = False
+                append_archive_trailer = False
+                append_key_trailer = False
                 if suffix in basefwx.MediaCipher.IMAGE_EXTS:
                     result = basefwx.ImageCipher.encrypt_image_inv(
                         str(path_obj),
                         password,
                         output=str(temp_output),
-                        include_trailer=True
+                        include_trailer=True,
+                        archive_original=archive_original
                     )
                 else:
                     try:
@@ -7014,7 +7513,10 @@ class basefwx:
                             display_path=display_path
                         )
                         result = str(temp_output)
-                        append_trailer = True
+                        if archive_original:
+                            append_archive_trailer = True
+                        else:
+                            append_key_trailer = True
                     elif info.get("audio"):
                         base_key, archive_key, _, trailer_header = basefwx._jmg_prepare_keys(
                             password,
@@ -7031,7 +7533,10 @@ class basefwx:
                             display_path=display_path
                         )
                         result = str(temp_output)
-                        append_trailer = True
+                        if archive_original:
+                            append_archive_trailer = True
+                        else:
+                            append_key_trailer = True
                     else:
                         fallback_out = output_path if output else path_obj.with_suffix(".fwx")
                         return basefwx.fwxAES_file(
@@ -7046,7 +7551,7 @@ class basefwx:
                 out_path = basefwx._normalize_path(result)
                 if out_path != temp_output:
                     temp_output = out_path
-                if append_trailer:
+                if append_archive_trailer:
                     def trailer_cb(frac: float) -> None:
                         if local_reporter:
                             local_reporter.update(file_index, 0.95 + 0.04 * frac, "archive", display_path)
@@ -7059,6 +7564,8 @@ class basefwx:
                         archive_key=archive_key,
                         key_header=trailer_header
                     )
+                elif append_key_trailer:
+                    basefwx.MediaCipher._append_key_trailer(temp_output, trailer_header)
                 if basefwx._normalize_path(output_path) != basefwx._normalize_path(temp_output):
                     basefwx.os.replace(temp_output, output_path)
                     temp_output = output_path
@@ -7104,6 +7611,21 @@ class basefwx:
                     )
                 else:
                     result = ""
+                    fallback_ok = False
+                    cached_bytes: "basefwx.typing.Optional[bytes]" = None
+                    base_key_from_trailer: "basefwx.typing.Optional[bytes]" = None
+
+                    try:
+                        fallback_ok = path_obj.stat().st_size <= basefwx.MediaCipher.TRAILER_FALLBACK_MAX
+                    except Exception:
+                        fallback_ok = False
+
+                    def _load_cached_bytes() -> bytes:
+                        nonlocal cached_bytes
+                        if cached_bytes is None:
+                            cached_bytes = path_obj.read_bytes()
+                        return cached_bytes
+
                     def trailer_cb(frac: float) -> None:
                         if local_reporter:
                             local_reporter.update(file_index, 0.05 + 0.90 * frac, "archive", display_path)
@@ -7115,19 +7637,24 @@ class basefwx:
                         progress_cb=trailer_cb if local_reporter else None
                     ):
                         result = str(temp_output)
-                    else:
-                        fallback_ok = False
-                        try:
-                            fallback_ok = path_obj.stat().st_size <= basefwx.MediaCipher.TRAILER_FALLBACK_MAX
-                        except Exception:
-                            fallback_ok = False
-                        if fallback_ok:
-                            data = path_obj.read_bytes()
-                            plain = basefwx.MediaCipher._decrypt_trailer(data, password)
-                            if plain is not None:
-                                temp_output.write_bytes(plain)
-                                result = str(temp_output)
+                    elif fallback_ok:
+                        plain = basefwx.MediaCipher._decrypt_trailer(_load_cached_bytes(), password)
+                        if plain is not None:
+                            temp_output.write_bytes(plain)
+                            result = str(temp_output)
                     if not result:
+                        base_key_from_trailer = basefwx.MediaCipher._load_base_key_from_key_trailer(path_obj, password)
+                        if base_key_from_trailer is None and fallback_ok:
+                            base_key_from_trailer = basefwx.MediaCipher._load_base_key_from_key_trailer_bytes(
+                                _load_cached_bytes(),
+                                password
+                            )
+                        if base_key_from_trailer is not None:
+                            _warnings_module.warn(
+                                "jMG no-archive payload detected; restored media may not be byte-identical "
+                                "to the original input.",
+                                UserWarning
+                            )
                         try:
                             info = basefwx.MediaCipher._probe_streams(path_obj)
                         except Exception:
@@ -7137,6 +7664,7 @@ class basefwx:
                                 path_obj,
                                 temp_output,
                                 password,
+                                base_key=base_key_from_trailer,
                                 reporter=local_reporter,
                                 file_index=file_index,
                                 display_path=display_path
@@ -7147,6 +7675,7 @@ class basefwx:
                                 path_obj,
                                 temp_output,
                                 password,
+                                base_key=base_key_from_trailer,
                                 reporter=local_reporter,
                                 file_index=file_index,
                                 display_path=display_path
@@ -8805,6 +9334,12 @@ def cli(argv=None) -> int:
         help="Preserve media metadata (encrypted) when using jMG media mode"
     )
     cryptin.add_argument(
+        "--no-archive",
+        dest="archive_original",
+        action="store_false",
+        help="jMG mode: do not embed full original payload (smaller output, non-byte-identical restore)"
+    )
+    cryptin.add_argument(
         "--keep-input",
         action="store_true",
         help="Do not delete the input after encryption"
@@ -8996,6 +9531,7 @@ def cli(argv=None) -> int:
                         compress=args.compress,
                         ignore_media=args.ignore_media,
                         keep_meta=args.keep_meta,
+                        archive_original=args.archive_original,
                         keep_input=args.keep_input
                     )
                     results[str(raw_path)] = "SUCCESS!"

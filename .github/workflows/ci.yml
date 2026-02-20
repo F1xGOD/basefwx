@@ -64,3 +64,14 @@ jobs:
         run: |
           chmod +x scripts/test_all.sh
           ./scripts/test_all.sh --fast
+
+      - name: Verify live/no-archive tests in CI
+        run: |
+          PY_BIN="./.venv/bin/python"
+          if [ ! -x "$PY_BIN" ]; then
+            PY_BIN="python3"
+          fi
+          "$PY_BIN" -m unittest \
+            python.tests.test_basefwx.BaseFWXUnitTests.test_live_stream_roundtrip_chunked \
+            python.tests.test_basefwx.BaseFWXUnitTests.test_live_stream_tamper_rejected \
+            python.tests.test_basefwx.BaseFWXUnitTests.test_jmg_image_no_archive_roundtrip_valid_image

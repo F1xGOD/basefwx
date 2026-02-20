@@ -1501,6 +1501,30 @@ py_jmg_roundtrip_no_archive() {
     "$PYTHON_BIN" "$PY_HELPER" jmg-roundtrip-no-archive "$input" "$enc" "$dec" "$PW"
 }
 
+py_jmg_roundtrip_gpu_logged() {
+    local input="$1"
+    local enc="$2"
+    local dec="$3"
+    local hwlog="$TMP_DIR/jmg_py_gpu_hw_$(basename "$enc").log"
+    rm -f "$hwlog"
+    log "STEP: python jmg-enc (gpu+hwlog) $input"
+    env BASEFWX_HWACCEL=nvenc BASEFWX_HWACCEL_STRICT=1 \
+        "$PYTHON_BIN" "$PY_HELPER" jmg-roundtrip "$input" "$enc" "$dec" "$PW" >>"$LOG" 2>"$hwlog" || {
+        cat "$hwlog" >>"$LOG"
+        return 1
+    }
+    cat "$hwlog" >>"$LOG"
+    if ! grep -q "\\[basefwx.hw\\].*op=jMGe" "$hwlog"; then
+        log "Missing hardware routing log for jMGe in GPU path"
+        return 1
+    fi
+    if ! grep -q "\\[basefwx.hw\\].*op=jMGd" "$hwlog"; then
+        log "Missing hardware routing log for jMGd in GPU path"
+        return 1
+    fi
+    return 0
+}
+
 pypy_jmg_roundtrip() {
     local input="$1"
     local enc="$2"
@@ -2548,6 +2572,41 @@ def cmd_live_stream_roundtrip(args: list[str]) -> int:
         basefwx_mod.fwxAES_live_decrypt_stream(src, dst, pw, use_master=False)
     return 0
 
+def cmd_live_ffmpeg_roundtrip(args: list[str]) -> int:
+    inp, enc, dec, pw = args
+    if shutil.which("ffmpeg") is None:
+        return 2
+    source_cmd = [
+        "ffmpeg",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-i",
+        inp,
+        "-f",
+        "matroska",
+        "-c",
+        "copy",
+        "-",
+    ]
+    sink_cmd = [
+        "ffmpeg",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-y",
+        "-f",
+        "matroska",
+        "-i",
+        "-",
+        "-c",
+        "copy",
+        dec,
+    ]
+    basefwx_mod.fwxAES_live_encrypt_ffmpeg(source_cmd, enc, pw, use_master=False)
+    basefwx_mod.fwxAES_live_decrypt_ffmpeg(enc, sink_cmd, pw, use_master=False)
+    return 0
+
 def cmd_text_roundtrip(args: list[str]) -> int:
     method, text_path, out_path, pw = args
     text = read_text(text_path)
@@ -2598,7 +2657,7 @@ def cmd_text_hash(args: list[str]) -> int:
 
 def cmd_jmg_roundtrip(args: list[str]) -> int:
     inp, enc, dec, pw = args
-    basefwx.MediaCipher.encrypt_media(inp, pw, output=enc)
+    basefwx.MediaCipher.encrypt_media(inp, pw, output=enc, archive_original=True)
     basefwx.MediaCipher.decrypt_media(enc, pw, output=dec)
     return 0
 
@@ -2610,7 +2669,7 @@ def cmd_jmg_roundtrip_no_archive(args: list[str]) -> int:
 
 def cmd_jmg_enc(args: list[str]) -> int:
     inp, enc, pw = args
-    basefwx.MediaCipher.encrypt_media(inp, pw, output=enc)
+    basefwx.MediaCipher.encrypt_media(inp, pw, output=enc, archive_original=True)
     return 0
 
 def cmd_jmg_dec(args: list[str]) -> int:
@@ -3074,6 +3133,53 @@ def cmd_bench_live(args: list[str]) -> int:
     _bench(warmup, iters, run)
     return 0
 
+def cmd_bench_live_ffmpeg(args: list[str]) -> int:
+    if len(args) < 2:
+        return 2
+    inp, pw = args[:2]
+    if shutil.which("ffmpeg") is None:
+        return 2
+    source = str(Path(inp).resolve())
+    warmup = _warmup_env()
+    iters = _iters_env()
+    with tempfile.TemporaryDirectory(prefix="basefwx-bench-live-ffmpeg-") as tmpdir:
+        tmp = Path(tmpdir)
+        enc = tmp / "bench.live.fwx"
+        dec = tmp / "bench.mkv"
+        def run() -> int:
+            source_cmd = [
+                "ffmpeg",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-i",
+                source,
+                "-f",
+                "matroska",
+                "-c",
+                "copy",
+                "-",
+            ]
+            sink_cmd = [
+                "ffmpeg",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-y",
+                "-f",
+                "matroska",
+                "-i",
+                "-",
+                "-c",
+                "copy",
+                str(dec),
+            ]
+            basefwx.fwxAES_live_encrypt_ffmpeg(source_cmd, str(enc), pw, use_master=False)
+            basefwx.fwxAES_live_decrypt_ffmpeg(str(enc), sink_cmd, pw, use_master=False)
+            return dec.stat().st_size
+        _bench(warmup, iters, run)
+    return 0
+
 def main() -> int:
     if len(sys.argv) < 2:
         return 2
@@ -3091,6 +3197,8 @@ def main() -> int:
         return cmd_fwxaes_stream_roundtrip(args)
     if cmd == "live-stream-roundtrip":
         return cmd_live_stream_roundtrip(args)
+    if cmd == "live-ffmpeg-roundtrip":
+        return cmd_live_ffmpeg_roundtrip(args)
     if cmd == "text-roundtrip":
         return cmd_text_roundtrip(args)
     if cmd == "text-encode":
@@ -3131,6 +3239,8 @@ def main() -> int:
         return cmd_bench_jmg(args)
     if cmd == "bench-live":
         return cmd_bench_live(args)
+    if cmd == "bench-live-ffmpeg":
+        return cmd_bench_live_ffmpeg(args)
     return 2
 
 if __name__ == "__main__":
@@ -3243,6 +3353,28 @@ if [[ "$RUN_PY_TESTS" == "1" ]]; then
     time_cmd "fwxaes_py_live_stream" "$PYTHON_BIN" "$PY_HELPER" live-stream-roundtrip \
         "$fwxaes_py_live_input" "$fwxaes_py_live_enc" "$fwxaes_py_live_dec" "$PW"
     add_verify "$ORIG_DIR/$FWXAES_FILE" "$fwxaes_py_live_dec"
+
+    if (( FFMPEG_AVAILABLE == 1 )); then
+        fwxaes_py_live_ffmpeg_src="$ORIG_DIR/jmg_sample.mp4"
+        if [[ ! -f "$fwxaes_py_live_ffmpeg_src" ]]; then
+            fwxaes_py_live_ffmpeg_src="$ORIG_DIR/jmg_sample.m4a"
+        fi
+        if [[ -f "$fwxaes_py_live_ffmpeg_src" ]]; then
+            fwxaes_py_live_ffmpeg_dir="$WORK_DIR/fwxaes_py_live_ffmpeg_stream"
+            mkdir -p "$fwxaes_py_live_ffmpeg_dir"
+            fwxaes_py_live_ffmpeg_enc="$fwxaes_py_live_ffmpeg_dir/stream.live.fwx"
+            fwxaes_py_live_ffmpeg_dec="$fwxaes_py_live_ffmpeg_dir/decoded.mkv"
+            time_cmd "fwxaes_py_live_ffmpeg_stream" "$PYTHON_BIN" "$PY_HELPER" live-ffmpeg-roundtrip \
+                "$fwxaes_py_live_ffmpeg_src" "$fwxaes_py_live_ffmpeg_enc" "$fwxaes_py_live_ffmpeg_dec" "$PW"
+            if [[ ! -s "$fwxaes_py_live_ffmpeg_dec" ]]; then
+                FAILURES+=("fwxaes_py_live_ffmpeg_stream (decode empty)")
+            elif ! ffprobe -v error -show_streams "$fwxaes_py_live_ffmpeg_dec" >/dev/null 2>&1; then
+                FAILURES+=("fwxaes_py_live_ffmpeg_stream (ffprobe failed)")
+            fi
+        else
+            FAILURES+=("fwxaes_py_live_ffmpeg_stream (missing media fixture)")
+        fi
+    fi
 fi
 
 if [[ "$RUN_CPP_TESTS" == "1" ]]; then
@@ -3714,6 +3846,15 @@ if (( ${#JMG_CASES[@]} > 0 )) && { [[ "$RUN_PY_TESTS" == "1" ]] || [[ "$RUN_PYPY
             time_cmd "jmg_py_noarchive_${tag}" py_jmg_roundtrip_no_archive "$jmg_py_noa_input" "$jmg_py_noa_enc" "$jmg_py_noa_dec"
             if [[ ! -s "$jmg_py_noa_dec" ]]; then
                 FAILURES+=("jmg_py_noarchive_${tag} (decode empty)")
+            fi
+
+            if (( NVIDIA_HWACCEL_AVAILABLE == 1 )) && [[ "$file_name" == *.mp4 || "$file_name" == *.mkv || "$file_name" == *.mov ]]; then
+                jmg_py_gpu_input="$(copy_input "jmg_py_gpu_${tag}" "$file_name")"
+                jmg_py_gpu_enc="$WORK_DIR/jmg_py_gpu_${tag}/enc_${file_name}"
+                jmg_py_gpu_dec="$WORK_DIR/jmg_py_gpu_${tag}/dec_${file_name}"
+                time_cmd "jmg_py_gpu_${tag}" py_jmg_roundtrip_gpu_logged \
+                    "$jmg_py_gpu_input" "$jmg_py_gpu_enc" "$jmg_py_gpu_dec"
+                add_verify "$ORIG_DIR/$file_name" "$jmg_py_gpu_dec"
             fi
         fi
         if [[ "$RUN_PYPY_TESTS" == "1" && "$PYPY_AVAILABLE" == "1" ]]; then
@@ -4619,6 +4760,11 @@ for idx in "${!BENCH_LANGS[@]}"; do
             time_cmd_bench "fwxaes_live_py_total" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_HEAVY" \
                 BASEFWX_BENCH_ITERS="$BENCH_ITERS_HEAVY" \
                 "$PYTHON_BIN" "$PY_HELPER" bench-live "$BENCH_BYTES_FILE" "$PW"
+            if (( FFMPEG_AVAILABLE == 1 )) && [[ -n "$BENCH_LIVE_AUDIO_FILE" && -f "$BENCH_LIVE_AUDIO_FILE" ]]; then
+                time_cmd_bench "fwxaes_live_ffmpeg_py_total" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_FILE" \
+                    BASEFWX_BENCH_ITERS="$BENCH_ITERS_FILE" \
+                    "$PYTHON_BIN" "$PY_HELPER" bench-live-ffmpeg "$BENCH_LIVE_AUDIO_FILE" "$PW"
+            fi
             for method in "${BENCH_TEXT_METHODS[@]}"; do
                 text_path="$(bench_text_for_method "$method")"
                 iters="$(bench_iters_for_method "$method")"

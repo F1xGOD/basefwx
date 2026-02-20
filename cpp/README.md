@@ -76,6 +76,8 @@ payload matches the AES file format.
   with Python/Java `fwxAES_live_*` APIs.
 - `fwxaes-live-enc` / `fwxaes-live-dec` accept `-` for stdin/stdout so they can be
   used in piping workflows (for example with `ffmpeg` audio/video streams).
+- jMG media transcode can use optional FFmpeg hardware acceleration:
+  set `BASEFWX_HWACCEL=nvenc` for NVIDIA (auto-detected fallback to CPU when unavailable).
 - `jmge --no-archive` stores a key-only `JMG1` trailer (smaller output, but decode
   may not be byte-identical to the source media).
 - Current C++ codec support covers b256/b512/pb512 plus b512file/pb512file

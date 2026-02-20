@@ -90,11 +90,24 @@ inline constexpr std::string_view kStreamMagic = "STRMOBF1";
 inline constexpr std::string_view kImageCipherStreamInfo = "basefwx.imagecipher.stream.v1";
 inline constexpr std::string_view kImageCipherArchiveInfo = "basefwx.imagecipher.archive.v1";
 inline constexpr std::string_view kImageCipherTrailerMagic = "JMG0";
+inline constexpr std::string_view kImageCipherKeyTrailerMagic = "JMG1";
 inline constexpr std::string_view kJmgKeyMagic = "JMGK";
 inline constexpr std::uint8_t kJmgKeyVersion = 1;
 inline constexpr std::string_view kJmgMaskInfo = "basefwx.jmg.mask.v1";
 inline constexpr std::string_view kFwxAesMaskInfo = "basefwx.fwxaes.mask.v1";
 inline constexpr std::string_view kFwxAesKeyInfo = "basefwx.fwxaes.key.v1";
+
+inline constexpr std::string_view kLiveFrameMagic = "LIVE";
+inline constexpr std::uint8_t kLiveFrameVersion = 1;
+inline constexpr std::uint8_t kLiveFrameTypeHeader = 1;
+inline constexpr std::uint8_t kLiveFrameTypeData = 2;
+inline constexpr std::uint8_t kLiveFrameTypeFin = 3;
+inline constexpr std::uint8_t kLiveKeyModePbkdf2 = 1;
+inline constexpr std::uint8_t kLiveKeyModeWrap = 2;
+inline constexpr std::size_t kLiveNoncePrefixLen = 4;
+inline constexpr std::size_t kLiveFrameHeaderLen = 18;
+inline constexpr std::size_t kLiveHeaderFixedLen = 12;
+inline constexpr std::size_t kLiveMaxBody = 1u << 30;
 
 inline constexpr std::string_view kB512MaskInfo = "basefwx.b512.mask.v1";
 inline constexpr std::string_view kPb512MaskInfo = "basefwx.pb512.mask.v1";

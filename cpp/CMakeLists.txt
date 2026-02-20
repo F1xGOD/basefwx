@@ -465,6 +465,7 @@ add_library(basefwxcpp
     src/env.cpp
     src/pq.cpp
     src/keywrap.cpp
+    src/livecipher.cpp
     src/obfuscation.cpp
     src/metadata.cpp
     src/filecodec.cpp

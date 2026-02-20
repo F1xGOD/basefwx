@@ -1,12 +1,14 @@
 #pragma once
 
 #include <cstdint>
+#include <iosfwd>
 #include <string>
 #include <vector>
 
 #include "basefwx/constants.hpp"
 #include "basefwx/filecodec.hpp"
 #include "basefwx/fwxaes.hpp"
+#include "basefwx/livecipher.hpp"
 
 namespace basefwx {
 
@@ -55,11 +57,24 @@ std::string Jmge(const std::string& path,
                  const std::string& password,
                  const std::string& output = {},
                  bool keep_meta = false,
-                 bool keep_input = false);
+                 bool keep_input = false,
+                 bool archive_original = true);
 std::string Jmgd(const std::string& path, const std::string& password, const std::string& output = {});
 std::string Kfme(const std::string& path, const std::string& output = {}, bool bw_mode = false);
 std::string Kfmd(const std::string& path, const std::string& output = {}, bool bw_mode = false);
 std::string Kfae(const std::string& path, const std::string& output = {}, bool bw_mode = false);
 std::string Kfad(const std::string& path, const std::string& output = {});
+
+std::uint64_t FwxAesLiveEncryptStream(std::istream& source,
+                                      std::ostream& dest,
+                                      const std::string& password,
+                                      bool use_master = true,
+                                      std::size_t chunk_size = constants::kStreamChunkSize);
+
+std::uint64_t FwxAesLiveDecryptStream(std::istream& source,
+                                      std::ostream& dest,
+                                      const std::string& password,
+                                      bool use_master = true,
+                                      std::size_t chunk_size = constants::kStreamChunkSize);
 
 }  // namespace basefwx

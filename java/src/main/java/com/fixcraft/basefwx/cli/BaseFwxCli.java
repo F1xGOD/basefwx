@@ -320,6 +320,30 @@ public final class BaseFwxCli {
                         throw new RuntimeException("fwxAES stream decrypt failed", exc);
                     }
                     return;
+                case "fwxaes-live-enc":
+                    if (argc < 4) {
+                        usage();
+                        return;
+                    }
+                    try (java.io.FileInputStream inStream = new java.io.FileInputStream(args[1]);
+                         java.io.FileOutputStream outStream = new java.io.FileOutputStream(args[2])) {
+                        BaseFwx.fwxAesLiveEncryptStream(inStream, outStream, args[3], useMaster);
+                    } catch (java.io.IOException exc) {
+                        throw new RuntimeException("fwxAES live encrypt failed", exc);
+                    }
+                    return;
+                case "fwxaes-live-dec":
+                    if (argc < 4) {
+                        usage();
+                        return;
+                    }
+                    try (java.io.FileInputStream inStream = new java.io.FileInputStream(args[1]);
+                         java.io.FileOutputStream outStream = new java.io.FileOutputStream(args[2])) {
+                        BaseFwx.fwxAesLiveDecryptStream(inStream, outStream, args[3], useMaster);
+                    } catch (java.io.IOException exc) {
+                        throw new RuntimeException("fwxAES live decrypt failed", exc);
+                    }
+                    return;
                 case "b512-enc":
                     if (argc < 3) {
                         usage();
@@ -494,7 +518,15 @@ public final class BaseFwxCli {
                     return;
                 case "jmge": {
                     JmgArgs opts = parseJmgArgs(args, 1);
-                    BaseFwx.jmgEncryptFile(opts.input, opts.output, opts.password, useMaster, opts.keepMeta, opts.keepInput);
+                    BaseFwx.jmgEncryptFile(
+                        opts.input,
+                        opts.output,
+                        opts.password,
+                        useMaster,
+                        opts.keepMeta,
+                        opts.keepInput,
+                        opts.archiveOriginal
+                    );
                     return;
                 }
                 case "jmgd": {
@@ -632,6 +664,75 @@ public final class BaseFwxCli {
                         return;
                     } finally {
                         pool.shutdown();
+                    }
+                }
+                case "bench-live": {
+                    if (argc < 3) {
+                        usage();
+                        return;
+                    }
+                    File input = new File(args[1]);
+                    String benchPass = args[2];
+                    final String benchPassFinal = benchPass;
+                    final boolean useMasterFlag = useMaster;
+                    int warmup = benchWarmup();
+                    int iters = benchIters();
+                    int workers = benchWorkers();
+                    confirmSingleThreadCli(workers);
+                    String name = input.getName();
+                    int dot = name.lastIndexOf('.');
+                    String ext = dot >= 0 ? name.substring(dot) : "";
+                    File[] tempDirs = new File[workers];
+                    File[] encFiles = new File[workers];
+                    File[] decFiles = new File[workers];
+                    try {
+                        for (int i = 0; i < workers; i++) {
+                            try {
+                                tempDirs[i] = Files.createTempDirectory("basefwx-bench-live-" + i).toFile();
+                            } catch (java.io.IOException exc) {
+                                throw new RuntimeException("Failed to create bench temp dir", exc);
+                            }
+                            encFiles[i] = new File(tempDirs[i], "bench.live");
+                            decFiles[i] = new File(tempDirs[i], "bench_dec" + ext);
+                        }
+                        BenchWorker worker = (idx) -> {
+                            File encFile = encFiles[idx];
+                            File decFile = decFiles[idx];
+                            try (java.io.FileInputStream src = new java.io.FileInputStream(input);
+                                 java.io.FileOutputStream encOut = new java.io.FileOutputStream(encFile)) {
+                                BaseFwx.fwxAesLiveEncryptStream(src, encOut, benchPassFinal, useMasterFlag);
+                            } catch (java.io.IOException exc) {
+                                throw new RuntimeException("bench-live encrypt failed", exc);
+                            }
+                            try (java.io.FileInputStream encIn = new java.io.FileInputStream(encFile);
+                                 java.io.FileOutputStream decOut = new java.io.FileOutputStream(decFile)) {
+                                BaseFwx.fwxAesLiveDecryptStream(encIn, decOut, benchPassFinal, useMasterFlag);
+                            } catch (java.io.IOException exc) {
+                                throw new RuntimeException("bench-live decrypt failed", exc);
+                            }
+                            long size = decFile.length();
+                            BENCH_SINK ^= (int) size;
+                            encFile.delete();
+                            decFile.delete();
+                            return size;
+                        };
+                        long ns = workers > 1
+                            ? benchParallelMedian(warmup, iters, workers, worker)
+                            : benchMedian(warmup, iters, () -> worker.run(0));
+                        System.out.println("BENCH_NS=" + ns);
+                        return;
+                    } finally {
+                        for (int i = 0; i < workers; i++) {
+                            if (encFiles[i] != null) {
+                                encFiles[i].delete();
+                            }
+                            if (decFiles[i] != null) {
+                                decFiles[i].delete();
+                            }
+                            if (tempDirs[i] != null) {
+                                tempDirs[i].delete();
+                            }
+                        }
                     }
                 }
                 case "bench-b512file": {
@@ -926,6 +1027,8 @@ public final class BaseFwxCli {
         System.out.println("  fwxaes-dec <in> <out> <password> [--no-master]");
         System.out.println("  fwxaes-stream-enc <in> <out> <password> [--no-master]");
         System.out.println("  fwxaes-stream-dec <in> <out> <password> [--no-master]");
+        System.out.println("  fwxaes-live-enc <in> <out> <password> [--no-master]");
+        System.out.println("  fwxaes-live-dec <in> <out> <password> [--no-master]");
         System.out.println("  b64-enc <text>");
         System.out.println("  b64-dec <text>");
         System.out.println("  n10-enc <text>");
@@ -952,7 +1055,7 @@ public final class BaseFwxCli {
         System.out.println("  pb512file-enc <in> <out> <password> [--no-master]");
         System.out.println("  pb512file-bytes-rt <in> <out> <password> [--no-master]");
         System.out.println("  pb512file-dec <in> <out> <password> [--no-master]");
-        System.out.println("  jmge <in> <out> <password> [--keep-meta] [--keep-input] [--no-master]");
+        System.out.println("  jmge <in> <out> <password> [--keep-meta] [--keep-input] [--no-archive] [--no-master]");
         System.out.println("  jmgd <in> <out> <password> [--no-master]");
         System.out.println("  b256-enc <text>");
         System.out.println("  b256-dec <text>");
@@ -960,6 +1063,7 @@ public final class BaseFwxCli {
         System.out.println("  bench-hash <method> <text-file>");
         System.out.println("  bench-fwxaes <file> <password> [--no-master]");
         System.out.println("  bench-fwxaes-par <file> <password> [--no-master]");
+        System.out.println("  bench-live <file> <password> [--no-master]");
         System.out.println("  bench-b512file <file> <password> [--no-master]");
         System.out.println("  bench-pb512file <file> <password> [--no-master]");
         System.out.println("  bench-jmg <media> <password> [--no-master]");
@@ -1010,6 +1114,10 @@ public final class BaseFwxCli {
             }
             if ("--keep-input".equalsIgnoreCase(arg)) {
                 parsed.keepInput = true;
+                continue;
+            }
+            if ("--no-archive".equalsIgnoreCase(arg)) {
+                parsed.archiveOriginal = false;
                 continue;
             }
             if ("--no-master".equalsIgnoreCase(arg)) {
@@ -1080,5 +1188,6 @@ public final class BaseFwxCli {
         String password = "";
         boolean keepMeta = false;
         boolean keepInput = false;
+        boolean archiveOriginal = true;
     }
 }

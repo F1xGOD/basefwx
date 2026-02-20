@@ -24,6 +24,11 @@
 #include <unordered_set>
 #include <vector>
 
+#ifdef _WIN32
+#include <fcntl.h>
+#include <io.h>
+#endif
+
 namespace {
 
 bool g_verbose = false;
@@ -110,6 +115,20 @@ bool LooksLikeMediaPath(const std::filesystem::path& path) {
         return false;
     }
     return kImageExts.count(ext) || kVideoExts.count(ext) || kAudioExts.count(ext);
+}
+
+void EnableBinaryStdio(bool use_stdin, bool use_stdout) {
+#ifdef _WIN32
+    if (use_stdin) {
+        _setmode(_fileno(stdin), _O_BINARY);
+    }
+    if (use_stdout) {
+        _setmode(_fileno(stdout), _O_BINARY);
+    }
+#else
+    (void)use_stdin;
+    (void)use_stdout;
+#endif
 }
 
 void PrintSystemInfo() {
@@ -407,16 +426,19 @@ void PrintUsage() {
     std::cout << "  basefwx_cpp pb512file-bytes-rt <in> <out> [-p <password>] [--master-pub <path>] [--no-master] [--strip-meta] [--kdf <label>] [--pbkdf2-iters <n>]\n";
     std::cout << "  basefwx_cpp pb512file-enc <file> [-p <password>] [--master-pub <path>] [--no-master] [--strip-meta] [--no-obf] [--compress] [--keep-input] [--kdf <label>] [--pbkdf2-iters <n>]\n";
     std::cout << "  basefwx_cpp pb512file-dec <file.fwx> [-p <password>] [--master-pub <path>] [--no-master] [--strip-meta] [--kdf <label>] [--pbkdf2-iters <n>]\n";
-    std::cout << "  basefwx_cpp fwxaes-enc <file> [-p <password>] [--master-pub <path>] [--no-master] [--out <path>] [--normalize] [--threshold <n>] [--cover-phrase <text>] [--compress] [--ignore-media] [--keep-meta] [--keep-input]\n";
+    std::cout << "  basefwx_cpp fwxaes-enc <file> [-p <password>] [--master-pub <path>] [--no-master] [--out <path>] [--normalize] [--threshold <n>] [--cover-phrase <text>] [--compress] [--ignore-media] [--keep-meta] [--keep-input] [--no-archive]\n";
     std::cout << "  basefwx_cpp fwxaes-dec <file> [-p <password>] [--master-pub <path>] [--no-master] [--out <path>]\n";
     std::cout << "  basefwx_cpp fwxaes-stream-enc <file> [-p <password>] [--master-pub <path>] [--no-master] [--out <path>]\n";
     std::cout << "  basefwx_cpp fwxaes-stream-dec <file> [-p <password>] [--master-pub <path>] [--no-master] [--out <path>]\n";
-    std::cout << "  basefwx_cpp jmge <media> [-p <password>] [--master-pub <path>] [--out <path>] [--keep-meta] [--keep-input]\n";
+    std::cout << "  basefwx_cpp fwxaes-live-enc <file> [-p <password>] [--master-pub <path>] [--no-master] [--out <path>]\n";
+    std::cout << "  basefwx_cpp fwxaes-live-dec <file> [-p <password>] [--master-pub <path>] [--no-master] [--out <path>]\n";
+    std::cout << "  basefwx_cpp jmge <media> [-p <password>] [--master-pub <path>] [--out <path>] [--keep-meta] [--keep-input] [--no-archive]\n";
     std::cout << "  basefwx_cpp jmgd <media> [-p <password>] [--master-pub <path>] [--out <path>]\n";
     std::cout << "  basefwx_cpp bench-text <method> <text-file> [-p <password>] [--master-pub <path>] [--no-master]\n";
     std::cout << "  basefwx_cpp bench-hash <method> <text-file>\n";
     std::cout << "  basefwx_cpp bench-fwxaes <file> <password> [--master-pub <path>] [--no-master]\n";
     std::cout << "  basefwx_cpp bench-fwxaes-par <file> <password> [--master-pub <path>] [--no-master]\n";
+    std::cout << "  basefwx_cpp bench-live <file> <password> [--master-pub <path>] [--no-master]\n";
     std::cout << "  basefwx_cpp bench-b512file <file> <password> [--master-pub <path>] [--no-master] [--no-aead]\n";
     std::cout << "  basefwx_cpp bench-pb512file <file> <password> [--master-pub <path>] [--no-master] [--no-aead]\n";
     std::cout << "  basefwx_cpp bench-jmg <media> <password> [--master-pub <path>] [--no-master]\n";
@@ -441,6 +463,7 @@ struct FwxAesArgs {
     bool ignore_media = false;
     bool keep_meta = false;
     bool keep_input = false;
+    bool archive_original = true;
 };
 
 struct ImageArgs {
@@ -449,6 +472,7 @@ struct ImageArgs {
     std::string password;
     bool keep_meta = false;
     bool keep_input = false;
+    bool archive_original = true;
 };
 
 struct FileArgs {
@@ -627,6 +651,9 @@ FwxAesArgs ParseFwxAesArgs(int argc, char** argv, int start_index) {
         } else if (flag == "--keep-input") {
             opts.keep_input = true;
             idx += 1;
+        } else if (flag == "--no-archive") {
+            opts.archive_original = false;
+            idx += 1;
         } else {
             throw std::runtime_error("Unknown flag: " + flag);
         }
@@ -666,6 +693,9 @@ ImageArgs ParseImageArgs(int argc, char** argv, int start_index) {
             idx += 1;
         } else if (flag == "--keep-input") {
             opts.keep_input = true;
+            idx += 1;
+        } else if (flag == "--no-archive") {
+            opts.archive_original = false;
             idx += 1;
         } else {
             throw std::runtime_error("Unknown flag: " + flag);
@@ -937,6 +967,60 @@ int main(int argc, char** argv) {
                 out << std::setprecision(3) << throughput;
                 std::cout << "THROUGHPUT_GiBps=" << out.str() << " WORKERS=" << workers << "\n";
             }
+            return 0;
+        }
+        if (command == "bench-live") {
+            if (argc < 4) {
+                PrintUsage();
+                return 2;
+            }
+            std::string input = argv[2];
+            std::string password = argv[3];
+            bool use_master = true;
+            for (int idx = 4; idx < argc; ++idx) {
+                std::string flag(argv[idx]);
+                if (flag == "--no-master") {
+                    use_master = false;
+                } else if (flag == "--master-pub" || flag == "--use-master-pub") {
+                    if (idx + 1 >= argc) {
+                        throw std::runtime_error("Missing master public key path");
+                    }
+                    ApplyMasterPubPath(argv[idx + 1]);
+                    idx += 1;
+                } else {
+                    throw std::runtime_error("Unknown flag: " + flag);
+                }
+            }
+            auto data = ReadBinaryFile(input);
+            std::string payload(reinterpret_cast<const char*>(data.data()), data.size());
+            int warmup = BenchWarmup();
+            int iters = BenchIters();
+            std::size_t workers = static_cast<std::size_t>(BenchWorkers());
+            if (workers == 0) {
+                workers = 1;
+            }
+            ConfirmSingleThreadCli(workers);
+            auto op = [&]() -> std::size_t {
+                std::istringstream source(payload, std::ios::in | std::ios::binary);
+                std::ostringstream encrypted(std::ios::out | std::ios::binary);
+                basefwx::FwxAesLiveEncryptStream(source, encrypted, password, use_master);
+                std::string enc_blob = encrypted.str();
+                std::istringstream enc_in(enc_blob, std::ios::in | std::ios::binary);
+                std::ostringstream restored(std::ios::out | std::ios::binary);
+                basefwx::FwxAesLiveDecryptStream(enc_in, restored, password, use_master);
+                std::size_t len = restored.str().size();
+                g_bench_sink.fetch_xor(len, std::memory_order_relaxed);
+                return len;
+            };
+            auto run = [&]() {
+                if (workers > 1) {
+                    RunParallel(workers, [&](std::size_t) { return op(); });
+                    return;
+                }
+                op();
+            };
+            auto ns = BenchMedian(warmup, iters, run);
+            std::cout << "BENCH_NS=" << ns << "\n";
             return 0;
         }
         if (command == "bench-b512file" || command == "bench-pb512file") {
@@ -1391,7 +1475,8 @@ int main(int argc, char** argv) {
             return 0;
         }
         if (command == "fwxaes-enc" || command == "fwxaes-dec"
-            || command == "fwxaes-stream-enc" || command == "fwxaes-stream-dec") {
+            || command == "fwxaes-stream-enc" || command == "fwxaes-stream-dec"
+            || command == "fwxaes-live-enc" || command == "fwxaes-live-dec") {
             FwxAesArgs opts = ParseFwxAesArgs(argc, argv, 2);
             if (opts.password.empty() && !opts.use_master) {
                 throw std::runtime_error("Password required when master key usage is disabled");
@@ -1403,11 +1488,53 @@ int main(int argc, char** argv) {
                     } else {
                         opts.output = opts.input + ".fwx";
                     }
+                } else if (command == "fwxaes-live-enc") {
+                    opts.output = (opts.input == "-") ? "-" : (opts.input + ".live.fwx");
+                } else if (command == "fwxaes-live-dec" && opts.input == "-") {
+                    opts.output = "-";
                 } else if (opts.input.size() >= 4 && opts.input.rfind(".fwx") == opts.input.size() - 4) {
                     opts.output = opts.input.substr(0, opts.input.size() - 4);
                 } else {
                     opts.output = opts.input + ".out";
                 }
+            }
+            if (command == "fwxaes-live-enc" || command == "fwxaes-live-dec") {
+                if (opts.normalize || opts.compress) {
+                    throw std::runtime_error("Live fwxAES does not support normalize or pack options");
+                }
+
+                std::ifstream input_file;
+                std::istream* input = nullptr;
+                bool use_stdin = (opts.input == "-");
+                if (use_stdin) {
+                    input = &std::cin;
+                } else {
+                    input_file.open(opts.input, std::ios::binary);
+                    if (!input_file) {
+                        throw std::runtime_error("Failed to open input file: " + opts.input);
+                    }
+                    input = &input_file;
+                }
+
+                std::ofstream output_file;
+                std::ostream* output = nullptr;
+                bool use_stdout = (opts.output == "-");
+                if (use_stdout) {
+                    output = &std::cout;
+                } else {
+                    output_file.open(opts.output, std::ios::binary);
+                    if (!output_file) {
+                        throw std::runtime_error("Failed to open output file: " + opts.output);
+                    }
+                    output = &output_file;
+                }
+                EnableBinaryStdio(use_stdin, use_stdout);
+                if (command == "fwxaes-live-enc") {
+                    basefwx::FwxAesLiveEncryptStream(*input, *output, opts.password, opts.use_master);
+                } else {
+                    basefwx::FwxAesLiveDecryptStream(*input, *output, opts.password, opts.use_master);
+                }
+                return 0;
             }
             if (command == "fwxaes-stream-enc" || command == "fwxaes-stream-dec") {
                 if (opts.normalize || opts.compress) {
@@ -1433,7 +1560,14 @@ int main(int argc, char** argv) {
             if (command == "fwxaes-enc") {
                 if (!opts.ignore_media && LooksLikeMediaPath(std::filesystem::path(opts.input))) {
                     try {
-                        std::cout << basefwx::Jmge(opts.input, opts.password, opts.output, opts.keep_meta, opts.keep_input) << "\n";
+                        std::cout << basefwx::Jmge(
+                            opts.input,
+                            opts.password,
+                            opts.output,
+                            opts.keep_meta,
+                            opts.keep_input,
+                            opts.archive_original
+                        ) << "\n";
                         return 0;
                     } catch (const std::exception&) {
                         // Fall back to standard fwxAES if media processing fails.
@@ -1456,7 +1590,14 @@ int main(int argc, char** argv) {
         if (command == "jmge" || command == "jmgd") {
             ImageArgs opts = ParseImageArgs(argc, argv, 2);
             if (command == "jmge") {
-                std::cout << basefwx::Jmge(opts.input, opts.password, opts.output, opts.keep_meta, opts.keep_input) << "\n";
+                std::cout << basefwx::Jmge(
+                    opts.input,
+                    opts.password,
+                    opts.output,
+                    opts.keep_meta,
+                    opts.keep_input,
+                    opts.archive_original
+                ) << "\n";
             } else {
                 std::cout << basefwx::Jmgd(opts.input, opts.password, opts.output) << "\n";
             }

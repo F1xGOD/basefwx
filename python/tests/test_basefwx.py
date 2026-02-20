@@ -12,7 +12,7 @@ import unittest
 import warnings
 import wave
 from unittest.mock import patch
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -345,6 +345,214 @@ class BaseFWXUnitTests(unittest.TestCase):
         self.assertEqual(offset, len(blob))
         return frames
 
+    def test_jmg_default_no_archive_uses_key_trailer(self):
+        src = self._make_png_fixture("jmg_default_no_archive.png")
+        enc = self.tmp_path / "jmg_default_no_archive_enc.png"
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            basefwx.MediaCipher.encrypt_media(
+                str(src),
+                "pw",
+                output=str(enc),
+                keep_input=True,
+            )
+        self.assertTrue(any("archive_original=False" in str(w.message) for w in caught))
+        blob = enc.read_bytes()
+        self.assertIn(basefwx.IMAGECIPHER_KEY_TRAILER_MAGIC, blob)
+        archive = basefwx._extract_balanced_trailer_from_bytes(
+            blob,
+            basefwx.IMAGECIPHER_TRAILER_MAGIC,
+        )
+        self.assertIsNone(archive)
+
+    def test_jmg_key_header_v2_profile_max(self):
+        src = self._make_png_fixture("jmg_profile_v2.png")
+        enc = self.tmp_path / "jmg_profile_v2_enc.png"
+        basefwx.MediaCipher.encrypt_media(
+            str(src),
+            "pw",
+            output=str(enc),
+            keep_input=True,
+            archive_original=False,
+        )
+        trailer = basefwx._extract_balanced_trailer_from_bytes(
+            enc.read_bytes(),
+            basefwx.IMAGECIPHER_KEY_TRAILER_MAGIC,
+        )
+        self.assertIsNotNone(trailer)
+        key_blob, _payload = trailer
+        self.assertTrue(key_blob.startswith(basefwx.JMG_KEY_MAGIC))
+        parsed = basefwx._jmg_parse_key_header(key_blob, "pw", use_master=True)
+        self.assertIsNotNone(parsed)
+        _header_len, _base_key, _archive_key, _material, profile_id = parsed
+        self.assertEqual(profile_id, basefwx.JMG_SECURITY_PROFILE_MAX)
+
+    def test_jmg_key_header_v1_legacy_compat(self):
+        mask_key, user_blob, master_blob, _ = basefwx._prepare_mask_key(
+            "pw",
+            True,
+            mask_info=basefwx.JMG_MASK_INFO,
+            require_password=False,
+            aad=basefwx.JMG_MASK_AAD,
+        )
+        _ = mask_key
+        payload = basefwx._pack_length_prefixed(user_blob, master_blob)
+        header = (
+            basefwx.JMG_KEY_MAGIC
+            + bytes([basefwx.JMG_KEY_VERSION_LEGACY])
+            + len(payload).to_bytes(4, "big")
+            + payload
+        )
+        parsed = basefwx._jmg_parse_key_header(header, "pw", use_master=True)
+        self.assertIsNotNone(parsed)
+        _header_len, _base_key, _archive_key, _material, profile_id = parsed
+        self.assertEqual(profile_id, basefwx.JMG_SECURITY_PROFILE_LEGACY)
+
+    def test_hwaccel_auto_priority_prefers_nvidia(self):
+        with patch.dict(os.environ, {"BASEFWX_HWACCEL": "auto"}, clear=False):
+            basefwx.MediaCipher._HWACCEL_READY = False
+            basefwx.MediaCipher._HWACCEL_CACHE = None
+            with patch.object(basefwx.MediaCipher, "_ffmpeg_encoder_set", return_value={"h264_nvenc", "h264_qsv", "h264_vaapi"}), \
+                    patch.object(basefwx.MediaCipher, "_ffmpeg_hwaccel_set", return_value={"cuda", "qsv", "vaapi"}), \
+                    patch.object(basefwx.MediaCipher, "_has_nvidia_hint", return_value=True), \
+                    patch.object(basefwx.MediaCipher, "_has_qsv_hint", return_value=True), \
+                    patch.object(basefwx.MediaCipher, "_has_vaapi_hint", return_value=True):
+                self.assertEqual(basefwx.MediaCipher._select_hwaccel(), "nvenc")
+
+    def test_hwaccel_strict_rejects_unavailable_request(self):
+        env = {
+            "BASEFWX_HWACCEL": "nvenc",
+            "BASEFWX_HWACCEL_STRICT": "1",
+        }
+        with patch.dict(os.environ, env, clear=False):
+            basefwx.MediaCipher._HWACCEL_READY = False
+            basefwx.MediaCipher._HWACCEL_CACHE = None
+            with patch.object(basefwx.MediaCipher, "_ffmpeg_encoder_set", return_value=set()), \
+                    patch.object(basefwx.MediaCipher, "_ffmpeg_hwaccel_set", return_value=set()), \
+                    patch.object(basefwx.MediaCipher, "_has_nvidia_hint", return_value=False):
+                with self.assertRaises(RuntimeError):
+                    basefwx.MediaCipher._select_hwaccel()
+
+    def test_jmg_logs_hw_plan_line(self):
+        src = self._make_png_fixture("jmg_hwlog_src.png")
+        enc = self.tmp_path / "jmg_hwlog_enc.png"
+        dec = self.tmp_path / "jmg_hwlog_dec.png"
+        stderr = io.StringIO()
+        with redirect_stderr(stderr):
+            basefwx.MediaCipher.encrypt_media(
+                str(src),
+                "pw",
+                output=str(enc),
+                keep_input=True,
+                archive_original=False,
+            )
+            basefwx.MediaCipher.decrypt_media(str(enc), "pw", output=str(dec))
+        logs = stderr.getvalue()
+        self.assertIn("[basefwx.hw] op=jMGe", logs)
+        self.assertIn("[basefwx.hw] op=jMGd", logs)
+
+    def test_hwaccel_stage_split_video_decode_cpu_encode_gpu(self):
+        src = self.tmp_path / "video_stage_split.mp4"
+        src.write_bytes(b"stub")
+        out = self.tmp_path / "video_stage_split_out.mp4"
+        info = {
+            "bit_rate": 1_000_000,
+            "duration": 1.0,
+            "video": {"width": 2, "height": 2, "fps": 30.0, "bit_rate": 900_000},
+            "audio": None,
+        }
+        recorded_cmds: list[list[str]] = []
+
+        def fake_ffmpeg(cmd, fallback_cmd=None):
+            _ = fallback_cmd
+            recorded_cmds.append(list(cmd))
+            target = Path(cmd[-1])
+            target.parent.mkdir(parents=True, exist_ok=True)
+            if target.suffix == ".raw":
+                if "video" in target.name:
+                    target.write_bytes(os.urandom(2 * 2 * 3))
+                else:
+                    target.write_bytes(b"")
+            else:
+                target.write_bytes(b"ok")
+
+        def fake_scramble_video_raw(raw_in, raw_out, *_args, **_kwargs):
+            raw_out.write_bytes(raw_in.read_bytes())
+
+        plan = {
+            "selected_accel": "nvenc",
+            "encode_device": "nvenc",
+            "decode_device": "cpu",
+            "pixel_backend": "cpu",
+            "gpu_pixels_strict": False,
+        }
+
+        with patch.object(basefwx.MediaCipher, "_probe_streams", return_value=info), \
+                patch.object(basefwx.MediaCipher, "_run_ffmpeg", side_effect=fake_ffmpeg), \
+                patch.object(basefwx.MediaCipher, "_probe_metadata", return_value={}), \
+                patch.object(basefwx.MediaCipher, "_encrypt_metadata", return_value=[]), \
+                patch.object(basefwx.MediaCipher, "_scramble_video_raw", side_effect=fake_scramble_video_raw):
+            basefwx.MediaCipher._scramble_video(
+                src,
+                out,
+                "pw",
+                keep_meta=False,
+                base_key=b"\x22" * 32,
+                hw_plan=plan,
+            )
+
+        decode_cmd = next(
+            cmd for cmd in recorded_cmds if "-map" in cmd and "0:v:0" in cmd and "-f" in cmd and "rawvideo" in cmd
+        )
+        self.assertNotIn("-hwaccel", decode_cmd)
+        encode_cmd = next(cmd for cmd in recorded_cmds if cmd and cmd[-1] == str(out))
+        self.assertIn("h264_nvenc", encode_cmd)
+
+    def test_gpu_pixels_auto_falls_back_without_cupy(self):
+        env = {
+            "BASEFWX_HWACCEL": "auto",
+            "BASEFWX_GPU_PIXELS": "auto",
+            "BASEFWX_GPU_PIXELS_MIN_BYTES": "1",
+        }
+        with patch.dict(os.environ, env, clear=False):
+            basefwx.MediaCipher._HWACCEL_READY = False
+            basefwx.MediaCipher._HWACCEL_CACHE = None
+            with patch.object(basefwx.MediaCipher, "_select_hwaccel", return_value="nvenc"), \
+                    patch.object(basefwx, "cp", None):
+                plan = basefwx.MediaCipher._build_hw_execution_plan(
+                    "jMGe",
+                    stream_type="video",
+                    frame_bytes=1024 * 1024,
+                    allow_pixel_gpu=True,
+                    prefer_cpu_decode=True,
+                )
+        self.assertEqual(plan["pixel_backend"], "cpu")
+        self.assertTrue(any("CuPy is unavailable" in reason for reason in plan["reasons"]))
+
+    def test_live_stream_default_chunk_size_uses_live_constant(self):
+        class ReadIntoBytesIO(io.BytesIO):
+            def __init__(self, data: bytes):
+                super().__init__(data)
+                self.request_sizes: list[int] = []
+
+            def readinto(self, b):  # type: ignore[override]
+                self.request_sizes.append(len(b))
+                return super().readinto(b)
+
+        payload = os.urandom(200_000)
+        source = ReadIntoBytesIO(payload)
+        encrypted = io.BytesIO()
+        basefwx.fwxAES_live_encrypt_stream(source, encrypted, "pw", use_master=False)
+        self.assertTrue(source.request_sizes)
+        self.assertEqual(source.request_sizes[0], basefwx.LIVE_STREAM_CHUNK_SIZE)
+
+        encrypted_source = ReadIntoBytesIO(encrypted.getvalue())
+        recovered = io.BytesIO()
+        basefwx.fwxAES_live_decrypt_stream(encrypted_source, recovered, "pw", use_master=False)
+        self.assertTrue(encrypted_source.request_sizes)
+        self.assertEqual(encrypted_source.request_sizes[0], basefwx.LIVE_STREAM_CHUNK_SIZE)
+        self.assertEqual(recovered.getvalue(), payload)
+
     def test_jmg_image_archive_roundtrip_exact(self):
         src = self._make_png_fixture("jmg_src.png")
         original = src.read_bytes()
@@ -488,6 +696,52 @@ class BaseFWXUnitTests(unittest.TestCase):
         recovered = io.BytesIO()
         basefwx.fwxAES_live_decrypt_stream(encrypted, recovered, "pw", use_master=False, chunk_size=777)
         self.assertEqual(recovered.getvalue(), payload)
+
+    def test_live_ffmpeg_helpers_roundtrip(self):
+        if shutil.which("ffmpeg") is None or shutil.which("ffprobe") is None:
+            self.skipTest("ffmpeg/ffprobe unavailable")
+        src = self.tmp_path / "live_src.wav"
+        with wave.open(str(src), "wb") as wav_file:
+            wav_file.setnchannels(1)
+            wav_file.setsampwidth(2)
+            wav_file.setframerate(24000)
+            wav_file.writeframes(os.urandom(24000))
+        enc = self.tmp_path / "live_stream.fwx"
+        dec = self.tmp_path / "live_decoded.wav"
+        source_cmd = [
+            "ffmpeg",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-i",
+            str(src),
+            "-f",
+            "matroska",
+            "-c",
+            "copy",
+            "-",
+        ]
+        sink_cmd = [
+            "ffmpeg",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-f",
+            "matroska",
+            "-i",
+            "-",
+            "-c",
+            "copy",
+            str(dec),
+        ]
+        basefwx.fwxAES_live_encrypt_ffmpeg(source_cmd, enc, "pw", use_master=False)
+        basefwx.fwxAES_live_decrypt_ffmpeg(enc, sink_cmd, "pw", use_master=False)
+        self.assertTrue(enc.exists())
+        self.assertTrue(dec.exists())
+        self.assertGreater(dec.stat().st_size, 44)
+        with wave.open(str(dec), "rb") as wav_file:
+            self.assertGreater(wav_file.getnframes(), 0)
 
     def test_aes_roundtrip_without_master(self):
         original = "Symmetric data"

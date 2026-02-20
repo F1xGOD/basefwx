@@ -46,9 +46,9 @@ python -m basefwx cryptin aes-light secret.bin -p "pass" --strip
 python -m basefwx cryptin aes-light secret.bin.fwx -p "pass"
 
 python -m basefwx cryptin fwxaes photo.jpg -p "pass"
-python -m basefwx cryptin fwxaes video.mp4 -p "pass" --keep-meta
-python -m basefwx cryptin fwxaes video.mp4 -p "pass"            # default no-archive
-python -m basefwx cryptin fwxaes video.mp4 -p "pass" --archive  # exact-restore trailer
+python -m basefwx cryptin fwxaes track.m4a -p "pass" --keep-meta
+python -m basefwx cryptin fwxaes track.m4a -p "pass"            # default no-archive
+python -m basefwx cryptin fwxaes track.m4a -p "pass" --archive  # exact-restore trailer
 ```
 
 n10 helpers:
@@ -83,6 +83,9 @@ Notes:
 - `kFMe` auto-detects source type (audio -> PNG, non-audio -> WAV).
 - `kFMd` strictly decodes BaseFWX carriers only.
 - `kFAe`/`kFAd` are deprecated compatibility aliases.
+- Optional kFM/kFA acceleration:
+  - `BASEFWX_KFM_ACCEL=auto|cuda|cpu` (default `auto`)
+  - `BASEFWX_KFM_ACCEL_MIN_BYTES=<bytes>` (default `1048576`, auto mode threshold)
 - Python jMG HW accel policy: NVIDIA (`nvenc`) -> Intel (`qsv`) -> VAAPI -> CPU.
 - Set `BASEFWX_HWACCEL_STRICT=1` to fail instead of CPU fallback when the requested accelerator cannot be used.
 
@@ -172,12 +175,13 @@ Media helpers:
 
 ```
 from basefwx import jMGe, jMGd
-jMGe("input.mp4", "password", output="out-small.mp4")  # default no-archive
-jMGe("input.mp4", "password", output="out.mp4", archive_original=True)
-jMGd("out-small.mp4", "password", output="plain.mp4")  # may not be byte-identical
+jMGe("input.m4a", "password", output="out-small.m4a")  # default no-archive
+jMGe("cover.png", "password", output="out.png", archive_original=True)
+jMGd("out-small.m4a", "password", output="plain.m4a")  # may not be byte-identical
 ```
 
 Use an empty password to rely on the master key only (requires the private key to be available).
+For Python only, jMG video is temporarily disabled unless `BASEFWX_ENABLE_JMG_VIDEO=1`.
 
 ## C++ CLI
 

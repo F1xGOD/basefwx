@@ -275,6 +275,21 @@ class BaseFWXUnitTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             basefwx.kFAe(str(src), str(src), bw_mode=True)
 
+    def test_kfm_xor_auto_falls_back_without_cupy(self):
+        left = os.urandom(4096)
+        right = os.urandom(4096)
+        expected = bytes(a ^ b for a, b in zip(left, right))
+        with patch.object(basefwx, "cp", None), \
+                patch.dict(os.environ, {"BASEFWX_KFM_ACCEL": "auto", "BASEFWX_KFM_ACCEL_MIN_BYTES": "1"}, clear=False):
+            got = basefwx._kfm_xor(left, right)
+        self.assertEqual(got, expected)
+
+    def test_kfm_cuda_mode_requires_cupy(self):
+        with patch.object(basefwx, "cp", None), \
+                patch.dict(os.environ, {"BASEFWX_KFM_ACCEL": "cuda"}, clear=False):
+            with self.assertRaisesRegex(RuntimeError, "kFM CUDA mode requested"):
+                basefwx._kfm_should_use_cuda(4096)
+
     def test_kfmd_refuses_plain_mp3_input(self):
         if basefwx.Image is None:
             self.skipTest("Pillow unavailable")
@@ -613,6 +628,38 @@ class BaseFWXUnitTests(unittest.TestCase):
         self.assertTrue(dec.exists())
         self.assertGreater(dec.stat().st_size, 0)
 
+    def test_jmg_video_disabled_by_default(self):
+        if shutil.which("ffmpeg") is None:
+            self.skipTest("ffmpeg unavailable")
+        src = self.tmp_path / "jmg_video_disabled_src.mp4"
+        make_src = [
+            "ffmpeg",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc2=size=128x72:rate=24",
+            "-t",
+            "1",
+            "-c:v",
+            "libx264",
+            "-pix_fmt",
+            "yuv420p",
+            str(src),
+        ]
+        subprocess.run(make_src, check=True, capture_output=True, text=True)
+        with self.assertRaisesRegex(RuntimeError, "jMG video mode is temporarily disabled"):
+            basefwx.MediaCipher.encrypt_media(
+                str(src),
+                "pw",
+                output=str(self.tmp_path / "jmg_video_disabled_enc.mp4"),
+                keep_input=True,
+                archive_original=False,
+            )
+
     def test_unscramble_video_bitrate_regression(self):
         src = self.tmp_path / "video_stub.mp4"
         src.write_bytes(b"stub")
@@ -635,10 +682,33 @@ class BaseFWXUnitTests(unittest.TestCase):
             else:
                 target.write_bytes(b"ok")
 
+        def fake_unscramble_stream(
+            decode_cmd,
+            encode_cmd,
+            width,
+            height,
+            fps,
+            base_key,
+            *,
+            security_profile=0,
+            progress_cb=None,
+            workers=None,
+            use_gpu_pixels=False,
+            gpu_pixels_strict=False,
+            total_frames_hint=0,
+        ):
+            target = Path(encode_cmd[-1])
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(b"ok")
+            if progress_cb:
+                progress_cb(1.0)
+
         with patch.object(basefwx.MediaCipher, "_probe_streams", return_value=info), \
                 patch.object(basefwx.MediaCipher, "_run_ffmpeg", side_effect=fake_ffmpeg), \
+                patch.object(basefwx.MediaCipher, "_unscramble_video_stream", side_effect=fake_unscramble_stream), \
                 patch.object(basefwx.MediaCipher, "_probe_metadata", return_value={}), \
-                patch.object(basefwx.MediaCipher, "_decrypt_metadata", return_value=[]):
+                patch.object(basefwx.MediaCipher, "_decrypt_metadata", return_value=[]), \
+                patch.dict(os.environ, {"BASEFWX_ENABLE_JMG_VIDEO": "1"}, clear=False):
             basefwx.MediaCipher._unscramble_video(
                 src,
                 out,
@@ -661,6 +731,15 @@ class BaseFWXUnitTests(unittest.TestCase):
             cursor += span
         recovered = b"".join(basefwx.fwxAES_live_decrypt_chunks(parts, "pw", use_master=False))
         self.assertEqual(recovered, payload)
+
+    def test_ffmpeg_video_codec_args_clamps_huge_bitrate(self):
+        args = basefwx.MediaCipher._ffmpeg_video_codec_args(
+            Path("out.mp4"),
+            target_bitrate=3_548_796_000,
+            hwaccel=None,
+        )
+        self.assertIn("2000000k", args)
+        self.assertIn("-bufsize", args)
 
     def test_live_stream_tamper_rejected(self):
         payload = os.urandom(12 * 1024)

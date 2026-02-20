@@ -6569,11 +6569,7 @@ class basefwx:
                     )
                 gpu_pixels_strict = bool(mode == "cuda" and cls._hwaccel_strict())
             if prefer_cpu_decode and selected_accel and stream_type == "video":
-                if pixel_backend == "cuda" and gpu_pixels_mode == "cuda":
-                    decode_device = encode_device
-                    reasons.append("forced CUDA pixel mode enables GPU decode path for throughput")
-                else:
-                    reasons.append("decode pinned to CPU to avoid hwdownload for CPU-side transforms")
+                reasons.append("decode pinned to CPU to avoid hwdownload for CPU-side transforms")
             aes_accel_state = cls._detect_aes_accel_state()
             reasons.append("AES operations remain on CPU (OpenSSL/cryptography path)")
             if stream_type == "live":
@@ -6913,6 +6909,18 @@ class basefwx:
             bits = basefwx.MediaCipher.AUDIO_MASK_BITS if mask_bits is None else max(1, min(16, int(mask_bits)))
             mask = (1 << bits) - 1
             out = bytearray(len(data))
+            if basefwx.np is not None and len(data) >= 2:
+                try:
+                    np_samples = basefwx.np.frombuffer(data, dtype=basefwx.np.dtype("<u2")).copy()
+                    np_keystream = basefwx.np.frombuffer(keystream, dtype=basefwx.np.dtype("<u2"))
+                    basefwx.np.bitwise_xor(
+                        np_samples,
+                        basefwx.np.bitwise_and(np_keystream, mask),
+                        out=np_samples,
+                    )
+                    return np_samples.tobytes() + tail
+                except Exception:
+                    pass
             for i in range(0, len(data), 2):
                 sample = int.from_bytes(data[i:i + 2], "little", signed=False)
                 ks = keystream[i] | (keystream[i + 1] << 8)
@@ -6972,6 +6980,18 @@ class basefwx:
                                     "CUDA pixel path failed during frame transform: "
                                     f"{err or exc.__class__.__name__}"
                                 ) from None
+            if basefwx.np is not None:
+                try:
+                    np_data = basefwx.np.frombuffer(data, dtype=basefwx.np.uint8).copy()
+                    np_keystream = basefwx.np.frombuffer(keystream, dtype=basefwx.np.uint8)
+                    basefwx.np.bitwise_xor(
+                        np_data,
+                        basefwx.np.bitwise_and(np_keystream, mask),
+                        out=np_data,
+                    )
+                    return np_data.tobytes()
+                except Exception:
+                    pass
             out = bytearray(data)
             for i in range(len(out)):
                 out[i] ^= keystream[i] & mask

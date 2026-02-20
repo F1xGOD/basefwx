@@ -314,7 +314,15 @@ FFMPEG_AVAILABLE=0
 if command -v ffmpeg >/dev/null 2>&1 && command -v ffprobe >/dev/null 2>&1; then
     FFMPEG_AVAILABLE=1
 fi
-export FFMPEG_AVAILABLE COOLDOWN_SECONDS
+NVIDIA_HWACCEL_AVAILABLE=0
+if (( FFMPEG_AVAILABLE == 1 )) && command -v nvidia-smi >/dev/null 2>&1; then
+    if ffmpeg -hide_banner -encoders 2>/dev/null | grep -q "h264_nvenc"; then
+        if nvidia-smi -L >/dev/null 2>&1; then
+            NVIDIA_HWACCEL_AVAILABLE=1
+        fi
+    fi
+fi
+export FFMPEG_AVAILABLE NVIDIA_HWACCEL_AVAILABLE COOLDOWN_SECONDS
 
 TEXT_NOPASS_METHODS=("b64" "b256" "a512" "n10")
 TEXT_PASS_METHODS=("b512" "pb512")
@@ -3733,6 +3741,15 @@ if (( ${#JMG_CASES[@]} > 0 )) && { [[ "$RUN_PY_TESTS" == "1" ]] || [[ "$RUN_PYPY
                 if [[ ! -s "$jmg_cpp_noa_dec" ]]; then
                     FAILURES+=("jmg_cpp_noarchive_${tag} (decode empty)")
                 fi
+
+                if (( NVIDIA_HWACCEL_AVAILABLE == 1 )) && [[ "$file_name" == *.mp4 || "$file_name" == *.mkv || "$file_name" == *.mov ]]; then
+                    jmg_cpp_gpu_input="$(copy_input "jmg_cpp_gpu_${tag}" "$file_name")"
+                    jmg_cpp_gpu_enc="$WORK_DIR/jmg_cpp_gpu_${tag}/enc_${file_name}"
+                    jmg_cpp_gpu_dec="$WORK_DIR/jmg_cpp_gpu_${tag}/dec_${file_name}"
+                    time_cmd "jmg_cpp_gpu_${tag}" env BASEFWX_HWACCEL=nvenc cpp_jmg_roundtrip \
+                        "$jmg_cpp_gpu_input" "$jmg_cpp_gpu_enc" "$jmg_cpp_gpu_dec"
+                    add_verify "$ORIG_DIR/$file_name" "$jmg_cpp_gpu_dec"
+                fi
             else
                 FAILURES+=("jmg_cpp_${tag} (cpp unavailable)")
             fi
@@ -4515,7 +4532,7 @@ if [[ ! "$BENCH_ITERS_FILE" =~ ^[0-9]+$ || "$BENCH_ITERS_FILE" -lt 1 ]]; then
     BENCH_ITERS_FILE=1
 fi
 
-JAVA_BENCH_FLAGS_DEFAULT="-server -Xms128m -Xmx2g -XX:+UseG1GC -XX:+TieredCompilation -XX:CompileThreshold=1000 -XX:+UseStringDeduplication -XX:MaxGCPauseMillis=200 -XX:+UseAES -XX:+UnlockDiagnosticVMOptions -XX:+UseAESIntrinsics -XX:+UseAESCTRIntrinsics -XX:+UseGHASHIntrinsics"
+JAVA_BENCH_FLAGS_DEFAULT="-server -XX:+UseG1GC -XX:+TieredCompilation -XX:CompileThreshold=1000 -XX:+UseStringDeduplication -XX:MaxGCPauseMillis=200 -XX:InitialRAMPercentage=20 -XX:MaxRAMPercentage=75 -XX:+UseAES -XX:+UnlockDiagnosticVMOptions -XX:+UseAESIntrinsics -XX:+UseAESCTRIntrinsics -XX:+UseGHASHIntrinsics"
 JAVA_BENCH_FLAGS="${JAVA_BENCH_FLAGS:-$JAVA_BENCH_FLAGS_DEFAULT}"
 read -r -a JAVA_BENCH_FLAGS_ARR <<<"$JAVA_BENCH_FLAGS"
 
@@ -4576,6 +4593,7 @@ log "BENCH_TEXT_SLOW_BYTES: $BENCH_TEXT_SLOW_BYTES"
 log "BENCH_TEXT_MAX_BYTES: $BENCH_TEXT_MAX_BYTES"
 log "BENCH_KFM_FILE: $BENCH_KFM_FILE"
 log "BENCH_LIVE_AUDIO_FILE: ${BENCH_LIVE_AUDIO_FILE:-<none>}"
+log "NVIDIA_HWACCEL_AVAILABLE: $NVIDIA_HWACCEL_AVAILABLE"
 
 for idx in "${!BENCH_LANGS[@]}"; do
     lang="${BENCH_LANGS[$idx]}"
@@ -4752,6 +4770,13 @@ for idx in "${!BENCH_LANGS[@]}"; do
                     BASEFWX_BENCH_WORKERS="$BENCH_FILE_WORKERS" \
                     "$CPP_BIN" bench-jmg "$ORIG_DIR/$jmg_file" "$PW" --no-master
             done
+            if (( NVIDIA_HWACCEL_AVAILABLE == 1 )) && [[ -f "$ORIG_DIR/jmg_sample.mp4" ]]; then
+                time_cmd_bench "jmg_cpp_gpu_jmg_sample_mp4" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_FILE" \
+                    BASEFWX_BENCH_ITERS="$BENCH_ITERS_FILE" \
+                    BASEFWX_BENCH_WORKERS="$BENCH_FILE_WORKERS" \
+                    BASEFWX_HWACCEL=nvenc \
+                    "$CPP_BIN" bench-jmg "$ORIG_DIR/jmg_sample.mp4" "$PW" --no-master
+            fi
             BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_FILE" BASEFWX_BENCH_ITERS="$BENCH_ITERS_FILE" \
                 time_cmd_bench "kfme_cpp_total" bench_kf_roundtrip "kfme" "cpp" "$BENCH_KFM_FILE"
             BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_FILE" BASEFWX_BENCH_ITERS="$BENCH_ITERS_FILE" \

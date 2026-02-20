@@ -56,7 +56,11 @@ public final class Constants {
     public static final byte[] IMAGECIPHER_TRAILER_MAGIC = "JMG0".getBytes(StandardCharsets.US_ASCII);
     public static final byte[] IMAGECIPHER_KEY_TRAILER_MAGIC = "JMG1".getBytes(StandardCharsets.US_ASCII);
     public static final byte[] JMG_KEY_MAGIC = "JMGK".getBytes(StandardCharsets.US_ASCII);
-    public static final int JMG_KEY_VERSION = 1;
+    public static final int JMG_KEY_VERSION_LEGACY = 1;
+    public static final int JMG_KEY_VERSION = 2;
+    public static final int JMG_SECURITY_PROFILE_LEGACY = 0;
+    public static final int JMG_SECURITY_PROFILE_MAX = 1;
+    public static final int JMG_SECURITY_PROFILE_DEFAULT = JMG_SECURITY_PROFILE_MAX;
     public static final byte[] JMG_MASK_INFO = "basefwx.jmg.mask.v1".getBytes(StandardCharsets.US_ASCII);
 
     public static final byte[] LIVE_FRAME_MAGIC = "LIVE".getBytes(StandardCharsets.US_ASCII);

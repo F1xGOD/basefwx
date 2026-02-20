@@ -4059,11 +4059,17 @@ else
     fi
 fi
 JMG_CASES=()
-for file_name in "jmg_sample.png" "jmg_sample.mp4" "jmg_sample.m4a"; do
+JMG_VIDEO_CASES_ENABLED="${BASEFWX_ENABLE_JMG_VIDEO:-0}"
+for file_name in "jmg_sample.png" "jmg_sample.m4a"; do
     if [[ -f "$ORIG_DIR/$file_name" ]]; then
         JMG_CASES+=("$file_name")
     fi
 done
+if [[ "$JMG_VIDEO_CASES_ENABLED" == "1" || "$JMG_VIDEO_CASES_ENABLED" == "true" || "$JMG_VIDEO_CASES_ENABLED" == "yes" || "$JMG_VIDEO_CASES_ENABLED" == "on" ]]; then
+    if [[ -f "$ORIG_DIR/jmg_sample.mp4" ]]; then
+        JMG_CASES+=("jmg_sample.mp4")
+    fi
+fi
 
 STEP_INDEX=0
 calc_total_steps

@@ -7807,6 +7807,11 @@ class basefwx:
                 cmd_video = ["ffmpeg", "-y"] + decode_video_args + [
                     "-i", str(path),
                     "-map", "0:v:0",
+                ]
+                if decode_device != "cpu" and selected_accel == "nvenc":
+                    # NVDEC keeps frames on GPU; explicitly download + convert for raw RGB output.
+                    cmd_video += ["-vf", "hwdownload,format=nv12,format=rgb24"]
+                cmd_video += [
                     "-f", "rawvideo",
                     "-pix_fmt", "rgb24",
                     str(raw_video)
@@ -8074,6 +8079,11 @@ class basefwx:
                 cmd_video = ["ffmpeg", "-y"] + decode_video_args + [
                     "-i", str(path),
                     "-map", "0:v:0",
+                ]
+                if decode_device != "cpu" and selected_accel == "nvenc":
+                    # NVDEC keeps frames on GPU; explicitly download + convert for raw RGB output.
+                    cmd_video += ["-vf", "hwdownload,format=nv12,format=rgb24"]
+                cmd_video += [
                     "-f", "rawvideo",
                     "-pix_fmt", "rgb24",
                     str(raw_video)

@@ -226,6 +226,9 @@ class basefwx:
     KFM_HEADER_LEN = KFM_HEADER_STRUCT.size
     KFM_MAX_PAYLOAD = 1_073_741_824
     KFM_AUDIO_RATE = 24000
+    KFM_ACCEL_ENV = "BASEFWX_KFM_ACCEL"
+    KFM_ACCEL_MIN_BYTES_ENV = "BASEFWX_KFM_ACCEL_MIN_BYTES"
+    KFM_ACCEL_DEFAULT_MIN_BYTES = 1 * 1024 * 1024
     KFM_AUDIO_EXTENSIONS = frozenset({
         ".wav", ".mp3", ".m4a", ".aac", ".flac", ".ogg", ".oga", ".opus",
         ".wma", ".amr", ".aiff", ".aif", ".alac", ".m4b", ".caf", ".mka",
@@ -261,6 +264,7 @@ class basefwx:
         "legacy": JMG_SECURITY_PROFILE_LEGACY,
         "max": JMG_SECURITY_PROFILE_MAX,
     }
+    JMG_VIDEO_ENABLE_ENV = "BASEFWX_ENABLE_JMG_VIDEO"
     JMG_MASK_INFO = b'basefwx.jmg.mask.v1'
     JMG_MASK_AAD = b'jmg'
     ENABLE_B512_AEAD = os.getenv("BASEFWX_B512_AEAD", "1") == "1"
@@ -1948,6 +1952,11 @@ class basefwx:
         if profile not in basefwx.JMG_SECURITY_PROFILE_LABELS:
             raise ValueError(f"Unsupported JMG security profile id: {profile}")
         return profile
+
+    @staticmethod
+    def _jmg_video_enabled() -> bool:
+        raw = basefwx.os.getenv(basefwx.JMG_VIDEO_ENABLE_ENV, "0").strip().lower()
+        return raw in {"1", "true", "yes", "on"}
 
     @staticmethod
     def _jmg_stream_info_for_profile(profile_id: int) -> bytes:
@@ -4047,6 +4056,62 @@ class basefwx:
         _warnings_module.warn(message, RuntimeWarning, stacklevel=3)
 
     @staticmethod
+    def _kfm_accel_mode() -> str:
+        raw = basefwx.os.getenv(basefwx.KFM_ACCEL_ENV, "auto").strip().lower()
+        if raw in {"", "auto"}:
+            return "auto"
+        if raw in {"cuda", "gpu", "nvidia"}:
+            return "cuda"
+        if raw in {"cpu", "off", "none"}:
+            return "cpu"
+        return "auto"
+
+    @staticmethod
+    def _kfm_accel_min_bytes() -> int:
+        raw = basefwx.os.getenv(basefwx.KFM_ACCEL_MIN_BYTES_ENV, "").strip()
+        if raw:
+            try:
+                return max(1, int(raw))
+            except Exception:
+                return basefwx.KFM_ACCEL_DEFAULT_MIN_BYTES
+        return basefwx.KFM_ACCEL_DEFAULT_MIN_BYTES
+
+    @staticmethod
+    def _kfm_should_use_cuda(length: int) -> bool:
+        mode = basefwx._kfm_accel_mode()
+        if mode == "cpu":
+            return False
+        if length <= 0:
+            return False
+        if mode == "auto" and length < basefwx._kfm_accel_min_bytes():
+            return False
+        if basefwx.cp is None or basefwx.np is None:
+            if mode == "cuda":
+                raise RuntimeError(
+                    "kFM CUDA mode requested but CuPy/NumPy is unavailable. "
+                    "Install CuPy or set BASEFWX_KFM_ACCEL=cpu."
+                )
+            return False
+        cuda_status_fn = None
+        with basefwx.contextlib.suppress(Exception):
+            cuda_status_fn = getattr(basefwx.MediaCipher, "_cuda_runtime_status", None)
+        if cuda_status_fn is None:
+            if mode == "cuda":
+                raise RuntimeError(
+                    "kFM CUDA mode requested but CUDA runtime probes are unavailable."
+                )
+            return False
+        ready, reason = cuda_status_fn()
+        if not ready:
+            if mode == "cuda":
+                raise RuntimeError(
+                    "kFM CUDA mode requested but CUDA runtime is unavailable: "
+                    f"{reason}"
+                )
+            return False
+        return True
+
+    @staticmethod
     def _kfm_paths_equal(a: "basefwx.pathlib.Path", b: "basefwx.pathlib.Path") -> bool:
         try:
             return a.resolve() == b.resolve()
@@ -4095,6 +4160,18 @@ class basefwx:
     def _kfm_xor(data: bytes, mask: bytes) -> bytes:
         if len(data) != len(mask):
             raise ValueError("kFM mask length mismatch")
+        if basefwx.np is not None:
+            try:
+                np_data = basefwx.np.frombuffer(data, dtype=basefwx.np.uint8)
+                np_mask = basefwx.np.frombuffer(mask, dtype=basefwx.np.uint8)
+                if basefwx._kfm_should_use_cuda(len(data)):
+                    gpu_data = basefwx.cp.asarray(np_data)
+                    gpu_mask = basefwx.cp.asarray(np_mask)
+                    gpu_out = basefwx.cp.bitwise_xor(gpu_data, gpu_mask)
+                    return basefwx.cp.asnumpy(gpu_out).tobytes()
+                return basefwx.np.bitwise_xor(np_data, np_mask).tobytes()
+            except Exception:
+                pass
         out = bytearray(len(data))
         for idx in range(len(data)):
             out[idx] = data[idx] ^ mask[idx]
@@ -4199,16 +4276,33 @@ class basefwx:
             raw = data
         if len(raw) % 2:
             raw += b"\x00"
-        pcm = bytearray(len(raw))
-        for idx in range(0, len(raw), 2):
-            value = raw[idx] | (raw[idx + 1] << 8)
-            sample = value - 32768
-            pcm[idx:idx + 2] = basefwx.struct.pack("<h", sample)
+        pcm_bytes: bytes
+        if basefwx.np is not None:
+            try:
+                np_u16 = basefwx.np.frombuffer(raw, dtype=basefwx.np.dtype("<u2"))
+                if basefwx._kfm_should_use_cuda(len(raw)):
+                    gpu_u16 = basefwx.cp.asarray(np_u16, dtype=basefwx.cp.uint16)
+                    gpu_i16 = (gpu_u16.astype(basefwx.cp.int32) - 32768).astype(basefwx.cp.int16)
+                    pcm_bytes = basefwx.cp.asnumpy(gpu_i16).tobytes()
+                else:
+                    np_i16 = (np_u16.astype(basefwx.np.int32) - 32768).astype(basefwx.np.int16)
+                    pcm_bytes = np_i16.tobytes()
+            except Exception:
+                pcm_bytes = b""
+        else:
+            pcm_bytes = b""
+        if not pcm_bytes:
+            pcm = bytearray(len(raw))
+            for idx in range(0, len(raw), 2):
+                value = raw[idx] | (raw[idx + 1] << 8)
+                sample = value - 32768
+                pcm[idx:idx + 2] = basefwx.struct.pack("<h", sample)
+            pcm_bytes = bytes(pcm)
         with basefwx.wave.open(str(output_path), "wb") as wav_file:
             wav_file.setnchannels(1)
             wav_file.setsampwidth(2)
             wav_file.setframerate(basefwx.KFM_AUDIO_RATE)
-            wav_file.writeframes(bytes(pcm))
+            wav_file.writeframes(pcm_bytes)
 
     @staticmethod
     def _kfm_wav_to_bytes(path: "basefwx.pathlib.Path") -> bytes:
@@ -4224,6 +4318,20 @@ class basefwx:
     def _kfm_pcm16le_to_bytes(frames: bytes) -> bytes:
         if len(frames) % 2:
             frames += b"\x00"
+        if basefwx.np is not None:
+            try:
+                np_i16 = basefwx.np.frombuffer(frames, dtype=basefwx.np.dtype("<i2"))
+                if basefwx._kfm_should_use_cuda(len(frames)):
+                    gpu_i16 = basefwx.cp.asarray(np_i16, dtype=basefwx.cp.int16)
+                    gpu_u16 = (
+                        (gpu_i16.astype(basefwx.cp.int32) + 32768)
+                        & basefwx.cp.asarray(0xFFFF, dtype=basefwx.cp.int32)
+                    ).astype(basefwx.cp.uint16)
+                    return basefwx.cp.asnumpy(gpu_u16).tobytes()
+                np_u16 = ((np_i16.astype(basefwx.np.int32) + 32768) & 0xFFFF).astype(basefwx.np.uint16)
+                return np_u16.tobytes()
+            except Exception:
+                pass
         out = bytearray(len(frames))
         for idx in range(0, len(frames), 2):
             sample = basefwx.struct.unpack("<h", frames[idx:idx + 2])[0]
@@ -7006,11 +7114,29 @@ class basefwx:
         def _ffmpeg_video_codec_args(
             output_path: "basefwx.pathlib.Path",
             target_bitrate: int | None = None,
-            hwaccel: "basefwx.typing.Optional[str]" = None
+            hwaccel: "basefwx.typing.Optional[str]" = None,
+            *,
+            lossless: bool = False
         ) -> "list[str]":
+            def _video_rate_kbps(bits_per_second: int) -> "tuple[int, int]":
+                # ffmpeg/libx264 rate options are parsed as signed 32-bit values.
+                # Clamp values so very large measured source bitrates cannot overflow.
+                max_kbps = 2_000_000  # 2e9 when expressed as "<n>k"
+                rate_kbps = max(100, min(bits_per_second // 1000, max_kbps))
+                buf_kbps = max(rate_kbps, min(rate_kbps * 2, max_kbps))
+                return rate_kbps, buf_kbps
+
             ext = output_path.suffix.lower()
+            if lossless:
+                # No-archive media must preserve transformed raw bytes, otherwise
+                # codec loss breaks deterministic unshuffle/unmask reconstruction.
+                if ext in {".mkv", ".avi"}:
+                    return ["-c:v", "ffv1", "-level", "3", "-g", "1", "-pix_fmt", "rgb24"]
+                if ext == ".webm":
+                    return ["-c:v", "libvpx-vp9", "-lossless", "1", "-pix_fmt", "yuv444p"]
+                return ["-c:v", "libx264rgb", "-preset", "veryfast", "-crf", "0", "-pix_fmt", "rgb24"]
             if target_bitrate and target_bitrate > 0:
-                kbps = max(100, target_bitrate // 1000)
+                kbps, buf_kbps = _video_rate_kbps(target_bitrate)
                 if ext == ".webm":
                     return ["-c:v", "libvpx-vp9", "-b:v", f"{kbps}k", "-crf", "33", "-pix_fmt", "yuv420p"]
                 if hwaccel == "nvenc":
@@ -7019,7 +7145,7 @@ class basefwx:
                         "-preset", "p4",
                         "-b:v", f"{kbps}k",
                         "-maxrate", f"{kbps}k",
-                        "-bufsize", f"{kbps * 2}k",
+                        "-bufsize", f"{buf_kbps}k",
                         "-pix_fmt", "yuv420p"
                     ]
                 if hwaccel == "qsv":
@@ -7027,7 +7153,7 @@ class basefwx:
                         "-c:v", "h264_qsv",
                         "-b:v", f"{kbps}k",
                         "-maxrate", f"{kbps}k",
-                        "-bufsize", f"{kbps * 2}k",
+                        "-bufsize", f"{buf_kbps}k",
                         "-pix_fmt", "yuv420p"
                     ]
                 if hwaccel == "vaapi":
@@ -7038,14 +7164,14 @@ class basefwx:
                         "-c:v", "h264_vaapi",
                         "-b:v", f"{kbps}k",
                         "-maxrate", f"{kbps}k",
-                        "-bufsize", f"{kbps * 2}k"
+                        "-bufsize", f"{buf_kbps}k"
                     ]
                 return [
                     "-c:v", "libx264",
                     "-preset", "veryfast",
                     "-b:v", f"{kbps}k",
                     "-maxrate", f"{kbps}k",
-                    "-bufsize", f"{kbps * 2}k",
+                    "-bufsize", f"{buf_kbps}k",
                     "-pix_fmt", "yuv420p"
                 ]
             if ext == ".webm":
@@ -7062,9 +7188,18 @@ class basefwx:
         @staticmethod
         def _ffmpeg_audio_codec_args(
             output_path: "basefwx.pathlib.Path",
-            target_bitrate: int | None = None
+            target_bitrate: int | None = None,
+            *,
+            lossless: bool = False
         ) -> "list[str]":
             ext = output_path.suffix.lower()
+            if lossless:
+                if ext in {".mp4", ".m4v", ".mov", ".m4a"}:
+                    return ["-c:a", "alac"]
+                if ext in {".mkv", ".flac"}:
+                    return ["-c:a", "flac"]
+                if ext in {".wav", ".aiff", ".aif", ".avi"}:
+                    return ["-c:a", "pcm_s16le"]
             if target_bitrate and target_bitrate > 0:
                 kbps = max(48, target_bitrate // 1000)
             else:
@@ -7097,6 +7232,11 @@ class basefwx:
                 except Exception:
                     pass
             return max(1, basefwx.os.cpu_count() or 1)
+
+        @staticmethod
+        def _jmg_lossless_no_archive() -> bool:
+            raw = basefwx.os.getenv("BASEFWX_JMG_NOARCHIVE_LOSSLESS", "1").strip().lower()
+            return raw not in {"0", "false", "no", "off"}
 
         @staticmethod
         def _jmg_profile_label(
@@ -8376,6 +8516,7 @@ class basefwx:
             keep_meta: bool,
             base_key: "basefwx.typing.Optional[bytes]" = None,
             security_profile: int = 0,
+            lossless_carrier: bool = False,
             reporter: "basefwx.typing.Optional[basefwx._ProgressReporter]" = None,
             file_index: int = 0,
             display_path: "basefwx.typing.Optional[basefwx.pathlib.Path]" = None,
@@ -8499,11 +8640,25 @@ class basefwx:
                         cmd_base += ["-metadata", meta]
                 else:
                     cmd_base += ["-map_metadata", "-1"]
-                video_args = basefwx.MediaCipher._ffmpeg_video_codec_args(output_path, video_bps, selected_accel)
-                cpu_video_args = basefwx.MediaCipher._ffmpeg_video_codec_args(output_path, video_bps, None)
+                video_args = basefwx.MediaCipher._ffmpeg_video_codec_args(
+                    output_path,
+                    video_bps,
+                    selected_accel,
+                    lossless=lossless_carrier,
+                )
+                cpu_video_args = basefwx.MediaCipher._ffmpeg_video_codec_args(
+                    output_path,
+                    video_bps,
+                    None,
+                    lossless=lossless_carrier,
+                )
                 cmd = cmd_base + video_args
                 if raw_audio_out:
-                    cmd += basefwx.MediaCipher._ffmpeg_audio_codec_args(output_path, audio_bps)
+                    cmd += basefwx.MediaCipher._ffmpeg_audio_codec_args(
+                        output_path,
+                        audio_bps,
+                        lossless=lossless_carrier,
+                    )
                 cmd += basefwx.MediaCipher._ffmpeg_container_args(output_path)
                 cmd.append(str(output_path))
                 decode_cmd = ["ffmpeg", "-loglevel", "error", "-y"] + decode_video_args + [
@@ -8526,7 +8681,11 @@ class basefwx:
                 total_frames_hint = max(1, int(round((float(info.get("duration") or 0.0) * (fps or 30.0)))))
                 fallback_cmd = cmd_base + cpu_video_args
                 if raw_audio_out:
-                    fallback_cmd += basefwx.MediaCipher._ffmpeg_audio_codec_args(output_path, audio_bps)
+                    fallback_cmd += basefwx.MediaCipher._ffmpeg_audio_codec_args(
+                        output_path,
+                        audio_bps,
+                        lossless=lossless_carrier,
+                    )
                 fallback_cmd += basefwx.MediaCipher._ffmpeg_container_args(output_path)
                 fallback_cmd.append(str(output_path))
 
@@ -8570,6 +8729,7 @@ class basefwx:
             keep_meta: bool,
             base_key: "basefwx.typing.Optional[bytes]" = None,
             security_profile: int = 0,
+            lossless_carrier: bool = False,
             reporter: "basefwx.typing.Optional[basefwx._ProgressReporter]" = None,
             file_index: int = 0,
             display_path: "basefwx.typing.Optional[basefwx.pathlib.Path]" = None
@@ -8637,7 +8797,11 @@ class basefwx:
                         cmd += ["-metadata", meta]
                 else:
                     cmd += ["-map_metadata", "-1"]
-                cmd += basefwx.MediaCipher._ffmpeg_audio_codec_args(output_path, audio_bps)
+                cmd += basefwx.MediaCipher._ffmpeg_audio_codec_args(
+                    output_path,
+                    audio_bps,
+                    lossless=lossless_carrier,
+                )
                 cmd += basefwx.MediaCipher._ffmpeg_container_args(output_path)
                 cmd.append(str(output_path))
                 basefwx.MediaCipher._run_ffmpeg(cmd)
@@ -8988,6 +9152,7 @@ class basefwx:
 
                 append_archive_trailer = False
                 append_key_trailer = False
+                lossless_no_archive = (not archive_original) and basefwx.MediaCipher._jmg_lossless_no_archive()
                 if suffix in basefwx.MediaCipher.IMAGE_EXTS:
                     _ensure_hw_plan("image")
                     result = basefwx.ImageCipher.encrypt_image_inv(
@@ -9003,6 +9168,12 @@ class basefwx:
                     except Exception:
                         info = {}
                     if info.get("video"):
+                        if not basefwx._jmg_video_enabled():
+                            raise RuntimeError(
+                                "jMG video mode is temporarily disabled. "
+                                "Use fwxAES for video, or set "
+                                f"{basefwx.JMG_VIDEO_ENABLE_ENV}=1 to re-enable."
+                            )
                         frame_bytes = int((info.get("video") or {}).get("width") or 0) * int(
                             (info.get("video") or {}).get("height") or 0
                         ) * 3
@@ -9028,6 +9199,7 @@ class basefwx:
                             file_index=file_index,
                             display_path=display_path,
                             hw_plan=plan,
+                            lossless_carrier=lossless_no_archive,
                         )
                         result = str(temp_output)
                         if archive_original:
@@ -9050,7 +9222,8 @@ class basefwx:
                             security_profile=basefwx.JMG_SECURITY_PROFILE_MAX,
                             reporter=local_reporter,
                             file_index=file_index,
-                            display_path=display_path
+                            display_path=display_path,
+                            lossless_carrier=lossless_no_archive,
                         )
                         result = str(temp_output)
                         if archive_original:
@@ -9208,6 +9381,12 @@ class basefwx:
                         except Exception:
                             info = {}
                         if info.get("video"):
+                            if not basefwx._jmg_video_enabled():
+                                raise RuntimeError(
+                                    "jMG video mode is temporarily disabled. "
+                                    "Use fwxAES for video, or set "
+                                    f"{basefwx.JMG_VIDEO_ENABLE_ENV}=1 to re-enable."
+                                )
                             frame_bytes = int((info.get("video") or {}).get("width") or 0) * int(
                                 (info.get("video") or {}).get("height") or 0
                             ) * 3

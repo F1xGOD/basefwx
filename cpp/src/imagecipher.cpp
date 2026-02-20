@@ -229,21 +229,68 @@ Bytes DeriveMaterial(const std::string& password) {
     return basefwx::crypto::Pbkdf2HmacSha256(password, salt, iters, 64);
 }
 
-Bytes DeriveMaterialFromMask(const Bytes& mask_key) {
-    return basefwx::crypto::HkdfSha256(mask_key, basefwx::constants::kImageCipherStreamInfo, 64);
+std::uint8_t NormalizeJmgProfile(std::uint8_t profile_id) {
+    if (profile_id != basefwx::constants::kJmgSecurityProfileLegacy
+        && profile_id != basefwx::constants::kJmgSecurityProfileMax) {
+        throw std::runtime_error("Unsupported JMG security profile");
+    }
+    return profile_id;
 }
 
-Bytes BaseKeyFromMask(const Bytes& mask_key) {
-    return basefwx::crypto::HkdfSha256(mask_key, basefwx::constants::kImageCipherStreamInfo, 32);
+std::string JmgProfileLabel(std::string_view label, std::uint8_t profile_id) {
+    NormalizeJmgProfile(profile_id);
+    if (profile_id == basefwx::constants::kJmgSecurityProfileMax) {
+        return std::string(label) + ".max";
+    }
+    return std::string(label);
 }
 
-Bytes ArchiveKeyFromMask(const Bytes& mask_key) {
-    return basefwx::crypto::HkdfSha256(mask_key, basefwx::constants::kImageCipherArchiveInfo, 32);
+std::string JmgStreamInfoForProfile(std::uint8_t profile_id) {
+    return JmgProfileLabel(basefwx::constants::kImageCipherStreamInfo, profile_id);
 }
 
-Bytes BuildJmgHeader(const Bytes& user_blob, const Bytes& master_blob) {
+std::string JmgArchiveInfoForProfile(std::uint8_t profile_id) {
+    return JmgProfileLabel(basefwx::constants::kImageCipherArchiveInfo, profile_id);
+}
+
+std::uint8_t JmgVideoMaskBitsForProfile(std::uint8_t profile_id) {
+    NormalizeJmgProfile(profile_id);
+    if (profile_id == basefwx::constants::kJmgSecurityProfileMax) {
+        return 8;
+    }
+    return 6;
+}
+
+std::uint16_t JmgAudioMaskBitsForProfile(std::uint8_t profile_id) {
+    NormalizeJmgProfile(profile_id);
+    if (profile_id == basefwx::constants::kJmgSecurityProfileMax) {
+        return 16;
+    }
+    return 13;
+}
+
+Bytes DeriveMaterialFromMask(const Bytes& mask_key,
+                             std::uint8_t profile_id = basefwx::constants::kJmgSecurityProfileLegacy) {
+    return basefwx::crypto::HkdfSha256(mask_key, JmgStreamInfoForProfile(profile_id), 64);
+}
+
+Bytes BaseKeyFromMask(const Bytes& mask_key,
+                      std::uint8_t profile_id = basefwx::constants::kJmgSecurityProfileLegacy) {
+    return basefwx::crypto::HkdfSha256(mask_key, JmgStreamInfoForProfile(profile_id), 32);
+}
+
+Bytes ArchiveKeyFromMask(const Bytes& mask_key,
+                         std::uint8_t profile_id = basefwx::constants::kJmgSecurityProfileLegacy) {
+    return basefwx::crypto::HkdfSha256(mask_key, JmgArchiveInfoForProfile(profile_id), 32);
+}
+
+Bytes BuildJmgHeader(const Bytes& user_blob,
+                     const Bytes& master_blob,
+                     std::uint8_t profile_id = basefwx::constants::kJmgSecurityProfileDefault) {
+    profile_id = NormalizeJmgProfile(profile_id);
     std::vector<basefwx::format::Bytes> parts = {user_blob, master_blob};
     Bytes payload = basefwx::format::PackLengthPrefixed(parts);
+    payload.insert(payload.begin(), profile_id);
     Bytes header;
     header.reserve(basefwx::constants::kJmgKeyMagic.size() + 1 + 4 + payload.size());
     header.insert(header.end(),
@@ -262,7 +309,8 @@ Bytes BuildJmgHeader(const Bytes& user_blob, const Bytes& master_blob) {
 bool ParseJmgHeader(const Bytes& blob,
                     std::size_t& header_len,
                     Bytes& user_blob,
-                    Bytes& master_blob) {
+                    Bytes& master_blob,
+                    std::uint8_t* profile_id_out = nullptr) {
     const std::size_t header_min = basefwx::constants::kJmgKeyMagic.size() + 1 + 4;
     if (blob.size() < header_min) {
         return false;
@@ -273,7 +321,8 @@ bool ParseJmgHeader(const Bytes& blob,
         return false;
     }
     std::uint8_t version = blob[basefwx::constants::kJmgKeyMagic.size()];
-    if (version != basefwx::constants::kJmgKeyVersion) {
+    if (version != basefwx::constants::kJmgKeyVersionLegacy
+        && version != basefwx::constants::kJmgKeyVersion) {
         throw std::runtime_error("Unsupported JMG key header version");
     }
     std::uint32_t payload_len = (static_cast<std::uint32_t>(blob[basefwx::constants::kJmgKeyMagic.size() + 1]) << 24)
@@ -286,9 +335,21 @@ bool ParseJmgHeader(const Bytes& blob,
     }
     Bytes payload(blob.begin() + static_cast<std::ptrdiff_t>(header_min),
                   blob.begin() + static_cast<std::ptrdiff_t>(header_len));
-    auto parts = basefwx::format::UnpackLengthPrefixed(payload, 2);
+    std::uint8_t profile_id = basefwx::constants::kJmgSecurityProfileLegacy;
+    Bytes key_payload = payload;
+    if (version == basefwx::constants::kJmgKeyVersion) {
+        if (payload.empty()) {
+            throw std::runtime_error("Truncated JMG key header profile");
+        }
+        profile_id = NormalizeJmgProfile(payload[0]);
+        key_payload.assign(payload.begin() + 1, payload.end());
+    }
+    auto parts = basefwx::format::UnpackLengthPrefixed(key_payload, 2);
     user_blob = parts[0];
     master_blob = parts[1];
+    if (profile_id_out) {
+        *profile_id_out = profile_id;
+    }
     return true;
 }
 
@@ -479,7 +540,8 @@ void AppendTrailerStream(const std::filesystem::path& output_path,
                          const std::string& password,
                          const std::function<void(double)>& progress_cb = {},
                          const Bytes& archive_key_override = Bytes{},
-                         const Bytes& key_header = Bytes{}) {
+                         const Bytes& key_header = Bytes{},
+                         std::string_view archive_info = basefwx::constants::kImageCipherArchiveInfo) {
     auto magic = basefwx::constants::kImageCipherTrailerMagic;
     std::error_code ec;
     auto size = std::filesystem::file_size(original_path, ec);
@@ -503,10 +565,9 @@ void AppendTrailerStream(const std::filesystem::path& output_path,
     Bytes archive_key = archive_key_override;
     if (archive_key.empty()) {
         Bytes material = DeriveMaterial(password);
-        archive_key = basefwx::crypto::HkdfSha256(material, basefwx::constants::kImageCipherArchiveInfo, 32);
+        archive_key = basefwx::crypto::HkdfSha256(material, archive_info, 32);
     }
-    Bytes aad(basefwx::constants::kImageCipherArchiveInfo.begin(),
-              basefwx::constants::kImageCipherArchiveInfo.end());
+    Bytes aad(archive_info.begin(), archive_info.end());
     Bytes nonce = basefwx::crypto::RandomBytes(basefwx::constants::kAeadNonceLen);
 
     std::ifstream input(original_path, std::ios::binary);
@@ -644,6 +705,7 @@ bool TryDecryptTrailerStream(const std::filesystem::path& input_path,
         input.seekg(static_cast<std::streamoff>(blob_start), std::ios::beg);
 
         Bytes archive_key;
+        std::string archive_info = std::string(basefwx::constants::kImageCipherArchiveInfo);
         Bytes nonce(basefwx::constants::kAeadNonceLen);
         std::uint64_t cipher_len = 0;
 
@@ -682,7 +744,8 @@ bool TryDecryptTrailerStream(const std::filesystem::path& input_path,
             std::size_t parsed_len = 0;
             Bytes user_blob;
             Bytes master_blob;
-            if (!ParseJmgHeader(header_bytes, parsed_len, user_blob, master_blob)) {
+            std::uint8_t profile_id = basefwx::constants::kJmgSecurityProfileLegacy;
+            if (!ParseJmgHeader(header_bytes, parsed_len, user_blob, master_blob, &profile_id)) {
                 throw std::runtime_error("Invalid JMG key header");
             }
             basefwx::pb512::KdfOptions kdf;
@@ -695,7 +758,8 @@ bool TryDecryptTrailerStream(const std::filesystem::path& input_path,
                 basefwx::constants::kMaskAadJmg,
                 kdf
             );
-            archive_key = ArchiveKeyFromMask(mask_key);
+            archive_key = ArchiveKeyFromMask(mask_key, profile_id);
+            archive_info = JmgArchiveInfoForProfile(profile_id);
             input.read(reinterpret_cast<char*>(nonce.data()),
                        static_cast<std::streamsize>(nonce.size()));
             if (input.gcount() != static_cast<std::streamsize>(nonce.size())) {
@@ -721,8 +785,7 @@ bool TryDecryptTrailerStream(const std::filesystem::path& input_path,
             cipher_len = blob_len - basefwx::constants::kAeadNonceLen - basefwx::constants::kAeadTagLen;
         }
 
-        Bytes aad(basefwx::constants::kImageCipherArchiveInfo.begin(),
-                  basefwx::constants::kImageCipherArchiveInfo.end());
+        Bytes aad(archive_info.begin(), archive_info.end());
 
         EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();
         if (!ctx) {
@@ -928,6 +991,7 @@ std::optional<TrailerInfo> ExtractBalancedTrailerInfo(const std::filesystem::pat
 
 struct JmgResolvedKeys {
     std::size_t header_len = 0;
+    std::uint8_t profile_id = basefwx::constants::kJmgSecurityProfileLegacy;
     Bytes material;
     Bytes base_key;
     Bytes archive_key;
@@ -937,7 +1001,8 @@ std::optional<JmgResolvedKeys> ResolveJmgHeaderKeys(const Bytes& blob, const std
     std::size_t header_len = 0;
     Bytes user_blob;
     Bytes master_blob;
-    if (!ParseJmgHeader(blob, header_len, user_blob, master_blob)) {
+    std::uint8_t profile_id = basefwx::constants::kJmgSecurityProfileLegacy;
+    if (!ParseJmgHeader(blob, header_len, user_blob, master_blob, &profile_id)) {
         return std::nullopt;
     }
     basefwx::pb512::KdfOptions kdf;
@@ -952,13 +1017,16 @@ std::optional<JmgResolvedKeys> ResolveJmgHeaderKeys(const Bytes& blob, const std
     );
     JmgResolvedKeys keys;
     keys.header_len = header_len;
-    keys.material = DeriveMaterialFromMask(mask_key);
-    keys.base_key = BaseKeyFromMask(mask_key);
-    keys.archive_key = ArchiveKeyFromMask(mask_key);
+    keys.profile_id = profile_id;
+    keys.material = DeriveMaterialFromMask(mask_key, profile_id);
+    keys.base_key = BaseKeyFromMask(mask_key, profile_id);
+    keys.archive_key = ArchiveKeyFromMask(mask_key, profile_id);
     return keys;
 }
 
-Bytes LoadBaseKeyFromKeyTrailerFile(const std::filesystem::path& input_path, const std::string& password) {
+Bytes LoadBaseKeyFromKeyTrailerFile(const std::filesystem::path& input_path,
+                                    const std::string& password,
+                                    std::uint8_t* profile_id_out = nullptr) {
     auto trailer_info = ExtractBalancedTrailerInfo(input_path, basefwx::constants::kImageCipherKeyTrailerMagic);
     if (!trailer_info.has_value() || trailer_info->blob_len == 0) {
         return {};
@@ -983,10 +1051,15 @@ Bytes LoadBaseKeyFromKeyTrailerFile(const std::filesystem::path& input_path, con
     if (keys->header_len != blob.size()) {
         throw std::runtime_error("Invalid JMG key trailer payload");
     }
+    if (profile_id_out) {
+        *profile_id_out = keys->profile_id;
+    }
     return keys->base_key;
 }
 
-Bytes LoadBaseKeyFromKeyTrailerBytes(const Bytes& file_bytes, const std::string& password) {
+Bytes LoadBaseKeyFromKeyTrailerBytes(const Bytes& file_bytes,
+                                     const std::string& password,
+                                     std::uint8_t* profile_id_out = nullptr) {
     Bytes payload;
     Bytes trailer;
     if (!ExtractTrailerWithMagic(file_bytes, basefwx::constants::kImageCipherKeyTrailerMagic, payload, trailer)
@@ -999,6 +1072,9 @@ Bytes LoadBaseKeyFromKeyTrailerBytes(const Bytes& file_bytes, const std::string&
     }
     if (keys->header_len != trailer.size()) {
         throw std::runtime_error("Invalid JMG key trailer payload");
+    }
+    if (profile_id_out) {
+        *profile_id_out = keys->profile_id;
     }
     return keys->base_key;
 }
@@ -1155,6 +1231,7 @@ std::string EncryptImageInv(const std::string& path,
     Bytes material_override;
     Bytes archive_key;
     Bytes trailer_header;
+    const std::uint8_t security_profile = basefwx::constants::kJmgSecurityProfileDefault;
 
     if (include_trailer) {
         basefwx::pb512::KdfOptions kdf;
@@ -1166,9 +1243,9 @@ std::string EncryptImageInv(const std::string& path,
             basefwx::constants::kMaskAadJmg,
             kdf
         );
-        material_override = DeriveMaterialFromMask(mask_key.mask_key);
-        archive_key = ArchiveKeyFromMask(mask_key.mask_key);
-        trailer_header = BuildJmgHeader(mask_key.user_blob, mask_key.master_blob);
+        material_override = DeriveMaterialFromMask(mask_key.mask_key, security_profile);
+        archive_key = ArchiveKeyFromMask(mask_key.mask_key, security_profile);
+        trailer_header = BuildJmgHeader(mask_key.user_blob, mask_key.master_blob, security_profile);
     }
 
     BuildMaskAndShuffle(resolved, num_pixels, image.channels, mask, rotations, perm, material,
@@ -1191,8 +1268,8 @@ std::string EncryptImageInv(const std::string& path,
 
     if (include_trailer) {
         if (archive_original) {
-            Bytes aad(basefwx::constants::kImageCipherArchiveInfo.begin(),
-                      basefwx::constants::kImageCipherArchiveInfo.end());
+            std::string archive_info = JmgArchiveInfoForProfile(security_profile);
+            Bytes aad(archive_info.begin(), archive_info.end());
             Bytes archive_blob = basefwx::crypto::AeadEncrypt(archive_key, original_bytes, aad);
             Bytes trailer = trailer_header;
             trailer.insert(trailer.end(), archive_blob.begin(), archive_blob.end());
@@ -1251,10 +1328,12 @@ std::string DecryptImageInv(const std::string& path,
             }
             Bytes archive_key;
             Bytes archive_blob;
+            std::string archive_info = std::string(basefwx::constants::kImageCipherArchiveInfo);
             if (header_keys.has_value()) {
                 archive_key = header_keys->archive_key;
                 material_override = header_keys->material;
                 have_material_override = true;
+                archive_info = JmgArchiveInfoForProfile(header_keys->profile_id);
                 archive_blob.assign(
                     trailer.begin() + static_cast<std::ptrdiff_t>(header_keys->header_len),
                     trailer.end()
@@ -1264,8 +1343,7 @@ std::string DecryptImageInv(const std::string& path,
                 archive_key = basefwx::crypto::HkdfSha256(material, basefwx::constants::kImageCipherArchiveInfo, 32);
                 archive_blob = trailer;
             }
-            Bytes aad(basefwx::constants::kImageCipherArchiveInfo.begin(),
-                      basefwx::constants::kImageCipherArchiveInfo.end());
+            Bytes aad(archive_info.begin(), archive_info.end());
             Bytes original_bytes = basefwx::crypto::AeadDecrypt(archive_key, archive_blob, aad);
             WriteFileBytes(output_path, original_bytes);
             return output_path.string();
@@ -2134,7 +2212,10 @@ Bytes UnshuffleFrameBlocks(const Bytes& frame,
     return out;
 }
 
-Bytes AudioMaskTransform(const Bytes& data, const Bytes& key, const Bytes& iv) {
+Bytes AudioMaskTransform(const Bytes& data,
+                         const Bytes& key,
+                         const Bytes& iv,
+                         std::uint16_t mask_bits) {
     // Obfuscation-only: masks low bits to preserve audio fidelity, not confidentiality.
     if (data.empty()) {
         return {};
@@ -2142,8 +2223,12 @@ Bytes AudioMaskTransform(const Bytes& data, const Bytes& key, const Bytes& iv) {
     Bytes zeros(data.size(), 0);
     Bytes stream = basefwx::crypto::AesCtrTransform(key, iv, zeros);
     Bytes out = data;
-    constexpr std::uint16_t kAudioMaskBits = 13;
-    constexpr std::uint16_t mask = static_cast<std::uint16_t>((1u << kAudioMaskBits) - 1u);
+    if (mask_bits > 16) {
+        mask_bits = 16;
+    }
+    const std::uint16_t mask = mask_bits == 16
+        ? static_cast<std::uint16_t>(0xFFFFu)
+        : static_cast<std::uint16_t>((1u << mask_bits) - 1u);
     std::size_t samples = out.size() / 2;
     for (std::size_t i = 0; i < samples; ++i) {
         std::size_t off = i * 2;
@@ -2158,7 +2243,10 @@ Bytes AudioMaskTransform(const Bytes& data, const Bytes& key, const Bytes& iv) {
     return out;
 }
 
-Bytes VideoMaskTransform(const Bytes& data, const Bytes& key, const Bytes& iv) {
+Bytes VideoMaskTransform(const Bytes& data,
+                         const Bytes& key,
+                         const Bytes& iv,
+                         std::uint8_t mask_bits) {
     // Obfuscation-only: masks low bits to preserve video quality, not confidentiality.
     if (data.empty()) {
         return {};
@@ -2166,8 +2254,12 @@ Bytes VideoMaskTransform(const Bytes& data, const Bytes& key, const Bytes& iv) {
     Bytes zeros(data.size(), 0);
     Bytes stream = basefwx::crypto::AesCtrTransform(key, iv, zeros);
     Bytes out = data;
-    constexpr std::uint8_t kVideoMaskBits = 6;
-    constexpr std::uint8_t mask = static_cast<std::uint8_t>((1u << kVideoMaskBits) - 1u);
+    if (mask_bits > 8) {
+        mask_bits = 8;
+    }
+    const std::uint8_t mask = mask_bits == 8
+        ? static_cast<std::uint8_t>(0xFFu)
+        : static_cast<std::uint8_t>((1u << mask_bits) - 1u);
     for (std::size_t i = 0; i < out.size(); ++i) {
         out[i] = static_cast<std::uint8_t>(out[i] ^ (stream[i] & mask));
     }
@@ -2211,6 +2303,7 @@ void ScrambleVideoRaw(const std::filesystem::path& raw_in,
                       const std::filesystem::path& raw_out,
                       const VideoInfo& video,
                       const Bytes& base_key,
+                      std::uint8_t security_profile = basefwx::constants::kJmgSecurityProfileLegacy,
                       const std::function<void(double)>& progress_cb = {}) {
     std::size_t frame_size = static_cast<std::size_t>(video.width) * static_cast<std::size_t>(video.height) * 3u;
     if (frame_size == 0) {
@@ -2227,6 +2320,10 @@ void ScrambleVideoRaw(const std::filesystem::path& raw_in,
     std::uint64_t group_index = 0;
     std::uint64_t processed_frames = 0;
     std::uint64_t total_frames = 0;
+    const std::string frame_label = JmgProfileLabel("jmg-frame", security_profile);
+    const std::string frame_block_label = JmgProfileLabel("jmg-fblk", security_profile);
+    const std::string frame_group_label = JmgProfileLabel("jmg-fgrp", security_profile);
+    const std::uint8_t video_mask_bits = JmgVideoMaskBitsForProfile(security_profile);
     if (progress_cb) {
         std::error_code ec;
         auto bytes = std::filesystem::file_size(raw_in, ec);
@@ -2253,11 +2350,11 @@ void ScrambleVideoRaw(const std::filesystem::path& raw_in,
         std::vector<Bytes> processed(frames.size());
         ParallelFor(frames.size(), static_cast<std::size_t>(group_frames), [&](std::size_t idx) {
             std::uint64_t frame_id = group_start_index + idx;
-            Bytes material = UnitMaterial(base_key, "jmg-frame", frame_id, 48);
+            Bytes material = UnitMaterial(base_key, frame_label, frame_id, 48);
             Bytes key(material.begin(), material.begin() + 32);
             Bytes iv(material.begin() + 32, material.begin() + 48);
-            Bytes masked = VideoMaskTransform(frames[idx], key, iv);
-            Bytes seed_bytes = UnitMaterial(base_key, "jmg-fblk", frame_id, 16);
+            Bytes masked = VideoMaskTransform(frames[idx], key, iv, video_mask_bits);
+            Bytes seed_bytes = UnitMaterial(base_key, frame_block_label, frame_id, 16);
             std::uint64_t seed = 0;
             for (std::uint8_t b : seed_bytes) {
                 seed = (seed << 8) | b;
@@ -2265,7 +2362,7 @@ void ScrambleVideoRaw(const std::filesystem::path& raw_in,
             processed[idx] = ShuffleFrameBlocks(masked, video.width, video.height, 3, seed, 2);
         });
         std::uint64_t seed_index = (group_index * 0x9E3779B97F4A7C15ULL) ^ group_start_index;
-        Bytes seed_bytes = UnitMaterial(base_key, "jmg-fgrp", seed_index, 16);
+        Bytes seed_bytes = UnitMaterial(base_key, frame_group_label, seed_index, 16);
         std::uint64_t seed = 0;
         for (std::uint8_t b : seed_bytes) {
             seed = (seed << 8) | b;
@@ -2291,6 +2388,7 @@ void ScrambleAudioRaw(const std::filesystem::path& raw_in,
                       const std::filesystem::path& raw_out,
                       const AudioInfo& audio,
                       const Bytes& base_key,
+                      std::uint8_t security_profile = basefwx::constants::kJmgSecurityProfileLegacy,
                       const std::function<void(double)>& progress_cb = {}) {
     constexpr double kAudioBlockSeconds = 0.15;
     constexpr double kAudioGroupSeconds = 1.0;
@@ -2306,6 +2404,10 @@ void ScrambleAudioRaw(const std::filesystem::path& raw_in,
     std::uint64_t group_index = 0;
     std::uint64_t processed_blocks = 0;
     std::uint64_t total_blocks = 0;
+    const std::string audio_block_label = JmgProfileLabel("jmg-ablock", security_profile);
+    const std::string audio_sample_label = JmgProfileLabel("jmg-asamp", security_profile);
+    const std::string audio_group_label = JmgProfileLabel("jmg-agrp", security_profile);
+    const std::uint16_t audio_mask_bits = JmgAudioMaskBitsForProfile(security_profile);
     if (progress_cb && block_size > 0) {
         std::error_code ec;
         auto bytes = std::filesystem::file_size(raw_in, ec);
@@ -2333,11 +2435,11 @@ void ScrambleAudioRaw(const std::filesystem::path& raw_in,
         std::vector<Bytes> processed(blocks.size());
         ParallelFor(blocks.size(), static_cast<std::size_t>(group_blocks), [&](std::size_t idx) {
             std::uint64_t block_id = group_start_index + idx;
-            Bytes material = UnitMaterial(base_key, "jmg-ablock", block_id, 48);
+            Bytes material = UnitMaterial(base_key, audio_block_label, block_id, 48);
             Bytes key(material.begin(), material.begin() + 32);
             Bytes iv(material.begin() + 32, material.begin() + 48);
-            Bytes masked = AudioMaskTransform(blocks[idx], key, iv);
-            Bytes seed_bytes = UnitMaterial(base_key, "jmg-asamp", block_id, 16);
+            Bytes masked = AudioMaskTransform(blocks[idx], key, iv, audio_mask_bits);
+            Bytes seed_bytes = UnitMaterial(base_key, audio_sample_label, block_id, 16);
             std::uint64_t seed = 0;
             for (std::uint8_t b : seed_bytes) {
                 seed = (seed << 8) | b;
@@ -2345,7 +2447,7 @@ void ScrambleAudioRaw(const std::filesystem::path& raw_in,
             processed[idx] = ShuffleAudioSamples(masked, seed, false);
         });
         std::uint64_t seed_index = (group_index * 0x9E3779B97F4A7C15ULL) ^ group_start_index;
-        Bytes seed_bytes = UnitMaterial(base_key, "jmg-agrp", seed_index, 16);
+        Bytes seed_bytes = UnitMaterial(base_key, audio_group_label, seed_index, 16);
         std::uint64_t seed = 0;
         for (std::uint8_t b : seed_bytes) {
             seed = (seed << 8) | b;
@@ -2371,6 +2473,7 @@ void UnscrambleVideoRaw(const std::filesystem::path& raw_in,
                         const std::filesystem::path& raw_out,
                         const VideoInfo& video,
                         const Bytes& base_key,
+                        std::uint8_t security_profile = basefwx::constants::kJmgSecurityProfileLegacy,
                         const std::function<void(double)>& progress_cb = {}) {
     std::size_t frame_size = static_cast<std::size_t>(video.width) * static_cast<std::size_t>(video.height) * 3u;
     if (frame_size == 0) {
@@ -2387,6 +2490,10 @@ void UnscrambleVideoRaw(const std::filesystem::path& raw_in,
     std::uint64_t group_index = 0;
     std::uint64_t processed_frames = 0;
     std::uint64_t total_frames = 0;
+    const std::string frame_label = JmgProfileLabel("jmg-frame", security_profile);
+    const std::string frame_block_label = JmgProfileLabel("jmg-fblk", security_profile);
+    const std::string frame_group_label = JmgProfileLabel("jmg-fgrp", security_profile);
+    const std::uint8_t video_mask_bits = JmgVideoMaskBitsForProfile(security_profile);
     if (progress_cb) {
         std::error_code ec;
         auto bytes = std::filesystem::file_size(raw_in, ec);
@@ -2410,7 +2517,7 @@ void UnscrambleVideoRaw(const std::filesystem::path& raw_in,
             break;
         }
         std::uint64_t seed_index = (group_index * 0x9E3779B97F4A7C15ULL) ^ group_start_index;
-        Bytes seed_bytes = UnitMaterial(base_key, "jmg-fgrp", seed_index, 16);
+        Bytes seed_bytes = UnitMaterial(base_key, frame_group_label, seed_index, 16);
         std::uint64_t seed = 0;
         for (std::uint8_t b : seed_bytes) {
             seed = (seed << 8) | b;
@@ -2424,16 +2531,16 @@ void UnscrambleVideoRaw(const std::filesystem::path& raw_in,
         std::vector<Bytes> restored(ordered.size());
         ParallelFor(ordered.size(), static_cast<std::size_t>(group_frames), [&](std::size_t idx) {
             std::uint64_t frame_id = group_start_index + idx;
-            Bytes seed_bytes_local = UnitMaterial(base_key, "jmg-fblk", frame_id, 16);
+            Bytes seed_bytes_local = UnitMaterial(base_key, frame_block_label, frame_id, 16);
             std::uint64_t seed_local = 0;
             for (std::uint8_t b : seed_bytes_local) {
                 seed_local = (seed_local << 8) | b;
             }
             Bytes unshuffled = UnshuffleFrameBlocks(ordered[idx], video.width, video.height, 3, seed_local, 2);
-            Bytes material = UnitMaterial(base_key, "jmg-frame", frame_id, 48);
+            Bytes material = UnitMaterial(base_key, frame_label, frame_id, 48);
             Bytes key(material.begin(), material.begin() + 32);
             Bytes iv(material.begin() + 32, material.begin() + 48);
-            restored[idx] = VideoMaskTransform(unshuffled, key, iv);
+            restored[idx] = VideoMaskTransform(unshuffled, key, iv, video_mask_bits);
         });
         for (const auto& frame : restored) {
             output.write(reinterpret_cast<const char*>(frame.data()),
@@ -2456,6 +2563,7 @@ void UnscrambleAudioRaw(const std::filesystem::path& raw_in,
                         const std::filesystem::path& raw_out,
                         const AudioInfo& audio,
                         const Bytes& base_key,
+                        std::uint8_t security_profile = basefwx::constants::kJmgSecurityProfileLegacy,
                         const std::function<void(double)>& progress_cb = {}) {
     constexpr double kAudioBlockSeconds = 0.15;
     constexpr double kAudioGroupSeconds = 1.0;
@@ -2471,6 +2579,10 @@ void UnscrambleAudioRaw(const std::filesystem::path& raw_in,
     std::uint64_t group_index = 0;
     std::uint64_t processed_blocks = 0;
     std::uint64_t total_blocks = 0;
+    const std::string audio_block_label = JmgProfileLabel("jmg-ablock", security_profile);
+    const std::string audio_sample_label = JmgProfileLabel("jmg-asamp", security_profile);
+    const std::string audio_group_label = JmgProfileLabel("jmg-agrp", security_profile);
+    const std::uint16_t audio_mask_bits = JmgAudioMaskBitsForProfile(security_profile);
     if (progress_cb && block_size > 0) {
         std::error_code ec;
         auto bytes = std::filesystem::file_size(raw_in, ec);
@@ -2495,7 +2607,7 @@ void UnscrambleAudioRaw(const std::filesystem::path& raw_in,
             break;
         }
         std::uint64_t seed_index = (group_index * 0x9E3779B97F4A7C15ULL) ^ group_start_index;
-        Bytes seed_bytes = UnitMaterial(base_key, "jmg-agrp", seed_index, 16);
+        Bytes seed_bytes = UnitMaterial(base_key, audio_group_label, seed_index, 16);
         std::uint64_t seed = 0;
         for (std::uint8_t b : seed_bytes) {
             seed = (seed << 8) | b;
@@ -2509,16 +2621,16 @@ void UnscrambleAudioRaw(const std::filesystem::path& raw_in,
         std::vector<Bytes> restored(ordered.size());
         ParallelFor(ordered.size(), static_cast<std::size_t>(group_blocks), [&](std::size_t idx) {
             std::uint64_t block_id = group_start_index + idx;
-            Bytes seed_bytes_local = UnitMaterial(base_key, "jmg-asamp", block_id, 16);
+            Bytes seed_bytes_local = UnitMaterial(base_key, audio_sample_label, block_id, 16);
             std::uint64_t seed_local = 0;
             for (std::uint8_t b : seed_bytes_local) {
                 seed_local = (seed_local << 8) | b;
             }
             Bytes unshuffled = ShuffleAudioSamples(ordered[idx], seed_local, true);
-            Bytes material = UnitMaterial(base_key, "jmg-ablock", block_id, 48);
+            Bytes material = UnitMaterial(base_key, audio_block_label, block_id, 48);
             Bytes key(material.begin(), material.begin() + 32);
             Bytes iv(material.begin() + 32, material.begin() + 48);
-            restored[idx] = AudioMaskTransform(unshuffled, key, iv);
+            restored[idx] = AudioMaskTransform(unshuffled, key, iv, audio_mask_bits);
         });
         for (const auto& block : restored) {
             output.write(reinterpret_cast<const char*>(block.data()),
@@ -2811,23 +2923,24 @@ std::string EncryptMedia(const std::string& path,
             basefwx::constants::kMaskAadJmg,
             kdf
         );
-        Bytes base_key = BaseKeyFromMask(mask_key.mask_key);
+        const std::uint8_t security_profile = basefwx::constants::kJmgSecurityProfileDefault;
+        Bytes base_key = BaseKeyFromMask(mask_key.mask_key, security_profile);
         Bytes archive_key;
         if (archive_original) {
-            archive_key = ArchiveKeyFromMask(mask_key.mask_key);
+            archive_key = ArchiveKeyFromMask(mask_key.mask_key, security_profile);
         }
-        Bytes trailer_header = BuildJmgHeader(mask_key.user_blob, mask_key.master_blob);
+        Bytes trailer_header = BuildJmgHeader(mask_key.user_blob, mask_key.master_blob, security_profile);
         if (video.valid) {
             auto video_cb = [&](double frac) {
                 progress.Update(0.25 + 0.45 * frac, "jmg-video", input_path);
             };
-            ScrambleVideoRaw(raw_video, raw_video_out, video, base_key, video_cb);
+            ScrambleVideoRaw(raw_video, raw_video_out, video, base_key, security_profile, video_cb);
         }
         if (audio.valid) {
             auto audio_cb = [&](double frac) {
                 progress.Update(0.70 + 0.20 * frac, "jmg-audio", input_path);
             };
-            ScrambleAudioRaw(raw_audio, raw_audio_out, audio, base_key, audio_cb);
+            ScrambleAudioRaw(raw_audio, raw_audio_out, audio, base_key, security_profile, audio_cb);
         }
 
         std::vector<std::string> cmd_base = {
@@ -2905,7 +3018,15 @@ std::string EncryptMedia(const std::string& path,
             auto archive_cb = [&](double frac) {
                 progress.Update(0.95 + 0.04 * frac, "archive", input_path);
             };
-            AppendTrailerStream(temp_output, input_path, resolved, archive_cb, archive_key, trailer_header);
+            AppendTrailerStream(
+                temp_output,
+                input_path,
+                resolved,
+                archive_cb,
+                archive_key,
+                trailer_header,
+                JmgArchiveInfoForProfile(security_profile)
+            );
         } else {
             AppendBalancedTrailer(temp_output, basefwx::constants::kImageCipherKeyTrailerMagic, trailer_header);
         }
@@ -2962,7 +3083,8 @@ std::string DecryptMedia(const std::string& path,
         return temp_output.string();
     }
 
-    Bytes base_key_override = LoadBaseKeyFromKeyTrailerFile(input_path, resolved);
+    std::uint8_t trailer_profile = basefwx::constants::kJmgSecurityProfileLegacy;
+    Bytes base_key_override = LoadBaseKeyFromKeyTrailerFile(input_path, resolved, &trailer_profile);
     bool has_base_key_override = !base_key_override.empty();
     if (has_base_key_override) {
         WarnNoArchivePayload();
@@ -2973,7 +3095,7 @@ std::string DecryptMedia(const std::string& path,
     if (!ec && file_size <= fallback_limit) {
         Bytes file_bytes = ReadFileBytes(input_path);
         if (!has_base_key_override) {
-            base_key_override = LoadBaseKeyFromKeyTrailerBytes(file_bytes, resolved);
+            base_key_override = LoadBaseKeyFromKeyTrailerBytes(file_bytes, resolved, &trailer_profile);
             has_base_key_override = !base_key_override.empty();
             if (has_base_key_override) {
                 WarnNoArchivePayload();
@@ -2993,17 +3115,19 @@ std::string DecryptMedia(const std::string& path,
                 std::size_t header_len = 0;
                 Bytes user_blob;
                 Bytes master_blob;
+                std::uint8_t profile_id = basefwx::constants::kJmgSecurityProfileLegacy;
                 std::size_t magic_len = basefwx::constants::kJmgKeyMagic.size();
                 if (trailer.size() >= magic_len
                     && std::memcmp(trailer.data(), basefwx::constants::kJmgKeyMagic.data(), magic_len) == 0) {
                     header_seen = true;
                 }
-                bool header_parsed = ParseJmgHeader(trailer, header_len, user_blob, master_blob);
+                bool header_parsed = ParseJmgHeader(trailer, header_len, user_blob, master_blob, &profile_id);
                 if (header_seen && !header_parsed) {
                     throw std::runtime_error("Invalid JMG key header");
                 }
                 header_seen = header_seen || header_parsed;
                 Bytes archive_key;
+                std::string archive_info = std::string(basefwx::constants::kImageCipherArchiveInfo);
                 if (header_seen) {
                     basefwx::pb512::KdfOptions kdf;
                     Bytes mask_key = basefwx::keywrap::RecoverMaskKey(
@@ -3015,13 +3139,13 @@ std::string DecryptMedia(const std::string& path,
                         basefwx::constants::kMaskAadJmg,
                         kdf
                     );
-                    archive_key = ArchiveKeyFromMask(mask_key);
+                    archive_key = ArchiveKeyFromMask(mask_key, profile_id);
+                    archive_info = JmgArchiveInfoForProfile(profile_id);
                 } else {
                     Bytes material = DeriveMaterial(resolved);
                     archive_key = basefwx::crypto::HkdfSha256(material, basefwx::constants::kImageCipherArchiveInfo, 32);
                 }
-                Bytes aad(basefwx::constants::kImageCipherArchiveInfo.begin(),
-                          basefwx::constants::kImageCipherArchiveInfo.end());
+                Bytes aad(archive_info.begin(), archive_info.end());
                 Bytes archive_blob = header_seen
                     ? Bytes(trailer.begin() + static_cast<std::ptrdiff_t>(header_len), trailer.end())
                     : trailer;
@@ -3126,13 +3250,13 @@ std::string DecryptMedia(const std::string& path,
             auto video_cb = [&](double frac) {
                 progress.Update(0.25 + 0.45 * frac, "unjmg-video", input_path);
             };
-            UnscrambleVideoRaw(raw_video, raw_video_out, video, base_key, video_cb);
+            UnscrambleVideoRaw(raw_video, raw_video_out, video, base_key, trailer_profile, video_cb);
         }
         if (audio.valid) {
             auto audio_cb = [&](double frac) {
                 progress.Update(0.70 + 0.20 * frac, "unjmg-audio", input_path);
             };
-            UnscrambleAudioRaw(raw_audio, raw_audio_out, audio, base_key, audio_cb);
+            UnscrambleAudioRaw(raw_audio, raw_audio_out, audio, base_key, trailer_profile, audio_cb);
         }
 
         std::vector<std::string> cmd_base = {

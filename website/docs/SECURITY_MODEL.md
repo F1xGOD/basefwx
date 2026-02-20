@@ -27,6 +27,8 @@ If master wrapping is disabled, a password is required. If master wrapping is en
 
 - File metadata inside the payload can be stripped with `--strip`.
 - Media metadata (jMG) is removed by default; use `--keep-meta` to preserve and encrypt it.
+- jMG defaults to `archive_original=True`, embedding an encrypted original payload trailer for exact restoration.
+- jMG `archive_original=False` uses a tiny `JMG1` key trailer only (smaller output, but decrypt may require media re-encode and is not guaranteed byte-identical).
 - OS filesystem timestamps are not altered by default.
 
 ## Obfuscation
@@ -36,6 +38,21 @@ It is deterministic and reversible, designed to remove obvious plaintext structu
 It is not a substitute for encryption.
 Video/audio scrambling masks only low-order bits to preserve playability and will leak structure.
 Image encryption without trailers is deterministic and reuses keystream material; only enable it with explicit opt-in (BASEFWX_ALLOW_INSECURE_IMAGE_OBFUSCATION=1).
+
+## Live Stream Framing
+
+Python provides a packetized live AEAD stream API (`LiveEncryptor`/`LiveDecryptor` and `fwxAES_live_*` wrappers):
+
+- Each frame is authenticated (AES-GCM) with per-frame nonces derived from a nonce prefix + sequence number.
+- AAD binds frame type, sequence number, and plaintext length to prevent structural tampering.
+- Sequence monotonicity is enforced; replayed or out-of-order frames are rejected.
+- Header key transport supports password PBKDF2 mode or master-wrap mode, matching fwxAES key semantics.
+
+Limits:
+
+- v1 framing is transport-agnostic bytes (no built-in jitter buffering, retransmission, or clock sync).
+- Stream integrity is frame-level; packet loss/corruption causes local auth failure at affected frames.
+- For deterministic cross-language interoperability, all implementations must match the v1 frame format exactly.
 
 ## Legacy CBC
 

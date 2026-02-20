@@ -24,9 +24,10 @@ It provides:
 - ML-KEM-768 master key wrapping (optional) and AES-GCM payload protection
 - Password-based encryption with Argon2id or PBKDF2
 - fwxAES file encryption with optional normalize wrapper
+- Packetized live fwxAES stream API for transport-agnostic real-time pipelines
 - b512/pb512 reversible encodings and file modes
 - kFM carrier codecs (auto media/audio encode + strict carrier decode)
-- jMG media cipher for images, video, and audio with metadata control
+- jMG media cipher for images, video, and audio with metadata control (`archive_original` toggle)
 - C++ library and CLI with Python/C++/Java format parity
 - Java (JVM) library and CLI for cross-compatible fwxAES/b512/pb512/b256/jMG/kFM
 
@@ -43,6 +44,7 @@ python -m basefwx kFMe photo.png -o photo.wav            # image/media -> audio 
 python -m basefwx kFMe track.mp3 -o track.png --bw       # audio -> image carrier
 python -m basefwx kFMd photo.wav -o photo-restored.png   # strict decode
 python -m basefwx kFMd track.png -o track-restored.mp3
+python -m basefwx cryptin fwxaes video.mp4 -p "password" --no-archive
 ```
 
 Notes:
@@ -54,6 +56,7 @@ Python API quick refs:
 ```python
 from basefwx import n10encode, n10decode, n10encode_bytes, n10decode_bytes
 from basefwx import kFMe, kFMd
+from basefwx import LiveEncryptor, LiveDecryptor, jMGe, jMGd
 
 digits = n10encode("hello")
 text = n10decode(digits)
@@ -62,6 +65,20 @@ blob = n10decode_bytes(blob_digits)
 
 carrier = kFMe("input.mp3", output="input.png", bw_mode=True)
 restored = kFMd("input.png", output="restored.mp3")
+
+# jMG full restore (default) and no-archive mode
+jMGe("clip.mp4", "password", output="clip.jmg.mp4", archive_original=True)
+jMGe("clip.mp4", "password", output="clip.small.mp4", archive_original=False)
+jMGd("clip.small.mp4", "password", output="clip.out.mp4")
+
+# Live packetized stream encryption/decryption
+enc = LiveEncryptor("password", use_master=False)
+dec = LiveDecryptor("password", use_master=False)
+wire = [enc.start(), enc.update(b"chunk-1"), enc.update(b"chunk-2"), enc.finalize()]
+plain_chunks = []
+for packet in wire:
+    plain_chunks.extend(dec.update(packet))
+dec.finalize()
 ```
 
 Optional extras:

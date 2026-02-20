@@ -62,7 +62,7 @@ def fwxAES(
     legacy: bool = False,
     ignore_media: bool = False,
     keep_meta: bool = False,
-    archive_original: bool = True,
+    archive_original: bool = False,
     keep_input: bool = False,
 ):
     if legacy:
@@ -190,6 +190,38 @@ def fwxAES_live_decrypt_stream(
     )
 
 
+def fwxAES_live_encrypt_ffmpeg(
+    source_cmd: "list[str]",
+    encrypted_dest,
+    password: str | bytes,
+    use_master: bool = True,
+    chunk_size: int | None = None,
+):
+    return basefwx.fwxAES_live_encrypt_ffmpeg(
+        source_cmd,
+        encrypted_dest,
+        password,
+        use_master=use_master,
+        chunk_size=chunk_size,
+    )
+
+
+def fwxAES_live_decrypt_ffmpeg(
+    encrypted_source,
+    sink_cmd: "list[str]",
+    password: str | bytes,
+    use_master: bool = True,
+    chunk_size: int | None = None,
+):
+    return basefwx.fwxAES_live_decrypt_ffmpeg(
+        encrypted_source,
+        sink_cmd,
+        password,
+        use_master=use_master,
+        chunk_size=chunk_size,
+    )
+
+
 def normalize_wrap(blob: bytes, cover_phrase: str = "low taper fade"):
     return basefwx.normalize_wrap(blob, cover_phrase)
 
@@ -272,8 +304,10 @@ __all__ = [
     "fwxAES_encrypt_raw",
     "fwxAES_encrypt_stream",
     "fwxAES_live_decrypt_chunks",
+    "fwxAES_live_decrypt_ffmpeg",
     "fwxAES_live_decrypt_stream",
     "fwxAES_live_encrypt_chunks",
+    "fwxAES_live_encrypt_ffmpeg",
     "fwxAES_live_encrypt_stream",
     "LiveDecryptor",
     "LiveEncryptor",

@@ -36,7 +36,8 @@ fwxAES-only flags:
 - `--cover-phrase <text>` cover phrase for normalize
 - `--ignore-media` disable media auto-detection (use normal fwxAES)
 - `--keep-meta` keep media metadata (encrypted) when using jMG
-- `--no-archive` jMG mode: skip embedded full-payload archive (smaller output, non-byte-identical restore)
+- `--no-archive` jMG mode: skip embedded full-payload archive (Python default)
+- `--archive` jMG mode: embed full-payload archive for exact restore
 
 Examples:
 
@@ -46,7 +47,8 @@ python -m basefwx cryptin aes-light secret.bin.fwx -p "pass"
 
 python -m basefwx cryptin fwxaes photo.jpg -p "pass"
 python -m basefwx cryptin fwxaes video.mp4 -p "pass" --keep-meta
-python -m basefwx cryptin fwxaes video.mp4 -p "pass" --no-archive
+python -m basefwx cryptin fwxaes video.mp4 -p "pass"            # default no-archive
+python -m basefwx cryptin fwxaes video.mp4 -p "pass" --archive  # exact-restore trailer
 ```
 
 n10 helpers:
@@ -81,6 +83,8 @@ Notes:
 - `kFMe` auto-detects source type (audio -> PNG, non-audio -> WAV).
 - `kFMd` strictly decodes BaseFWX carriers only.
 - `kFAe`/`kFAd` are deprecated compatibility aliases.
+- Python jMG HW accel policy: NVIDIA (`nvenc`) -> Intel (`qsv`) -> VAAPI -> CPU.
+- Set `BASEFWX_HWACCEL_STRICT=1` to fail instead of CPU fallback when the requested accelerator cannot be used.
 
 ## Python API
 
@@ -117,6 +121,25 @@ with open("live.enc", "rb") as src, open("live.out", "wb") as dst:
     fwxAES_live_decrypt_stream(src, dst, "password", use_master=False)
 ```
 
+Live ffmpeg bridge helpers:
+
+```
+from basefwx import fwxAES_live_encrypt_ffmpeg, fwxAES_live_decrypt_ffmpeg
+
+fwxAES_live_encrypt_ffmpeg(
+    ["ffmpeg", "-hide_banner", "-loglevel", "error", "-i", "input.mp4", "-f", "matroska", "-c", "copy", "-"],
+    "stream.live.fwx",
+    "password",
+    use_master=False,
+)
+fwxAES_live_decrypt_ffmpeg(
+    "stream.live.fwx",
+    ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-f", "matroska", "-i", "-", "-c", "copy", "restored.mkv"],
+    "password",
+    use_master=False,
+)
+```
+
 Bytes helpers for b512/pb512 file containers:
 
 ```
@@ -149,9 +172,9 @@ Media helpers:
 
 ```
 from basefwx import jMGe, jMGd
+jMGe("input.mp4", "password", output="out-small.mp4")  # default no-archive
 jMGe("input.mp4", "password", output="out.mp4", archive_original=True)
-jMGe("input.mp4", "password", output="out-small.mp4", archive_original=False)
-jMGd("out-small.mp4", "password", output="plain.mp4")
+jMGd("out-small.mp4", "password", output="plain.mp4")  # may not be byte-identical
 ```
 
 Use an empty password to rely on the master key only (requires the private key to be available).

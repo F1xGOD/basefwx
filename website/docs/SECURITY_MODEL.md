@@ -27,8 +27,9 @@ If master wrapping is disabled, a password is required. If master wrapping is en
 
 - File metadata inside the payload can be stripped with `--strip`.
 - Media metadata (jMG) is removed by default; use `--keep-meta` to preserve and encrypt it.
-- jMG defaults to `archive_original=True`, embedding an encrypted original payload trailer for exact restoration.
-- jMG `archive_original=False` uses a tiny `JMG1` key trailer only (smaller output, but decrypt may require media re-encode and is not guaranteed byte-identical).
+- Python jMG defaults to `archive_original=False`, writing a tiny `JMG1` key trailer only (smaller output, decrypt may require media re-encode, not guaranteed byte-identical).
+- Use Python `--archive` or `archive_original=True` for exact-restore archive trailers (`JMG0`).
+- New Python no-archive outputs use `JMGK` v2 profile metadata (`max`) and remain backward-compatible with legacy `JMGK` v1 decode.
 - OS filesystem timestamps are not altered by default.
 
 ## Obfuscation
@@ -37,6 +38,7 @@ BASEFWX includes a size-preserving obfuscation layer before AEAD.
 It is deterministic and reversible, designed to remove obvious plaintext structure.
 It is not a substitute for encryption.
 Video/audio scrambling masks only low-order bits to preserve playability and will leak structure.
+Python no-archive `max` profile increases masking to full byte/sample transforms to reduce residual structure.
 Image encryption without trailers is deterministic and reuses keystream material; only enable it with explicit opt-in (BASEFWX_ALLOW_INSECURE_IMAGE_OBFUSCATION=1).
 
 ## Live Stream Framing
@@ -47,6 +49,7 @@ Python, Java, and C++ provide a packetized live AEAD stream API (`LiveEncryptor`
 - AAD binds frame type, sequence number, and plaintext length to prevent structural tampering.
 - Sequence monotonicity is enforced; replayed or out-of-order frames are rejected.
 - Header key transport supports password PBKDF2 mode or master-wrap mode, matching fwxAES key semantics.
+- Python additionally exposes ffmpeg bridge helpers (`fwxAES_live_encrypt_ffmpeg` / `fwxAES_live_decrypt_ffmpeg`) for pipe-based media flows.
 
 Limits:
 

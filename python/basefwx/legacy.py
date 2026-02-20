@@ -6268,6 +6268,21 @@ class basefwx:
             cls._CUDA_RUNTIME_READY = ready
             cls._CUDA_RUNTIME_ERROR = error
 
+        @staticmethod
+        def _format_cuda_error(exc: Exception) -> str:
+            msg = str(exc).strip().replace("\n", " ")
+            if len(msg) > 220:
+                msg = msg[:220] + "..."
+            if "cudaErrorInsufficientDriver" in msg:
+                msg += " (driver/runtime mismatch; install a CuPy build matching your NVIDIA driver/CUDA runtime)"
+            if "cuda_fp16.h" in msg:
+                msg = (
+                    "CUDA headers missing for CuPy JIT (cuda_fp16.h not found). "
+                    "Set CUDA_PATH to your toolkit root (for example /usr or /usr/local/cuda) "
+                    "and ensure include/cuda_fp16.h is present."
+                )
+            return msg or exc.__class__.__name__
+
         @classmethod
         def _cuda_runtime_status(cls) -> "tuple[bool, str]":
             env_key = cls._cuda_runtime_env_key()
@@ -6280,15 +6295,18 @@ class basefwx:
             try:
                 count = int(basefwx.cp.cuda.runtime.getDeviceCount())
             except Exception as exc:
-                msg = str(exc).strip().replace("\n", " ")
-                if len(msg) > 220:
-                    msg = msg[:220] + "..."
-                if "cudaErrorInsufficientDriver" in msg:
-                    msg += " (driver/runtime mismatch; use a matching CuPy build or unset CUDA_PATH/LD_LIBRARY_PATH overrides)"
-                cls._set_cuda_runtime_state(False, msg or exc.__class__.__name__)
+                cls._set_cuda_runtime_state(False, cls._format_cuda_error(exc))
                 return False, cls._CUDA_RUNTIME_ERROR
             if count <= 0:
                 cls._set_cuda_runtime_state(False, "CUDA runtime reports no available devices")
+                return False, cls._CUDA_RUNTIME_ERROR
+            try:
+                # Probe one tiny ufunc so we fail early on incomplete CUDA toolkit/header setups.
+                probe = basefwx.cp.asarray([1], dtype=basefwx.cp.uint8)
+                probe ^= basefwx.cp.asarray([1], dtype=basefwx.cp.uint8)
+                _ = probe.get()
+            except Exception as exc:
+                cls._set_cuda_runtime_state(False, cls._format_cuda_error(exc))
                 return False, cls._CUDA_RUNTIME_ERROR
             cls._set_cuda_runtime_state(True, "")
             return True, ""

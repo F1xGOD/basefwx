@@ -79,7 +79,7 @@ jobs:
 
           data = json.loads(bench_path.read_text(encoding="utf-8"))
           labels = {entry.get("label") for entry in data.get("tests", [])}
-          required = {"fwxaes_live_py_total", "kfae_py_total"}
+          required = {"fwxaes_live_py_total", "fwxaes_live_cpp_total", "fwxaes_live_cpp_audio_total", "fwxaes_live_java_total", "kfae_py_total"}
           missing = sorted(label for label in required if label not in labels)
           if missing:
               raise SystemExit(f"Missing benchmark labels: {', '.join(missing)}")

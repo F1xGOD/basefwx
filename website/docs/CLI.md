@@ -172,6 +172,8 @@ cpp/build/basefwx_cpp fwxaes-enc <file> -p <password> [--out <path>]
 cpp/build/basefwx_cpp fwxaes-dec <file> -p <password> [--out <path>]
 cpp/build/basefwx_cpp fwxaes-stream-enc <file> -p <password> [--out <path>]
 cpp/build/basefwx_cpp fwxaes-stream-dec <file> -p <password> [--out <path>]
+cpp/build/basefwx_cpp fwxaes-live-enc <file> -p <password> [--out <path>]
+cpp/build/basefwx_cpp fwxaes-live-dec <file> -p <password> [--out <path>]
 cpp/build/basefwx_cpp n10-enc <text>
 cpp/build/basefwx_cpp n10-dec <digits>
 cpp/build/basefwx_cpp n10file-enc <in-file> <out-file>
@@ -191,7 +193,7 @@ cpp/build/basefwx_cpp b512file-dec <file.fwx> -p <password>
 cpp/build/basefwx_cpp pb512file-enc <file> -p <password>
 cpp/build/basefwx_cpp pb512file-dec <file.fwx> -p <password>
 
-cpp/build/basefwx_cpp jmge <media> [-p <password>] [--master-pub <path>] [--out <path>]
+cpp/build/basefwx_cpp jmge <media> [-p <password>] [--master-pub <path>] [--out <path>] [--no-archive]
 cpp/build/basefwx_cpp jmgd <media> [-p <password>] [--out <path>]
 ```
 
@@ -199,6 +201,20 @@ Master-only media encryption (C++):
 
 ```
 cpp/build/basefwx_cpp jmge input.mp4 --master-pub /secure/mlkem768.pub --out out.mp4
+```
+
+Notes:
+
+- `jmge --no-archive` writes a key-only `JMG1` trailer (smaller output, decode may not be byte-identical).
+- `fwxaes-live-*` implements the packetized `LIVE` v1 stream format used by Python/Java.
+- `fwxaes-live-*` supports `-` for stdin/stdout, so you can pipe media streams (for example with `ffmpeg`).
+
+Example live audio pipe (C++):
+
+```bash
+ffmpeg -hide_banner -loglevel error -i input.m4a -vn -ac 1 -ar 16000 -f wav pipe:1 \
+  | cpp/build/basefwx_cpp fwxaes-live-enc - -p password --no-master --out - \
+  | cpp/build/basefwx_cpp fwxaes-live-dec - -p password --no-master --out - > restored.wav
 ```
 
 ## C++ API
@@ -213,6 +229,20 @@ std::ofstream out("output.fwx", std::ios::binary);
 basefwx::fwxaes::Options opts;
 opts.use_master = false;
 basefwx::fwxaes::EncryptStream(in, out, "password", opts);
+```
+
+Live packet stream:
+
+```
+#include "basefwx/basefwx.hpp"
+
+std::ifstream src("input.bin", std::ios::binary);
+std::ofstream live("output.live", std::ios::binary);
+basefwx::FwxAesLiveEncryptStream(src, live, "password", false);
+
+std::ifstream live_in("output.live", std::ios::binary);
+std::ofstream plain("restored.bin", std::ios::binary);
+basefwx::FwxAesLiveDecryptStream(live_in, plain, "password", false);
 ```
 
 Bytes helpers for b512/pb512 file containers:
@@ -248,6 +278,8 @@ java -jar build/libs/basefwx-java.jar fwxaes-enc <in> <out> <password>
 java -jar build/libs/basefwx-java.jar fwxaes-dec <in> <out> <password>
 java -jar build/libs/basefwx-java.jar fwxaes-stream-enc <in> <out> <password>
 java -jar build/libs/basefwx-java.jar fwxaes-stream-dec <in> <out> <password>
+java -jar build/libs/basefwx-java.jar fwxaes-live-enc <in> <out> <password>
+java -jar build/libs/basefwx-java.jar fwxaes-live-dec <in> <out> <password>
 java -jar build/libs/basefwx-java.jar n10-enc <text>
 java -jar build/libs/basefwx-java.jar n10-dec <digits>
 java -jar build/libs/basefwx-java.jar n10file-enc <in> <out>
@@ -267,14 +299,15 @@ java -jar build/libs/basefwx-java.jar b512file-dec <in> <out> <password>
 java -jar build/libs/basefwx-java.jar pb512file-enc <in> <out> <password>
 java -jar build/libs/basefwx-java.jar pb512file-dec <in> <out> <password>
 
-java -jar build/libs/basefwx-java.jar jmge <in> <out> <password>
+java -jar build/libs/basefwx-java.jar jmge <in> <out> <password> [--no-archive]
 java -jar build/libs/basefwx-java.jar jmgd <in> <out> <password>
 ```
 
 Notes:
 
 - jMG media requires `ffmpeg` and `ffprobe` to be available on PATH.
-- `jmge` supports `--keep-meta` and `--keep-input` to preserve metadata and inputs.
+- `jmge` supports `--keep-meta`, `--keep-input`, and `--no-archive`.
+- `--no-archive` writes a key-only `JMG1` trailer (smaller output, but restore may not be byte-identical).
 - `kFMd` strictly decodes BaseFWX carriers and refuses plain files.
 - The Java module does not include ML-KEM or Argon2 support yet.
 
@@ -293,6 +326,16 @@ BaseFwx.DecodedFile decoded = BaseFwx.b512FileDecodeBytes(blob, "password", fals
 
 BaseFwx.jmgEncryptFile(new File("input.mp4"), new File("out.mp4"), "password", true, false, true);
 BaseFwx.jmgDecryptFile(new File("out.mp4"), new File("plain.mp4"), "password", true);
+BaseFwx.jmgEncryptFile(new File("input.mp4"), new File("out-small.mp4"), "password", true, false, true, false);
+
+try (InputStream in = new FileInputStream("input.bin");
+     OutputStream out = new FileOutputStream("output.live")) {
+    BaseFwx.fwxAesLiveEncryptStream(in, out, "password", false);
+}
+try (InputStream in = new FileInputStream("output.live");
+     OutputStream out = new FileOutputStream("restored.bin")) {
+    BaseFwx.fwxAesLiveDecryptStream(in, out, "password", false);
+}
 
 String digits = BaseFwx.n10Encode("hello");
 String text = BaseFwx.n10Decode(digits);

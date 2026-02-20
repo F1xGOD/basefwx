@@ -936,6 +936,34 @@ cpp_fwxAES_stream_roundtrip() {
     "$CPP_BIN" fwxaes-stream-dec "$enc" -p "$PW" --no-master --out "$dec"
 }
 
+cpp_fwxAES_live_roundtrip() {
+    local input="$1"
+    local enc="$2"
+    local dec="$3"
+    log "STEP: $CPP_BIN fwxaes-live-enc $input"
+    "$CPP_BIN" fwxaes-live-enc "$input" -p "$PW" --no-master --out "$enc" || return $?
+    log "STEP: $CPP_BIN fwxaes-live-dec $enc"
+    "$CPP_BIN" fwxaes-live-dec "$enc" -p "$PW" --no-master --out "$dec"
+}
+
+cpp_fwxAES_live_audio_pipe_roundtrip() {
+    local input_audio="$1"
+    local reference_wav="$2"
+    local decoded_wav="$3"
+    local piped_wav="${decoded_wav}.pipe.wav"
+    if (( FFMPEG_AVAILABLE != 1 )); then
+        log "Skipping C++ live audio pipe test: ffmpeg/ffprobe unavailable"
+        return 0
+    fi
+    log "STEP: ffmpeg decode $input_audio -> $reference_wav"
+    ffmpeg -hide_banner -loglevel error -y -i "$input_audio" -vn -ac 1 -ar 16000 -f wav "$reference_wav" || return $?
+    log "STEP: ffmpeg pipe | $CPP_BIN fwxaes-live-enc - | $CPP_BIN fwxaes-live-dec -"
+    ffmpeg -hide_banner -loglevel error -i "$input_audio" -vn -ac 1 -ar 16000 -f wav pipe:1 \
+        | "$CPP_BIN" fwxaes-live-enc - -p "$PW" --no-master --out - \
+        | "$CPP_BIN" fwxaes-live-dec - -p "$PW" --no-master --out - > "$piped_wav"
+    ffmpeg -hide_banner -loglevel error -y -i "$piped_wav" -vn -ac 1 -ar 16000 -f wav "$decoded_wav" || return $?
+}
+
 cpp_fwxAES_wrong() {
     local input="$1"
     local enc="$2"
@@ -1071,6 +1099,16 @@ java_fwxAES_stream_roundtrip() {
     "$JAVA_BIN" -jar "$JAVA_JAR" fwxaes-stream-enc "$input" "$enc" "$PW" --no-master || return $?
     log "STEP: $JAVA_BIN -jar $JAVA_JAR fwxaes-stream-dec $enc"
     "$JAVA_BIN" -jar "$JAVA_JAR" fwxaes-stream-dec "$enc" "$dec" "$PW" --no-master
+}
+
+java_fwxAES_live_roundtrip() {
+    local input="$1"
+    local enc="$2"
+    local dec="$3"
+    log "STEP: $JAVA_BIN -jar $JAVA_JAR fwxaes-live-enc $input"
+    "$JAVA_BIN" -jar "$JAVA_JAR" fwxaes-live-enc "$input" "$enc" "$PW" --no-master || return $?
+    log "STEP: $JAVA_BIN -jar $JAVA_JAR fwxaes-live-dec $enc"
+    "$JAVA_BIN" -jar "$JAVA_JAR" fwxaes-live-dec "$enc" "$dec" "$PW" --no-master
 }
 
 java_fwxAES_enc() {
@@ -1501,6 +1539,16 @@ cpp_jmg_roundtrip() {
     "$CPP_BIN" jmgd "$enc" -p "$PW" --out "$dec"
 }
 
+cpp_jmg_roundtrip_no_archive() {
+    local input="$1"
+    local enc="$2"
+    local dec="$3"
+    log "STEP: $CPP_BIN jmge $input --no-archive"
+    "$CPP_BIN" jmge "$input" -p "$PW" --no-archive --out "$enc" || return $?
+    log "STEP: $CPP_BIN jmgd $enc"
+    "$CPP_BIN" jmgd "$enc" -p "$PW" --out "$dec"
+}
+
 cpp_jmg_enc() {
     local input="$1"
     local enc="$2"
@@ -1521,6 +1569,16 @@ java_jmg_roundtrip() {
     local dec="$3"
     log "STEP: $JAVA_BIN -jar $JAVA_JAR jmge $input"
     "$JAVA_BIN" -jar "$JAVA_JAR" jmge "$input" "$enc" "$PW" || return $?
+    log "STEP: $JAVA_BIN -jar $JAVA_JAR jmgd $enc"
+    "$JAVA_BIN" -jar "$JAVA_JAR" jmgd "$enc" "$dec" "$PW"
+}
+
+java_jmg_roundtrip_no_archive() {
+    local input="$1"
+    local enc="$2"
+    local dec="$3"
+    log "STEP: $JAVA_BIN -jar $JAVA_JAR jmge $input --no-archive"
+    "$JAVA_BIN" -jar "$JAVA_JAR" jmge "$input" "$enc" "$PW" --no-archive || return $?
     log "STEP: $JAVA_BIN -jar $JAVA_JAR jmgd $enc"
     "$JAVA_BIN" -jar "$JAVA_JAR" jmgd "$enc" "$dec" "$PW"
 }
@@ -1948,6 +2006,62 @@ fwxaes_cpp_enc_py_dec() {
     "$PYTHON_BIN" "$PY_HELPER" fwxaes-dec "$enc" "$dec" "$PW"
 }
 
+fwxaes_live_py_enc_cpp_dec() {
+    local input="$1"
+    local enc="$2"
+    local dec="$3"
+    log "STEP: python live encrypt $input"
+    "$PYTHON_BIN" - <<PY
+import basefwx
+with open("$input", "rb") as src, open("$enc", "wb") as dst:
+    basefwx.fwxAES_live_encrypt_stream(src, dst, "$PW", use_master=False)
+PY
+    log "STEP: $CPP_BIN fwxaes-live-dec $enc"
+    "$CPP_BIN" fwxaes-live-dec "$enc" -p "$PW" --no-master --out "$dec"
+}
+
+fwxaes_live_cpp_enc_py_dec() {
+    local input="$1"
+    local enc="$2"
+    local dec="$3"
+    log "STEP: $CPP_BIN fwxaes-live-enc $input"
+    "$CPP_BIN" fwxaes-live-enc "$input" -p "$PW" --no-master --out "$enc" || return $?
+    log "STEP: python live decrypt $enc"
+    "$PYTHON_BIN" - <<PY
+import basefwx
+with open("$enc", "rb") as src, open("$dec", "wb") as dst:
+    basefwx.fwxAES_live_decrypt_stream(src, dst, "$PW", use_master=False)
+PY
+}
+
+fwxaes_live_py_enc_java_dec() {
+    local input="$1"
+    local enc="$2"
+    local dec="$3"
+    log "STEP: python live encrypt $input"
+    "$PYTHON_BIN" - <<PY
+import basefwx
+with open("$input", "rb") as src, open("$enc", "wb") as dst:
+    basefwx.fwxAES_live_encrypt_stream(src, dst, "$PW", use_master=False)
+PY
+    log "STEP: java fwxaes-live-dec $enc"
+    "$JAVA_BIN" -jar "$JAVA_JAR" fwxaes-live-dec "$enc" "$dec" "$PW" --no-master
+}
+
+fwxaes_live_java_enc_py_dec() {
+    local input="$1"
+    local enc="$2"
+    local dec="$3"
+    log "STEP: java fwxaes-live-enc $input"
+    "$JAVA_BIN" -jar "$JAVA_JAR" fwxaes-live-enc "$input" "$enc" "$PW" --no-master || return $?
+    log "STEP: python live decrypt $enc"
+    "$PYTHON_BIN" - <<PY
+import basefwx
+with open("$enc", "rb") as src, open("$dec", "wb") as dst:
+    basefwx.fwxAES_live_decrypt_stream(src, dst, "$PW", use_master=False)
+PY
+}
+
 fwxaes_py_enc_java_dec() {
     local input="$1"
     local enc="$2"
@@ -1964,6 +2078,26 @@ fwxaes_java_enc_py_dec() {
     java_fwxAES_enc "$input" "$enc" || return $?
     log "STEP: python fwxaes-dec $enc"
     "$PYTHON_BIN" "$PY_HELPER" fwxaes-dec "$enc" "$dec" "$PW"
+}
+
+fwxaes_live_cpp_enc_java_dec() {
+    local input="$1"
+    local enc="$2"
+    local dec="$3"
+    log "STEP: $CPP_BIN fwxaes-live-enc $input"
+    "$CPP_BIN" fwxaes-live-enc "$input" -p "$PW" --no-master --out "$enc" || return $?
+    log "STEP: java fwxaes-live-dec $enc"
+    "$JAVA_BIN" -jar "$JAVA_JAR" fwxaes-live-dec "$enc" "$dec" "$PW" --no-master
+}
+
+fwxaes_live_java_enc_cpp_dec() {
+    local input="$1"
+    local enc="$2"
+    local dec="$3"
+    log "STEP: java fwxaes-live-enc $input"
+    "$JAVA_BIN" -jar "$JAVA_JAR" fwxaes-live-enc "$input" "$enc" "$PW" --no-master || return $?
+    log "STEP: $CPP_BIN fwxaes-live-dec $enc"
+    "$CPP_BIN" fwxaes-live-dec "$enc" -p "$PW" --no-master --out "$dec"
 }
 
 text_py_enc_cpp_dec() {
@@ -3115,6 +3249,38 @@ if [[ "$RUN_CPP_TESTS" == "1" ]]; then
     else
         FAILURES+=("fwxaes_cpp_stream (cpp unavailable)")
     fi
+
+    fwxaes_cpp_live_input="$(copy_input "fwxaes_cpp_live_stream" "$FWXAES_FILE")"
+    fwxaes_cpp_live_enc="$(with_suffix "$fwxaes_cpp_live_input" ".live.fwx")"
+    fwxaes_cpp_live_dec="$WORK_DIR/fwxaes_cpp_live_stream/decoded_${FWXAES_FILE}"
+    if (( CPP_AVAILABLE == 1 )); then
+        cooldown "fwxaes_py_to_cpp_live_stream"
+        time_cmd "fwxaes_cpp_live_stream" cpp_fwxAES_live_roundtrip \
+            "$fwxaes_cpp_live_input" "$fwxaes_cpp_live_enc" "$fwxaes_cpp_live_dec"
+        add_verify "$ORIG_DIR/$FWXAES_FILE" "$fwxaes_cpp_live_dec"
+    else
+        FAILURES+=("fwxaes_cpp_live_stream (cpp unavailable)")
+    fi
+
+    if (( CPP_AVAILABLE == 1 )) && (( FFMPEG_AVAILABLE == 1 )); then
+        fwxaes_cpp_live_audio_source="$ORIG_DIR/jmg_sample.m4a"
+        if [[ ! -f "$fwxaes_cpp_live_audio_source" ]]; then
+            fwxaes_cpp_live_audio_source="$ORIG_DIR/jmg_sample.mp4"
+        fi
+        if [[ -f "$fwxaes_cpp_live_audio_source" ]]; then
+            fwxaes_cpp_live_audio_ref="$WORK_DIR/fwxaes_cpp_live_audio_stream/reference.wav"
+            fwxaes_cpp_live_audio_dec="$WORK_DIR/fwxaes_cpp_live_audio_stream/decoded.wav"
+            mkdir -p "$WORK_DIR/fwxaes_cpp_live_audio_stream"
+            cooldown "fwxaes_cpp_live_audio_stream"
+            time_cmd "fwxaes_cpp_live_audio_stream" cpp_fwxAES_live_audio_pipe_roundtrip \
+                "$fwxaes_cpp_live_audio_source" "$fwxaes_cpp_live_audio_ref" "$fwxaes_cpp_live_audio_dec"
+            add_verify "$fwxaes_cpp_live_audio_ref" "$fwxaes_cpp_live_audio_dec"
+        else
+            FAILURES+=("fwxaes_cpp_live_audio_stream (missing audio fixture)")
+        fi
+    elif (( CPP_AVAILABLE == 1 )); then
+        log "Skipping C++ live audio stream test: ffmpeg/ffprobe unavailable"
+    fi
 fi
 
 if [[ "$RUN_JAVA_TESTS" == "1" ]]; then
@@ -3128,6 +3294,18 @@ if [[ "$RUN_JAVA_TESTS" == "1" ]]; then
         add_verify "$ORIG_DIR/$FWXAES_FILE" "$fwxaes_java_stream_dec"
     else
         FAILURES+=("fwxaes_java_stream (java unavailable)")
+    fi
+
+    fwxaes_java_live_input="$(copy_input "fwxaes_java_live_stream" "$FWXAES_FILE")"
+    fwxaes_java_live_enc="$(with_suffix "$fwxaes_java_live_input" ".live.fwx")"
+    fwxaes_java_live_dec="$WORK_DIR/fwxaes_java_live_stream/decoded_${FWXAES_FILE}"
+    if (( JAVA_AVAILABLE == 1 )); then
+        cooldown "fwxaes_py_to_java_live_stream"
+        time_cmd "fwxaes_java_live_stream" java_fwxAES_live_roundtrip \
+            "$fwxaes_java_live_input" "$fwxaes_java_live_enc" "$fwxaes_java_live_dec"
+        add_verify "$ORIG_DIR/$FWXAES_FILE" "$fwxaes_java_live_dec"
+    else
+        FAILURES+=("fwxaes_java_live_stream (java unavailable)")
     fi
 fi
 
@@ -3546,6 +3724,15 @@ if (( ${#JMG_CASES[@]} > 0 )) && { [[ "$RUN_PY_TESTS" == "1" ]] || [[ "$RUN_PYPY
                 cooldown "jmg_py_to_cpp_${tag}"
                 time_cmd "jmg_cpp_${tag}" cpp_jmg_roundtrip "$jmg_cpp_input" "$jmg_cpp_enc" "$jmg_cpp_dec"
                 add_verify "$ORIG_DIR/$file_name" "$jmg_cpp_dec"
+
+                jmg_cpp_noa_input="$(copy_input "jmg_cpp_noarchive_${tag}" "$file_name")"
+                jmg_cpp_noa_enc="$WORK_DIR/jmg_cpp_noarchive_${tag}/enc_${file_name}"
+                jmg_cpp_noa_dec="$WORK_DIR/jmg_cpp_noarchive_${tag}/dec_${file_name}"
+                time_cmd "jmg_cpp_noarchive_${tag}" cpp_jmg_roundtrip_no_archive \
+                    "$jmg_cpp_noa_input" "$jmg_cpp_noa_enc" "$jmg_cpp_noa_dec"
+                if [[ ! -s "$jmg_cpp_noa_dec" ]]; then
+                    FAILURES+=("jmg_cpp_noarchive_${tag} (decode empty)")
+                fi
             else
                 FAILURES+=("jmg_cpp_${tag} (cpp unavailable)")
             fi
@@ -3558,6 +3745,15 @@ if (( ${#JMG_CASES[@]} > 0 )) && { [[ "$RUN_PY_TESTS" == "1" ]] || [[ "$RUN_PYPY
                 cooldown "jmg_cpp_to_java_${tag}"
                 time_cmd "jmg_java_${tag}" java_jmg_roundtrip "$jmg_java_input" "$jmg_java_enc" "$jmg_java_dec"
                 add_verify "$ORIG_DIR/$file_name" "$jmg_java_dec"
+
+                jmg_java_noa_input="$(copy_input "jmg_java_noarchive_${tag}" "$file_name")"
+                jmg_java_noa_enc="$WORK_DIR/jmg_java_noarchive_${tag}/enc_${file_name}"
+                jmg_java_noa_dec="$WORK_DIR/jmg_java_noarchive_${tag}/dec_${file_name}"
+                time_cmd "jmg_java_noarchive_${tag}" java_jmg_roundtrip_no_archive \
+                    "$jmg_java_noa_input" "$jmg_java_noa_enc" "$jmg_java_noa_dec"
+                if [[ ! -s "$jmg_java_noa_dec" ]]; then
+                    FAILURES+=("jmg_java_noarchive_${tag} (decode empty)")
+                fi
             else
                 FAILURES+=("jmg_java_${tag} (java unavailable)")
             fi
@@ -3806,6 +4002,20 @@ if [[ "$SKIP_CROSS" != "1" ]]; then
         time_cmd "fwxaes_cpp_enc_py_dec" fwxaes_cpp_enc_py_dec "$fwxaes_cpyp_input" "$fwxaes_cpyp_enc" "$fwxaes_cpyp_dec"
         add_verify "$ORIG_DIR/$FWXAES_FILE" "$fwxaes_cpyp_dec"
 
+        fwxaes_live_pycc_input="$(copy_input "fwxaes_live_pycc" "$FWXAES_FILE")"
+        fwxaes_live_pycc_enc="$(with_suffix "$fwxaes_live_pycc_input" ".live.fwx")"
+        fwxaes_live_pycc_dec="$WORK_DIR/fwxaes_live_pycc/decoded_${FWXAES_FILE}"
+        time_cmd "fwxaes_live_py_enc_cpp_dec" fwxaes_live_py_enc_cpp_dec \
+            "$fwxaes_live_pycc_input" "$fwxaes_live_pycc_enc" "$fwxaes_live_pycc_dec"
+        add_verify "$ORIG_DIR/$FWXAES_FILE" "$fwxaes_live_pycc_dec"
+
+        fwxaes_live_cpyp_input="$(copy_input "fwxaes_live_cpyp" "$FWXAES_FILE")"
+        fwxaes_live_cpyp_enc="$(with_suffix "$fwxaes_live_cpyp_input" ".live.fwx")"
+        fwxaes_live_cpyp_dec="$WORK_DIR/fwxaes_live_cpyp/decoded_${FWXAES_FILE}"
+        time_cmd "fwxaes_live_cpp_enc_py_dec" fwxaes_live_cpp_enc_py_dec \
+            "$fwxaes_live_cpyp_input" "$fwxaes_live_cpyp_enc" "$fwxaes_live_cpyp_dec"
+        add_verify "$ORIG_DIR/$FWXAES_FILE" "$fwxaes_live_cpyp_dec"
+
         # kFM/kFA cross-compat (Python <-> C++)
         kfme_pycc_input="$(copy_input "kfme_pycc" "$KFM_FILE")"
         kfme_pycc_enc="$WORK_DIR/kfme_pycc/carrier.wav"
@@ -3905,6 +4115,20 @@ if [[ "$SKIP_CROSS" != "1" ]]; then
         time_cmd "fwxaes_java_enc_py_dec" fwxaes_java_enc_py_dec "$fwxaes_jp_input" "$fwxaes_jp_enc" "$fwxaes_jp_dec"
         add_verify "$ORIG_DIR/$FWXAES_FILE" "$fwxaes_jp_dec"
 
+        fwxaes_live_pyj_input="$(copy_input "fwxaes_live_pyj" "$FWXAES_FILE")"
+        fwxaes_live_pyj_enc="$(with_suffix "$fwxaes_live_pyj_input" ".live.fwx")"
+        fwxaes_live_pyj_dec="$WORK_DIR/fwxaes_live_pyj/decoded_${FWXAES_FILE}"
+        time_cmd "fwxaes_live_py_enc_java_dec" fwxaes_live_py_enc_java_dec \
+            "$fwxaes_live_pyj_input" "$fwxaes_live_pyj_enc" "$fwxaes_live_pyj_dec"
+        add_verify "$ORIG_DIR/$FWXAES_FILE" "$fwxaes_live_pyj_dec"
+
+        fwxaes_live_jp_input="$(copy_input "fwxaes_live_jp" "$FWXAES_FILE")"
+        fwxaes_live_jp_enc="$(with_suffix "$fwxaes_live_jp_input" ".live.fwx")"
+        fwxaes_live_jp_dec="$WORK_DIR/fwxaes_live_jp/decoded_${FWXAES_FILE}"
+        time_cmd "fwxaes_live_java_enc_py_dec" fwxaes_live_java_enc_py_dec \
+            "$fwxaes_live_jp_input" "$fwxaes_live_jp_enc" "$fwxaes_live_jp_dec"
+        add_verify "$ORIG_DIR/$FWXAES_FILE" "$fwxaes_live_jp_dec"
+
         # kFM/kFA cross-compat (Python <-> Java)
         kfme_pyj_input="$(copy_input "kfme_pyj" "$KFM_FILE")"
         kfme_pyj_enc="$WORK_DIR/kfme_pyj/carrier.wav"
@@ -3965,6 +4189,20 @@ if [[ "$SKIP_CROSS" != "1" ]]; then
     fi
 
     if [[ "$RUN_CPP_TESTS" == "1" && "$CPP_AVAILABLE" == "1" && "$RUN_JAVA_TESTS" == "1" && "$JAVA_AVAILABLE" == "1" ]]; then
+        fwxaes_live_cppj_input="$(copy_input "fwxaes_live_cppj" "$FWXAES_FILE")"
+        fwxaes_live_cppj_enc="$(with_suffix "$fwxaes_live_cppj_input" ".live.fwx")"
+        fwxaes_live_cppj_dec="$WORK_DIR/fwxaes_live_cppj/decoded_${FWXAES_FILE}"
+        time_cmd "fwxaes_live_cpp_enc_java_dec" fwxaes_live_cpp_enc_java_dec \
+            "$fwxaes_live_cppj_input" "$fwxaes_live_cppj_enc" "$fwxaes_live_cppj_dec"
+        add_verify "$ORIG_DIR/$FWXAES_FILE" "$fwxaes_live_cppj_dec"
+
+        fwxaes_live_jcpp_input="$(copy_input "fwxaes_live_jcpp" "$FWXAES_FILE")"
+        fwxaes_live_jcpp_enc="$(with_suffix "$fwxaes_live_jcpp_input" ".live.fwx")"
+        fwxaes_live_jcpp_dec="$WORK_DIR/fwxaes_live_jcpp/decoded_${FWXAES_FILE}"
+        time_cmd "fwxaes_live_java_enc_cpp_dec" fwxaes_live_java_enc_cpp_dec \
+            "$fwxaes_live_jcpp_input" "$fwxaes_live_jcpp_enc" "$fwxaes_live_jcpp_dec"
+        add_verify "$ORIG_DIR/$FWXAES_FILE" "$fwxaes_live_jcpp_dec"
+
         # kFM/kFA cross-compat (C++ <-> Java)
         kfme_cppj_input="$(copy_input "kfme_cppj" "$KFM_FILE")"
         kfme_cppj_enc="$WORK_DIR/kfme_cppj/carrier.wav"
@@ -4124,6 +4362,21 @@ if [[ ! -f "$BENCH_KFM_FILE" ]]; then
     BENCH_KFM_FILE="$BENCH_BYTES_FILE"
 fi
 
+BENCH_LIVE_AUDIO_FILE=""
+if (( FFMPEG_AVAILABLE == 1 )); then
+    bench_live_audio_src="$ORIG_DIR/jmg_sample.m4a"
+    if [[ ! -f "$bench_live_audio_src" ]]; then
+        bench_live_audio_src="$ORIG_DIR/jmg_sample.mp4"
+    fi
+    if [[ -f "$bench_live_audio_src" ]]; then
+        BENCH_LIVE_AUDIO_FILE="$TMP_DIR/bench_live_audio.wav"
+        if ! ffmpeg -hide_banner -loglevel error -y -i "$bench_live_audio_src" -vn -ac 1 -ar 16000 -f wav "$BENCH_LIVE_AUDIO_FILE"; then
+            log "Failed to prepare BENCH_LIVE_AUDIO_FILE; skipping C++ live audio benchmark"
+            BENCH_LIVE_AUDIO_FILE=""
+        fi
+    fi
+fi
+
 BENCH_WORKERS_SLOW="${BENCH_WORKERS_SLOW:-}"
 if [[ -z "$BENCH_WORKERS_SLOW" ]]; then
     if (( FBENCH == 1 )); then
@@ -4262,7 +4515,7 @@ if [[ ! "$BENCH_ITERS_FILE" =~ ^[0-9]+$ || "$BENCH_ITERS_FILE" -lt 1 ]]; then
     BENCH_ITERS_FILE=1
 fi
 
-JAVA_BENCH_FLAGS_DEFAULT="-server -XX:+UseG1GC -XX:+AlwaysPreTouch -XX:+TieredCompilation -XX:CompileThreshold=1000 -XX:+UseStringDeduplication -XX:MaxGCPauseMillis=200 -XX:InitialRAMPercentage=70 -XX:MaxRAMPercentage=95 -XX:+UseAES -XX:+UnlockDiagnosticVMOptions -XX:+UseAESIntrinsics -XX:+UseAESCTRIntrinsics -XX:+UseGHASHIntrinsics -XX:+PrintCompilation"
+JAVA_BENCH_FLAGS_DEFAULT="-server -Xms128m -Xmx2g -XX:+UseG1GC -XX:+TieredCompilation -XX:CompileThreshold=1000 -XX:+UseStringDeduplication -XX:MaxGCPauseMillis=200 -XX:+UseAES -XX:+UnlockDiagnosticVMOptions -XX:+UseAESIntrinsics -XX:+UseAESCTRIntrinsics -XX:+UseGHASHIntrinsics"
 JAVA_BENCH_FLAGS="${JAVA_BENCH_FLAGS:-$JAVA_BENCH_FLAGS_DEFAULT}"
 read -r -a JAVA_BENCH_FLAGS_ARR <<<"$JAVA_BENCH_FLAGS"
 
@@ -4322,6 +4575,7 @@ log "BENCH_TEXT_BYTES: $BENCH_TEXT_BYTES"
 log "BENCH_TEXT_SLOW_BYTES: $BENCH_TEXT_SLOW_BYTES"
 log "BENCH_TEXT_MAX_BYTES: $BENCH_TEXT_MAX_BYTES"
 log "BENCH_KFM_FILE: $BENCH_KFM_FILE"
+log "BENCH_LIVE_AUDIO_FILE: ${BENCH_LIVE_AUDIO_FILE:-<none>}"
 
 for idx in "${!BENCH_LANGS[@]}"; do
     lang="${BENCH_LANGS[$idx]}"
@@ -4453,6 +4707,14 @@ for idx in "${!BENCH_LANGS[@]}"; do
                     BASEFWX_BENCH_ITERS="$BENCH_ITERS_HEAVY" \
                     "$CPP_BIN" bench-fwxaes "$BENCH_BYTES_FILE" "$PW" --no-master
             fi
+            time_cmd_bench "fwxaes_live_cpp_total" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_HEAVY" \
+                BASEFWX_BENCH_ITERS="$BENCH_ITERS_HEAVY" \
+                "$CPP_BIN" bench-live "$BENCH_BYTES_FILE" "$PW" --no-master
+            if [[ -n "$BENCH_LIVE_AUDIO_FILE" && -f "$BENCH_LIVE_AUDIO_FILE" ]]; then
+                time_cmd_bench "fwxaes_live_cpp_audio_total" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_HEAVY" \
+                    BASEFWX_BENCH_ITERS="$BENCH_ITERS_HEAVY" \
+                    "$CPP_BIN" bench-live "$BENCH_LIVE_AUDIO_FILE" "$PW" --no-master
+            fi
             for method in "${BENCH_TEXT_METHODS[@]}"; do
                 text_path="$(bench_text_for_method "$method")"
                 iters="$(bench_iters_for_method "$method")"
@@ -4509,7 +4771,7 @@ for idx in "${!BENCH_LANGS[@]}"; do
             else
                 # Use increased warmup for Java to ensure JIT compilation reaches steady state
                 # JVM startup is NOT included, but JIT warmup is (fairest comparison)
-                time_cmd_bench "fwxaes_java_correct_light" env BASEFWX_BENCH_WARMUP="$BENCH_WJAVA_FWXAES_JAVA_FWXAES" \
+                time_cmd_bench "fwxaes_java_correct_light" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_JAVA_FWXAES" \
                     BASEFWX_BENCH_ITERS="$BENCH_ITERS_HEAVY" \
                     BASEFWX_TEST_KDF_ITERS="$FWXAES_LIGHT_KDF_ITERS" \
                     "$JAVA_BIN" "${JAVA_BENCH_FLAGS_ARR[@]}" -jar "$JAVA_JAR" bench-fwxaes "$BENCH_BYTES_FILE" "$PW" --no-master
@@ -4517,6 +4779,9 @@ for idx in "${!BENCH_LANGS[@]}"; do
                     BASEFWX_BENCH_ITERS="$BENCH_ITERS_HEAVY" \
                     "$JAVA_BIN" "${JAVA_BENCH_FLAGS_ARR[@]}" -jar "$JAVA_JAR" bench-fwxaes "$BENCH_BYTES_FILE" "$PW" --no-master
             fi
+            time_cmd_bench "fwxaes_live_java_total" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_HEAVY" \
+                BASEFWX_BENCH_ITERS="$BENCH_ITERS_HEAVY" \
+                "$JAVA_BIN" "${JAVA_BENCH_FLAGS_ARR[@]}" -jar "$JAVA_JAR" bench-live "$BENCH_BYTES_FILE" "$PW" --no-master
             for method in "${BENCH_TEXT_METHODS[@]}"; do
                 text_path="$(bench_text_for_method "$method")"
                 iters="$(bench_iters_for_method "$method")"
@@ -4762,6 +5027,7 @@ fi
 BENCH_METHODS=(
     "fwxAES-light|${FWXAES_LIGHT_PY_KEY}|${FWXAES_LIGHT_PYPY_KEY}|${FWXAES_LIGHT_CPP_KEY}|${FWXAES_LIGHT_JAVA_KEY}"
     "fwxAES|${FWXAES_PY_KEY}|${FWXAES_PYPY_KEY}|${FWXAES_CPP_KEY}|${FWXAES_JAVA_KEY}"
+    "fwxAES-live|fwxaes_live_py_total|fwxaes_live_pypy_total|fwxaes_live_cpp_total|fwxaes_live_java_total"
     "b256|b256_py_correct|b256_pypy_correct|b256_cpp_correct|b256_java_correct"
     "b512|b512_py_correct|b512_pypy_correct|b512_cpp_correct|b512_java_correct"
     "pb512|pb512_py_correct|pb512_pypy_correct|pb512_cpp_correct|pb512_java_correct"
@@ -5012,6 +5278,7 @@ PY
 printf "\nTiming summary (native):\n"
 compare_speed_block "fwxAES-light" "$FWXAES_LIGHT_PY_KEY" "$FWXAES_LIGHT_PYPY_KEY" "$FWXAES_LIGHT_CPP_KEY" "$FWXAES_LIGHT_JAVA_KEY"
 compare_speed_block "fwxAES" "$FWXAES_PY_KEY" "$FWXAES_PYPY_KEY" "$FWXAES_CPP_KEY" "$FWXAES_JAVA_KEY"
+compare_speed_block "fwxAES-live" "fwxaes_live_py_total" "fwxaes_live_pypy_total" "fwxaes_live_cpp_total" "fwxaes_live_java_total"
 compare_speed_block "b256" "b256_py_correct" "b256_pypy_correct" "b256_cpp_correct" "b256_java_correct"
 compare_speed_block "b512" "b512_py_correct" "b512_pypy_correct" "b512_cpp_correct" "b512_java_correct"
 compare_speed_block "pb512" "pb512_py_correct" "pb512_pypy_correct" "pb512_cpp_correct" "pb512_java_correct"

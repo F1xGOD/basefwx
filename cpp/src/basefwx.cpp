@@ -1357,8 +1357,16 @@ std::string Jmge(const std::string& path,
                  const std::string& password,
                  const std::string& output,
                  bool keep_meta,
-                 bool keep_input) {
-    return basefwx::imagecipher::EncryptMedia(path, ResolvePassword(password), output, keep_meta, keep_input);
+                 bool keep_input,
+                 bool archive_original) {
+    return basefwx::imagecipher::EncryptMedia(
+        path,
+        ResolvePassword(password),
+        output,
+        keep_meta,
+        keep_input,
+        archive_original
+    );
 }
 
 std::string Jmgd(const std::string& path, const std::string& password, const std::string& output) {
@@ -1418,6 +1426,22 @@ std::string Kfae(const std::string& path, const std::string& output, bool bw_mod
 std::string Kfad(const std::string& path, const std::string& output) {
     WarnKfmUsage("kFAd is deprecated; use kFMd (auto-detect) instead.");
     return Kfmd(path, output, false);
+}
+
+std::uint64_t FwxAesLiveEncryptStream(std::istream& source,
+                                      std::ostream& dest,
+                                      const std::string& password,
+                                      bool use_master,
+                                      std::size_t chunk_size) {
+    return basefwx::livecipher::EncryptStream(source, dest, password, use_master, chunk_size);
+}
+
+std::uint64_t FwxAesLiveDecryptStream(std::istream& source,
+                                      std::ostream& dest,
+                                      const std::string& password,
+                                      bool use_master,
+                                      std::size_t chunk_size) {
+    return basefwx::livecipher::DecryptStream(source, dest, password, use_master, chunk_size);
 }
 
 }  // namespace basefwx

@@ -1,22 +1,39 @@
 """Media carrier helpers (kFM/kFA and media cipher wrappers)."""
 
+import sys
+import warnings
+
 from .main import basefwx
 
 
+def _with_friendly_interrupt(fn, *args, **kwargs):
+    try:
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always", UserWarning)
+            result = fn(*args, **kwargs)
+        for item in caught:
+            msg = str(item.message).strip()
+            if msg:
+                print(f"⚠ {msg}", file=sys.stderr)
+        return result
+    except KeyboardInterrupt:
+        raise KeyboardInterrupt("Exiting...") from None
+
+
 def kFMe(path: str, output: str | None = None, *, bw_mode: bool = False):
-    return basefwx.kFMe(path, output, bw_mode=bw_mode)
+    return _with_friendly_interrupt(basefwx.kFMe, path, output, bw_mode=bw_mode)
 
 
 def kFMd(path: str, output: str | None = None, *, bw_mode: bool = False):
-    return basefwx.kFMd(path, output, bw_mode=bw_mode)
+    return _with_friendly_interrupt(basefwx.kFMd, path, output, bw_mode=bw_mode)
 
 
 def kFAe(path: str, output: str | None = None, *, bw_mode: bool = False):
-    return basefwx.kFAe(path, output, bw_mode=bw_mode)
+    return _with_friendly_interrupt(basefwx.kFAe, path, output, bw_mode=bw_mode)
 
 
 def kFAd(path: str, output: str | None = None):
-    return basefwx.kFAd(path, output)
+    return _with_friendly_interrupt(basefwx.kFAd, path, output)
 
 
 def jMGe(
@@ -25,10 +42,11 @@ def jMGe(
     output: str | None = None,
     *,
     keep_meta: bool = False,
-    archive_original: bool = True,
+    archive_original: bool = False,
     keep_input: bool = False,
 ):
-    return basefwx.MediaCipher.encrypt_media(
+    return _with_friendly_interrupt(
+        basefwx.MediaCipher.encrypt_media,
         path,
         password,
         output=output,
@@ -39,7 +57,12 @@ def jMGe(
 
 
 def jMGd(path: str, password: str = "", output: str | None = None):
-    return basefwx.MediaCipher.decrypt_media(path, password, output=output)
+    return _with_friendly_interrupt(
+        basefwx.MediaCipher.decrypt_media,
+        path,
+        password,
+        output=output,
+    )
 
 
 __all__ = ["jMGd", "jMGe", "kFAd", "kFAe", "kFMd", "kFMe"]

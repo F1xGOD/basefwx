@@ -27,7 +27,7 @@ It provides:
 - Packetized live fwxAES stream API for transport-agnostic real-time pipelines
 - b512/pb512 reversible encodings and file modes
 - kFM carrier codecs (auto media/audio encode + strict carrier decode)
-- jMG media cipher for images/audio with metadata control (`archive_original` toggle). Video path is temporarily disabled in Python unless `BASEFWX_ENABLE_JMG_VIDEO=1`.
+- jMG media cipher for images/audio with metadata control (`archive_original` toggle). Video path is temporarily disabled by default in Python/C++/Java unless `BASEFWX_ENABLE_JMG_VIDEO=1`.
 - C++ library and CLI with Python/C++/Java format parity
 - Java (JVM) library and CLI for cross-compatible fwxAES/b512/pb512/b256/jMG/kFM
 
@@ -54,6 +54,10 @@ Notes:
 - Optional kFM/kFA acceleration:
   - `BASEFWX_KFM_ACCEL=auto|cuda|cpu` (default `auto`)
   - `BASEFWX_KFM_ACCEL_MIN_BYTES=<bytes>` (default `1048576`, auto mode threshold)
+- CLI progress now includes live system telemetry (CPU/GPU/RAM/I/O/TEMP when available).
+  Disable with `BASEFWX_PROGRESS_TELEMETRY=0`.
+- C++/Java CLI global flags: `--no-log` (suppress non-essential logs) and `--verbose` (show hardware routing reasons).
+- jMG video is disabled by default in Python/C++/Java; set `BASEFWX_ENABLE_JMG_VIDEO=1` to re-enable temporarily.
 
 Python API quick refs:
 

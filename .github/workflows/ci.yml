@@ -61,6 +61,7 @@ jobs:
         env:
           BASEFWX_OBFUSCATE: "1"
           ALLOW_BAKED_PUB: "0"
+          BASEFWX_ENABLE_JMG_VIDEO: "0"
         run: |
           chmod +x scripts/test_all.sh
           ./scripts/test_all.sh --fast
@@ -76,5 +77,6 @@ jobs:
             python.tests.test_basefwx.BaseFWXUnitTests.test_live_stream_tamper_rejected \
             python.tests.test_basefwx.BaseFWXUnitTests.test_jmg_image_no_archive_roundtrip_valid_image \
             python.tests.test_basefwx.BaseFWXUnitTests.test_jmg_video_disabled_by_default \
+            python.tests.test_basefwx.BaseFWXUnitTests.test_probe_streams_ignores_attached_pic_video \
             python.tests.test_basefwx.BaseFWXUnitTests.test_ffmpeg_video_codec_args_clamps_huge_bitrate \
             python.tests.test_basefwx.BaseFWXUnitTests.test_kfm_xor_auto_falls_back_without_cupy

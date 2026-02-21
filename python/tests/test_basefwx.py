@@ -1,5 +1,6 @@
 import collections
 import io
+import json
 import math
 import os
 import random
@@ -659,6 +660,75 @@ class BaseFWXUnitTests(unittest.TestCase):
                 keep_input=True,
                 archive_original=False,
             )
+
+    def test_probe_streams_ignores_attached_pic_video(self):
+        sample = {
+            "streams": [
+                {
+                    "codec_type": "video",
+                    "width": 600,
+                    "height": 600,
+                    "avg_frame_rate": "0/0",
+                    "r_frame_rate": "0/0",
+                    "bit_rate": "32000",
+                    "disposition": {"attached_pic": 1},
+                },
+                {
+                    "codec_type": "audio",
+                    "sample_rate": "44100",
+                    "channels": 2,
+                    "bit_rate": "128000",
+                    "disposition": {"attached_pic": 0},
+                },
+            ],
+            "format": {"duration": "10.0", "bit_rate": "160000"},
+        }
+
+        class _FakeResult:
+            def __init__(self):
+                self.returncode = 0
+                self.stdout = json.dumps(sample)
+                self.stderr = ""
+
+        with patch.object(basefwx.MediaCipher, "_ensure_ffmpeg", return_value=None), \
+                patch.object(basefwx.subprocess, "run", return_value=_FakeResult()):
+            info = basefwx.MediaCipher._probe_streams(self.tmp_path / "tagged.mp3")
+        self.assertIsNone(info.get("video"))
+        self.assertIsNotNone(info.get("audio"))
+
+    def test_probe_streams_ignores_audio_cover_art_without_disposition(self):
+        sample = {
+            "streams": [
+                {
+                    "codec_type": "audio",
+                    "sample_rate": "48000",
+                    "channels": 2,
+                    "r_frame_rate": "0/0",
+                    "avg_frame_rate": "0/0",
+                    "bit_rate": "256000",
+                },
+                {
+                    "codec_type": "video",
+                    "width": 1280,
+                    "height": 720,
+                    "r_frame_rate": "0/0",
+                    "avg_frame_rate": "0/0",
+                },
+            ],
+            "format": {"duration": "10.0", "bit_rate": "280000"},
+        }
+
+        class _FakeResult:
+            def __init__(self):
+                self.returncode = 0
+                self.stdout = json.dumps(sample)
+                self.stderr = ""
+
+        with patch.object(basefwx.MediaCipher, "_ensure_ffmpeg", return_value=None), \
+                patch.object(basefwx.subprocess, "run", return_value=_FakeResult()):
+            info = basefwx.MediaCipher._probe_streams(self.tmp_path / "tagged-no-disposition.mp3")
+        self.assertIsNone(info.get("video"))
+        self.assertIsNotNone(info.get("audio"))
 
     def test_unscramble_video_bitrate_regression(self):
         src = self.tmp_path / "video_stub.mp4"

@@ -23,7 +23,7 @@ setup(
     python_requires=">=3.10",
     author="F1xGOD",
     author_email="f1xgodim@gmail.com",
-    description="With BaseFWX you can encode securely!",
+    description="The encryption you can trust, the performance you need, the security you deserve.",
     long_description=read_readme(),
     long_description_content_type="text/markdown",
     license="GPL-3.0-or-later",

@@ -5,10 +5,12 @@
 
 #include <chrono>
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cctype>
 #include <cstdlib>
 #include <condition_variable>
+#include <cstdio>
 #include <exception>
 #include <filesystem>
 #include <fstream>
@@ -17,6 +19,7 @@
 #include <iostream>
 #include <limits>
 #include <mutex>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -32,12 +35,34 @@
 namespace {
 
 bool g_verbose = false;
+bool g_no_log = false;
 
 std::string ToLower(std::string value) {
     for (char& ch : value) {
         ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
     }
     return value;
+}
+
+bool IsTruthy(std::string value) {
+    value = ToLower(std::move(value));
+    return value == "1" || value == "true" || value == "yes" || value == "on";
+}
+
+void SetCliEnvVar(const char* key, const char* value) {
+#if defined(_WIN32)
+    _putenv_s(key, value);
+#else
+    setenv(key, value, 1);
+#endif
+}
+
+bool ShouldLog() {
+    return !g_no_log && !basefwx::env::IsEnabled("BASEFWX_NO_LOG", false);
+}
+
+bool IsVerbose() {
+    return g_verbose || basefwx::env::IsEnabled("BASEFWX_VERBOSE", false);
 }
 
 bool CliPlain() {
@@ -132,7 +157,7 @@ void EnableBinaryStdio(bool use_stdin, bool use_stdout) {
 }
 
 void PrintSystemInfo() {
-    if (!g_verbose) {
+    if (!IsVerbose() || !ShouldLog()) {
         return;
     }
     
@@ -144,14 +169,14 @@ void PrintSystemInfo() {
     }
     
     // CPU info
-    std::cout << "CPU: "
+    std::cerr << "CPU: "
               << basefwx::cli::Yellow(std::to_string(sysinfo.cpu.logical_cores))
               << " | "
               << basefwx::cli::Blue(basefwx::system::FormatFrequency(sysinfo.cpu.max_frequency_mhz))
               << "\n";
     
     // RAM info
-    std::cout << "RAM: "
+    std::cerr << "RAM: "
               << basefwx::cli::Yellow(basefwx::system::FormatBytes(sysinfo.memory.total_bytes))
               << " | Used: "
               << basefwx::cli::Yellow(basefwx::system::FormatBytes(sysinfo.memory.used_bytes))
@@ -159,17 +184,17 @@ void PrintSystemInfo() {
               << basefwx::cli::Yellow(basefwx::system::FormatBytes(sysinfo.memory.available_bytes));
     
     if (sysinfo.memory.frequency_mhz > 0) {
-        std::cout << " | " << basefwx::cli::Blue(basefwx::system::FormatFrequency(sysinfo.memory.frequency_mhz));
+        std::cerr << " | " << basefwx::cli::Blue(basefwx::system::FormatFrequency(sysinfo.memory.frequency_mhz));
     }
-    std::cout << "\n";
+    std::cerr << "\n";
     
     // Chunk size recommendation
     auto policy = basefwx::system::GetChunkSizePolicy(sysinfo.memory);
     std::size_t chunk_size = basefwx::system::ChunkSizeFromPolicy(policy);
-    std::cout << "Chunk Size: "
+    std::cerr << "Chunk Size: "
               << basefwx::cli::BoldGreen(basefwx::system::FormatBytes(chunk_size))
               << " (optimized for this system)\n";
-    std::cout << "\n";
+    std::cerr << "\n";
 }
 
 void ApplyMasterPubPath(const std::string& path) {
@@ -277,6 +302,9 @@ void WarnSingleThreadIfForced() {
         return;
     }
     warned = true;
+    if (!ShouldLog()) {
+        return;
+    }
     std::cerr << "\033[38;5;208mWARN: MULTI-THREAD IS DISABLED; THIS MAY CAUSE SEVERE PERFORMANCE DETERIORATION\033[0m\n";
     std::cerr << "\033[38;5;208mWARN: SINGLE-THREAD MODE MAY REDUCE SECURITY MARGIN\033[0m\n";
 }
@@ -397,6 +425,7 @@ void PrintUsage() {
     bool plain = CliPlain();
     const char* cyan = "\033[36m";
     std::cout << StyleText(EmojiPrefix("✨", plain) + "Usage:", cyan, plain) << "\n";
+    std::cout << "  [global] --verbose|-v --no-log --no-color\n";
     std::cout << "  basefwx_cpp info <file.fwx>\n";
     std::cout << "  basefwx_cpp b64-enc <text>\n";
     std::cout << "  basefwx_cpp b64-dec <text>\n";
@@ -442,6 +471,331 @@ void PrintUsage() {
     std::cout << "  basefwx_cpp bench-b512file <file> <password> [--master-pub <path>] [--no-master] [--no-aead]\n";
     std::cout << "  basefwx_cpp bench-pb512file <file> <password> [--master-pub <path>] [--no-master] [--no-aead]\n";
     std::cout << "  basefwx_cpp bench-jmg <media> <password> [--master-pub <path>] [--no-master]\n";
+}
+
+struct CommandHwPlan {
+    std::string op;
+    std::string encode = "CPU";
+    std::string decode = "CPU";
+    std::string pixels = "CPU";
+    std::string parallel = "OFF";
+    std::string crypto = "CPU";
+    std::string aes = "unknown";
+    bool expect_gpu = false;
+    std::string reason;
+};
+
+std::string ReadCommandCapture(const std::string& cmd) {
+#if defined(_WIN32)
+    FILE* pipe = _popen(cmd.c_str(), "r");
+#else
+    FILE* pipe = popen(cmd.c_str(), "r");
+#endif
+    if (!pipe) {
+        return {};
+    }
+    std::string output;
+    std::array<char, 256> buffer{};
+    while (std::fgets(buffer.data(), static_cast<int>(buffer.size()), pipe)) {
+        output.append(buffer.data());
+    }
+#if defined(_WIN32)
+    _pclose(pipe);
+#else
+    pclose(pipe);
+#endif
+    return output;
+}
+
+std::optional<double> ProbeCpuTempC() {
+#if defined(__linux__)
+    std::filesystem::path root("/sys/class/thermal");
+    std::error_code ec;
+    if (!std::filesystem::exists(root, ec)) {
+        return std::nullopt;
+    }
+    double sum = 0.0;
+    std::size_t count = 0;
+    for (const auto& entry : std::filesystem::directory_iterator(root, ec)) {
+        if (ec) {
+            break;
+        }
+        if (!entry.is_directory()) {
+            continue;
+        }
+        auto temp_path = entry.path() / "temp";
+        if (!std::filesystem::exists(temp_path, ec)) {
+            continue;
+        }
+        std::ifstream in(temp_path);
+        double raw = 0.0;
+        if (!(in >> raw)) {
+            continue;
+        }
+        if (raw > 1000.0) {
+            raw /= 1000.0;
+        }
+        if (raw < 5.0 || raw > 130.0) {
+            continue;
+        }
+        sum += raw;
+        ++count;
+    }
+    if (count == 0) {
+        return std::nullopt;
+    }
+    return sum / static_cast<double>(count);
+#else
+    return std::nullopt;
+#endif
+}
+
+class CommandTelemetry {
+  public:
+    explicit CommandTelemetry(CommandHwPlan plan)
+        : plan_(std::move(plan)) {
+        enabled_ = ShouldLog();
+        if (!enabled_) {
+            return;
+        }
+        EmitHeader();
+        running_.store(true, std::memory_order_relaxed);
+        worker_ = std::thread([this]() { Loop(); });
+    }
+
+    ~CommandTelemetry() {
+        Stop();
+    }
+
+    CommandTelemetry(const CommandTelemetry&) = delete;
+    CommandTelemetry& operator=(const CommandTelemetry&) = delete;
+
+  private:
+    void Stop() {
+        if (!enabled_) {
+            return;
+        }
+        running_.store(false, std::memory_order_relaxed);
+        cv_.notify_all();
+        if (worker_.joinable()) {
+            worker_.join();
+        }
+        enabled_ = false;
+    }
+
+    void EmitHeader() {
+        std::cerr << "🎛 [basefwx.hw] op=" << plan_.op
+                  << " encode=" << plan_.encode
+                  << " decode=" << plan_.decode
+                  << " pixels=" << plan_.pixels
+                  << " parallel=" << plan_.parallel
+                  << " crypto=" << plan_.crypto
+                  << " aes_accel=" << plan_.aes
+                  << "\n";
+        if (IsVerbose() && !plan_.reason.empty()) {
+            std::cerr << "   reason: " << plan_.reason << "\n";
+        }
+    }
+
+    static std::optional<double> ParseGpuField(const std::string& field) {
+        try {
+            return std::stod(field);
+        } catch (const std::exception&) {
+            return std::nullopt;
+        }
+    }
+
+    static std::string Trim(std::string value) {
+        while (!value.empty() && (value.back() == '\n' || value.back() == '\r' || value.back() == ' ' || value.back() == '\t')) {
+            value.pop_back();
+        }
+        std::size_t start = 0;
+        while (start < value.size() && (value[start] == ' ' || value[start] == '\t')) {
+            ++start;
+        }
+        return value.substr(start);
+    }
+
+    void Loop() {
+        while (running_.load(std::memory_order_relaxed)) {
+            std::unique_lock<std::mutex> lock(mu_);
+            cv_.wait_for(lock, std::chrono::seconds(5));
+            if (!running_.load(std::memory_order_relaxed)) {
+                break;
+            }
+            lock.unlock();
+            EmitTelemetry();
+        }
+    }
+
+    void EmitTelemetry() {
+        auto mem = basefwx::system::DetectMemoryInfo();
+        std::ostringstream line;
+        line << "📊 [basefwx.stats]";
+
+        auto cpu_pct = SampleCpuPercent();
+        if (cpu_pct.has_value()) {
+            line << " CPU " << std::fixed << std::setprecision(0) << *cpu_pct << "%";
+        }
+        if (mem.total_bytes > 0) {
+            double ram_pct = (static_cast<double>(mem.used_bytes) * 100.0) / static_cast<double>(mem.total_bytes);
+            line << " \\ RAM " << std::fixed << std::setprecision(0) << ram_pct << "%";
+        }
+        if (plan_.expect_gpu) {
+            auto gpu = SampleGpuPercentTemp();
+            if (gpu.first.has_value()) {
+                line << " \\ GPU " << std::fixed << std::setprecision(0) << *gpu.first << "%";
+            }
+            if (gpu.second.has_value()) {
+                line << " \\ " << std::fixed << std::setprecision(0) << *gpu.second << "C";
+                std::cerr << line.str() << "\n";
+                return;
+            }
+        }
+        auto cpu_temp = ProbeCpuTempC();
+        if (cpu_temp.has_value()) {
+            line << " \\ " << std::fixed << std::setprecision(0) << *cpu_temp << "C";
+        }
+        std::cerr << line.str() << "\n";
+    }
+
+    std::pair<std::optional<double>, std::optional<double>> SampleGpuPercentTemp() {
+        std::string output = ReadCommandCapture(
+            "nvidia-smi --query-gpu=utilization.gpu,temperature.gpu --format=csv,noheader,nounits");
+        if (output.empty()) {
+            return {std::nullopt, std::nullopt};
+        }
+        std::istringstream iss(output);
+        std::string row;
+        std::vector<double> gpu;
+        std::vector<double> temp;
+        while (std::getline(iss, row)) {
+            std::size_t comma = row.find(',');
+            if (comma == std::string::npos) {
+                continue;
+            }
+            std::string gpu_raw = Trim(row.substr(0, comma));
+            std::string temp_raw = Trim(row.substr(comma + 1));
+            auto gpu_val = ParseGpuField(gpu_raw);
+            auto temp_val = ParseGpuField(temp_raw);
+            if (gpu_val.has_value()) {
+                gpu.push_back(*gpu_val);
+            }
+            if (temp_val.has_value() && *temp_val > 0.0) {
+                temp.push_back(*temp_val);
+            }
+        }
+        std::optional<double> gpu_avg;
+        std::optional<double> temp_avg;
+        if (!gpu.empty()) {
+            double sum = 0.0;
+            for (double value : gpu) {
+                sum += value;
+            }
+            gpu_avg = sum / static_cast<double>(gpu.size());
+        }
+        if (!temp.empty()) {
+            double sum = 0.0;
+            for (double value : temp) {
+                sum += value;
+            }
+            temp_avg = sum / static_cast<double>(temp.size());
+        }
+        return {gpu_avg, temp_avg};
+    }
+
+    std::optional<double> SampleCpuPercent() {
+#if defined(__linux__)
+        std::ifstream in("/proc/stat");
+        if (!in) {
+            return std::nullopt;
+        }
+        std::string label;
+        std::uint64_t user = 0;
+        std::uint64_t nice = 0;
+        std::uint64_t system = 0;
+        std::uint64_t idle = 0;
+        std::uint64_t iowait = 0;
+        std::uint64_t irq = 0;
+        std::uint64_t softirq = 0;
+        std::uint64_t steal = 0;
+        in >> label >> user >> nice >> system >> idle >> iowait >> irq >> softirq >> steal;
+        if (label != "cpu") {
+            return std::nullopt;
+        }
+        std::uint64_t idle_total = idle + iowait;
+        std::uint64_t total = user + nice + system + idle + iowait + irq + softirq + steal;
+        if (prev_total_ == 0 || total <= prev_total_) {
+            prev_total_ = total;
+            prev_idle_ = idle_total;
+            return std::nullopt;
+        }
+        std::uint64_t delta_total = total - prev_total_;
+        std::uint64_t delta_idle = idle_total - prev_idle_;
+        prev_total_ = total;
+        prev_idle_ = idle_total;
+        if (delta_total == 0) {
+            return std::nullopt;
+        }
+        double usage = 100.0 * (1.0 - (static_cast<double>(delta_idle) / static_cast<double>(delta_total)));
+        if (usage < 0.0) {
+            usage = 0.0;
+        }
+        if (usage > 100.0) {
+            usage = 100.0;
+        }
+        return usage;
+#else
+        return std::nullopt;
+#endif
+    }
+
+    CommandHwPlan plan_;
+    bool enabled_ = false;
+    std::atomic<bool> running_{false};
+    std::thread worker_;
+    std::mutex mu_;
+    std::condition_variable cv_;
+    std::uint64_t prev_total_ = 0;
+    std::uint64_t prev_idle_ = 0;
+};
+
+CommandHwPlan BuildHwPlan(const std::string& command) {
+    CommandHwPlan plan;
+    plan.op = command;
+    const unsigned int hw = std::thread::hardware_concurrency();
+    const std::size_t workers = hw > 0 ? static_cast<std::size_t>(hw) : 1;
+    plan.parallel = workers > 1 ? ("ON(" + std::to_string(workers) + "w)") : "OFF";
+    if (basefwx::env::IsEnabled("BASEFWX_FORCE_SINGLE_THREAD", false)) {
+        plan.parallel = "OFF";
+    }
+    if (basefwx::env::IsEnabled("BASEFWX_AES_NI", true)) {
+        plan.aes = "aesni";
+    } else {
+        plan.aes = "cpu";
+    }
+    if (command == "jmge" || command == "jmgd") {
+        const std::string hwaccel = ToLower(basefwx::env::Get("BASEFWX_HWACCEL"));
+        if (hwaccel == "nvenc" || hwaccel == "cuda" || hwaccel == "nvidia") {
+            plan.encode = "NVENC";
+            plan.decode = "NVENC";
+            plan.expect_gpu = true;
+            plan.reason = "BASEFWX_HWACCEL requested NVIDIA encode/decode path";
+        } else if (hwaccel == "qsv" || hwaccel == "intel") {
+            plan.encode = "QSV";
+            plan.decode = "QSV";
+            plan.reason = "BASEFWX_HWACCEL requested Intel QSV path";
+        } else if (hwaccel == "vaapi") {
+            plan.encode = "VAAPI";
+            plan.decode = "VAAPI";
+            plan.reason = "BASEFWX_HWACCEL requested VAAPI path";
+        } else {
+            plan.reason = "auto hwaccel routing with CPU crypto";
+        }
+    } else {
+        plan.reason = "command uses CPU crypto path";
+    }
+    return plan;
 }
 
 struct ParsedOptions {
@@ -707,24 +1061,50 @@ ImageArgs ParseImageArgs(int argc, char** argv, int start_index) {
 }  // namespace
 
 int main(int argc, char** argv) {
-    // Check for global flags first
+    std::vector<std::string> cleaned_args;
+    cleaned_args.reserve(static_cast<std::size_t>(argc));
+    cleaned_args.emplace_back(argv[0]);
     for (int i = 1; i < argc; ++i) {
         std::string arg(argv[i]);
         if (arg == "--verbose" || arg == "-v") {
             g_verbose = true;
-        } else if (arg == "--no-color") {
-            basefwx::cli::SetColorsEnabled(false);
+            continue;
         }
+        if (arg == "--no-log") {
+            g_no_log = true;
+            continue;
+        }
+        if (arg == "--no-color") {
+            basefwx::cli::SetColorsEnabled(false);
+            SetCliEnvVar("NO_COLOR", "1");
+            continue;
+        }
+        cleaned_args.push_back(std::move(arg));
     }
-    
-    // Print system info if verbose
-    PrintSystemInfo();
-    
+    std::vector<char*> argv_storage;
+    argv_storage.reserve(cleaned_args.size());
+    for (auto& arg : cleaned_args) {
+        argv_storage.push_back(arg.data());
+    }
+    argc = static_cast<int>(argv_storage.size());
+    argv = argv_storage.data();
+
+    SetCliEnvVar("BASEFWX_VERBOSE", g_verbose ? "1" : "0");
+    SetCliEnvVar("BASEFWX_NO_LOG", g_no_log ? "1" : "0");
+
     if (argc < 2) {
         PrintUsage();
         return 2;
     }
     std::string command(argv[1]);
+    std::optional<CommandTelemetry> telemetry;
+    if (command != "jmge" && command != "jmgd") {
+        telemetry.emplace(BuildHwPlan(command));
+    }
+
+    // Print system info if verbose
+    PrintSystemInfo();
+
     try {
         if (command == "info") {
             if (argc < 3) {

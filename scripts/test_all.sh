@@ -62,6 +62,7 @@ BASELINE_LANG="${BASELINE_LANG:-py}"
 EXPECT_BASELINE=0
 BENCH_ONLY=0
 FBENCH=0
+HEAVY_MODE=0
 
 for arg in "$@"; do
     if (( EXPECT_BASELINE == 1 )); then
@@ -89,6 +90,14 @@ for arg in "$@"; do
             SKIP_CROSS=1
             TEST_KDF_ITERS="${TEST_KDF_ITERS:-1000}"
             ;;
+        --heavy)
+            TEST_MODE="heavy"
+            HEAVY_MODE=1
+            BIG_FILE_BYTES=100663296
+            BENCH_FILE_BYTES=268435456
+            BENCH_TEXT_BYTES=16777216
+            TEST_KDF_ITERS="${TEST_KDF_ITERS:-350000}"
+            ;;
         --baseline)
             EXPECT_BASELINE=1
             ;;
@@ -111,6 +120,10 @@ for arg in "$@"; do
             ;;
     esac
 done
+if (( HEAVY_MODE == 1 )); then
+    PW="basefwx-heavy-2026-password-64chars-aaaaaaaaaaaaaaaaaaaaaaaa"
+    BAD_PW="basefwx-heavy-2026-wrong-password-bbbbbbbbbbbbbbbbbbbbbbbb"
+fi
 FBENCH_TEXT_MAX_BYTES="${FBENCH_TEXT_MAX_BYTES:-$((2 * 1024 * 1024))}"
 FBENCH_TEXT_SLOW_BYTES="${FBENCH_TEXT_SLOW_BYTES:-$((512 * 1024))}"
 FBENCH_FILE_MAX_BYTES="${FBENCH_FILE_MAX_BYTES:-$((70 * 1024 * 1024))}"
@@ -170,12 +183,14 @@ if (( FBENCH == 1 )); then
     BENCH_ITERS_HEAVY="${BENCH_ITERS_HEAVY:-3}"
     BENCH_ITERS_FILE="${BENCH_ITERS_FILE:-3}"
 fi
-if [[ "$TEST_MODE" != "default" ]]; then
+if [[ "$TEST_MODE" == "fast" || "$TEST_MODE" == "quickest" || "$TEST_MODE" == "bench" ]]; then
     ENABLE_HUGE=0
 fi
 if [[ -z "$BENCH_FILE_BYTES" ]]; then
     if [[ "$TEST_MODE" == "fast" || "$TEST_MODE" == "quickest" ]]; then
         BENCH_FILE_BYTES="$BIG_FILE_BYTES"
+    elif [[ "$TEST_MODE" == "heavy" ]]; then
+        BENCH_FILE_BYTES=268435456
     else
         BENCH_FILE_BYTES=220000000
     fi
@@ -183,6 +198,8 @@ fi
 if [[ -z "$BENCH_TEXT_BYTES" ]]; then
     if [[ "$TEST_MODE" == "fast" || "$TEST_MODE" == "quickest" ]]; then
         BENCH_TEXT_BYTES="$BIG_FILE_BYTES"
+    elif [[ "$TEST_MODE" == "heavy" ]]; then
+        BENCH_TEXT_BYTES=16777216
     else
         BENCH_TEXT_BYTES=8388608
     fi
@@ -340,6 +357,20 @@ PROGRESS_INTERVAL="${PROGRESS_INTERVAL:-15}"
 if [[ ! "$PROGRESS_INTERVAL" =~ ^[0-9]+$ ]]; then
     PROGRESS_INTERVAL=15
 fi
+if [[ -z "${SHOW_RUNTIME_USAGE+x}" ]]; then
+    if [[ -n "${CI:-}" ]]; then
+        SHOW_RUNTIME_USAGE=0
+    else
+        SHOW_RUNTIME_USAGE=1
+    fi
+fi
+if [[ ! "$SHOW_RUNTIME_USAGE" =~ ^[0-9]+$ ]]; then
+    SHOW_RUNTIME_USAGE=1
+fi
+USAGE_GPU_INTERVAL="${USAGE_GPU_INTERVAL:-30}"
+if [[ ! "$USAGE_GPU_INTERVAL" =~ ^[0-9]+$ || "$USAGE_GPU_INTERVAL" -lt 1 ]]; then
+    USAGE_GPU_INTERVAL=30
+fi
 
 COLOR_ENABLED=1
 if [[ ! -t 1 || -n "${NO_COLOR:-}" || "${TERM:-}" == "dumb" ]]; then
@@ -373,6 +404,116 @@ EMOJI_FAIL="❌"
 EMOJI_FAST="⚡"
 EMOJI_SLOW="🐌"
 EMOJI_WARN="⚠️"
+
+USAGE_CPU_PREV_TOTAL=""
+USAGE_CPU_PREV_IDLE=""
+USAGE_GPU_LAST_QUERY=-1
+USAGE_GPU_LAST_VALUE=""
+
+usage_cpu_percent() {
+    if [[ ! -r /proc/stat ]]; then
+        return 0
+    fi
+    local cpu_label user nice system idle iowait irq softirq steal guest guest_nice
+    read -r cpu_label user nice system idle iowait irq softirq steal guest guest_nice </proc/stat || return 0
+    local total=$((user + nice + system + idle + iowait + irq + softirq + steal))
+    local idle_total=$((idle + iowait))
+    if [[ -n "$USAGE_CPU_PREV_TOTAL" && -n "$USAGE_CPU_PREV_IDLE" ]]; then
+        local delta_total=$((total - USAGE_CPU_PREV_TOTAL))
+        local delta_idle=$((idle_total - USAGE_CPU_PREV_IDLE))
+        if (( delta_total > 0 )); then
+            local busy=$((delta_total - delta_idle))
+            if (( busy < 0 )); then
+                busy=0
+            fi
+            printf "%d" $(((busy * 100 + (delta_total / 2)) / delta_total))
+        fi
+    fi
+    USAGE_CPU_PREV_TOTAL=$total
+    USAGE_CPU_PREV_IDLE=$idle_total
+    return 0
+}
+
+usage_ram_percent() {
+    if [[ ! -r /proc/meminfo ]]; then
+        return 0
+    fi
+    local key value unit
+    local mem_total=0
+    local mem_available=0
+    while read -r key value unit; do
+        case "$key" in
+            MemTotal:)
+                mem_total="$value"
+                ;;
+            MemAvailable:)
+                mem_available="$value"
+                ;;
+        esac
+        if (( mem_total > 0 && mem_available > 0 )); then
+            break
+        fi
+    done </proc/meminfo
+    if (( mem_total <= 0 )); then
+        return 0
+    fi
+    if (( mem_available < 0 )); then
+        mem_available=0
+    fi
+    local used=$((mem_total - mem_available))
+    if (( used < 0 )); then
+        used=0
+    fi
+    printf "%d" $(((used * 100 + (mem_total / 2)) / mem_total))
+    return 0
+}
+
+usage_gpu_percent() {
+    if (( NVIDIA_HWACCEL_AVAILABLE != 1 )); then
+        return 0
+    fi
+    local now=$SECONDS
+    if (( USAGE_GPU_LAST_QUERY >= 0 && now - USAGE_GPU_LAST_QUERY < USAGE_GPU_INTERVAL )); then
+        printf "%s" "$USAGE_GPU_LAST_VALUE"
+        return 0
+    fi
+    USAGE_GPU_LAST_QUERY=$now
+    local value
+    value="$(nvidia-smi --query-gpu=utilization.gpu --format=csv,noheader,nounits 2>/dev/null | head -n 1 | tr -cd '0-9')"
+    USAGE_GPU_LAST_VALUE="$value"
+    printf "%s" "$USAGE_GPU_LAST_VALUE"
+    return 0
+}
+
+usage_snapshot() {
+    if (( SHOW_RUNTIME_USAGE != 1 )); then
+        return 0
+    fi
+    local parts=()
+    local cpu ram gpu
+    cpu="$(usage_cpu_percent)"
+    if [[ -n "$cpu" ]]; then
+        parts+=("${BLUE}CPU${RESET} ${cpu}%")
+    fi
+    ram="$(usage_ram_percent)"
+    if [[ -n "$ram" ]]; then
+        parts+=("${CYAN}RAM${RESET} ${ram}%")
+    fi
+    gpu="$(usage_gpu_percent)"
+    if [[ -n "$gpu" ]]; then
+        parts+=("${GREEN}GPU${RESET} ${gpu}%")
+    fi
+    local joined=""
+    local part
+    for part in "${parts[@]}"; do
+        if [[ -n "$joined" ]]; then
+            joined+=" | "
+        fi
+        joined+="$part"
+    done
+    printf "%s" "$joined"
+    return 0
+}
 
 log() {
     printf "%s\n" "$*" >>"$LOG"
@@ -426,11 +567,18 @@ time_cmd() {
 time_cmd_bench() {
     local key="$1"
     shift
-    local output rc bench_ns
+    local output rc bench_ns out_file
     announce_step "$key"
     log "CMD[$key]: $*"
-    output="$("$@" 2>>"$LOG")"
+    out_file="$TMP_DIR/bench_${key}.out"
+    rm -f "$out_file"
+    run_with_heartbeat_capture "$key" "$out_file" "$@"
     rc=$?
+    if [[ -f "$out_file" ]]; then
+        output="$(cat "$out_file")"
+    else
+        output=""
+    fi
     if [[ -n "$output" ]]; then
         log "$output"
     fi
@@ -483,6 +631,7 @@ run_with_heartbeat() {
     local label="$1"
     shift
     local start_s=$SECONDS
+    usage_cpu_percent >/dev/null 2>&1 || true
     if (( PROGRESS_INTERVAL <= 0 )); then
         "$@" >>"$LOG" 2>&1
         return $?
@@ -495,7 +644,45 @@ run_with_heartbeat() {
         local now=$SECONDS
         if (( now >= next_tick )); then
             if kill -0 "$pid" 2>/dev/null; then
-                printf "  %s %s%s%s (%ds elapsed)\n" "$EMOJI_PROGRESS" "$YELLOW" "$label" "$RESET" "$((now - start_s))"
+                local usage_line
+                usage_line="$(usage_snapshot)"
+                if [[ -n "$usage_line" ]]; then
+                    printf "  %s %s%s%s (%ds elapsed) | %s\n" "$EMOJI_PROGRESS" "$YELLOW" "$label" "$RESET" "$((now - start_s))" "$usage_line"
+                else
+                    printf "  %s %s%s%s (%ds elapsed)\n" "$EMOJI_PROGRESS" "$YELLOW" "$label" "$RESET" "$((now - start_s))"
+                fi
+            fi
+            next_tick=$((next_tick + PROGRESS_INTERVAL))
+        fi
+    done
+    wait "$pid"
+}
+
+run_with_heartbeat_capture() {
+    local label="$1"
+    local output_file="$2"
+    shift 2
+    local start_s=$SECONDS
+    usage_cpu_percent >/dev/null 2>&1 || true
+    if (( PROGRESS_INTERVAL <= 0 )); then
+        "$@" >"$output_file" 2>>"$LOG"
+        return $?
+    fi
+    "$@" >"$output_file" 2>>"$LOG" &
+    local pid=$!
+    local next_tick=$((start_s + PROGRESS_INTERVAL))
+    while kill -0 "$pid" 2>/dev/null; do
+        sleep 1
+        local now=$SECONDS
+        if (( now >= next_tick )); then
+            if kill -0 "$pid" 2>/dev/null; then
+                local usage_line
+                usage_line="$(usage_snapshot)"
+                if [[ -n "$usage_line" ]]; then
+                    printf "  %s %s%s%s (%ds elapsed) | %s\n" "$EMOJI_PROGRESS" "$YELLOW" "$label" "$RESET" "$((now - start_s))" "$usage_line"
+                else
+                    printf "  %s %s%s%s (%ds elapsed)\n" "$EMOJI_PROGRESS" "$YELLOW" "$label" "$RESET" "$((now - start_s))"
+                fi
             fi
             next_tick=$((next_tick + PROGRESS_INTERVAL))
         fi
@@ -2266,6 +2453,8 @@ fi
 
 log "Python: $("$PYTHON_BIN" --version 2>&1)"
 log "C++ binary: $CPP_BIN"
+log "TEST_MODE: $TEST_MODE"
+log "SHOW_RUNTIME_USAGE: $SHOW_RUNTIME_USAGE"
 if [[ -z "$JAVA_BIN" ]]; then
     JAVA_BIN="$(command -v java || true)"
 fi
@@ -2328,7 +2517,10 @@ bench_mode = mode == "bench"
 
 text = ("The quick brown fox jumps over the lazy dog. " * 40).encode("ascii")
 (root / "tiny.txt").write_bytes(text[:1024])
-(root / "kfm_payload.bin").write_bytes(os.urandom(256 * 1024))
+kfm_payload_bytes = 256 * 1024
+if mode == "heavy":
+    kfm_payload_bytes = 2 * 1024 * 1024
+(root / "kfm_payload.bin").write_bytes(os.urandom(kfm_payload_bytes))
 bench_text_bytes = int(os.getenv("BENCH_TEXT_BYTES", "0"))
 if bench_text_bytes > 0:
     phrase = (
@@ -2348,7 +2540,12 @@ def write_png(path: Path, size: int) -> None:
         path.write_bytes(os.urandom(size * size * 3))
 
 if not bench_mode:
-    jmg_size = 96 if mode in ("fast", "quickest") else 192
+    if mode in ("fast", "quickest"):
+        jmg_size = 96
+    elif mode == "heavy":
+        jmg_size = 320
+    else:
+        jmg_size = 192
     write_png(root / "jmg_sample.png", jmg_size)
 
     if mode not in ("fast", "quickest"):
@@ -2360,9 +2557,14 @@ if not bench_mode:
 
     ffmpeg = shutil.which("ffmpeg")
     if ffmpeg:
-        duration = "1.0"
-        fps = "24"
-        v_size = "128x72"
+        if mode == "heavy":
+            duration = "4.0"
+            fps = "30"
+            v_size = "320x180"
+        else:
+            duration = "1.0"
+            fps = "24"
+            v_size = "128x72"
         mp4_path = root / "jmg_sample.mp4"
         m4a_path = root / "jmg_sample.m4a"
         try:
@@ -2434,6 +2636,8 @@ if mode in ("fast", "quickest"):
 else:
     if not bench_mode:
         write_large(root / "large_36m.bin", big_bytes, seed=4242)
+        if mode == "heavy":
+            write_large(root / "large_200m.bin", large_200m, seed=12345)
         if enable_huge:
             write_large(root / "large_200m.bin", large_200m, seed=12345)
             write_large(root / "huge_1p2g.bin", large_1p2g, seed=98765)
@@ -4050,6 +4254,13 @@ KFM_FILE="kfm_payload.bin"
 if [[ "$TEST_MODE" == "fast" || "$TEST_MODE" == "quickest" ]]; then
     B512FILE_CASES=("sample_payload.bin" "sample_payload_copy.bin")
     PB512FILE_CASES=("sample_payload.bin" "sample_payload_copy.bin")
+elif [[ "$TEST_MODE" == "heavy" ]]; then
+    B512FILE_CASES=("noise.png" "small.bin" "medium.bin" "large_36m.bin")
+    PB512FILE_CASES=("small.bin" "medium.bin" "large_36m.bin")
+    if [[ -f "$ORIG_DIR/large_200m.bin" ]]; then
+        B512FILE_CASES+=("large_200m.bin")
+        PB512FILE_CASES+=("large_200m.bin")
+    fi
 else
     B512FILE_CASES=("noise.png" "large_36m.bin")
     PB512FILE_CASES=("medium.bin" "large_36m.bin")
@@ -4068,6 +4279,69 @@ done
 if [[ "$JMG_VIDEO_CASES_ENABLED" == "1" || "$JMG_VIDEO_CASES_ENABLED" == "true" || "$JMG_VIDEO_CASES_ENABLED" == "yes" || "$JMG_VIDEO_CASES_ENABLED" == "on" ]]; then
     if [[ -f "$ORIG_DIR/jmg_sample.mp4" ]]; then
         JMG_CASES+=("jmg_sample.mp4")
+    fi
+fi
+
+# CLI flag smoke checks and jMG video gate checks for C++/Java.
+if [[ "$TEST_MODE" != "quickest" ]]; then
+    if [[ "$CPP_AVAILABLE" == "1" && -x "$CPP_BIN" && -f "$ORIG_DIR/jmg_sample.m4a" ]]; then
+        cpp_smoke_dir="$WORK_DIR/cpp_flag_smoke"
+        mkdir -p "$cpp_smoke_dir"
+        cpp_no_log_err="$cpp_smoke_dir/no_log.err"
+        cpp_no_log_out="$cpp_smoke_dir/no_log.m4a"
+        if ! "$CPP_BIN" --no-log jmge "$ORIG_DIR/jmg_sample.m4a" -p "$PW" --keep-input --out "$cpp_no_log_out" 2>"$cpp_no_log_err"; then
+            FAILURES+=("cpp_no_log_smoke (command failed)")
+        elif grep -Eq "basefwx\\.hw|Overall|File    |WARN:" "$cpp_no_log_err"; then
+            FAILURES+=("cpp_no_log_smoke (unexpected logs)")
+        fi
+        cpp_verbose_err="$cpp_smoke_dir/verbose.err"
+        cpp_verbose_out="$cpp_smoke_dir/verbose.m4a"
+        if ! "$CPP_BIN" --verbose jmge "$ORIG_DIR/jmg_sample.m4a" -p "$PW" --keep-input --out "$cpp_verbose_out" 2>"$cpp_verbose_err"; then
+            FAILURES+=("cpp_verbose_smoke (command failed)")
+        elif ! grep -q "reason:" "$cpp_verbose_err"; then
+            FAILURES+=("cpp_verbose_smoke (missing reason line)")
+        fi
+    fi
+    if [[ "$JAVA_AVAILABLE" == "1" && -f "$JAVA_JAR" && -f "$ORIG_DIR/jmg_sample.m4a" ]]; then
+        java_smoke_dir="$WORK_DIR/java_flag_smoke"
+        mkdir -p "$java_smoke_dir"
+        java_no_log_err="$java_smoke_dir/no_log.err"
+        java_no_log_out="$java_smoke_dir/no_log.m4a"
+        if ! "$JAVA_BIN" -jar "$JAVA_JAR" --no-log jmge "$ORIG_DIR/jmg_sample.m4a" "$java_no_log_out" "$PW" --keep-input 2>"$java_no_log_err"; then
+            FAILURES+=("java_no_log_smoke (command failed)")
+        elif grep -Eq "basefwx\\.hw|WARN:" "$java_no_log_err"; then
+            FAILURES+=("java_no_log_smoke (unexpected logs)")
+        fi
+        java_verbose_err="$java_smoke_dir/verbose.err"
+        java_verbose_out="$java_smoke_dir/verbose.m4a"
+        if ! "$JAVA_BIN" -jar "$JAVA_JAR" --verbose jmge "$ORIG_DIR/jmg_sample.m4a" "$java_verbose_out" "$PW" --keep-input 2>"$java_verbose_err"; then
+            FAILURES+=("java_verbose_smoke (command failed)")
+        elif ! grep -q "reason:" "$java_verbose_err"; then
+            FAILURES+=("java_verbose_smoke (missing reason line)")
+        fi
+    fi
+fi
+
+if [[ "$JMG_VIDEO_CASES_ENABLED" != "1" && "$JMG_VIDEO_CASES_ENABLED" != "true" && "$JMG_VIDEO_CASES_ENABLED" != "yes" && "$JMG_VIDEO_CASES_ENABLED" != "on" && -f "$ORIG_DIR/jmg_sample.mp4" ]]; then
+    if [[ "$CPP_AVAILABLE" == "1" && -x "$CPP_BIN" ]]; then
+        cpp_gate_dir="$WORK_DIR/cpp_jmg_video_gate"
+        mkdir -p "$cpp_gate_dir"
+        cpp_gate_err="$cpp_gate_dir/jmge_video.err"
+        if "$CPP_BIN" jmge "$ORIG_DIR/jmg_sample.mp4" -p "$PW" --out "$cpp_gate_dir/out.mp4" >"$cpp_gate_dir/stdout.log" 2>"$cpp_gate_err"; then
+            FAILURES+=("cpp_jmg_video_gate (expected failure)")
+        elif ! grep -q "jMG video mode is temporarily disabled" "$cpp_gate_err"; then
+            FAILURES+=("cpp_jmg_video_gate (missing disable message)")
+        fi
+    fi
+    if [[ "$JAVA_AVAILABLE" == "1" && -f "$JAVA_JAR" ]]; then
+        java_gate_dir="$WORK_DIR/java_jmg_video_gate"
+        mkdir -p "$java_gate_dir"
+        java_gate_err="$java_gate_dir/jmge_video.err"
+        if "$JAVA_BIN" -jar "$JAVA_JAR" jmge "$ORIG_DIR/jmg_sample.mp4" "$java_gate_dir/out.mp4" "$PW" >"$java_gate_dir/stdout.log" 2>"$java_gate_err"; then
+            FAILURES+=("java_jmg_video_gate (expected failure)")
+        elif ! grep -q "jMG video mode is temporarily disabled" "$java_gate_err"; then
+            FAILURES+=("java_jmg_video_gate (missing disable message)")
+        fi
     fi
 fi
 
@@ -4632,6 +4906,13 @@ if [[ -z "${BENCH_WARMUP_LIGHT:-}" || -z "${BENCH_WARMUP_HEAVY:-}" ]]; then
         BENCH_WARMUP_FILE_JAVA="${BENCH_WARMUP_FILE_JAVA:-2}"
         # Java needs extra warmup to reach JIT steady state on light operations
         BENCH_WARMUP_JAVA_FWXAES="${BENCH_WARMUP_JAVA_FWXAES:-8}"
+    elif [[ "$TEST_MODE" == "heavy" ]]; then
+        BENCH_WARMUP_LIGHT="${BENCH_WARMUP_LIGHT:-6}"
+        BENCH_WARMUP_HEAVY="${BENCH_WARMUP_HEAVY:-8}"
+        BENCH_WARMUP_FILE="${BENCH_WARMUP_FILE:-2}"
+        BENCH_WARMUP_FILE_JAVA="${BENCH_WARMUP_FILE_JAVA:-4}"
+        # Java needs extra warmup to reach JIT steady state on heavy operations
+        BENCH_WARMUP_JAVA_FWXAES="${BENCH_WARMUP_JAVA_FWXAES:-12}"
     else
         BENCH_WARMUP_LIGHT="${BENCH_WARMUP_LIGHT:-5}"
         BENCH_WARMUP_HEAVY="${BENCH_WARMUP_HEAVY:-6}"
@@ -4659,6 +4940,8 @@ if [[ -z "${BENCH_ITERS_HEAVY:-}" ]]; then
         BENCH_ITERS_HEAVY=1
     elif [[ "$TEST_MODE" == "fast" ]]; then
         BENCH_ITERS_HEAVY=3
+    elif [[ "$TEST_MODE" == "heavy" ]]; then
+        BENCH_ITERS_HEAVY=6
     else
         BENCH_ITERS_HEAVY=4
     fi
@@ -4668,6 +4951,8 @@ if [[ -z "${BENCH_ITERS_FILE:-}" ]]; then
         BENCH_ITERS_FILE=1
     elif [[ "$TEST_MODE" == "fast" ]]; then
         BENCH_ITERS_FILE=2
+    elif [[ "$TEST_MODE" == "heavy" ]]; then
+        BENCH_ITERS_FILE=6
     else
         BENCH_ITERS_FILE=4
     fi
@@ -4922,7 +5207,9 @@ for idx in "${!BENCH_LANGS[@]}"; do
                     BASEFWX_BENCH_WORKERS="$BENCH_FILE_WORKERS" \
                     "$CPP_BIN" bench-jmg "$ORIG_DIR/$jmg_file" "$PW" --no-master
             done
-            if (( NVIDIA_HWACCEL_AVAILABLE == 1 )) && [[ -f "$ORIG_DIR/jmg_sample.mp4" ]]; then
+            if (( NVIDIA_HWACCEL_AVAILABLE == 1 )) \
+                && [[ "$JMG_VIDEO_CASES_ENABLED" == "1" || "$JMG_VIDEO_CASES_ENABLED" == "true" || "$JMG_VIDEO_CASES_ENABLED" == "yes" || "$JMG_VIDEO_CASES_ENABLED" == "on" ]] \
+                && [[ -f "$ORIG_DIR/jmg_sample.mp4" ]]; then
                 time_cmd_bench "jmg_cpp_gpu_jmg_sample_mp4" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_FILE" \
                     BASEFWX_BENCH_ITERS="$BENCH_ITERS_FILE" \
                     BASEFWX_BENCH_WORKERS="$BENCH_FILE_WORKERS" \

@@ -59,6 +59,7 @@ jobs:
           ALLOW_BAKED_PUB: "0"
           BASEFWX_BENCH_RESULTS_DIR: results
           BASEFWX_RELEASE_TAG: ${{ inputs.tag }}
+          BASEFWX_ENABLE_JMG_VIDEO: "0"
         run: |
           if [[ -z "${BASEFWX_RELEASE_TAG}" ]]; then
             BASEFWX_RELEASE_TAG="manual-$(date -u +%Y%m%d-%H%M%S)"

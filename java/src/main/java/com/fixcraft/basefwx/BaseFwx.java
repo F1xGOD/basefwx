@@ -63,8 +63,10 @@ public final class BaseFwx {
         if (override) {
             String orange = "\u001b[38;5;208m";
             String reset = "\u001b[0m";
-            System.err.println(orange + "WARN: MULTI-THREAD DISABLED; PERFORMANCE MAY DETERIORATE. "
-                + "Using BASEFWX_FORCE_SINGLE_THREAD=1 with " + available + " cores available." + reset);
+            if (RuntimeLog.shouldLog()) {
+                System.err.println(orange + "WARN: MULTI-THREAD DISABLED; PERFORMANCE MAY DETERIORATE. "
+                    + "Using BASEFWX_FORCE_SINGLE_THREAD=1 with " + available + " cores available." + reset);
+            }
         }
     }
 
@@ -3665,7 +3667,7 @@ public final class BaseFwx {
     }
 
     private static void kfmWarn(String message) {
-        System.err.println("WARN: " + message);
+        RuntimeLog.warn(message);
     }
 
     private static byte[] kfmReadHead(File input, int maxBytes) {

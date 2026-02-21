@@ -7,6 +7,7 @@
 #include "basefwx/format.hpp"
 #include "basefwx/keywrap.hpp"
 #include "basefwx/pb512.hpp"
+#include "basefwx/system_info.hpp"
 
 #include <algorithm>
 #include <array>
@@ -1080,6 +1081,9 @@ Bytes LoadBaseKeyFromKeyTrailerBytes(const Bytes& file_bytes,
 }
 
 void WarnNoArchivePayload() {
+    if (basefwx::env::IsEnabled("BASEFWX_NO_LOG", false)) {
+        return;
+    }
     std::cerr
         << "WARNING: jMG no-archive payload detected; restored media may not be byte-identical to the original input."
         << std::endl;
@@ -1544,7 +1548,7 @@ int RunProcess(const std::vector<std::string>& args, std::string* output) {
         }
         si.dwFlags |= STARTF_USESTDHANDLES;
         si.hStdOutput = write_pipe;
-        si.hStdError = GetStdHandle(STD_ERROR_HANDLE);
+        si.hStdError = write_pipe;
         si.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
         inherit_handles = TRUE;
     }
@@ -1612,6 +1616,7 @@ int RunProcess(const std::vector<std::string>& args, std::string* output) {
     if (pid == 0) {
         if (output) {
             dup2(pipefd[1], STDOUT_FILENO);
+            dup2(pipefd[1], STDERR_FILENO);
             close(pipefd[0]);
             close(pipefd[1]);
         }
@@ -1660,7 +1665,9 @@ std::string RunCommandCapture(const std::vector<std::string>& args) {
 }
 
 void RunCommand(const std::vector<std::string>& args) {
-    int rc = RunProcess(args, nullptr);
+    std::string sink;
+    std::string* capture = basefwx::env::IsEnabled("BASEFWX_NO_LOG", false) ? &sink : nullptr;
+    int rc = RunProcess(args, capture);
     if (rc != 0) {
         throw std::runtime_error("Command failed (" + std::to_string(rc) + "): "
                                  + FormatCommandForError(args));
@@ -1974,6 +1981,78 @@ HwAccel SelectHwAccel() {
     return cached.value();
 }
 
+bool IsJmgVideoEnabled() {
+    return basefwx::env::IsEnabled("BASEFWX_ENABLE_JMG_VIDEO", false);
+}
+
+bool LogEnabled() {
+    return !basefwx::env::IsEnabled("BASEFWX_NO_LOG", false);
+}
+
+bool VerboseEnabled() {
+    return basefwx::env::IsEnabled("BASEFWX_VERBOSE", false);
+}
+
+std::string HwAccelName(HwAccel accel) {
+    switch (accel) {
+        case HwAccel::Nvenc:
+            return "NVENC";
+        case HwAccel::Qsv:
+            return "QSV";
+        case HwAccel::Vaapi:
+            return "VAAPI";
+        default:
+            return "CPU";
+    }
+}
+
+std::string ParallelText() {
+    if (basefwx::env::IsEnabled("BASEFWX_FORCE_SINGLE_THREAD", false)) {
+        return "OFF";
+    }
+    std::size_t workers = 1;
+    const char* raw = std::getenv("BASEFWX_MEDIA_WORKERS");
+    if (raw && *raw) {
+        try {
+            std::size_t parsed = static_cast<std::size_t>(std::stoul(raw));
+            if (parsed > 0) {
+                workers = parsed;
+            }
+        } catch (const std::exception&) {
+        }
+    } else {
+        unsigned int hw = std::thread::hardware_concurrency();
+        workers = hw > 0 ? static_cast<std::size_t>(hw) : 1;
+    }
+    if (workers <= 1) {
+        return "OFF";
+    }
+    return "ON(" + std::to_string(workers) + "w)";
+}
+
+void LogHwPlan(const std::string& op, HwAccel accel, const std::string& reason) {
+    if (!LogEnabled()) {
+        return;
+    }
+    const std::string device = HwAccelName(accel);
+    const bool expect_gpu = accel != HwAccel::None;
+    std::cerr << "🎛 [basefwx.hw] op=" << op
+              << " encode=" << device
+              << " decode=" << device
+              << " pixels=CPU"
+              << " parallel=" << ParallelText()
+              << " crypto=CPU"
+              << " aes_accel=aesni"
+              << "\n";
+    if (VerboseEnabled()) {
+        std::cerr << "   reason: " << reason
+                  << "; AES operations remain on CPU path\n";
+    }
+    if (expect_gpu) {
+        (void)expect_gpu;
+    }
+}
+
 std::filesystem::path CreateTempDir(const std::string& prefix) {
     auto base = std::filesystem::temp_directory_path();
     std::random_device rd;
@@ -1994,13 +2073,124 @@ struct ProgressReporter {
     bool printed = false;
     bool use_ansi = false;
     std::chrono::steady_clock::time_point last_tick{};
+    std::chrono::steady_clock::time_point last_metrics_tick{};
     double last_fraction = -1.0;
+    std::string telemetry;
+    std::uint64_t prev_cpu_total = 0;
+    std::uint64_t prev_cpu_idle = 0;
 
     ProgressReporter() {
+        enabled = LogEnabled();
+        if (!enabled) {
+            return;
+        }
         const char* term = std::getenv("TERM");
         const char* no_color = std::getenv("NO_COLOR");
         use_ansi = !no_color && term && std::string(term) != "dumb";
         last_tick = std::chrono::steady_clock::now();
+        last_metrics_tick = last_tick;
+    }
+
+    std::optional<double> SampleCpuPercent() {
+#if defined(__linux__)
+        std::ifstream in("/proc/stat");
+        if (!in) {
+            return std::nullopt;
+        }
+        std::string label;
+        std::uint64_t user = 0;
+        std::uint64_t nice = 0;
+        std::uint64_t system = 0;
+        std::uint64_t idle = 0;
+        std::uint64_t iowait = 0;
+        std::uint64_t irq = 0;
+        std::uint64_t softirq = 0;
+        std::uint64_t steal = 0;
+        in >> label >> user >> nice >> system >> idle >> iowait >> irq >> softirq >> steal;
+        if (label != "cpu") {
+            return std::nullopt;
+        }
+        std::uint64_t idle_total = idle + iowait;
+        std::uint64_t total = user + nice + system + idle + iowait + irq + softirq + steal;
+        if (prev_cpu_total == 0 || total <= prev_cpu_total) {
+            prev_cpu_total = total;
+            prev_cpu_idle = idle_total;
+            return std::nullopt;
+        }
+        std::uint64_t delta_total = total - prev_cpu_total;
+        std::uint64_t delta_idle = idle_total - prev_cpu_idle;
+        prev_cpu_total = total;
+        prev_cpu_idle = idle_total;
+        if (delta_total == 0) {
+            return std::nullopt;
+        }
+        double usage = 100.0 * (1.0 - (static_cast<double>(delta_idle) / static_cast<double>(delta_total)));
+        usage = std::clamp(usage, 0.0, 100.0);
+        return usage;
+#else
+        return std::nullopt;
+#endif
+    }
+
+    std::optional<double> SampleTempC() {
+#if defined(__linux__)
+        std::filesystem::path root("/sys/class/thermal");
+        std::error_code ec;
+        if (!std::filesystem::exists(root, ec)) {
+            return std::nullopt;
+        }
+        double sum = 0.0;
+        std::size_t count = 0;
+        for (const auto& entry : std::filesystem::directory_iterator(root, ec)) {
+            if (ec || !entry.is_directory()) {
+                continue;
+            }
+            std::ifstream in(entry.path() / "temp");
+            double raw = 0.0;
+            if (!(in >> raw)) {
+                continue;
+            }
+            if (raw > 1000.0) {
+                raw /= 1000.0;
+            }
+            if (raw < 5.0 || raw > 130.0) {
+                continue;
+            }
+            sum += raw;
+            ++count;
+        }
+        if (count == 0) {
+            return std::nullopt;
+        }
+        return sum / static_cast<double>(count);
+#else
+        return std::nullopt;
+#endif
+    }
+
+    std::string BuildTelemetrySnapshot(bool force = false) {
+        auto now = std::chrono::steady_clock::now();
+        if (!force && !telemetry.empty()
+            && std::chrono::duration_cast<std::chrono::seconds>(now - last_metrics_tick).count() < 5) {
+            return telemetry;
+        }
+        last_metrics_tick = now;
+        std::ostringstream out;
+        auto cpu = SampleCpuPercent();
+        if (cpu.has_value()) {
+            out << " | CPU " << std::fixed << std::setprecision(0) << *cpu << "%";
+        }
+        auto mem = basefwx::system::DetectMemoryInfo();
+        if (mem.total_bytes > 0) {
+            double ram = (static_cast<double>(mem.used_bytes) * 100.0) / static_cast<double>(mem.total_bytes);
+            out << " \\ RAM " << std::fixed << std::setprecision(0) << ram << "%";
+        }
+        auto temp = SampleTempC();
+        if (temp.has_value()) {
+            out << " \\ " << std::fixed << std::setprecision(0) << *temp << "C";
+        }
+        telemetry = out.str();
+        return telemetry;
     }
 
     static std::string RenderBar(double fraction, int width = 30) {
@@ -2036,23 +2226,23 @@ struct ProgressReporter {
         int pct = static_cast<int>(std::round(fraction * 100.0));
         std::string bar = RenderBar(fraction);
         std::string name = path.filename().string();
-        std::string line1 = "Overall " + bar + " " + std::to_string(pct) + "% " + phase;
+        std::string line1 = "Overall " + bar + " " + std::to_string(pct) + "% " + phase + BuildTelemetrySnapshot();
         std::string line2 = "File    " + bar + " " + std::to_string(pct) + "% " + name;
         if (use_ansi) {
             if (printed) {
-                std::cout << "\033[2A";
+                std::cerr << "\033[2A";
             }
-            std::cout << "\r\033[2K" << line1 << "\n"
+            std::cerr << "\r\033[2K" << line1 << "\n"
                       << "\r\033[2K" << line2 << std::flush;
         } else {
-            std::cout << line1 << "\n" << line2 << std::endl;
+            std::cerr << line1 << "\n" << line2 << std::endl;
         }
         printed = true;
     }
 
     void Finish() {
         if (printed) {
-            std::cout << std::endl;
+            std::cerr << std::endl;
             printed = false;
         }
     }
@@ -2855,6 +3045,10 @@ std::string EncryptMedia(const std::string& path,
         video.valid = false;
         audio.valid = false;
     }
+    if (video.valid && !IsJmgVideoEnabled()) {
+        throw std::runtime_error(
+            "jMG video mode is temporarily disabled. Use fwxAES for video, or set BASEFWX_ENABLE_JMG_VIDEO=1 to re-enable.");
+    }
     if (!video.valid && !audio.valid) {
         std::filesystem::path fallback_out = output.empty()
             ? input_path.parent_path() / (input_path.stem().string() + ".fwx")
@@ -2865,6 +3059,7 @@ std::string EncryptMedia(const std::string& path,
 
     BitrateTargets targets = EstimateBitrates(input_path, video, audio);
     HwAccel accel = SelectHwAccel();
+    LogHwPlan("jMGe", accel, "media encode/decode routed from BASEFWX_HWACCEL selection");
     std::filesystem::path temp_dir = CreateTempDir("basefwx-media");
     try {
         std::filesystem::path raw_video = temp_dir / "video.raw";
@@ -3061,6 +3256,19 @@ std::string DecryptMedia(const std::string& path,
     if (IsImageExt(input_path)) {
         return DecryptImageInv(input_path.string(), resolved, output);
     }
+    try {
+        VideoInfo gate_video = ProbeVideo(input_path);
+        if (gate_video.valid && !IsJmgVideoEnabled()) {
+            throw std::runtime_error(
+                "jMG video mode is temporarily disabled. Use fwxAES for video, or set BASEFWX_ENABLE_JMG_VIDEO=1 to re-enable.");
+        }
+    } catch (const std::runtime_error& exc) {
+        std::string msg = exc.what();
+        if (msg.find("jMG video mode is temporarily disabled") != std::string::npos) {
+            throw;
+        }
+    } catch (const std::exception&) {
+    }
 
     std::filesystem::path output_path = output.empty() ? input_path : NormalizePath(output);
     std::filesystem::path temp_output = output_path;
@@ -3175,6 +3383,10 @@ std::string DecryptMedia(const std::string& path,
         video.valid = false;
         audio.valid = false;
     }
+    if (video.valid && !IsJmgVideoEnabled()) {
+        throw std::runtime_error(
+            "jMG video mode is temporarily disabled. Use fwxAES for video, or set BASEFWX_ENABLE_JMG_VIDEO=1 to re-enable.");
+    }
     if (!video.valid && !audio.valid) {
         bool can_fwx = input_path.extension() == ".fwx";
         if (!can_fwx) {
@@ -3196,6 +3408,7 @@ std::string DecryptMedia(const std::string& path,
 
     BitrateTargets targets = EstimateBitrates(input_path, video, audio);
     HwAccel accel = SelectHwAccel();
+    LogHwPlan("jMGd", accel, "media encode/decode routed from BASEFWX_HWACCEL selection");
     std::filesystem::path temp_dir = CreateTempDir("basefwx-media");
     try {
         std::filesystem::path raw_video = temp_dir / "video.raw";

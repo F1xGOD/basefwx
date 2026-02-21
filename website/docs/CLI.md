@@ -86,6 +86,8 @@ Notes:
 - Optional kFM/kFA acceleration:
   - `BASEFWX_KFM_ACCEL=auto|cuda|cpu` (default `auto`)
   - `BASEFWX_KFM_ACCEL_MIN_BYTES=<bytes>` (default `1048576`, auto mode threshold)
+- CLI progress includes live system telemetry (CPU/GPU/RAM/I/O/TEMP when available).
+  Set `BASEFWX_PROGRESS_TELEMETRY=0` to disable.
 - Python jMG HW accel policy: NVIDIA (`nvenc`) -> Intel (`qsv`) -> VAAPI -> CPU.
 - Set `BASEFWX_HWACCEL_STRICT=1` to fail instead of CPU fallback when the requested accelerator cannot be used.
 
@@ -181,7 +183,7 @@ jMGd("out-small.m4a", "password", output="plain.m4a")  # may not be byte-identic
 ```
 
 Use an empty password to rely on the master key only (requires the private key to be available).
-For Python only, jMG video is temporarily disabled unless `BASEFWX_ENABLE_JMG_VIDEO=1`.
+jMG video is temporarily disabled by default across Python/C++/Java unless `BASEFWX_ENABLE_JMG_VIDEO=1`.
 
 ## C++ CLI
 
@@ -195,6 +197,9 @@ cmake --build cpp/build
 Usage:
 
 ```
+cpp/build/basefwx_cpp [global flags] <command> ...
+global flags: --verbose|-v --no-log --no-color
+
 cpp/build/basefwx_cpp fwxaes-enc <file> -p <password> [--out <path>]
 cpp/build/basefwx_cpp fwxaes-dec <file> -p <password> [--out <path>]
 cpp/build/basefwx_cpp fwxaes-stream-enc <file> -p <password> [--out <path>]
@@ -233,9 +238,12 @@ cpp/build/basefwx_cpp jmge input.mp4 --master-pub /secure/mlkem768.pub --out out
 Notes:
 
 - `jmge --no-archive` writes a key-only `JMG1` trailer (smaller output, decode may not be byte-identical).
+- `--no-log` suppresses telemetry/progress/warnings and keeps primary outputs/errors only.
+- `--verbose` adds detailed hardware routing reason lines.
 - `fwxaes-live-*` implements the packetized `LIVE` v1 stream format used by Python/Java.
 - `fwxaes-live-*` supports `-` for stdin/stdout, so you can pipe media streams (for example with `ffmpeg`).
 - Optional NVIDIA acceleration for jMG: set `BASEFWX_HWACCEL=nvenc` (auto fallback to CPU if unavailable).
+- jMG video is disabled by default unless `BASEFWX_ENABLE_JMG_VIDEO=1`.
 
 Example live audio pipe (C++):
 
@@ -336,6 +344,9 @@ Notes:
 - jMG media requires `ffmpeg` and `ffprobe` to be available on PATH.
 - `jmge` supports `--keep-meta`, `--keep-input`, and `--no-archive`.
 - `--no-archive` writes a key-only `JMG1` trailer (smaller output, but restore may not be byte-identical).
+- Java CLI global flags: `--verbose|-v`, `--no-log`.
+- `--no-log` suppresses telemetry/warnings while preserving primary outputs/errors.
+- jMG video is disabled by default unless `BASEFWX_ENABLE_JMG_VIDEO=1`.
 - `kFMd` strictly decodes BaseFWX carriers and refuses plain files.
 - The Java module does not include ML-KEM or Argon2 support yet.
 

@@ -547,12 +547,34 @@ class basefwx:
             self._last_render = 0.0
             self._last_fraction: dict[int, float] = {}
             self._lock = basefwx.threading.Lock()
+            self._telemetry_last = 0.0
+            self._telemetry_text = ""
+            self._telemetry_interval = 5.0
+            self._telemetry_enabled = True
+            self._telemetry_expect_gpu = False
+            try:
+                raw_telemetry = basefwx.os.getenv("BASEFWX_PROGRESS_TELEMETRY", "1").strip().lower()
+                if raw_telemetry in {"0", "false", "no", "off"}:
+                    self._telemetry_enabled = False
+            except Exception:
+                pass
             # Get terminal width, default to 80 if not available
             try:
                 import shutil
                 self._term_width = shutil.get_terminal_size().columns
             except Exception:
                 self._term_width = 80
+            try:
+                import psutil  # type: ignore
+                self._psutil = psutil
+            except Exception:
+                self._psutil = None
+            self._cpu_stat_prev_total: "basefwx.typing.Optional[int]" = None
+            self._cpu_stat_prev_idle: "basefwx.typing.Optional[int]" = None
+            if self._psutil is None:
+                # Prime /proc/stat baseline so first rendered sample can still show CPU%.
+                with basefwx.contextlib.suppress(Exception):
+                    self._probe_cpu_percent_fallback()
             
             # Try to import colorama for cross-platform color support
             try:
@@ -572,7 +594,232 @@ class basefwx:
                 or basefwx.os.getenv("ANSICON")
                 or (term and term != "dumb")
             )
-                
+            self._has_nvidia_smi = bool(basefwx.shutil.which("nvidia-smi"))
+
+        def _ansi(self, text: str, code: str) -> str:
+            if not self._supports_ansi:
+                return text
+            return f"\033[{code}m{text}\033[0m"
+
+        def _color_label(self, label: str) -> str:
+            if label == "CPU":
+                return self._ansi(label, "36;1")
+            if label == "GPU":
+                return self._ansi(label, "35;1")
+            if label == "RAM":
+                return self._ansi(label, "32;1")
+            return self._ansi(label, "1")
+
+        def _color_temp(self, temp_c: float) -> str:
+            value = f"{temp_c:.0f}C"
+            if temp_c <= 19.0:
+                color = "94"
+            elif temp_c <= 37.0:
+                color = "32"
+            elif temp_c <= 67.0:
+                color = "33"
+            elif temp_c <= 85.0:
+                color = "38;5;208"
+            elif temp_c <= 100.0:
+                color = "31"
+            else:
+                color = "91"
+            return self._ansi(value, color)
+
+        def set_hw_execution_plan(self, plan: "basefwx.typing.Optional[dict[str, basefwx.typing.Any]]") -> None:
+            expect_gpu = False
+            if isinstance(plan, dict):
+                for key in ("selected_accel", "encode_device", "decode_device", "pixel_backend"):
+                    raw = str(plan.get(key, "") or "").strip().lower()
+                    if raw and raw not in {"cpu", "none", "off", "false", "0"}:
+                        expect_gpu = True
+                        break
+            with self._lock:
+                self._telemetry_expect_gpu = expect_gpu
+                self._telemetry_last = 0.0
+                self._telemetry_text = ""
+
+        def _safe_float(self, value) -> float | None:
+            try:
+                return float(value)
+            except Exception:
+                return None
+
+        def _probe_cpu_percent_fallback(self) -> float | None:
+            # Lightweight Linux fallback when psutil is unavailable.
+            if not basefwx.sys.platform.startswith("linux"):
+                return None
+            try:
+                with open("/proc/stat", "r", encoding="utf-8", errors="ignore") as handle:
+                    first = handle.readline().strip()
+                if not first.startswith("cpu "):
+                    return None
+                fields = [int(part) for part in first.split()[1:] if part.isdigit()]
+                if len(fields) < 4:
+                    return None
+                total = int(sum(fields))
+                idle = int(fields[3] + (fields[4] if len(fields) > 4 else 0))
+                prev_total = self._cpu_stat_prev_total
+                prev_idle = self._cpu_stat_prev_idle
+                self._cpu_stat_prev_total = total
+                self._cpu_stat_prev_idle = idle
+                if prev_total is None or prev_idle is None:
+                    return None
+                delta_total = total - prev_total
+                delta_idle = idle - prev_idle
+                if delta_total <= 0:
+                    return None
+                usage = 100.0 * (1.0 - (delta_idle / float(delta_total)))
+                return max(0.0, min(100.0, usage))
+            except Exception:
+                return None
+
+        def _probe_ram_percent_fallback(self) -> float | None:
+            if not basefwx.sys.platform.startswith("linux"):
+                return None
+            try:
+                mem_total_kib = None
+                mem_avail_kib = None
+                with open("/proc/meminfo", "r", encoding="utf-8", errors="ignore") as handle:
+                    for line in handle:
+                        if line.startswith("MemTotal:"):
+                            parts = line.split()
+                            if len(parts) >= 2:
+                                mem_total_kib = int(parts[1])
+                        elif line.startswith("MemAvailable:"):
+                            parts = line.split()
+                            if len(parts) >= 2:
+                                mem_avail_kib = int(parts[1])
+                        if mem_total_kib is not None and mem_avail_kib is not None:
+                            break
+                if not mem_total_kib or mem_avail_kib is None:
+                    return None
+                used = max(0, mem_total_kib - mem_avail_kib)
+                return max(0.0, min(100.0, (used * 100.0) / float(mem_total_kib)))
+            except Exception:
+                return None
+
+        def _probe_nvidia_metrics(self) -> "tuple[float | None, float | None]":
+            if not self._has_nvidia_smi:
+                return None, None
+            try:
+                result = basefwx.subprocess.run(
+                    [
+                        "nvidia-smi",
+                        "--query-gpu=utilization.gpu,temperature.gpu",
+                        "--format=csv,noheader,nounits",
+                    ],
+                    capture_output=True,
+                    text=True,
+                )
+                if result.returncode != 0:
+                    return None, None
+                gpu_values = []
+                temp_values = []
+                for line in (result.stdout or "").splitlines():
+                    parts = [p.strip() for p in line.split(",")]
+                    if len(parts) < 2:
+                        continue
+                    gpu_val = self._safe_float(parts[0])
+                    temp_val = self._safe_float(parts[1])
+                    if gpu_val is not None:
+                        gpu_values.append(gpu_val)
+                    if temp_val is not None and temp_val > 0:
+                        temp_values.append(temp_val)
+                gpu_pct = (sum(gpu_values) / len(gpu_values)) if gpu_values else None
+                gpu_temp = (sum(temp_values) / len(temp_values)) if temp_values else None
+                return gpu_pct, gpu_temp
+            except Exception:
+                return None, None
+
+        def _probe_cpu_temp(self) -> float | None:
+            if self._psutil is not None:
+                try:
+                    sensors = self._psutil.sensors_temperatures()
+                except Exception:
+                    sensors = {}
+                if sensors:
+                    values = []
+                    for entries in sensors.values():
+                        for entry in entries:
+                            current = self._safe_float(getattr(entry, "current", None))
+                            if current is not None and current > 0:
+                                values.append(current)
+                    if values:
+                        return sum(values) / len(values)
+            # Fallback for Linux systems without psutil temperature access.
+            if not basefwx.sys.platform.startswith("linux"):
+                return None
+            values: "list[float]" = []
+            try:
+                thermal_root = basefwx.pathlib.Path("/sys/class/thermal")
+                for temp_file in thermal_root.glob("thermal_zone*/temp"):
+                    try:
+                        raw = temp_file.read_text(encoding="utf-8", errors="ignore").strip()
+                        if not raw:
+                            continue
+                        val = float(raw)
+                        if val > 1000.0:
+                            val /= 1000.0
+                        if 5.0 <= val <= 130.0:
+                            values.append(val)
+                    except Exception:
+                        continue
+            except Exception:
+                return None
+            if not values:
+                return None
+            return sum(values) / len(values)
+
+        def _sample_runtime_metrics(self) -> str:
+            if not self._telemetry_enabled:
+                return ""
+            cpu_pct = None
+            ram_pct = None
+            if self._psutil is not None:
+                try:
+                    cpu_pct = self._safe_float(self._psutil.cpu_percent(interval=None))
+                except Exception:
+                    cpu_pct = None
+                try:
+                    ram_pct = self._safe_float(self._psutil.virtual_memory().percent)
+                except Exception:
+                    ram_pct = None
+            else:
+                cpu_pct = self._probe_cpu_percent_fallback()
+                ram_pct = self._probe_ram_percent_fallback()
+            if cpu_pct is None:
+                cpu_pct = 0.0
+            gpu_pct = None
+            gpu_temp = None
+            if self._telemetry_expect_gpu:
+                gpu_pct, gpu_temp = self._probe_nvidia_metrics()
+            cpu_temp = self._probe_cpu_temp()
+            temp_values = [v for v in (cpu_temp, gpu_temp) if v is not None]
+            temp_avg = (sum(temp_values) / len(temp_values)) if temp_values else None
+
+            parts: list[str] = []
+            if cpu_pct is not None:
+                parts.append(f"{self._color_label('CPU')} {cpu_pct:.0f}%")
+            if gpu_pct is not None and gpu_pct > 0.5:
+                parts.append(f"{self._color_label('GPU')} {gpu_pct:.0f}%")
+            if ram_pct is not None:
+                parts.append(f"{self._color_label('RAM')} {ram_pct:.0f}%")
+            if temp_avg is not None:
+                parts.append(self._color_temp(temp_avg))
+            if not parts:
+                return ""
+            return " \\ ".join(parts)
+
+        def _telemetry_snapshot(self, force: bool = False) -> str:
+            if not self._telemetry_enabled:
+                return ""
+            now = basefwx.time.monotonic()
+            if force or not self._telemetry_text or (now - self._telemetry_last) >= self._telemetry_interval:
+                self._telemetry_text = self._sample_runtime_metrics()
+                self._telemetry_last = now
+            return self._telemetry_text
+
         def reset_terminal_state(self):
             """Ensure terminal is in a clean state for subsequent output"""
             with self._lock:
@@ -618,9 +865,14 @@ class basefwx:
             # middle parts of the line if needed
             max_width = self._term_width
             
-            # For line1, simple truncation is fine as it doesn't contain filenames
+            # For line1, preserve the metric tail when truncation is required.
             if len(line1) > max_width:
-                line1 = line1[:max_width]
+                tail_keep = min(36, max(0, max_width // 2))
+                head_keep = max(0, max_width - tail_keep - 1)
+                if head_keep > 0 and tail_keep > 0:
+                    line1 = line1[:head_keep] + "…" + line1[-tail_keep:]
+                else:
+                    line1 = line1[:max_width]
                 
             # For line2, we need to be smarter to preserve filenames
             if len(line2) > max_width:
@@ -750,17 +1002,20 @@ class basefwx:
 
                 hint_text = f" ({self._format_size_hint(size_hint)})" if size_hint else ""
                 label_text = f" [{label}]" if label else ""
+                # force final updates so 100% renders
+                force = fraction >= 1.0 or overall_fraction >= 1.0
+                telemetry_text = self._telemetry_snapshot(force=force)
+                telemetry_suffix = f" | {telemetry_text}" if telemetry_text else ""
 
                 # Clean formatting with consistent spacing
-                line1 = f"Overall {overall} {percent_overall} {status_text}"
+                line1 = f"Overall {overall} {percent_overall} {status_text}{telemetry_suffix}"
                 line2 = f"File    {current} {percent_file} phase: {phase}{hint_text}{label_text}"
 
                 # Remove any possible newline characters that might be in the phase name
                 line1 = line1.replace("\n", " ")
                 line2 = line2.replace("\n", " ")
 
-                # normal write path; force final updates so 100% renders
-                force = fraction >= 1.0 or overall_fraction >= 1.0
+                # normal write path
                 self._write(line1, line2, force=force)
 
         def finalize_file(
@@ -784,11 +1039,13 @@ class basefwx:
 
                 hint_text = f" ({self._format_size_hint(size_hint)})" if size_hint else ""
                 label_text = f" [{label}]" if label else ""
+                telemetry_text = self._telemetry_snapshot(force=True)
+                telemetry_suffix = f" | {telemetry_text}" if telemetry_text else ""
 
                 # Show green checkmark for completed file
                 completion_indicator = f" {self._green}✓{self._reset}" if self._has_colors else " ✓"
 
-                line1 = f"Overall {overall} {percent_overall} {status_text}"
+                line1 = f"Overall {overall} {percent_overall} {status_text}{telemetry_suffix}"
                 line2 = f"File    {current} 100% phase: done{hint_text}{label_text}{completion_indicator}"
 
                 # force final output (overwriting in TTY or printing in non-TTY)
@@ -3823,68 +4080,118 @@ class basefwx:
     ) -> str:
         password = basefwx._resolve_password(password, use_master=use_master)
         path = basefwx._normalize_path(file)
+        display_path = path
         threshold = basefwx.NORMALIZE_THRESHOLD if normalize_threshold is None else int(normalize_threshold)
-        if path.suffix.lower() == ".fwx":
-            data = path.read_bytes()
-            if data.startswith(basefwx.FWXAES_MAGIC):
-                blob = data
-            else:
+        local_reporter = None
+        created_reporter = False
+        if not basefwx._SILENT_MODE:
+            local_reporter = basefwx._ProgressReporter(1)
+            created_reporter = True
+
+        def _set_bytes_hw_plan() -> None:
+            if not local_reporter:
+                return
+            plan = basefwx.MediaCipher._build_hw_execution_plan(
+                "fwxAES_file",
+                stream_type="bytes",
+                allow_pixel_gpu=False,
+                prefer_cpu_decode=True,
+            )
+            basefwx.MediaCipher._log_hw_execution_plan(plan)
+            local_reporter.set_hw_execution_plan(plan)
+
+        try:
+            if path.suffix.lower() == ".fwx":
+                _set_bytes_hw_plan()
+                if local_reporter:
+                    local_reporter.update(0, 0.05, "read", display_path)
+                data = path.read_bytes()
+                if data.startswith(basefwx.FWXAES_MAGIC):
+                    blob = data
+                else:
+                    try:
+                        text = data.decode("utf-8")
+                    except UnicodeDecodeError as exc:
+                        raise ValueError("Input is not a valid FWX1 blob or UTF-8 normalized text") from exc
+                    blob = basefwx.normalize_unwrap(text)
+                if local_reporter:
+                    local_reporter.update(0, 0.35, "decrypt", display_path)
+                plain = basefwx.fwxAES_decrypt_raw(blob, password, use_master=use_master)
+                packed = basefwx._unwrap_pack_header(plain)
+                if packed:
+                    pack_flag, archive_bytes = packed
+                    dest_path = basefwx._normalize_path(output) if output else path.parent
+                    dest_dir = dest_path if dest_path.exists() and dest_path.is_dir() else dest_path.parent
+                    temp_dir = basefwx.tempfile.TemporaryDirectory(prefix="basefwx-pack-dec-")
+                    try:
+                        suffix = basefwx.PACK_SUFFIX_XZ if pack_flag == basefwx.PACK_TAR_XZ else basefwx.PACK_SUFFIX_GZ
+                        archive_path = basefwx.pathlib.Path(temp_dir.name) / f"{path.stem}{suffix}"
+                        archive_path.write_bytes(archive_bytes)
+                        if local_reporter:
+                            local_reporter.update(0, 0.70, "unpack", display_path)
+                        extracted = basefwx._unpack_archive(archive_path, pack_flag, target_dir=dest_dir)
+                        if local_reporter:
+                            local_reporter.update(0, 1.0, "done", display_path)
+                        return str(extracted)
+                    finally:
+                        temp_dir.cleanup()
+                out_path = basefwx._normalize_path(output) if output else path.with_suffix('')
+                if local_reporter:
+                    local_reporter.update(0, 0.80, "write", display_path)
+                with open(out_path, 'wb') as handle:
+                    handle.write(plain)
+                if local_reporter:
+                    local_reporter.update(0, 1.0, "done", display_path)
+                return str(out_path)
+            if not ignore_media:
                 try:
-                    text = data.decode("utf-8")
-                except UnicodeDecodeError as exc:
-                    raise ValueError("Input is not a valid FWX1 blob or UTF-8 normalized text") from exc
-                blob = basefwx.normalize_unwrap(text)
-            plain = basefwx.fwxAES_decrypt_raw(blob, password, use_master=use_master)
-            packed = basefwx._unwrap_pack_header(plain)
-            if packed:
-                pack_flag, archive_bytes = packed
-                dest_path = basefwx._normalize_path(output) if output else path.parent
-                dest_dir = dest_path if dest_path.exists() and dest_path.is_dir() else dest_path.parent
-                temp_dir = basefwx.tempfile.TemporaryDirectory(prefix="basefwx-pack-dec-")
+                    media_ext = path.suffix.lower()
+                    if media_ext in (basefwx.MediaCipher.IMAGE_EXTS | basefwx.MediaCipher.VIDEO_EXTS | basefwx.MediaCipher.AUDIO_EXTS):
+                        return basefwx.MediaCipher.encrypt_media(
+                            str(path),
+                            password,
+                            output=output,
+                            keep_meta=keep_meta,
+                            archive_original=archive_original,
+                            keep_input=keep_input,
+                            reporter=local_reporter,
+                            file_index=0,
+                            display_path=display_path,
+                        )
+                except Exception:
+                    pass
+            _set_bytes_hw_plan()
+            if local_reporter:
+                local_reporter.update(0, 0.05, "read", display_path)
+            pack_ctx = basefwx._pack_input_to_archive(path, compress, None, 0)
+            if pack_ctx:
+                archive_path, pack_flag, pack_temp = pack_ctx
                 try:
-                    suffix = basefwx.PACK_SUFFIX_XZ if pack_flag == basefwx.PACK_TAR_XZ else basefwx.PACK_SUFFIX_GZ
-                    archive_path = basefwx.pathlib.Path(temp_dir.name) / f"{path.stem}{suffix}"
-                    archive_path.write_bytes(archive_bytes)
-                    extracted = basefwx._unpack_archive(archive_path, pack_flag, target_dir=dest_dir)
-                    return str(extracted)
+                    if local_reporter:
+                        local_reporter.update(0, 0.25, "pack", display_path)
+                    payload = basefwx._wrap_pack_header(archive_path.read_bytes(), pack_flag)
                 finally:
-                    temp_dir.cleanup()
-            out_path = basefwx._normalize_path(output) if output else path.with_suffix('')
-            with open(out_path, 'wb') as handle:
-                handle.write(plain)
+                    pack_temp.cleanup()
+            else:
+                payload = path.read_bytes()
+            if local_reporter:
+                local_reporter.update(0, 0.55, "encrypt", display_path)
+            blob = basefwx.fwxAES_encrypt_raw(payload, password, use_master=use_master)
+            out_path = basefwx._normalize_path(output) if output else path.with_suffix('.fwx')
+            if local_reporter:
+                local_reporter.update(0, 0.80, "write", display_path)
+            if normalize and len(payload) <= threshold:
+                text = basefwx.normalize_wrap(blob, cover_phrase)
+                out_path.write_text(text, encoding="utf-8", newline="\n")
+            else:
+                out_path.write_bytes(blob)
+            basefwx._remove_input(path, keep_input, out_path)
+            if local_reporter:
+                local_reporter.update(0, 1.0, "done", display_path)
             return str(out_path)
-        if not ignore_media:
-            try:
-                media_ext = path.suffix.lower()
-                if media_ext in (basefwx.MediaCipher.IMAGE_EXTS | basefwx.MediaCipher.VIDEO_EXTS | basefwx.MediaCipher.AUDIO_EXTS):
-                    return basefwx.MediaCipher.encrypt_media(
-                        str(path),
-                        password,
-                        output=output,
-                        keep_meta=keep_meta,
-                        archive_original=archive_original,
-                        keep_input=keep_input
-                    )
-            except Exception:
-                pass
-        pack_ctx = basefwx._pack_input_to_archive(path, compress, None, 0)
-        if pack_ctx:
-            archive_path, pack_flag, pack_temp = pack_ctx
-            try:
-                payload = basefwx._wrap_pack_header(archive_path.read_bytes(), pack_flag)
-            finally:
-                pack_temp.cleanup()
-        else:
-            payload = path.read_bytes()
-        blob = basefwx.fwxAES_encrypt_raw(payload, password, use_master=use_master)
-        out_path = basefwx._normalize_path(output) if output else path.with_suffix('.fwx')
-        if normalize and len(payload) <= threshold:
-            text = basefwx.normalize_wrap(blob, cover_phrase)
-            out_path.write_text(text, encoding="utf-8", newline="\n")
-        else:
-            out_path.write_bytes(blob)
-        basefwx._remove_input(path, keep_input, out_path)
-        return str(out_path)
+        finally:
+            if created_reporter and local_reporter:
+                local_reporter.reset_terminal_state()
     # REVERSIBLE  - SECURITY: ❙
     @staticmethod
     def b64encode(string: str):
@@ -6630,6 +6937,8 @@ class basefwx:
             pixel_backend = "cpu"
             gpu_pixels_strict = False
             pixel_workers = cls._media_workers()
+            parallel_workers = cls._media_workers()
+            parallel_enabled = parallel_workers > 1
             gpu_pixels_mode = "cpu"
             if allow_pixel_gpu:
                 mode, min_bytes = cls._gpu_pixels_policy()
@@ -6691,6 +7000,8 @@ class basefwx:
                 "pixel_backend": pixel_backend,
                 "gpu_pixels_strict": gpu_pixels_strict,
                 "pixel_workers": pixel_workers,
+                "parallel_enabled": parallel_enabled,
+                "parallel_workers": parallel_workers,
                 "crypto_device": "cpu",
                 "aes_accel_state": aes_accel_state,
                 "reasons": reasons,
@@ -6722,9 +7033,13 @@ class basefwx:
             pixels = str(plan.get("pixel_backend", "cpu")).upper()
             crypto = str(plan.get("crypto_device", "cpu")).upper()
             aes = str(plan.get("aes_accel_state", "unknown"))
+            parallel_enabled = bool(plan.get("parallel_enabled", False))
+            parallel_workers = int(plan.get("parallel_workers") or 1)
+            parallel_text = f"ON({parallel_workers}w)" if parallel_enabled else "OFF"
             header = (
                 f"🎛️ [basefwx.hw] op={plan.get('op_name', 'unknown')} "
-                f"encode={encode} decode={decode} pixels={pixels} crypto={crypto} aes_accel={aes}"
+                f"encode={encode} decode={decode} pixels={pixels} "
+                f"parallel={parallel_text} crypto={crypto} aes_accel={aes}"
             )
             detail = f"   reason: {reason or 'n/a'}"
             if basefwx.MediaCipher._hw_log_color_enabled():
@@ -6734,6 +7049,7 @@ class basefwx:
                     f"encode={basefwx.MediaCipher._hw_color(encode, '32;1')} "
                     f"decode={basefwx.MediaCipher._hw_color(decode, '33;1')} "
                     f"pixels={basefwx.MediaCipher._hw_color(pixels, '35;1')} "
+                    f"parallel={basefwx.MediaCipher._hw_color(parallel_text, '37;1')} "
                     f"crypto={basefwx.MediaCipher._hw_color(crypto, '34;1')} "
                     f"aes_accel={basefwx.MediaCipher._hw_color(aes, '36')}"
                 )
@@ -6770,6 +7086,7 @@ class basefwx:
                 "-v", "error",
                 "-show_entries",
                 "stream=codec_type,width,height,avg_frame_rate,r_frame_rate,sample_rate,channels,bit_rate"
+                ":stream_disposition=attached_pic"
                 ":format=duration,bit_rate",
                 "-of", "json",
                 str(path)
@@ -6781,7 +7098,33 @@ class basefwx:
             streams = data.get("streams", []) or []
             video = None
             audio = None
+            has_audio_stream = any(stream.get("codec_type") == "audio" for stream in streams)
             for stream in streams:
+                if stream.get("codec_type") == "video":
+                    # Ignore album-art/cover-image streams (common in mp3/m4a tags).
+                    disposition = stream.get("disposition") or {}
+                    try:
+                        attached_pic = int(disposition.get("attached_pic") or 0) == 1
+                    except Exception:
+                        attached_pic = False
+                    if not attached_pic and has_audio_stream:
+                        # ffprobe does not always emit disposition when queried with
+                        # all stream fields. Treat "video" streams without framerate
+                        # or bitrate as likely cover art for audio-only containers.
+                        try:
+                            rate_hint = basefwx.MediaCipher._parse_rate(
+                                stream.get("avg_frame_rate") or stream.get("r_frame_rate") or ""
+                            )
+                        except Exception:
+                            rate_hint = 0.0
+                        try:
+                            bitrate_hint = int(float(stream.get("bit_rate") or 0.0))
+                        except Exception:
+                            bitrate_hint = 0
+                        if rate_hint <= 0.0 and bitrate_hint <= 0:
+                            attached_pic = True
+                    if attached_pic:
+                        continue
                 if stream.get("codec_type") == "video" and video is None:
                     video = stream
                 elif stream.get("codec_type") == "audio" and audio is None:
@@ -8542,6 +8885,9 @@ class basefwx:
                     prefer_cpu_decode=True,
                 )
                 basefwx.MediaCipher._log_hw_execution_plan(hw_plan)
+            if reporter:
+                with basefwx.contextlib.suppress(Exception):
+                    reporter.set_hw_execution_plan(hw_plan)
             selected_accel = hw_plan.get("selected_accel")
             decode_device = hw_plan.get("decode_device", "cpu")
             # jMG transform runs on host memory, so CPU decode avoids avoidable hwdownload copies.
@@ -8845,6 +9191,9 @@ class basefwx:
                     prefer_cpu_decode=True,
                 )
                 basefwx.MediaCipher._log_hw_execution_plan(hw_plan)
+            if reporter:
+                with basefwx.contextlib.suppress(Exception):
+                    reporter.set_hw_execution_plan(hw_plan)
             selected_accel = hw_plan.get("selected_accel")
             decode_device = hw_plan.get("decode_device", "cpu")
             # jMG transform runs on host memory, so CPU decode avoids avoidable hwdownload copies.
@@ -9148,6 +9497,9 @@ class basefwx:
                             prefer_cpu_decode=prefer_cpu_decode,
                         )
                         basefwx.MediaCipher._log_hw_execution_plan(hw_plan)
+                    if local_reporter:
+                        with basefwx.contextlib.suppress(Exception):
+                            local_reporter.set_hw_execution_plan(hw_plan)
                     return hw_plan
 
                 append_archive_trailer = False
@@ -9315,6 +9667,9 @@ class basefwx:
                             prefer_cpu_decode=prefer_cpu_decode,
                         )
                         basefwx.MediaCipher._log_hw_execution_plan(hw_plan)
+                    if local_reporter:
+                        with basefwx.contextlib.suppress(Exception):
+                            local_reporter.set_hw_execution_plan(hw_plan)
                     return hw_plan
 
                 suffix = path_obj.suffix.lower()
@@ -11263,6 +11618,15 @@ def cli(argv=None) -> int:
         normalized = method_map.get(method)
         if not normalized:
             parser.error(f"Unsupported method '{args.method}'")
+
+        if normalized in {"b512", "aes-light", "aes-heavy"}:
+            hw_plan = basefwx.MediaCipher._build_hw_execution_plan(
+                f"cryptin-{normalized}",
+                stream_type="bytes",
+                allow_pixel_gpu=False,
+                prefer_cpu_decode=True,
+            )
+            basefwx.MediaCipher._log_hw_execution_plan(hw_plan)
 
         if normalized == "fwxaes":
             results = {}

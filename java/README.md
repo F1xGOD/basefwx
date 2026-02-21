@@ -6,7 +6,7 @@ This module provides a Java implementation of the core BaseFWX codecs so it can 
 - fwxAES raw encrypt/decrypt (PBKDF2 mode + EC master-key wrap)
 - fwxAES streaming encrypt/decrypt (InputStream/OutputStream)
 - fwxAES live packet streaming encrypt/decrypt (frame-based, transport-agnostic)
-- jMG media cipher for images, video, and audio (ffmpeg/ffprobe required)
+- jMG media cipher for images/audio (video path is temporarily disabled by default unless `BASEFWX_ENABLE_JMG_VIDEO=1`)
 - b512 / pb512 encode/decode (PBKDF2 + optional EC master-key wrap)
 - b256 encode/decode
 - n10 numeric encode/decode (text + bytes/file helpers)
@@ -44,6 +44,8 @@ jar cfe build/libs/basefwx-java.jar com.fixcraft.basefwx.cli.BaseFwxCli -C build
 
 ## CLI
 ```
+java -jar build/libs/basefwx-java.jar [global flags] <command> ...
+# global flags: --verbose|-v --no-log
 java -jar build/libs/basefwx-java.jar fwxaes-enc <in> <out> <password>
 java -jar build/libs/basefwx-java.jar fwxaes-dec <in> <out> <password>
 java -jar build/libs/basefwx-java.jar fwxaes-stream-enc <in> <out> <password>
@@ -96,6 +98,9 @@ Notes:
 - jMG requires `ffmpeg` and `ffprobe` on PATH.
 - `jmge` supports `--keep-meta`, `--keep-input`, and `--no-archive`.
 - `--no-archive` stores only key material (`JMG1`) instead of a full embedded original payload (`JMG0`), so decode output may not be byte-identical.
+- `--no-log` suppresses telemetry/warnings while preserving primary outputs/errors.
+- `--verbose` prints additional hardware routing reason lines.
+- jMG video is disabled by default unless `BASEFWX_ENABLE_JMG_VIDEO=1`.
 - `kFMd` only decodes BaseFWX carriers and refuses plain WAV/PNG/MP3/M4A inputs.
 
 ## Cross-compat notes

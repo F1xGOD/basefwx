@@ -503,6 +503,9 @@ bool IsKnownKfmImageExt(const std::string& ext) {
 }
 
 void WarnKfmUsage(const std::string& message) {
+    if (basefwx::env::IsEnabled("BASEFWX_NO_LOG", false)) {
+        return;
+    }
     std::cerr << "WARN: " << message << "\n";
 }
 

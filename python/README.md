@@ -54,6 +54,8 @@ Notes:
 - Optional kFM/kFA acceleration:
   - `BASEFWX_KFM_ACCEL=auto|cuda|cpu` (default `auto`)
   - `BASEFWX_KFM_ACCEL_MIN_BYTES=<bytes>` (default `1048576`, auto mode threshold)
+- CLI progress now includes live system telemetry (CPU/GPU/RAM/I/O/TEMP when available).
+  Disable with `BASEFWX_PROGRESS_TELEMETRY=0`.
 
 Python API quick refs:
 

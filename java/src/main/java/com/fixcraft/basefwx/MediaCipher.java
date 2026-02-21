@@ -54,6 +54,7 @@ public final class MediaCipher {
     private static final String HWACCEL_ENV = "BASEFWX_HWACCEL";
     private static final String VAAPI_DEVICE_ENV = "BASEFWX_VAAPI_DEVICE";
     private static final String MEDIA_WORKERS_ENV = "BASEFWX_MEDIA_WORKERS";
+    private static final String ENABLE_JMG_VIDEO_ENV = "BASEFWX_ENABLE_JMG_VIDEO";
 
     private static final Set<String> IMAGE_EXTS = buildSet(
         ".png", ".jpg", ".jpeg", ".bmp", ".tga", ".gif", ".webp",
@@ -72,6 +73,28 @@ public final class MediaCipher {
     private static volatile String hwaccelCache = null;
     private static volatile boolean hwaccelReady = false;
     private static volatile Set<String> encoderCache = null;
+
+    private static boolean truthyEnv(String name) {
+        String raw = System.getenv(name);
+        if (raw == null) {
+            return false;
+        }
+        String value = raw.trim().toLowerCase(Locale.US);
+        return "1".equals(value) || "true".equals(value) || "yes".equals(value) || "on".equals(value);
+    }
+
+    static boolean isJmgVideoEnabled() {
+        return truthyEnv(ENABLE_JMG_VIDEO_ENV);
+    }
+
+    public static String selectedHwaccelForCli() {
+        String hw = selectHwaccel();
+        return hw == null ? "cpu" : hw;
+    }
+
+    public static int mediaWorkersForCli() {
+        return mediaWorkers();
+    }
 
     public static File encryptMedia(File input,
                                     File output,
@@ -111,6 +134,11 @@ public final class MediaCipher {
                 info = probeStreams(input);
             } catch (RuntimeException exc) {
                 info = new MediaInfo();
+            }
+            if (info.video != null && !isJmgVideoEnabled()) {
+                throw new RuntimeException(
+                    "jMG video mode is temporarily disabled. Use fwxAES for video, or set BASEFWX_ENABLE_JMG_VIDEO=1 to re-enable."
+                );
             }
             if (info.video != null) {
                 JmgKeys keys = prepareJmgKeys(pw, useMaster);
@@ -178,6 +206,19 @@ public final class MediaCipher {
         if (IMAGE_EXTS.contains(ext)) {
             result = decryptImage(input, tempOutput, pw, useMaster);
         } else {
+            try {
+                MediaInfo gateInfo = probeStreams(input);
+                if (gateInfo.video != null && !isJmgVideoEnabled()) {
+                    throw new RuntimeException(
+                        "jMG video mode is temporarily disabled. Use fwxAES for video, or set BASEFWX_ENABLE_JMG_VIDEO=1 to re-enable."
+                    );
+                }
+            } catch (RuntimeException exc) {
+                String msg = exc.getMessage();
+                if (msg != null && msg.contains("jMG video mode is temporarily disabled")) {
+                    throw exc;
+                }
+            }
             if (decryptTrailerStream(input, pw, useMaster, tempOutput)) {
                 result = tempOutput;
             } else {
@@ -195,6 +236,11 @@ public final class MediaCipher {
                         info = probeStreams(input);
                     } catch (RuntimeException exc) {
                         info = new MediaInfo();
+                    }
+                    if (info.video != null && !isJmgVideoEnabled()) {
+                        throw new RuntimeException(
+                            "jMG video mode is temporarily disabled. Use fwxAES for video, or set BASEFWX_ENABLE_JMG_VIDEO=1 to re-enable."
+                        );
                     }
                     int[] trailerProfileHolder = new int[] {Constants.JMG_SECURITY_PROFILE_LEGACY};
                     byte[] baseKeyFromTrailer = loadBaseKeyFromKeyTrailer(input, pw, useMaster, trailerProfileHolder);
@@ -2344,8 +2390,8 @@ public final class MediaCipher {
     }
 
     private static void warnNoArchivePayload() {
-        System.err.println(
-            "WARNING: jMG no-archive payload detected; restored media may not be byte-identical to the original input."
+        RuntimeLog.warn(
+            "jMG no-archive payload detected; restored media may not be byte-identical to the original input."
         );
     }
 

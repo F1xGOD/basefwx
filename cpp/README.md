@@ -22,6 +22,8 @@ cmake --build cpp/build
 ## CLI (current)
 
 ```bash
+./cpp/build/basefwx_cpp [global flags] <command> ...
+# global flags: --verbose|-v --no-log --no-color
 ./cpp/build/basefwx_cpp info <file.fwx>
 ./cpp/build/basefwx_cpp b256-enc "hello"
 ./cpp/build/basefwx_cpp b256-dec "<payload>"
@@ -80,6 +82,9 @@ payload matches the AES file format.
   set `BASEFWX_HWACCEL=nvenc` for NVIDIA (auto-detected fallback to CPU when unavailable).
 - `jmge --no-archive` stores a key-only `JMG1` trailer (smaller output, but decode
   may not be byte-identical to the source media).
+- `--no-log` suppresses telemetry/progress/warnings while preserving primary outputs/errors.
+- `--verbose` adds a hardware routing reason line.
+- jMG video is temporarily disabled by default unless `BASEFWX_ENABLE_JMG_VIDEO=1`.
 - Current C++ codec support covers b256/b512/pb512 plus b512file/pb512file
   (AES-heavy) and fwxaes. Argon2id + ML-KEM-768 support is enabled when the
   dependencies are installed.

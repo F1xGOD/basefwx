@@ -1,43 +1,41 @@
 # Changelog
 
-## [v3.6.2] - Released
+## [v3.6.2] - 2026-02-22
 
-Compare: <https://github.com/F1xGOD/basefwx/compare/ed79adb...907833c>
+Compare: <https://github.com/F1xGOD/basefwx/compare/v3.6.1...v3.6.2>
 
 ### Added
-- Python `kFM`/`kFA` reversible carrier methods:
-  - `kFMe`: image/media bytes -> WAV noise carrier
-  - `kFMd`: WAV carrier -> original bytes, with non-kFM fallback to static PNG
-  - `kFAe`: audio bytes -> PNG noise carrier (RGB or BW static mode)
-  - `kFAd`: PNG carrier -> original bytes, with non-kFM fallback to WAV
-- C++ `kFM`/`kFA` API + CLI parity with Python:
-  - `basefwx::Kfme`, `basefwx::Kfmd`, `basefwx::Kfae`, `basefwx::Kfad`
-  - CLI commands: `kFMe`, `kFMd`, `kFAe`, `kFAd`
-- Java `kFM`/`kFA` API + CLI parity with Python:
-  - `BaseFwx.kFMe`, `BaseFwx.kFMd`, `BaseFwx.kFAe`, `BaseFwx.kFAd`
-  - CLI commands: `kFMe`, `kFMd`, `kFAe`, `kFAd`
-- Versioned kFM container header with magic/version/mode/checksum for deterministic detection.
-- Python CLI commands: `kFMe`, `kFMd`, `kFAe`, `kFAd`.
-- Python tests covering kFM/kFA API and CLI roundtrips plus fallback behavior.
-- n10 numeric codec support across C++, Java, and Python.
-- n10 CLI commands for text and file workflows in all supported runtimes.
-- n10 coverage in benchmark export and benchmark summary output.
-- Expanded benchmark scenarios for Java and cross-language parity checks.
-- Added branch sync workflow.
+- New reversible carrier APIs in all runtimes:
+  - `kFMe` / `kFMd` for auto media carrier encode/decode.
+  - `kFAe` / `kFAd` legacy audio-image aliases (kept for compatibility).
+- Versioned kFM container header (magic/version/mode/checksum) for deterministic detection and safer decode paths.
+- New `n10` codec support in Python, C++, and Java (API + CLI + benchmarks).
+- Python live packetized AEAD APIs (`fwxAES_live_*`) with stream/chunk helpers and ffmpeg bridge helpers.
+- Python jMG no-archive path with key-only trailer support (`JMG1`) plus compatibility fallback behavior.
+- Runtime hardware/telemetry logging:
+  - Python, C++, Java hardware plan banner.
+  - Progress telemetry with CPU/RAM/temp (and GPU when active).
+  - CLI global logging controls in C++/Java: `--no-log`, `--verbose`.
+- `scripts/test_all.sh --heavy` mode for larger fixtures, longer passwords, and reliability-focused benchmark/test defaults.
 
 ### Changed
-- Python package layout moved under `python/` with workflow and editable-install fixes.
-- Repository structure updated with website/docs organization improvements.
-- Benchmark pipeline updated to keep website benchmark feeds aligned with runtime changes.
+- Python package refactor from monolithic `main.py` into modular API layout, with `legacy.py` retained for compatibility internals.
+- PyPI metadata now reads from the root project README so package description matches the main repository docs.
+- jMG defaults in Python shifted toward no-archive behavior for lower output overhead; archive mode remains available.
+- Hardware routing policy in Python was hardened:
+  - AES work stays on CPU (AES-NI path where available).
+  - GPU is used for media stages where beneficial with strict/fallback controls.
+- Branch/workflow parity, publish, benchmark, and website-feed automation were tightened for release consistency.
 
 ### Fixed
-- Java BW-mode PNG carrier serialization now preserves exact bytes (prevents false fallback on `kFAd`).
-- `kFMd` now accepts `.mp3`/`.m4a` audio inputs in Python/C++/Java using runtime ffmpeg decode fallback.
-- Cross-language compatibility issues in codec/KDF paths (including PBKDF2 interoperability).
-- Java build and Gradle compatibility issues.
-- Website hash/integrity display issues.
-- CI and test workflow regressions after project layout updates.
+- Multiple cross-runtime compatibility regressions in codec/KDF paths (including PBKDF2-related decode/interop issues).
+- Java and C++ parity gaps for kFM/kFA/live paths and CLI handling.
+- macOS/Windows/Linux build workflow regressions (arch matrix, dependency handling, static-linking prep).
+- ffmpeg media-path handling improvements across Python/Java/C++ (including mp3/m4a intake paths).
+- Website release/hash rendering and benchmark ingestion issues.
+- CI/test reliability regressions after project restructuring.
 
 ### Notes
-- Benchmarks consumed by the website (`website/results/benchmarks-latest.json`) now include `n10`.
-- Existing benchmark pages automatically render new methods from the JSON dataset.
+- jMG video mode is intentionally gated/paused by default in current release tracks for safety/stability; use fwxAES for video unless explicitly re-enabled.
+- Java media operations require `ffmpeg` available on `PATH`; missing ffmpeg will fail jMG Java tests/benchmarks.
+- Benchmark/website datasets now include newer methods (`n10`, live suites, carrier suites) and are consumed by `website/results/benchmarks-latest.json`.

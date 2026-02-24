@@ -79,12 +79,28 @@ jobs:
               raise SystemExit("Missing results/benchmarks-latest.json")
 
           data = json.loads(bench_path.read_text(encoding="utf-8"))
-          labels = {entry.get("label") for entry in data.get("tests", [])}
-          required = {"fwxaes_live_py_total", "fwxaes_live_cpp_total", "fwxaes_live_cpp_audio_total", "fwxaes_live_java_total", "kfae_py_total"}
-          missing = sorted(label for label in required if label not in labels)
+          tests = {
+              entry.get("label"): entry.get("times", {})
+              for entry in data.get("tests", [])
+              if entry.get("label")
+          }
+          required = {
+              "fwxAES-live": {"python", "cpp", "java"},
+              "kFAe": {"python"},
+          }
+          missing = []
+          for label, langs in required.items():
+              times = tests.get(label)
+              if not isinstance(times, dict):
+                  missing.append(f"{label} (label missing)")
+                  continue
+              for lang in sorted(langs):
+                  value = times.get(lang)
+                  if not isinstance(value, int) or value <= 0:
+                      missing.append(f"{label}:{lang}")
           if missing:
               raise SystemExit(f"Missing benchmark labels: {', '.join(missing)}")
-          print("Live benchmark coverage OK:", ", ".join(sorted(required)))
+          print("Live benchmark coverage OK")
           PY
 
       - name: Publish benchmark results to DEV

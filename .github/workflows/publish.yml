@@ -83,12 +83,28 @@ jobs:
               raise SystemExit("Missing results/benchmarks-latest.json")
 
           data = json.loads(bench_path.read_text(encoding="utf-8"))
-          labels = {entry.get("label") for entry in data.get("tests", [])}
-          required = {"fwxaes_live_py_total", "fwxaes_live_cpp_total", "fwxaes_live_cpp_audio_total", "fwxaes_live_java_total", "kfae_py_total"}
-          missing = sorted(label for label in required if label not in labels)
+          tests = {
+              entry.get("label"): entry.get("times", {})
+              for entry in data.get("tests", [])
+              if entry.get("label")
+          }
+          required = {
+              "fwxAES-live": {"python", "cpp", "java"},
+              "kFAe": {"python"},
+          }
+          missing = []
+          for label, langs in required.items():
+              times = tests.get(label)
+              if not isinstance(times, dict):
+                  missing.append(f"{label} (label missing)")
+                  continue
+              for lang in sorted(langs):
+                  value = times.get(lang)
+                  if not isinstance(value, int) or value <= 0:
+                      missing.append(f"{label}:{lang}")
           if missing:
               raise SystemExit(f"Missing benchmark labels: {', '.join(missing)}")
-          print("Live benchmark coverage OK:", ", ".join(sorted(required)))
+          print("Live benchmark coverage OK")
           PY
 
       - name: Upload benchmark results
@@ -137,6 +153,9 @@ jobs:
     runs-on: ${{ matrix.runner }}
     container:
       image: ${{ matrix.container_image }}
+    defaults:
+      run:
+        shell: bash
     strategy:
       fail-fast: false
       matrix:
@@ -301,6 +320,9 @@ jobs:
             allow_failure: false
     container:
       image: debian:${{ matrix.debian }}
+    defaults:
+      run:
+        shell: bash
     permissions:
       contents: read
     steps:
@@ -344,10 +366,14 @@ jobs:
           - arch: amd64
             triplet: x64-windows-static
             cmake_arch: x64
+            require_oqs: "OFF"
+            oqs_static: "OFF"
             output: basefwx-windows-amd64.exe
           - arch: x86
             triplet: x86-windows-static
             cmake_arch: Win32
+            require_oqs: "OFF"
+            oqs_static: "OFF"
             output: basefwx-windows-x86.exe
     permissions:
       contents: read
@@ -383,16 +409,20 @@ jobs:
         env:
           VCPKG_MAX_CONCURRENCY: "8"
         run: |
-          cmake -S cpp -B cpp/build `
-            -G "Visual Studio 17 2022" `
-            -A ${{ matrix.cmake_arch }} `
-            -DCMAKE_TOOLCHAIN_FILE="${{ github.workspace }}\\vcpkg\\scripts\\buildsystems\\vcpkg.cmake" `
-            -DVCPKG_TARGET_TRIPLET=${{ matrix.triplet }} `
-            -DCMAKE_SYSTEM_VERSION=10.0 `
-            -DBASEFWX_REQUIRE_ARGON2=ON `
-            -DBASEFWX_REQUIRE_OQS=ON `
-            -DBASEFWX_OQS_STATIC=ON `
-            -DBASEFWX_WIN_IPO=OFF
+          $args = @(
+            "-S", "cpp",
+            "-B", "cpp/build",
+            "-G", "Visual Studio 17 2022",
+            "-A", "${{ matrix.cmake_arch }}",
+            "-DCMAKE_TOOLCHAIN_FILE=${{ github.workspace }}\\vcpkg\\scripts\\buildsystems\\vcpkg.cmake",
+            "-DVCPKG_TARGET_TRIPLET=${{ matrix.triplet }}",
+            "-DCMAKE_SYSTEM_VERSION=10.0",
+            "-DBASEFWX_REQUIRE_ARGON2=ON",
+            "-DBASEFWX_REQUIRE_OQS=${{ matrix.require_oqs }}",
+            "-DBASEFWX_OQS_STATIC=${{ matrix.oqs_static }}",
+            "-DBASEFWX_WIN_IPO=OFF"
+          )
+          cmake @args
 
       - name: Build
         shell: pwsh

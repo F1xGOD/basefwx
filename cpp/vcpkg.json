@@ -5,6 +5,9 @@
     "openssl",
     "zlib",
     "argon2",
-    "liboqs"
+    {
+      "name": "liboqs",
+      "platform": "!uwp & !(windows & static)"
+    }
   ]
 }

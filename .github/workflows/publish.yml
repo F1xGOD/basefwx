@@ -223,7 +223,15 @@ jobs:
           url="https://github.com/Kitware/CMake/releases/download/v${cmake_ver}/cmake-${cmake_ver}-linux-${cmake_arch}.tar.gz"
           wget -qO /tmp/cmake.tgz "$url"
           tar -xzf /tmp/cmake.tgz -C /tmp
-          cp -r "/tmp/cmake-${cmake_ver}-linux-${cmake_arch}/"* /usr/local/
+          cmake_root="/tmp/cmake-${cmake_ver}-linux-${cmake_arch}"
+          install -d /usr/local/bin /usr/local/share /usr/local/doc
+          cp -a "${cmake_root}/bin/." /usr/local/bin/
+          if [ -d "${cmake_root}/share" ]; then
+            cp -a "${cmake_root}/share/." /usr/local/share/
+          fi
+          if [ -d "${cmake_root}/doc" ]; then
+            cp -a "${cmake_root}/doc/." /usr/local/doc/
+          fi
           cmake --version
 
       - name: Install liboqs

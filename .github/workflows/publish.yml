@@ -161,11 +161,11 @@ jobs:
       matrix:
         include:
           - runner: ubuntu-latest
-            container_image: debian:10
+            container_image: debian:12
             arch: amd64
             output: basefwx-linux-amd64
           - runner: ubuntu-24.04-arm
-            container_image: debian:10
+            container_image: debian:12
             arch: arm64
             output: basefwx-linux-arm64
     permissions:
@@ -179,7 +179,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: /usr/local
-          key: liboqs-0.11.0-static-debian10-${{ runner.arch }}
+          key: liboqs-0.11.0-static-debian12-${{ runner.arch }}
 
       - name: Install system deps
         run: |

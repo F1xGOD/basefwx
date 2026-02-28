@@ -296,7 +296,7 @@ jobs:
             -DLZMA_LIBRARY="${libdir}/liblzma.a" \
             -DLZMA_INCLUDE_DIR=/usr/include \
             -DBASEFWX_NATIVE_OPT=OFF \
-            ${extra_args[@]}
+            "${extra_args[@]}"
 
       - name: Build
         run: cmake --build cpp/build --config Release

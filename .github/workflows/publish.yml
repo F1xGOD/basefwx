@@ -359,14 +359,19 @@ jobs:
         include:
           - debian: "9"
             allow_failure: true
+            artifact: basefwx-linux-amd64-legacy
           - debian: "10"
             allow_failure: true
+            artifact: basefwx-linux-amd64-legacy
           - debian: "11"
             allow_failure: false
+            artifact: basefwx-linux-amd64-legacy
           - debian: "12"
             allow_failure: false
+            artifact: basefwx-linux-amd64
           - debian: "13"
             allow_failure: false
+            artifact: basefwx-linux-amd64
     container:
       image: debian:${{ matrix.debian }}
     defaults:
@@ -382,6 +387,8 @@ jobs:
             if [ -f /etc/apt/sources.list ]; then
               sed -i 's|deb.debian.org/debian|archive.debian.org/debian|g' /etc/apt/sources.list || true
               sed -i 's|security.debian.org/debian-security|archive.debian.org/debian-security|g' /etc/apt/sources.list || true
+              # Some EOL releases no longer have "-updates" suites.
+              sed -r -i 's/([a-z]+)-updates/\1/g' /etc/apt/sources.list || true
             fi
             apt-get -o Acquire::Check-Valid-Until=false update
           fi
@@ -390,25 +397,18 @@ jobs:
             apt-get install -y libargon2-0 || true
           fi
 
-      - name: Download Linux amd64 legacy artifact
-        if: ${{ matrix.debian == '9' || matrix.debian == '10' }}
-        uses: actions/download-artifact@v4
-        with:
-          name: basefwx-linux-amd64-legacy
-          path: dist
-
       - name: Download Linux amd64 artifact
-        if: ${{ matrix.debian != '9' && matrix.debian != '10' }}
         uses: actions/download-artifact@v4
         with:
-          name: basefwx-linux-amd64
+          name: ${{ matrix.artifact }}
           path: dist
 
       - name: Smoke run
         run: |
           set -euo pipefail
-          chmod +x dist/basefwx-linux-amd64
-          out="$(dist/basefwx-linux-amd64 hash512 "debian-${{ matrix.debian }}")"
+          bin="dist/${{ matrix.artifact }}"
+          chmod +x "$bin"
+          out="$("$bin" hash512 "debian-${{ matrix.debian }}")"
           if [ "${#out}" -ne 128 ]; then
             echo "Unexpected hash512 output length on Debian ${{ matrix.debian }}: ${#out}" >&2
             exit 1

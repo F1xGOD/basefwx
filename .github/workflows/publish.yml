@@ -372,31 +372,12 @@ jobs:
           - debian: "13"
             allow_failure: false
             artifact: basefwx-linux-amd64
-    container:
-      image: debian:${{ matrix.debian }}
     defaults:
       run:
         shell: bash
     permissions:
       contents: read
     steps:
-      - name: Install runtime deps
-        run: |
-          set -euo pipefail
-          if ! apt-get update; then
-            if [ -f /etc/apt/sources.list ]; then
-              sed -i 's|deb.debian.org/debian|archive.debian.org/debian|g' /etc/apt/sources.list || true
-              sed -i 's|security.debian.org/debian-security|archive.debian.org/debian-security|g' /etc/apt/sources.list || true
-              # Some EOL releases no longer have "-updates" suites.
-              sed -r -i 's/([a-z]+)-updates/\1/g' /etc/apt/sources.list || true
-            fi
-            apt-get -o Acquire::Check-Valid-Until=false update
-          fi
-          apt-get install -y ca-certificates libstdc++6 zlib1g liblzma5
-          if ! apt-get install -y libargon2-1; then
-            apt-get install -y libargon2-0 || true
-          fi
-
       - name: Download Linux amd64 artifact
         uses: actions/download-artifact@v4
         with:
@@ -408,11 +389,33 @@ jobs:
           set -euo pipefail
           bin="dist/${{ matrix.artifact }}"
           chmod +x "$bin"
-          out="$("$bin" hash512 "debian-${{ matrix.debian }}")"
-          if [ "${#out}" -ne 128 ]; then
-            echo "Unexpected hash512 output length on Debian ${{ matrix.debian }}: ${#out}" >&2
-            exit 1
-          fi
+          docker run --rm \
+            --platform linux/amd64 \
+            -v "$PWD/dist:/dist:ro" \
+            "debian:${{ matrix.debian }}" \
+            bash -lc '
+              set -euo pipefail
+              export DEBIAN_FRONTEND=noninteractive
+              if ! apt-get update; then
+                if [ -f /etc/apt/sources.list ]; then
+                  sed -i "s|deb.debian.org/debian|archive.debian.org/debian|g" /etc/apt/sources.list || true
+                  sed -i "s|security.debian.org/debian-security|archive.debian.org/debian-security|g" /etc/apt/sources.list || true
+                  # Some EOL releases no longer have "-updates" suites.
+                  sed -r -i "s/([a-z]+)-updates/\1/g" /etc/apt/sources.list || true
+                  awk "!seen[\$0]++" /etc/apt/sources.list > /tmp/sources.list && mv /tmp/sources.list /etc/apt/sources.list
+                fi
+                apt-get -o Acquire::Check-Valid-Until=false update
+              fi
+              apt-get install -y --no-install-recommends ca-certificates libstdc++6 zlib1g liblzma5
+              if ! apt-get install -y --no-install-recommends libargon2-1; then
+                apt-get install -y --no-install-recommends libargon2-0 || true
+              fi
+              out="$("/dist/${{ matrix.artifact }}" hash512 "debian-${{ matrix.debian }}")"
+              if [ "${#out}" -ne 128 ]; then
+                echo "Unexpected hash512 output length on Debian ${{ matrix.debian }}: ${#out}" >&2
+                exit 1
+              fi
+            '
 
   build-cli-windows:
     runs-on: windows-2022

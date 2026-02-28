@@ -269,6 +269,24 @@ jobs:
               exit 1
             fi
           done
+          # For legacy builds (Debian 10) build OpenSSL 3 locally so headers like
+          # <openssl/core_names.h> are available even on older base images.
+          openssl_crypto_lib="${libdir}/libcrypto.a"
+          openssl_ssl_lib="${libdir}/libssl.a"
+          if [[ "${{ matrix.output }}" == *"legacy"* ]]; then
+            echo "Building OpenSSL 3 for legacy build"
+            OPENSSL_VER="3.0.11"
+            wget -qO /tmp/openssl.tar.gz "https://www.openssl.org/source/openssl-${OPENSSL_VER}.tar.gz"
+            tar -xzf /tmp/openssl.tar.gz -C /tmp
+            pushd /tmp/openssl-${OPENSSL_VER}
+            ./config --prefix=/usr/local/openssl-3 --openssldir=/usr/local/openssl-3 no-shared
+            make -j"$(nproc)"
+            make install_sw
+            popd
+            openssl_crypto_lib="/usr/local/openssl-3/lib/libcrypto.a"
+            openssl_ssl_lib="/usr/local/openssl-3/lib/libssl.a"
+            export CMAKE_PREFIX_PATH="/usr/local/openssl-3:${CMAKE_PREFIX_PATH:-}"
+          fi
           # Allow legacy builds to opt out of LTO/native flags for wider runtime compatibility
           extra_args=()
           if [[ "${{ matrix.output }}" == *"legacy"* ]]; then
@@ -285,8 +303,8 @@ jobs:
             -DBASEFWX_REQUIRE_LZMA=ON \
             -DBASEFWX_OQS_STATIC=ON \
             -DOPENSSL_USE_STATIC_LIBS=TRUE \
-            -DOPENSSL_CRYPTO_LIBRARY="${libdir}/libcrypto.a" \
-            -DOPENSSL_SSL_LIBRARY="${libdir}/libssl.a" \
+            -DOPENSSL_CRYPTO_LIBRARY="${openssl_crypto_lib}" \
+            -DOPENSSL_SSL_LIBRARY="${openssl_ssl_lib}" \
             -DOQS_INCLUDE_DIR=/usr/local/include \
             -DOQS_LIBRARY=/usr/local/lib/liboqs.a \
             -DZLIB_LIBRARY="${libdir}/libz.a" \

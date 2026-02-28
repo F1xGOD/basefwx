@@ -299,6 +299,7 @@ jobs:
             extra_args+=( -DCMAKE_INTERPROCEDURAL_OPTIMIZATION_RELEASE=OFF )
             extra_args+=( -DBASEFWX_NATIVE_OPT=OFF )
             extra_args+=( "-DCMAKE_CXX_FLAGS=-Wno-deprecated-declarations -O2" )
+            extra_args+=( "-DCMAKE_EXE_LINKER_FLAGS=-lstdc++fs" )
           fi
 
           cmake -S cpp -B cpp/build \

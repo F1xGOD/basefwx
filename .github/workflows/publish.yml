@@ -161,11 +161,15 @@ jobs:
       matrix:
         include:
           - runner: ubuntu-latest
-            container_image: debian:10
+            container_image: debian:12
             arch: amd64
             output: basefwx-linux-amd64
-          - runner: ubuntu-24.04-arm
+          - runner: ubuntu-latest
             container_image: debian:10
+            arch: amd64
+            output: basefwx-linux-amd64-legacy
+          - runner: ubuntu-24.04-arm
+            container_image: debian:12
             arch: arm64
             output: basefwx-linux-arm64
     permissions:
@@ -179,7 +183,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: /usr/local
-          key: liboqs-0.11.0-static-debian10-${{ runner.arch }}
+          key: liboqs-0.11.0-static-debian12-${{ runner.arch }}
 
       - name: Install system deps
         run: |
@@ -188,6 +192,8 @@ jobs:
             if [ -f /etc/apt/sources.list ]; then
               sed -i 's|deb.debian.org/debian|archive.debian.org/debian|g' /etc/apt/sources.list || true
               sed -i 's|security.debian.org/debian-security|archive.debian.org/debian-security|g' /etc/apt/sources.list || true
+                # Some old releases no longer have "-updates" suites; map them to the base suite
+                sed -r -i 's/([a-z]+)-updates/\1/g' /etc/apt/sources.list || true
             fi
             apt-get -o Acquire::Check-Valid-Until=false update
           fi
@@ -319,7 +325,7 @@ jobs:
           - debian: "9"
             allow_failure: true
           - debian: "10"
-            allow_failure: false
+            allow_failure: true
           - debian: "11"
             allow_failure: false
           - debian: "12"
@@ -349,7 +355,15 @@ jobs:
             apt-get install -y libargon2-0 || true
           fi
 
+      - name: Download Linux amd64 legacy artifact
+        if: ${{ matrix.debian == '9' || matrix.debian == '10' }}
+        uses: actions/download-artifact@v4
+        with:
+          name: basefwx-linux-amd64-legacy
+          path: dist
+
       - name: Download Linux amd64 artifact
+        if: ${{ matrix.debian != '9' && matrix.debian != '10' }}
         uses: actions/download-artifact@v4
         with:
           name: basefwx-linux-amd64

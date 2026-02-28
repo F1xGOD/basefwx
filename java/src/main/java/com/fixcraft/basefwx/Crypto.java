@@ -342,6 +342,10 @@ public final class Crypto {
         try {
             Cipher cipher = AES_GCM_ENC.get();
             GCMParameterSpec spec = new GCMParameterSpec(Constants.AEAD_TAG_LEN * 8, iv);
+            // lgtm[java/static-initialization-vector] - IV is provided by caller; the
+            // top-level helper `aesGcmEncrypt()` generates a fresh random nonce each
+            // invocation and the iv parameter may also come from a counter/nonce
+            // sequence under the caller's control. We do not use a constant IV.
             cipher.init(Cipher.ENCRYPT_MODE, new SecretKeySpec(key, "AES"), spec);
             if (aad != null && aad.length > 0) {
                 cipher.updateAAD(aad);
@@ -428,6 +432,9 @@ public final class Crypto {
         try {
             Cipher cipher = AES_GCM_DEC.get();
             GCMParameterSpec spec = new GCMParameterSpec(Constants.AEAD_TAG_LEN * 8, iv);
+            // lgtm[java/static-initialization-vector] - IV is passed in by the initial
+            // encryption routine; uniqueness is the caller's responsibility.  Decryption
+            // obviously needs the same IV that was used to encrypt the data.
             cipher.init(Cipher.DECRYPT_MODE, new SecretKeySpec(key, "AES"), spec);
             if (aad != null && aad.length > 0) {
                 cipher.updateAAD(aad);

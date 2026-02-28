@@ -479,6 +479,11 @@ target_include_directories(basefwxcpp
 )
 target_link_libraries(basefwxcpp PUBLIC OpenSSL::Crypto ZLIB::ZLIB)
 
+# GCC 8 and older keep std::filesystem in a separate support library.
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS 9)
+    target_link_libraries(basefwxcpp PUBLIC stdc++fs)
+endif()
+
 if(ARGON2_FOUND)
     target_include_directories(basefwxcpp PUBLIC ${ARGON2_INCLUDE_DIRS})
     if(ARGON2_LIBRARY_DIRS)

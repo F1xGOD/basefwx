@@ -331,8 +331,8 @@ jobs:
         run: |
           deps="$(readelf -d cpp/build/basefwx_cpp)"
           printf '%s\n' "$deps"
-          if printf '%s\n' "$deps" | grep -Eq 'liboqs\.so|libcrypto\.so|libssl\.so'; then
-            echo "Binary still links against dynamic OQS/OpenSSL" >&2
+          if printf '%s\n' "$deps" | grep -Eq 'liboqs\.so|libcrypto\.so|libssl\.so|libargon2\.so'; then
+            echo "Binary still links against dynamic OQS/OpenSSL/Argon2" >&2
             exit 1
           fi
 

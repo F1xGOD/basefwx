@@ -273,6 +273,8 @@ jobs:
           # <openssl/core_names.h> are available even on older base images.
           openssl_crypto_lib="${libdir}/libcrypto.a"
           openssl_ssl_lib="${libdir}/libssl.a"
+          openssl_root=""
+          openssl_include=""
           if [[ "${{ matrix.output }}" == *"legacy"* ]]; then
             echo "Building OpenSSL 3 for legacy build"
             OPENSSL_VER="3.0.11"
@@ -283,8 +285,11 @@ jobs:
             make -j"$(nproc)"
             make install_sw
             popd
-            openssl_crypto_lib="/usr/local/openssl-3/lib/libcrypto.a"
-            openssl_ssl_lib="/usr/local/openssl-3/lib/libssl.a"
+            # installed libs live under lib64 on Debian
+            openssl_crypto_lib="/usr/local/openssl-3/lib64/libcrypto.a"
+            openssl_ssl_lib="/usr/local/openssl-3/lib64/libssl.a"
+            openssl_root="/usr/local/openssl-3"
+            openssl_include="/usr/local/openssl-3/include"
             export CMAKE_PREFIX_PATH="/usr/local/openssl-3:${CMAKE_PREFIX_PATH:-}"
           fi
           # Allow legacy builds to opt out of LTO/native flags for wider runtime compatibility
@@ -305,6 +310,8 @@ jobs:
             -DOPENSSL_USE_STATIC_LIBS=TRUE \
             -DOPENSSL_CRYPTO_LIBRARY="${openssl_crypto_lib}" \
             -DOPENSSL_SSL_LIBRARY="${openssl_ssl_lib}" \
+            $( [[ -n "$openssl_root" ]] && echo "-DOPENSSL_ROOT_DIR=$openssl_root" ) \
+            $( [[ -n "$openssl_include" ]] && echo "-DOPENSSL_INCLUDE_DIR=$openssl_include" ) \
             -DOQS_INCLUDE_DIR=/usr/local/include \
             -DOQS_LIBRARY=/usr/local/lib/liboqs.a \
             -DZLIB_LIBRARY="${libdir}/libz.a" \

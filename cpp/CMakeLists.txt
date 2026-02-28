@@ -168,6 +168,15 @@ if(BASEFWX_USE_VENDOR_DEPS)
     endif()
 endif()
 
+# Prefer explicit Argon2 paths when provided to avoid pkg-config picking a different install.
+if(ARGON2_LIBRARY OR ARGON2_INCLUDE_DIR)
+    if(ARGON2_LIBRARY AND ARGON2_INCLUDE_DIR)
+        set(ARGON2_FOUND TRUE)
+        set(ARGON2_INCLUDE_DIRS ${ARGON2_INCLUDE_DIR})
+        set(ARGON2_LIBRARIES ${ARGON2_LIBRARY})
+    endif()
+endif()
+
 # Prefer explicit OQS paths when provided to avoid pkg-config picking a different install.
 if(OQS_LIBRARY OR OQS_INCLUDE_DIR)
     if(OQS_LIBRARY AND OQS_INCLUDE_DIR)

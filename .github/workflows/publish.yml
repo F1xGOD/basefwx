@@ -269,6 +269,13 @@ jobs:
               exit 1
             fi
           done
+          # Allow legacy builds to opt out of LTO/native flags for wider runtime compatibility
+          extra_flags=""
+          if [[ "${{ matrix.output }}" == *"legacy"* ]]; then
+            echo "Configuring legacy-friendly build flags"
+            extra_flags="-DCMAKE_INTERPROCEDURAL_OPTIMIZATION_RELEASE=OFF -DBASEFWX_NATIVE_OPT=OFF -DCMAKE_CXX_FLAGS=\"-Wno-deprecated-declarations -O2\""
+          fi
+
           cmake -S cpp -B cpp/build \
             -DCMAKE_BUILD_TYPE=Release \
             -DBASEFWX_REQUIRE_ARGON2=ON \
@@ -287,7 +294,7 @@ jobs:
             -DLZMA_LIBRARY="${libdir}/liblzma.a" \
             -DLZMA_INCLUDE_DIR=/usr/include \
             -DBASEFWX_NATIVE_OPT=OFF \
-            -DCMAKE_CXX_FLAGS="-Wno-deprecated-declarations"
+            ${extra_flags}
 
       - name: Build
         run: cmake --build cpp/build --config Release

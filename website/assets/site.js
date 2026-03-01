@@ -550,7 +550,7 @@ const loadVirusTotal = async () => {
         statusIcon = VT_OK_ICON;
         statusClass = "vt-check ok";
         statusLabel = "Known false positives only";
-      } else if (malicious > 4 || suspicious > 12) {
+      } else if (malicious >= 4 || suspicious >= 7) {
         statusIcon = VT_BAD_ICON;
         statusClass = "vt-check bad";
         statusLabel = "VirusTotal high risk";

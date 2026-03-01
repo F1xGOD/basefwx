@@ -14,17 +14,44 @@ public final class LiveCipher {
     private static final int FRAME_HEADER_LEN = Constants.LIVE_FRAME_HEADER_LEN;
     private static final int HEADER_FIXED_LEN = Constants.LIVE_HEADER_FIXED_LEN;
 
-    private static byte[] concat(byte[] a, byte[] b) {
-        if (a.length == 0) {
-            return Arrays.copyOf(b, b.length);
+    private static boolean bytesEqualAt(byte[] data, int offset, byte[] expected) {
+        if (offset < 0 || expected == null || offset + expected.length > data.length) {
+            return false;
         }
-        if (b.length == 0) {
-            return Arrays.copyOf(a, a.length);
+        for (int i = 0; i < expected.length; i++) {
+            if (data[offset + i] != expected[i]) {
+                return false;
+            }
         }
-        byte[] out = new byte[a.length + b.length];
-        System.arraycopy(a, 0, out, 0, a.length);
-        System.arraycopy(b, 0, out, a.length, b.length);
-        return out;
+        return true;
+    }
+
+    private static void checkSliceBounds(byte[] data, int off, int len, String name) {
+        if (data == null) {
+            throw new IllegalArgumentException(name + " must not be null");
+        }
+        if (off < 0 || len < 0 || off > data.length - len) {
+            throw new IllegalArgumentException("Invalid " + name + " slice");
+        }
+    }
+
+    private static void compactInPlace(byte[] buffer, int srcOffset, int length) {
+        if (length > 0 && srcOffset > 0) {
+            System.arraycopy(buffer, srcOffset, buffer, 0, length);
+        }
+    }
+
+    private static byte[] growBuffer(byte[] current, int required) {
+        int cap = current.length == 0 ? 4096 : current.length;
+        while (cap < required) {
+            int doubled = cap << 1;
+            if (doubled <= cap) {
+                cap = required;
+                break;
+            }
+            cap = doubled;
+        }
+        return Arrays.copyOf(current, cap);
     }
 
     private static int hardenFwxAesIterations(byte[] password, int iterations) {
@@ -222,22 +249,41 @@ public final class LiveCipher {
         }
 
         public byte[] update(byte[] chunk) {
+            if (chunk == null) {
+                return update(new byte[0], 0, 0);
+            }
+            return update(chunk, 0, chunk.length);
+        }
+
+        public byte[] update(byte[] chunk, int off, int len) {
             if (!started) {
                 throw new IllegalArgumentException("LiveEncryptor.start() must be called before update()");
             }
             if (finalized) {
                 throw new IllegalArgumentException("LiveEncryptor already finalized");
             }
-            byte[] payload = chunk == null ? new byte[0] : chunk;
-            if (payload.length == 0) {
+            checkSliceBounds(chunk, off, len, "chunk");
+            if (len == 0) {
                 return new byte[0];
             }
             byte[] nonce = nonceForSequence(noncePrefix, sequence);
-            byte[] aad = liveAad(Constants.LIVE_FRAME_TYPE_DATA, sequence, payload.length);
-            byte[] ct = Crypto.aesGcmEncryptWithIv(key, nonce, payload, aad);
-            byte[] body = new byte[4 + ct.length];
-            writeU32(body, 0, payload.length);
-            System.arraycopy(ct, 0, body, 4, ct.length);
+            byte[] aad = liveAad(Constants.LIVE_FRAME_TYPE_DATA, sequence, len);
+            int ctLen = len + Constants.AEAD_TAG_LEN;
+            byte[] body = new byte[4 + ctLen];
+            writeU32(body, 0, len);
+            int written = Crypto.aesGcmEncryptWithIvInto(
+                key,
+                nonce,
+                chunk,
+                off,
+                len,
+                body,
+                4,
+                aad
+            );
+            if (written != ctLen) {
+                body = Arrays.copyOf(body, Math.max(4, 4 + written));
+            }
             byte[] frame = packFrame(Constants.LIVE_FRAME_TYPE_DATA, sequence, body);
             sequence += 1L;
             return frame;
@@ -270,6 +316,8 @@ public final class LiveCipher {
         private byte[] key;
         private byte[] noncePrefix;
         private byte[] buffer;
+        private int bufferStart;
+        private int bufferEnd;
 
         public LiveDecryptor(String password, boolean useMaster) {
             this.password = BaseFwx.resolvePasswordBytes(password, useMaster);
@@ -280,33 +328,100 @@ public final class LiveCipher {
             this.key = new byte[0];
             this.noncePrefix = new byte[0];
             this.buffer = new byte[0];
+            this.bufferStart = 0;
+            this.bufferEnd = 0;
         }
 
         public LiveDecryptor(String password) {
             this(password, true);
         }
 
-        private void parseHeader(byte[] body) {
-            if (body.length < HEADER_FIXED_LEN) {
+        private int bufferedSize() {
+            return bufferEnd - bufferStart;
+        }
+
+        private void ensureAppendCapacity(int incoming) {
+            int unread = bufferedSize();
+            if (incoming <= 0) {
+                return;
+            }
+            if (buffer.length == 0) {
+                buffer = new byte[Math.max(4096, incoming)];
+                bufferStart = 0;
+                bufferEnd = 0;
+                return;
+            }
+            if (buffer.length - bufferEnd >= incoming) {
+                return;
+            }
+            if (bufferStart > 0 && buffer.length - unread >= incoming) {
+                compactInPlace(buffer, bufferStart, unread);
+                bufferStart = 0;
+                bufferEnd = unread;
+                if (buffer.length - bufferEnd >= incoming) {
+                    return;
+                }
+            }
+            buffer = growBuffer(buffer, unread + incoming);
+            if (bufferStart > 0 && unread > 0) {
+                compactInPlace(buffer, bufferStart, unread);
+            }
+            bufferStart = 0;
+            bufferEnd = unread;
+        }
+
+        private void append(byte[] data, int off, int len) {
+            if (len <= 0) {
+                return;
+            }
+            ensureAppendCapacity(len);
+            System.arraycopy(data, off, buffer, bufferEnd, len);
+            bufferEnd += len;
+        }
+
+        private void maybeCompactBuffer() {
+            if (bufferStart == 0) {
+                return;
+            }
+            if (bufferStart < (1 << 20) && bufferStart * 2 < bufferEnd) {
+                return;
+            }
+            int unread = bufferedSize();
+            compactInPlace(buffer, bufferStart, unread);
+            bufferStart = 0;
+            bufferEnd = unread;
+        }
+
+        private void parseHeader(byte[] data, int bodyOff, int bodyLen) {
+            if (bodyLen < HEADER_FIXED_LEN) {
                 throw new IllegalArgumentException("Truncated live stream header");
             }
-            int keyMode = body[0] & 0xFF;
-            int saltLen = body[1] & 0xFF;
-            int nonceLen = body[2] & 0xFF;
-            int keyHeaderLen = readU32(body, 4);
-            int iters = readU32(body, 8);
+            int keyMode = data[bodyOff] & 0xFF;
+            int saltLen = data[bodyOff + 1] & 0xFF;
+            int nonceLen = data[bodyOff + 2] & 0xFF;
+            int keyHeaderLen = readU32(data, bodyOff + 4);
+            int iters = readU32(data, bodyOff + 8);
+            if (keyHeaderLen < 0) {
+                throw new IllegalArgumentException("Invalid live stream key header length");
+            }
 
-            int need = HEADER_FIXED_LEN + keyHeaderLen + saltLen + nonceLen;
-            if (body.length != need) {
+            long need = (long) HEADER_FIXED_LEN + (long) keyHeaderLen + (long) saltLen + (long) nonceLen;
+            if (bodyLen != need) {
                 throw new IllegalArgumentException("Invalid live stream header length");
             }
 
-            int offset = HEADER_FIXED_LEN;
-            byte[] keyHeader = Arrays.copyOfRange(body, offset, offset + keyHeaderLen);
+            int offset = bodyOff + HEADER_FIXED_LEN;
+            byte[] keyHeader = keyHeaderLen == 0
+                ? new byte[0]
+                : Arrays.copyOfRange(data, offset, offset + keyHeaderLen);
             offset += keyHeaderLen;
-            byte[] salt = Arrays.copyOfRange(body, offset, offset + saltLen);
+            byte[] salt = saltLen == 0
+                ? new byte[0]
+                : Arrays.copyOfRange(data, offset, offset + saltLen);
             offset += saltLen;
-            byte[] prefix = Arrays.copyOfRange(body, offset, offset + nonceLen);
+            byte[] prefix = nonceLen == 0
+                ? new byte[0]
+                : Arrays.copyOfRange(data, offset, offset + nonceLen);
             if (prefix.length != Constants.LIVE_NONCE_PREFIX_LEN) {
                 throw new IllegalArgumentException("Invalid live stream nonce prefix");
             }
@@ -346,63 +461,78 @@ public final class LiveCipher {
             expectedSequence = 1L;
         }
 
-        private byte[] decryptDataFrame(long sequence, byte[] body) {
-            if (body.length < 4 + Constants.AEAD_TAG_LEN) {
+        private byte[] decryptDataFrame(long sequence, byte[] data, int off, int len) {
+            if (len < 4 + Constants.AEAD_TAG_LEN) {
                 throw new IllegalArgumentException("Truncated live data frame");
             }
-            int plainLen = readU32(body, 0);
-            byte[] ct = Arrays.copyOfRange(body, 4, body.length);
+            int plainLen = readU32(data, off);
+            if (plainLen < 0) {
+                throw new IllegalArgumentException("Invalid live frame length");
+            }
+            int ctOff = off + 4;
+            int ctLen = len - 4;
             byte[] nonce = nonceForSequence(noncePrefix, sequence);
             byte[] aad = liveAad(Constants.LIVE_FRAME_TYPE_DATA, sequence, plainLen);
-            byte[] plain;
+            byte[] plain = new byte[plainLen];
+            int written;
             try {
-                plain = Crypto.aesGcmDecryptWithIv(key, nonce, ct, aad);
+                written = Crypto.aesGcmDecryptWithIvInto(key, nonce, data, ctOff, ctLen, plain, 0, aad);
             } catch (RuntimeException exc) {
                 throw new IllegalArgumentException("Live frame authentication failed", exc);
             }
-            if (plain.length != plainLen) {
+            if (written != plainLen) {
                 throw new IllegalArgumentException("Live frame length mismatch");
             }
             return plain;
         }
 
-        private void decryptFinFrame(long sequence, byte[] body) {
-            if (body.length < Constants.AEAD_TAG_LEN) {
+        private void decryptFinFrame(long sequence, byte[] data, int off, int len) {
+            if (len < Constants.AEAD_TAG_LEN) {
                 throw new IllegalArgumentException("Truncated live FIN frame");
             }
             byte[] nonce = nonceForSequence(noncePrefix, sequence);
             byte[] aad = liveAad(Constants.LIVE_FRAME_TYPE_FIN, sequence, 0);
-            byte[] plain;
+            byte[] plain = new byte[Math.max(0, len - Constants.AEAD_TAG_LEN)];
+            int written;
             try {
-                plain = Crypto.aesGcmDecryptWithIv(key, nonce, body, aad);
+                written = Crypto.aesGcmDecryptWithIvInto(key, nonce, data, off, len, plain, 0, aad);
             } catch (RuntimeException exc) {
                 throw new IllegalArgumentException("Live FIN authentication failed", exc);
             }
-            if (plain.length != 0) {
+            if (written != 0) {
                 throw new IllegalArgumentException("Live FIN frame carries unexpected payload");
             }
             finished = true;
         }
 
         public List<byte[]> update(byte[] data) {
-            if (finished && data != null && data.length > 0) {
+            if (data == null) {
+                return update(new byte[0], 0, 0);
+            }
+            return update(data, 0, data.length);
+        }
+
+        public List<byte[]> update(byte[] data, int off, int len) {
+            if (finished && len > 0) {
                 throw new IllegalArgumentException("Live stream already finalized");
             }
-            if (data != null && data.length > 0) {
-                buffer = concat(buffer, data);
+            checkSliceBounds(data, off, len, "frame");
+            if (len > 0) {
+                append(data, off, len);
             }
             List<byte[]> outputs = new ArrayList<byte[]>();
-            while (buffer.length >= FRAME_HEADER_LEN) {
-                if (!Arrays.equals(Arrays.copyOfRange(buffer, 0, LIVE_MAGIC.length), LIVE_MAGIC)) {
+            while (bufferedSize() >= FRAME_HEADER_LEN) {
+                int frameStart = bufferStart;
+                if (!bytesEqualAt(buffer, frameStart, LIVE_MAGIC)) {
                     throw new IllegalArgumentException("Invalid live frame magic");
                 }
-                int version = buffer[4] & 0xFF;
+                int version = buffer[frameStart + 4] & 0xFF;
                 if (version != Constants.LIVE_FRAME_VERSION) {
                     throw new IllegalArgumentException("Unsupported live frame version");
                 }
-                int frameType = buffer[5] & 0xFF;
-                long sequence = readU64(buffer, 6);
-                int bodyLen = readU32(buffer, 14);
+                int frameType = buffer[frameStart + 5] & 0xFF;
+                long sequence = readU64(buffer, frameStart + 6);
+                int bodyLen = readU32(buffer, frameStart + 14);
                 if (bodyLen < 0 || bodyLen > Constants.LIVE_MAX_BODY) {
                     throw new IllegalArgumentException("Live frame too large");
                 }
@@ -411,33 +541,39 @@ public final class LiveCipher {
                     throw new IllegalArgumentException("Live frame too large");
                 }
                 int frameLen = (int) frameLenLong;
-                if (buffer.length < frameLen) {
+                if (bufferedSize() < frameLen) {
                     break;
                 }
-                byte[] body = Arrays.copyOfRange(buffer, FRAME_HEADER_LEN, frameLen);
-                buffer = Arrays.copyOfRange(buffer, frameLen, buffer.length);
+                int bodyOff = frameStart + FRAME_HEADER_LEN;
 
                 if (!started) {
                     if (frameType != Constants.LIVE_FRAME_TYPE_HEADER || sequence != 0L) {
                         throw new IllegalArgumentException("Live stream must start with header frame");
                     }
-                    parseHeader(body);
-                    continue;
-                }
-                if (sequence != expectedSequence) {
-                    throw new IllegalArgumentException("Live frame sequence mismatch");
-                }
-                if (frameType == Constants.LIVE_FRAME_TYPE_DATA) {
-                    byte[] plain = decryptDataFrame(sequence, body);
-                    if (plain.length > 0) {
-                        outputs.add(plain);
-                    }
-                } else if (frameType == Constants.LIVE_FRAME_TYPE_FIN) {
-                    decryptFinFrame(sequence, body);
+                    parseHeader(buffer, bodyOff, bodyLen);
                 } else {
-                    throw new IllegalArgumentException("Unexpected live frame type");
+                    if (sequence != expectedSequence) {
+                        throw new IllegalArgumentException("Live frame sequence mismatch");
+                    }
+                    if (frameType == Constants.LIVE_FRAME_TYPE_DATA) {
+                        byte[] plain = decryptDataFrame(sequence, buffer, bodyOff, bodyLen);
+                        if (plain.length > 0) {
+                            outputs.add(plain);
+                        }
+                    } else if (frameType == Constants.LIVE_FRAME_TYPE_FIN) {
+                        decryptFinFrame(sequence, buffer, bodyOff, bodyLen);
+                    } else {
+                        throw new IllegalArgumentException("Unexpected live frame type");
+                    }
+                    expectedSequence += 1L;
                 }
-                expectedSequence += 1L;
+                bufferStart += frameLen;
+                if (bufferStart == bufferEnd) {
+                    bufferStart = 0;
+                    bufferEnd = 0;
+                    break;
+                }
+                maybeCompactBuffer();
             }
             return outputs;
         }
@@ -449,7 +585,7 @@ public final class LiveCipher {
             if (!finished) {
                 throw new IllegalArgumentException("Live stream ended without FIN frame");
             }
-            if (buffer.length > 0) {
+            if (bufferedSize() > 0) {
                 throw new IllegalArgumentException("Trailing bytes after live stream FIN");
             }
         }
@@ -502,8 +638,7 @@ public final class LiveCipher {
             byte[] buf = new byte[chunk];
             int read;
             while ((read = source.read(buf)) != -1) {
-                byte[] payload = read == buf.length ? Arrays.copyOf(buf, buf.length) : Arrays.copyOf(buf, read);
-                byte[] frame = encryptor.update(payload);
+                byte[] frame = encryptor.update(buf, 0, read);
                 if (frame.length > 0) {
                     dest.write(frame);
                     total += frame.length;
@@ -534,8 +669,7 @@ public final class LiveCipher {
             byte[] buf = new byte[chunk];
             int read;
             while ((read = source.read(buf)) != -1) {
-                byte[] frame = read == buf.length ? Arrays.copyOf(buf, buf.length) : Arrays.copyOf(buf, read);
-                List<byte[]> plains = decryptor.update(frame);
+                List<byte[]> plains = decryptor.update(buf, 0, read);
                 for (byte[] plain : plains) {
                     if (plain.length > 0) {
                         dest.write(plain);

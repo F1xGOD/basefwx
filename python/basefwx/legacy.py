@@ -3486,6 +3486,7 @@ class basefwx:
             self._sequence = 1
             self._key = b""
             self._nonce_prefix = b""
+            self._aead = None
 
         def _init_session(self) -> bytes:
             pw = basefwx._coerce_password_bytes(self._password)
@@ -3524,6 +3525,7 @@ class basefwx:
                 salt = basefwx.os.urandom(basefwx.FWXAES_SALT_LEN)
                 iters = basefwx._fwxaes_iterations(pw)
                 self._key = basefwx._kdf_pbkdf2_raw(pw, salt, iters)
+            self._aead = basefwx.AESGCM(self._key)
             self._nonce_prefix = basefwx.os.urandom(basefwx.LIVE_NONCE_PREFIX_LEN)
             body = basefwx.LIVE_HEADER_STRUCT.pack(
                 key_mode,
@@ -3549,13 +3551,16 @@ class basefwx:
                 raise ValueError("LiveEncryptor.start() must be called before update()")
             if self._finalized:
                 raise ValueError("LiveEncryptor already finalized")
-            payload = bytes(chunk)
-            if not payload:
+            payload = memoryview(chunk)
+            payload_len = payload.nbytes
+            if payload_len == 0:
                 return b""
             nonce = basefwx._live_nonce(self._nonce_prefix, self._sequence)
-            aad = basefwx._live_aad(basefwx.LIVE_FRAME_TYPE_DATA, self._sequence, len(payload))
-            ct = basefwx.AESGCM(self._key).encrypt(nonce, payload, aad)
-            body = basefwx.struct.pack(">I", len(payload)) + ct
+            aad = basefwx._live_aad(basefwx.LIVE_FRAME_TYPE_DATA, self._sequence, payload_len)
+            aead = self._aead if self._aead is not None else basefwx.AESGCM(self._key)
+            self._aead = aead
+            ct = aead.encrypt(nonce, payload, aad)
+            body = basefwx.struct.pack(">I", payload_len) + ct
             frame = basefwx._live_pack_frame(basefwx.LIVE_FRAME_TYPE_DATA, self._sequence, body)
             self._sequence += 1
             return frame
@@ -3567,7 +3572,9 @@ class basefwx:
                 raise ValueError("LiveEncryptor already finalized")
             nonce = basefwx._live_nonce(self._nonce_prefix, self._sequence)
             aad = basefwx._live_aad(basefwx.LIVE_FRAME_TYPE_FIN, self._sequence, 0)
-            fin_blob = basefwx.AESGCM(self._key).encrypt(nonce, b"", aad)
+            aead = self._aead if self._aead is not None else basefwx.AESGCM(self._key)
+            self._aead = aead
+            fin_blob = aead.encrypt(nonce, b"", aad)
             frame = basefwx._live_pack_frame(basefwx.LIVE_FRAME_TYPE_FIN, self._sequence, fin_blob)
             self._sequence += 1
             self._finalized = True
@@ -3585,28 +3592,31 @@ class basefwx:
             self._password = basefwx._resolve_password(password, use_master=use_master)
             self._use_master = bool(use_master)
             self._buffer = bytearray()
+            self._buffer_offset = 0
             self._started = False
             self._finished = False
             self._expected_sequence = 0
             self._key = b""
             self._nonce_prefix = b""
+            self._aead = None
 
-        def _parse_header(self, body: bytes) -> None:
+        def _parse_header(self, data: bytearray, body_off: int, body_len: int) -> None:
             fixed_len = basefwx.LIVE_HEADER_STRUCT.size
-            if len(body) < fixed_len:
+            if body_len < fixed_len:
                 raise ValueError("Truncated live stream header")
-            key_mode, salt_len, nonce_len, _reserved, key_header_len, iters = basefwx.LIVE_HEADER_STRUCT.unpack(
-                body[:fixed_len]
+            key_mode, salt_len, nonce_len, _reserved, key_header_len, iters = basefwx.LIVE_HEADER_STRUCT.unpack_from(
+                data,
+                body_off
             )
-            offset = fixed_len
+            offset = body_off + fixed_len
             need = fixed_len + key_header_len + salt_len + nonce_len
-            if len(body) != need:
+            if body_len != need:
                 raise ValueError("Invalid live stream header length")
-            key_header = body[offset:offset + key_header_len]
+            key_header = bytes(data[offset:offset + key_header_len])
             offset += key_header_len
-            salt = body[offset:offset + salt_len]
+            salt = bytes(data[offset:offset + salt_len])
             offset += salt_len
-            nonce_prefix = body[offset:offset + nonce_len]
+            nonce_prefix = bytes(data[offset:offset + nonce_len])
             if len(nonce_prefix) != basefwx.LIVE_NONCE_PREFIX_LEN:
                 raise ValueError("Invalid live stream nonce prefix")
             if key_mode == basefwx.LIVE_KEYMODE_WRAP:
@@ -3634,32 +3644,40 @@ class basefwx:
             else:
                 raise ValueError("Unsupported live key mode")
             self._key = key
+            self._aead = basefwx.AESGCM(key)
             self._nonce_prefix = nonce_prefix
             self._started = True
             self._expected_sequence = 1
 
-        def _decrypt_data_frame(self, sequence: int, body: bytes) -> bytes:
-            if len(body) < 4 + basefwx.AEAD_TAG_LEN:
+        def _decrypt_data_frame(self, sequence: int, data: bytearray, body_off: int, body_len: int) -> bytes:
+            if body_len < 4 + basefwx.AEAD_TAG_LEN:
                 raise ValueError("Truncated live data frame")
-            plain_len = basefwx.struct.unpack(">I", body[:4])[0]
-            ct = body[4:]
+            plain_len = basefwx.struct.unpack_from(">I", data, body_off)[0]
+            ct_off = body_off + 4
+            ct_len = body_len - 4
+            if plain_len != ct_len - basefwx.AEAD_TAG_LEN:
+                raise ValueError("Live frame length mismatch")
             nonce = basefwx._live_nonce(self._nonce_prefix, sequence)
             aad = basefwx._live_aad(basefwx.LIVE_FRAME_TYPE_DATA, sequence, plain_len)
             try:
-                plain = basefwx.AESGCM(self._key).decrypt(nonce, ct, aad)
+                aead = self._aead if self._aead is not None else basefwx.AESGCM(self._key)
+                self._aead = aead
+                plain = aead.decrypt(nonce, memoryview(data)[ct_off:ct_off + ct_len], aad)
             except Exception as exc:
                 raise ValueError("Live frame authentication failed") from exc
             if len(plain) != plain_len:
                 raise ValueError("Live frame length mismatch")
             return plain
 
-        def _decrypt_fin_frame(self, sequence: int, body: bytes) -> None:
-            if len(body) < basefwx.AEAD_TAG_LEN:
+        def _decrypt_fin_frame(self, sequence: int, data: bytearray, body_off: int, body_len: int) -> None:
+            if body_len < basefwx.AEAD_TAG_LEN:
                 raise ValueError("Truncated live FIN frame")
             nonce = basefwx._live_nonce(self._nonce_prefix, sequence)
             aad = basefwx._live_aad(basefwx.LIVE_FRAME_TYPE_FIN, sequence, 0)
             try:
-                plain = basefwx.AESGCM(self._key).decrypt(nonce, body, aad)
+                aead = self._aead if self._aead is not None else basefwx.AESGCM(self._key)
+                self._aead = aead
+                plain = aead.decrypt(nonce, memoryview(data)[body_off:body_off + body_len], aad)
             except Exception as exc:
                 raise ValueError("Live FIN authentication failed") from exc
             if plain:
@@ -3673,9 +3691,13 @@ class basefwx:
                 self._buffer.extend(data)
             outputs: "list[bytes]" = []
             header_len = basefwx.LIVE_FRAME_HEADER_STRUCT.size
-            while len(self._buffer) >= header_len:
-                magic, version, frame_type, sequence, body_len = basefwx.LIVE_FRAME_HEADER_STRUCT.unpack(
-                    bytes(self._buffer[:header_len])
+            buf = self._buffer
+            buf_len = len(buf)
+            offset = self._buffer_offset
+            while buf_len - offset >= header_len:
+                magic, version, frame_type, sequence, body_len = basefwx.LIVE_FRAME_HEADER_STRUCT.unpack_from(
+                    buf,
+                    offset
                 )
                 if magic != basefwx.LIVE_FRAME_MAGIC:
                     raise ValueError("Invalid live frame magic")
@@ -3684,26 +3706,34 @@ class basefwx:
                 if body_len > basefwx.KFM_MAX_PAYLOAD:
                     raise ValueError("Live frame too large")
                 frame_len = header_len + body_len
-                if len(self._buffer) < frame_len:
+                if buf_len - offset < frame_len:
                     break
-                body = bytes(self._buffer[header_len:frame_len])
-                del self._buffer[:frame_len]
+                body_off = offset + header_len
                 if not self._started:
                     if frame_type != basefwx.LIVE_FRAME_TYPE_HEADER or sequence != 0:
                         raise ValueError("Live stream must start with header frame")
-                    self._parse_header(body)
-                    continue
-                if sequence != self._expected_sequence:
-                    raise ValueError("Live frame sequence mismatch")
-                if frame_type == basefwx.LIVE_FRAME_TYPE_DATA:
-                    plain = self._decrypt_data_frame(sequence, body)
-                    if plain:
-                        outputs.append(plain)
-                elif frame_type == basefwx.LIVE_FRAME_TYPE_FIN:
-                    self._decrypt_fin_frame(sequence, body)
+                    self._parse_header(buf, body_off, body_len)
                 else:
-                    raise ValueError("Unexpected live frame type")
-                self._expected_sequence += 1
+                    if sequence != self._expected_sequence:
+                        raise ValueError("Live frame sequence mismatch")
+                    if frame_type == basefwx.LIVE_FRAME_TYPE_DATA:
+                        plain = self._decrypt_data_frame(sequence, buf, body_off, body_len)
+                        if plain:
+                            outputs.append(plain)
+                    elif frame_type == basefwx.LIVE_FRAME_TYPE_FIN:
+                        self._decrypt_fin_frame(sequence, buf, body_off, body_len)
+                    else:
+                        raise ValueError("Unexpected live frame type")
+                    self._expected_sequence += 1
+                offset += frame_len
+            self._buffer_offset = offset
+            if self._buffer_offset:
+                if self._buffer_offset == buf_len:
+                    self._buffer.clear()
+                    self._buffer_offset = 0
+                elif self._buffer_offset >= (1 << 20) or (self._buffer_offset * 2 >= buf_len):
+                    del self._buffer[:self._buffer_offset]
+                    self._buffer_offset = 0
             return outputs
 
         def finalize(self) -> None:
@@ -3711,7 +3741,7 @@ class basefwx:
                 raise ValueError("Missing live stream header frame")
             if not self._finished:
                 raise ValueError("Live stream ended without FIN frame")
-            if self._buffer:
+            if len(self._buffer) > self._buffer_offset:
                 raise ValueError("Trailing bytes after live stream FIN")
 
     @staticmethod

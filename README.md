@@ -51,11 +51,13 @@ python -m basefwx cryptin fwxaes video.mp4 -p "password" --archive  # exact-rest
 Notes:
 - `kFMd` only decodes BaseFWX carriers; it refuses plain WAV/PNG/MP3/M4A files.
 - `kFAe` / `kFAd` remain available as deprecated aliases to `kFMe` / `kFMd`.
+- Release support policy is single-version: only the latest release is maintained; all older releases are immediately unsupported.
 - Optional kFM/kFA acceleration:
   - `BASEFWX_KFM_ACCEL=auto|cuda|cpu` (default `auto`)
   - `BASEFWX_KFM_ACCEL_MIN_BYTES=<bytes>` (default `1048576`, auto mode threshold)
 - CLI progress now includes live system telemetry (CPU/GPU/RAM/I/O/TEMP when available).
   Disable with `BASEFWX_PROGRESS_TELEMETRY=0`.
+- Python `n10` was optimized for large payloads, but compiled runtimes (C++/Java) are still expected to benchmark faster for very large text workloads.
 - C++/Java CLI global flags: `--no-log` (suppress non-essential logs) and `--verbose` (show hardware routing reasons).
 - jMG video is disabled by default in Python/C++/Java; set `BASEFWX_ENABLE_JMG_VIDEO=1` to re-enable temporarily.
 

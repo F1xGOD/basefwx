@@ -841,12 +841,25 @@ jobs:
       - name: VirusTotal scan
         env:
           VIRUSTOTAL_API_KEY: ${{ secrets.VIRUSTOTAL_API_KEY }}
+          VT_MAX_EFFECTIVE_MALICIOUS: "4"
+          VT_MAX_EFFECTIVE_SUSPICIOUS: "7"
         run: |
           set -euo pipefail
           if [ -z "${VIRUSTOTAL_API_KEY:-}" ]; then
             echo "VIRUSTOTAL_API_KEY is not set"
             exit 1
           fi
+          max_effective_malicious="${VT_MAX_EFFECTIVE_MALICIOUS:-2}"
+          max_effective_suspicious="${VT_MAX_EFFECTIVE_SUSPICIOUS:-4}"
+          if ! [[ "$max_effective_malicious" =~ ^[0-9]+$ ]]; then
+            echo "VT_MAX_EFFECTIVE_MALICIOUS must be a non-negative integer" >&2
+            exit 1
+          fi
+          if ! [[ "$max_effective_suspicious" =~ ^[0-9]+$ ]]; then
+            echo "VT_MAX_EFFECTIVE_SUSPICIOUS must be a non-negative integer" >&2
+            exit 1
+          fi
+          echo "VirusTotal effective threshold: malicious<=${max_effective_malicious}, suspicious<=${max_effective_suspicious}"
 
           # Public VT API free tier is 4 requests/minute.
           # Use a hard minimum interval to stay below that limit on rolling windows.
@@ -933,6 +946,7 @@ jobs:
           ids=()
           statuses=()
           analyses=()
+          threshold_violations=()
 
           for file in "${files[@]}"; do
             name="$(basename "$file")"
@@ -1058,6 +1072,11 @@ jobs:
               --argjson fp_suspicious "$fp_suspicious" '
                 .malicious = (((.malicious // 0) - $fp_malicious) | if . < 0 then 0 else . end)
                 | .suspicious = (((.suspicious // 0) - $fp_suspicious) | if . < 0 then 0 else . end)')
+            effective_malicious=$(echo "$effective_stats" | jq -r '.malicious // 0')
+            effective_suspicious=$(echo "$effective_stats" | jq -r '.suspicious // 0')
+            if [ "$effective_malicious" -gt "$max_effective_malicious" ] || [ "$effective_suspicious" -gt "$max_effective_suspicious" ]; then
+              threshold_violations+=("${name} (effective malicious=${effective_malicious}, suspicious=${effective_suspicious})")
+            fi
 
             json=$(jq \
               --arg name "$name" \
@@ -1086,9 +1105,21 @@ jobs:
               }]' <<< "$json")
           done
 
+          json=$(jq \
+            --argjson max_effective_malicious "$max_effective_malicious" \
+            --argjson max_effective_suspicious "$max_effective_suspicious" \
+            '.policy = {
+              max_effective_malicious: $max_effective_malicious,
+              max_effective_suspicious: $max_effective_suspicious
+            }' <<< "$json")
           echo "$json" > dist_out/virustotal-results.json
           python python/tools/format_vt_results.py dist_out/virustotal-results.json dist_out/virustotal-results.txt
           cp dist_out/virustotal-results.txt dist_out/results.txt
+          if [ "${#threshold_violations[@]}" -gt 0 ]; then
+            echo "VirusTotal threshold exceeded for:"
+            printf ' - %s\n' "${threshold_violations[@]}"
+            exit 1
+          fi
 
       - name: Upload VirusTotal results
         uses: softprops/action-gh-release@v2

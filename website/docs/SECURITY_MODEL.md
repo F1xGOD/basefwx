@@ -14,6 +14,16 @@ BASEFWX is built around authenticated encryption with optional post-quantum mast
 - Master wrapping: ML-KEM-768 shared secret -> HKDF-SHA256
 - Password KDF: Argon2id when available, PBKDF2 fallback
 
+## Version Support Policy
+
+BaseFWX uses a strict single-version maintenance model:
+
+- Only the latest published release is supported.
+- When a new release is published, all previous releases are immediately end-of-life.
+- Older releases receive no maintenance (no security fixes, no bug fixes, no compatibility updates).
+
+For this project, "upgrade to latest" is a security requirement, not a convenience recommendation.
+
 ## Key Paths
 
 Two independent unlock paths are supported:

@@ -161,17 +161,17 @@ jobs:
       matrix:
         include:
           - runner: ubuntu-latest
-            container_image: debian:12
-            arch: amd64
-            output: basefwx-linux-amd64
-          - runner: ubuntu-latest
             container_image: debian:10
             arch: amd64
-            output: basefwx-linux-amd64-legacy
+            output: basefwx-linux-amd64
+            legacy_compat: true
+            cache_tag: debian10
           - runner: ubuntu-24.04-arm
             container_image: debian:12
             arch: arm64
             output: basefwx-linux-arm64
+            legacy_compat: false
+            cache_tag: debian12
     permissions:
       contents: read
     steps:
@@ -183,7 +183,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: /usr/local
-          key: liboqs-0.11.0-static-debian12-${{ runner.arch }}
+          key: liboqs-0.11.0-static-${{ matrix.cache_tag }}-${{ runner.arch }}
 
       - name: Install system deps
         run: |
@@ -269,14 +269,14 @@ jobs:
               exit 1
             fi
           done
-          # For legacy builds (Debian 10) build OpenSSL 3 locally so headers like
+          # For compatibility builds (Debian 10) build OpenSSL 3 locally so headers like
           # <openssl/core_names.h> are available even on older base images.
           openssl_crypto_lib="${libdir}/libcrypto.a"
           openssl_ssl_lib="${libdir}/libssl.a"
           openssl_root=""
           openssl_include=""
-          if [[ "${{ matrix.output }}" == *"legacy"* ]]; then
-            echo "Building OpenSSL 3 for legacy build"
+          if [[ "${{ matrix.legacy_compat }}" == "true" ]]; then
+            echo "Building OpenSSL 3 for Debian 10+ compatibility build"
             OPENSSL_VER="3.0.11"
             wget -qO /tmp/openssl.tar.gz "https://www.openssl.org/source/openssl-${OPENSSL_VER}.tar.gz"
             tar -xzf /tmp/openssl.tar.gz -C /tmp
@@ -292,10 +292,10 @@ jobs:
             openssl_include="/usr/local/openssl-3/include"
             export CMAKE_PREFIX_PATH="/usr/local/openssl-3:${CMAKE_PREFIX_PATH:-}"
           fi
-          # Allow legacy builds to opt out of LTO/native flags for wider runtime compatibility
+          # Allow Debian 10 compatibility build to opt out of LTO/native flags for wider runtime compatibility
           extra_args=()
-          if [[ "${{ matrix.output }}" == *"legacy"* ]]; then
-            echo "Configuring legacy-friendly build flags"
+          if [[ "${{ matrix.legacy_compat }}" == "true" ]]; then
+            echo "Configuring compatibility-friendly build flags"
             extra_args+=( -DCMAKE_INTERPROCEDURAL_OPTIMIZATION_RELEASE=OFF )
             extra_args+=( -DBASEFWX_NATIVE_OPT=OFF )
             extra_args+=( "-DCMAKE_CXX_FLAGS=-Wno-deprecated-declarations -O2" )
@@ -357,15 +357,12 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - debian: "9"
-            allow_failure: true
-            artifact: basefwx-linux-amd64-legacy
           - debian: "10"
-            allow_failure: true
-            artifact: basefwx-linux-amd64-legacy
+            allow_failure: false
+            artifact: basefwx-linux-amd64
           - debian: "11"
             allow_failure: false
-            artifact: basefwx-linux-amd64-legacy
+            artifact: basefwx-linux-amd64
           - debian: "12"
             allow_failure: false
             artifact: basefwx-linux-amd64
@@ -393,7 +390,7 @@ jobs:
             --platform linux/amd64 \
             -v "$PWD/dist:/dist:ro" \
             "debian:${{ matrix.debian }}" \
-            bash -lc '
+            bash -c '
               set -euo pipefail
               export DEBIAN_FRONTEND=noninteractive
               if ! apt-get update; then

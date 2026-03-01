@@ -83,6 +83,8 @@ Notes:
 - `kFMe` auto-detects source type (audio -> PNG, non-audio -> WAV).
 - `kFMd` strictly decodes BaseFWX carriers only.
 - `kFAe`/`kFAd` are deprecated compatibility aliases.
+- Support policy is single-version: only the latest release is maintained; all older releases are immediately unsupported.
+- Python `n10` is optimized for large payloads, but C++/Java remain faster in heavy benchmark runs.
 - Optional kFM/kFA acceleration:
   - `BASEFWX_KFM_ACCEL=auto|cuda|cpu` (default `auto`)
   - `BASEFWX_KFM_ACCEL_MIN_BYTES=<bytes>` (default `1048576`, auto mode threshold)

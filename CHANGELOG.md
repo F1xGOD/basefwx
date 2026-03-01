@@ -1,5 +1,25 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+- Python live stream (`fwxAES_live_*`) internals were optimized to reduce allocation pressure:
+  - Reused AES-GCM contexts for session frame operations.
+  - Replaced repeated front-buffer deletion with offset+compact buffering in live decrypt paths.
+- C++ live stream internals were optimized for lower-copy operation:
+  - Switched data-frame AES-GCM operations to `*Into` APIs where possible.
+  - Replaced repeated `vector.erase(begin, ...)` usage with offset+compact buffering.
+- Java live stream internals were optimized similarly (slice-based updates and lower-copy decrypt buffering).
+- Python `n10` codec hot paths were optimized for large payloads:
+  - Cached per-index transform offsets across runs.
+  - Reduced conversion/parse overhead in encode/decode loops.
+- Python `b1024` hot path was optimized by removing large intermediate `str -> bytes` conversions in codec packing.
+- Java kFM PNG carrier paths (`kFAe`/PNG decode) were optimized with byte-raster fast paths to reduce per-pixel overhead.
+
+### Notes
+- Benchmarks remain expected to favor compiled runtimes (C++/Java) for very large `n10` workloads, but Python steady-state performance improved.
+- Documentation was synchronized across GitHub and website pages for support policy and benchmark interpretation.
+
 ## [v3.6.2] - 2026-02-22
 
 Compare: <https://github.com/F1xGOD/basefwx/compare/v3.6.1...v3.6.2>

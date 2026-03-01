@@ -40,9 +40,10 @@ public:
     void Finalize();
 
 private:
-    void ParseHeader(const Bytes& body);
-    Bytes DecryptDataFrame(std::uint64_t sequence, const Bytes& body) const;
-    void DecryptFinFrame(std::uint64_t sequence, const Bytes& body);
+    void ParseHeader(const std::uint8_t* body, std::size_t body_len);
+    Bytes DecryptDataFrame(std::uint64_t sequence, const std::uint8_t* body, std::size_t body_len) const;
+    void DecryptFinFrame(std::uint64_t sequence, const std::uint8_t* body, std::size_t body_len);
+    void CompactBufferIfNeeded(std::size_t incoming_len = 0);
 
     std::string password_;
     bool use_master_ = true;
@@ -52,6 +53,7 @@ private:
     Bytes key_;
     Bytes nonce_prefix_;
     Bytes buffer_;
+    std::size_t buffer_offset_ = 0;
 };
 
 std::vector<Bytes> EncryptChunks(const std::vector<Bytes>& chunks,

@@ -166,13 +166,6 @@ Bytes BuildSessionHeader(std::uint8_t key_mode,
     return body;
 }
 
-void AppendBytes(Bytes& dst, const std::uint8_t* data, std::size_t len) {
-    if (data == nullptr || len == 0) {
-        return;
-    }
-    dst.insert(dst.end(), data, data + len);
-}
-
 }  // namespace
 
 LiveEncryptor::LiveEncryptor(const std::string& password, bool use_master)
@@ -256,13 +249,22 @@ Bytes LiveEncryptor::Update(const std::uint8_t* data, std::size_t len) {
     if (len > std::numeric_limits<std::uint32_t>::max()) {
         throw std::runtime_error("Live frame plaintext too large");
     }
-    Bytes payload(data, data + len);
     Bytes nonce = NonceForSequence(nonce_prefix_, sequence_);
     Bytes aad = LiveAad(basefwx::constants::kLiveFrameTypeData, sequence_, static_cast<std::uint32_t>(len));
-    Bytes ct = basefwx::crypto::AesGcmEncryptWithIv(key_, nonce, payload, aad);
-    Bytes body(4 + ct.size());
+    Bytes body(4 + len + basefwx::constants::kAeadTagLen);
     WriteU32Be(body.data(), static_cast<std::uint32_t>(len));
-    std::memcpy(body.data() + 4, ct.data(), ct.size());
+    std::size_t written = basefwx::crypto::AesGcmEncryptWithIvInto(
+        key_,
+        nonce,
+        data,
+        len,
+        aad,
+        body.data() + 4,
+        body.size() - 4
+    );
+    if (written != len + basefwx::constants::kAeadTagLen) {
+        body.resize(4 + written);
+    }
     Bytes frame = PackFrame(basefwx::constants::kLiveFrameTypeData, sequence_, body);
     sequence_ += 1;
     return frame;
@@ -288,41 +290,38 @@ LiveDecryptor::LiveDecryptor(const std::string& password, bool use_master)
     : password_(basefwx::ResolvePassword(password)),
       use_master_(use_master) {}
 
-void LiveDecryptor::ParseHeader(const Bytes& body) {
-    if (body.size() < basefwx::constants::kLiveHeaderFixedLen) {
+void LiveDecryptor::ParseHeader(const std::uint8_t* body, std::size_t body_len) {
+    if (body == nullptr || body_len < basefwx::constants::kLiveHeaderFixedLen) {
         throw std::runtime_error("Truncated live stream header");
     }
     std::uint8_t key_mode = body[0];
     std::uint8_t salt_len = body[1];
     std::uint8_t nonce_len = body[2];
-    std::uint32_t key_header_len = ReadU32Be(body.data() + 4);
-    std::uint32_t iters = ReadU32Be(body.data() + 8);
+    std::uint32_t key_header_len = ReadU32Be(body + 4);
+    std::uint32_t iters = ReadU32Be(body + 8);
 
     std::size_t needed = basefwx::constants::kLiveHeaderFixedLen
         + static_cast<std::size_t>(key_header_len)
         + static_cast<std::size_t>(salt_len)
         + static_cast<std::size_t>(nonce_len);
-    if (body.size() != needed) {
+    if (body_len != needed) {
         throw std::runtime_error("Invalid live stream header length");
     }
 
     std::size_t offset = basefwx::constants::kLiveHeaderFixedLen;
     Bytes key_header;
     if (key_header_len > 0) {
-        key_header.assign(body.begin() + static_cast<std::ptrdiff_t>(offset),
-                          body.begin() + static_cast<std::ptrdiff_t>(offset + key_header_len));
+        key_header.assign(body + offset, body + offset + key_header_len);
         offset += key_header_len;
     }
     Bytes salt;
     if (salt_len > 0) {
-        salt.assign(body.begin() + static_cast<std::ptrdiff_t>(offset),
-                    body.begin() + static_cast<std::ptrdiff_t>(offset + salt_len));
+        salt.assign(body + offset, body + offset + salt_len);
         offset += salt_len;
     }
     Bytes nonce_prefix;
     if (nonce_len > 0) {
-        nonce_prefix.assign(body.begin() + static_cast<std::ptrdiff_t>(offset),
-                            body.begin() + static_cast<std::ptrdiff_t>(offset + nonce_len));
+        nonce_prefix.assign(body + offset, body + offset + nonce_len);
     }
     if (nonce_prefix.size() != basefwx::constants::kLiveNoncePrefixLen) {
         throw std::runtime_error("Invalid live stream nonce prefix");
@@ -364,39 +363,68 @@ void LiveDecryptor::ParseHeader(const Bytes& body) {
     expected_sequence_ = 1;
 }
 
-Bytes LiveDecryptor::DecryptDataFrame(std::uint64_t sequence, const Bytes& body) const {
-    if (body.size() < 4 + basefwx::constants::kAeadTagLen) {
+Bytes LiveDecryptor::DecryptDataFrame(std::uint64_t sequence,
+                                      const std::uint8_t* body,
+                                      std::size_t body_len) const {
+    if (body == nullptr || body_len < 4 + basefwx::constants::kAeadTagLen) {
         throw std::runtime_error("Truncated live data frame");
     }
-    std::uint32_t plain_len = ReadU32Be(body.data());
-    Bytes ct(body.begin() + 4, body.end());
+    std::uint32_t plain_len = ReadU32Be(body);
+    const std::uint8_t* ct = body + 4;
+    std::size_t ct_len = body_len - 4;
+    std::size_t expected_plain = ct_len - basefwx::constants::kAeadTagLen;
+    if (plain_len != expected_plain) {
+        throw std::runtime_error("Live frame length mismatch");
+    }
     Bytes nonce = NonceForSequence(nonce_prefix_, sequence);
     Bytes aad = LiveAad(basefwx::constants::kLiveFrameTypeData, sequence, plain_len);
-    Bytes plain;
+    Bytes plain(expected_plain);
     try {
-        plain = basefwx::crypto::AesGcmDecryptWithIv(key_, nonce, ct, aad);
+        std::size_t written = basefwx::crypto::AesGcmDecryptWithIvInto(
+            key_,
+            nonce,
+            ct,
+            ct_len,
+            aad,
+            plain.data(),
+            plain.size()
+        );
+        if (written != expected_plain) {
+            throw std::runtime_error("Live frame length mismatch");
+        }
     } catch (const std::exception&) {
         throw std::runtime_error("Live frame authentication failed");
-    }
-    if (plain.size() != plain_len) {
-        throw std::runtime_error("Live frame length mismatch");
     }
     return plain;
 }
 
-void LiveDecryptor::DecryptFinFrame(std::uint64_t sequence, const Bytes& body) {
-    if (body.size() < basefwx::constants::kAeadTagLen) {
+void LiveDecryptor::DecryptFinFrame(std::uint64_t sequence,
+                                    const std::uint8_t* body,
+                                    std::size_t body_len) {
+    if (body == nullptr || body_len < basefwx::constants::kAeadTagLen) {
         throw std::runtime_error("Truncated live FIN frame");
     }
     Bytes nonce = NonceForSequence(nonce_prefix_, sequence);
     Bytes aad = LiveAad(basefwx::constants::kLiveFrameTypeFin, sequence, 0);
-    Bytes plain;
+    std::size_t expected_plain = body_len - basefwx::constants::kAeadTagLen;
+    Bytes plain(expected_plain);
+    std::uint8_t dummy = 0;
+    std::uint8_t* out = expected_plain > 0 ? plain.data() : &dummy;
+    std::size_t written = 0;
     try {
-        plain = basefwx::crypto::AesGcmDecryptWithIv(key_, nonce, body, aad);
+        written = basefwx::crypto::AesGcmDecryptWithIvInto(
+            key_,
+            nonce,
+            body,
+            body_len,
+            aad,
+            out,
+            expected_plain
+        );
     } catch (const std::exception&) {
         throw std::runtime_error("Live FIN authentication failed");
     }
-    if (!plain.empty()) {
+    if (written != 0) {
         throw std::runtime_error("Live FIN frame carries unexpected payload");
     }
     finished_ = true;
@@ -406,15 +434,44 @@ std::vector<Bytes> LiveDecryptor::Update(const Bytes& data) {
     return Update(data.data(), data.size());
 }
 
+void LiveDecryptor::CompactBufferIfNeeded(std::size_t incoming_len) {
+    if (buffer_offset_ == 0) {
+        return;
+    }
+    const std::size_t unread = buffer_.size() - buffer_offset_;
+    const bool append_overflow = incoming_len > (buffer_.capacity() - buffer_.size());
+    const bool compact_helps_space = unread + incoming_len <= buffer_.capacity();
+    const bool fragmented = buffer_offset_ >= (buffer_.size() / 2);
+    if (!(fragmented || (append_overflow && compact_helps_space))) {
+        return;
+    }
+    if (unread > 0) {
+        std::memmove(buffer_.data(), buffer_.data() + buffer_offset_, unread);
+    }
+    buffer_.resize(unread);
+    buffer_offset_ = 0;
+}
+
 std::vector<Bytes> LiveDecryptor::Update(const std::uint8_t* data, std::size_t len) {
     if (finished_ && len > 0) {
         throw std::runtime_error("Live stream already finalized");
     }
-    AppendBytes(buffer_, data, len);
+    if (buffer_offset_ == buffer_.size()) {
+        buffer_.clear();
+        buffer_offset_ = 0;
+    }
+    CompactBufferIfNeeded(len);
+    if (data != nullptr && len > 0) {
+        if (buffer_.capacity() < buffer_.size() + len) {
+            buffer_.reserve(buffer_.size() + len);
+        }
+        buffer_.insert(buffer_.end(), data, data + len);
+    }
 
     std::vector<Bytes> outputs;
-    while (buffer_.size() >= basefwx::constants::kLiveFrameHeaderLen) {
-        const std::uint8_t* head = buffer_.data();
+    std::size_t buffered = buffer_.size() - buffer_offset_;
+    while (buffered >= basefwx::constants::kLiveFrameHeaderLen) {
+        const std::uint8_t* head = buffer_.data() + static_cast<std::ptrdiff_t>(buffer_offset_);
         if (std::memcmp(head,
                         basefwx::constants::kLiveFrameMagic.data(),
                         basefwx::constants::kLiveFrameMagic.size()) != 0) {
@@ -431,37 +488,44 @@ std::vector<Bytes> LiveDecryptor::Update(const std::uint8_t* data, std::size_t l
             throw std::runtime_error("Live frame too large");
         }
         std::size_t frame_len = basefwx::constants::kLiveFrameHeaderLen + static_cast<std::size_t>(body_len);
-        if (buffer_.size() < frame_len) {
+        if (buffered < frame_len) {
             break;
         }
-        Bytes body;
-        if (body_len > 0) {
-            body.assign(buffer_.begin() + static_cast<std::ptrdiff_t>(basefwx::constants::kLiveFrameHeaderLen),
-                        buffer_.begin() + static_cast<std::ptrdiff_t>(frame_len));
-        }
-        buffer_.erase(buffer_.begin(), buffer_.begin() + static_cast<std::ptrdiff_t>(frame_len));
+        const std::uint8_t* body = head + basefwx::constants::kLiveFrameHeaderLen;
 
         if (!started_) {
             if (frame_type != basefwx::constants::kLiveFrameTypeHeader || sequence != 0) {
                 throw std::runtime_error("Live stream must start with header frame");
             }
-            ParseHeader(body);
-            continue;
-        }
-        if (sequence != expected_sequence_) {
-            throw std::runtime_error("Live frame sequence mismatch");
-        }
-        if (frame_type == basefwx::constants::kLiveFrameTypeData) {
-            Bytes plain = DecryptDataFrame(sequence, body);
-            if (!plain.empty()) {
-                outputs.push_back(std::move(plain));
-            }
-        } else if (frame_type == basefwx::constants::kLiveFrameTypeFin) {
-            DecryptFinFrame(sequence, body);
+            ParseHeader(body, static_cast<std::size_t>(body_len));
         } else {
-            throw std::runtime_error("Unexpected live frame type");
+            if (sequence != expected_sequence_) {
+                throw std::runtime_error("Live frame sequence mismatch");
+            }
+            if (frame_type == basefwx::constants::kLiveFrameTypeData) {
+                Bytes plain = DecryptDataFrame(sequence, body, static_cast<std::size_t>(body_len));
+                if (!plain.empty()) {
+                    outputs.push_back(std::move(plain));
+                }
+            } else if (frame_type == basefwx::constants::kLiveFrameTypeFin) {
+                DecryptFinFrame(sequence, body, static_cast<std::size_t>(body_len));
+            } else {
+                throw std::runtime_error("Unexpected live frame type");
+            }
+            expected_sequence_ += 1;
         }
-        expected_sequence_ += 1;
+        buffer_offset_ += frame_len;
+        buffered -= frame_len;
+        if (buffer_offset_ == buffer_.size()) {
+            buffer_.clear();
+            buffer_offset_ = 0;
+            buffered = 0;
+            break;
+        }
+        if (buffer_offset_ >= (1u << 20)) {
+            CompactBufferIfNeeded(0);
+            buffered = buffer_.size() - buffer_offset_;
+        }
     }
     return outputs;
 }
@@ -473,7 +537,7 @@ void LiveDecryptor::Finalize() {
     if (!finished_) {
         throw std::runtime_error("Live stream ended without FIN frame");
     }
-    if (!buffer_.empty()) {
+    if (buffer_.size() > buffer_offset_) {
         throw std::runtime_error("Trailing bytes after live stream FIN");
     }
 }

@@ -1034,61 +1034,31 @@ public final class BaseFwxCli {
                     int iters = benchIters();
                     int workers = benchWorkers();
                     confirmSingleThreadCli(workers);
-                    String name = input.getName();
-                    int dot = name.lastIndexOf('.');
-                    String ext = dot >= 0 ? name.substring(dot) : "";
-                    File[] tempDirs = new File[workers];
-                    File[] encFiles = new File[workers];
-                    File[] decFiles = new File[workers];
-                    try {
-                        for (int i = 0; i < workers; i++) {
-                            try {
-                                tempDirs[i] = Files.createTempDirectory("basefwx-bench-live-" + i).toFile();
-                            } catch (java.io.IOException exc) {
-                                throw new RuntimeException("Failed to create bench temp dir", exc);
-                            }
-                            encFiles[i] = new File(tempDirs[i], "bench.live");
-                            decFiles[i] = new File(tempDirs[i], "bench_dec" + ext);
-                        }
-                        BenchWorker worker = (idx) -> {
-                            File encFile = encFiles[idx];
-                            File decFile = decFiles[idx];
-                            try (java.io.FileInputStream src = new java.io.FileInputStream(input);
-                                 java.io.FileOutputStream encOut = new java.io.FileOutputStream(encFile)) {
-                                BaseFwx.fwxAesLiveEncryptStream(src, encOut, benchPassFinal, useMasterFlag);
-                            } catch (java.io.IOException exc) {
-                                throw new RuntimeException("bench-live encrypt failed", exc);
-                            }
-                            try (java.io.FileInputStream encIn = new java.io.FileInputStream(encFile);
-                                 java.io.FileOutputStream decOut = new java.io.FileOutputStream(decFile)) {
-                                BaseFwx.fwxAesLiveDecryptStream(encIn, decOut, benchPassFinal, useMasterFlag);
-                            } catch (java.io.IOException exc) {
-                                throw new RuntimeException("bench-live decrypt failed", exc);
-                            }
-                            long size = decFile.length();
+                    final byte[] data = readAllBytes(input);
+                    BenchWorker worker = (idx) -> {
+                        try {
+                            java.io.ByteArrayInputStream src = new java.io.ByteArrayInputStream(data);
+                            java.io.ByteArrayOutputStream encOut = new java.io.ByteArrayOutputStream(
+                                data.length + (data.length / 16) + 512
+                            );
+                            BaseFwx.fwxAesLiveEncryptStream(src, encOut, benchPassFinal, useMasterFlag);
+                            byte[] encrypted = encOut.toByteArray();
+
+                            java.io.ByteArrayInputStream encIn = new java.io.ByteArrayInputStream(encrypted);
+                            java.io.ByteArrayOutputStream decOut = new java.io.ByteArrayOutputStream(data.length);
+                            BaseFwx.fwxAesLiveDecryptStream(encIn, decOut, benchPassFinal, useMasterFlag);
+                            long size = decOut.size();
                             BENCH_SINK ^= (int) size;
-                            encFile.delete();
-                            decFile.delete();
                             return size;
-                        };
-                        long ns = workers > 1
-                            ? benchParallelMedian(warmup, iters, workers, worker)
-                            : benchMedian(warmup, iters, () -> worker.run(0));
-                        System.out.println("BENCH_NS=" + ns);
-                        return;
-                    } finally {
-                        for (int i = 0; i < workers; i++) {
-                            if (encFiles[i] != null) {
-                                encFiles[i].delete();
-                            }
-                            if (decFiles[i] != null) {
-                                decFiles[i].delete();
-                            }
-                            if (tempDirs[i] != null) {
-                                tempDirs[i].delete();
-                            }
+                        } catch (RuntimeException exc) {
+                            throw new RuntimeException("bench-live roundtrip failed", exc);
                         }
-                    }
+                    };
+                    long ns = workers > 1
+                        ? benchParallelMedian(warmup, iters, workers, worker)
+                        : benchMedian(warmup, iters, () -> worker.run(0));
+                    System.out.println("BENCH_NS=" + ns);
+                    return;
                 }
                 case "bench-b512file": {
                     if (argc < 3) {

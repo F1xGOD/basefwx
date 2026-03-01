@@ -36,6 +36,8 @@ All benchmarks use **warm-up iterations + median measurement** to ensure fair co
 
 **Why this is fair**: Each language reports the time a real user would experience after initialization is complete. JVM startup is a one-time cost; the measured times represent sustained operation.
 
+For `n10` specifically, Python now caches internal transform offsets across runs; first-run timing may be slower than steady-state medians in repeated benchmark loops.
+
 ## Modes
 
 - `--fast` reduces fixture sizes and skips wrong-password and cross-compat tests.

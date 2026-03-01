@@ -12,6 +12,7 @@ if hasattr(_sys_module, "set_int_max_str_digits"):
 
 class basefwx:
     import base64
+    import array
     import concurrent.futures
     import enum
     import threading
@@ -217,6 +218,8 @@ class basefwx:
     N10_HEADER_DIGITS = 28
     N10_MASK64 = (1 << 64) - 1
     N10_MUL_INV = pow(N10_MUL, -1, N10_MOD)
+    N10_OFFSET_XOR = 0xA5A5F0F01234ABCD
+    N10_OFFSET_CACHE = array.array("Q")
     KFM_MAGIC = b"KFM!"
     KFM_VERSION = 1
     KFM_MODE_IMAGE_AUDIO = 1
@@ -421,6 +424,9 @@ class basefwx:
     }
     _CODE_TRANSLATION: typing.ClassVar[dict[int, str]] = (lambda m: {ord(k): v for k, v in m.items()})(_CODE_MAP)
     _CODE_TRANSLATION_TABLE: typing.ClassVar[tuple[str, ...]] = (lambda t: tuple(t.get(i, chr(i)) for i in range(256)))(_CODE_TRANSLATION)
+    _CODE_TRANSLATION_TABLE_BYTES: typing.ClassVar[tuple[bytes, ...]] = tuple(
+        token.encode("utf-8") for token in _CODE_TRANSLATION_TABLE
+    )
     _DECODE_MAP: typing.ClassVar[dict[str, str]] = {v: k for k, v in _CODE_MAP.items()}
     _DECODE_PATTERN = _re_module.compile(
         "|".join(
@@ -447,6 +453,8 @@ class basefwx:
     # Threshold for _mdcode_ascii optimization (tuned via microbenchmarks)
     # List comprehension is faster than generator for inputs > 500 chars
     _MDCODE_ASCII_THRESHOLD = 500
+    # Threshold for byte-path code translation (list join beats generator above this size)
+    _CODE_BYTES_ASCII_THRESHOLD = 500
 
     @staticmethod
     def _fast_b32hexencode(data: bytes) -> bytes:
@@ -4248,7 +4256,29 @@ class basefwx:
 
     @staticmethod
     def _n10_offset(index: int) -> int:
-        return basefwx._n10_mix64(index ^ 0xA5A5F0F01234ABCD) % basefwx.N10_MOD
+        if index < 0:
+            raise ValueError("n10 index out of range")
+        basefwx._n10_ensure_offsets(index)
+        return int(basefwx.N10_OFFSET_CACHE[index])
+
+    @staticmethod
+    def _n10_ensure_offsets(max_index: int) -> None:
+        if max_index < 0:
+            return
+        cache = basefwx.N10_OFFSET_CACHE
+        current = len(cache)
+        if current > max_index:
+            return
+        mask64 = basefwx.N10_MASK64
+        n10_mod = basefwx.N10_MOD
+        seed = basefwx.N10_OFFSET_XOR
+        for index in range(current, max_index + 1):
+            value = (index ^ seed) & mask64
+            value = (value + 0x9E3779B97F4A7C15) & mask64
+            value = ((value ^ (value >> 30)) * 0xBF58476D1CE4E5B9) & mask64
+            value = ((value ^ (value >> 27)) * 0x94D049BB133111EB) & mask64
+            value = (value ^ (value >> 31)) & mask64
+            cache.append(value % n10_mod)
 
     @staticmethod
     def _n10_transform(value: int, index: int) -> int:
@@ -4270,9 +4300,10 @@ class basefwx:
         part = payload[offset:offset + 10]
         if len(part) != 10:
             raise ValueError("n10 payload truncated")
-        if not part.isdigit():
+        try:
+            return int(part)
+        except ValueError:
             raise ValueError("n10 payload must contain only digits")
-        return int(part)
 
     @staticmethod
     def _n10_fnv1a32(data: bytes) -> int:
@@ -4291,33 +4322,58 @@ class basefwx:
     @staticmethod
     def n10encode_bytes(data):
         if isinstance(data, memoryview):
-            raw = data.tobytes()
-        elif isinstance(data, bytearray):
-            raw = bytes(data)
-        elif isinstance(data, bytes):
-            raw = data
+            raw = data.cast("B")
+        elif isinstance(data, (bytearray, bytes)):
+            raw = memoryview(data).cast("B")
         else:
             raise TypeError("n10encode_bytes expects bytes-like input")
 
-        if len(raw) >= basefwx.N10_MOD:
+        raw_len = raw.nbytes
+        if raw_len >= basefwx.N10_MOD:
             raise ValueError("n10 input is too large")
 
-        block_count = (len(raw) + 3) // 4
-        parts = [
-            basefwx.N10_MAGIC,
-            basefwx.N10_VERSION,
-            f"{basefwx._n10_transform(len(raw), 0):010d}",
-            f"{basefwx._n10_transform(basefwx._n10_fnv1a32(raw), 1):010d}",
-        ]
+        block_count = (raw_len + 3) // 4
+        basefwx._n10_ensure_offsets(block_count + 1)
+        offsets = basefwx.N10_OFFSET_CACHE
+        n10_mod = basefwx.N10_MOD
+        n10_mul = basefwx.N10_MUL
+        n10_add = basefwx.N10_ADD
 
-        offset = 0
-        for block in range(block_count):
+        transformed_len = ((n10_mul * ((raw_len + offsets[0]) % n10_mod)) + n10_add) % n10_mod
+        transformed_checksum = (
+            (n10_mul * ((basefwx._n10_fnv1a32(raw) + offsets[1]) % n10_mod)) + n10_add
+        ) % n10_mod
+
+        parts = [""] * (block_count + 4)
+        parts[0] = basefwx.N10_MAGIC
+        parts[1] = basefwx.N10_VERSION
+        parts[2] = f"{transformed_len:010d}"
+        parts[3] = f"{transformed_checksum:010d}"
+
+        full_blocks = raw_len // 4
+        for block in range(full_blocks):
+            raw_offset = block * 4
+            word = (
+                (raw[raw_offset] << 24)
+                | (raw[raw_offset + 1] << 16)
+                | (raw[raw_offset + 2] << 8)
+                | raw[raw_offset + 3]
+            )
+            transformed = ((n10_mul * ((word + offsets[block + 2]) % n10_mod)) + n10_add) % n10_mod
+            parts[block + 4] = f"{transformed:010d}"
+
+        tail_len = raw_len - (full_blocks * 4)
+        if tail_len:
+            raw_offset = full_blocks * 4
             word = 0
-            chunk = raw[offset:offset + 4]
-            for idx, byte in enumerate(chunk):
-                word |= byte << (24 - (idx * 8))
-            parts.append(f"{basefwx._n10_transform(word, block + 2):010d}")
-            offset += len(chunk)
+            if tail_len >= 1:
+                word |= raw[raw_offset] << 24
+            if tail_len >= 2:
+                word |= raw[raw_offset + 1] << 16
+            if tail_len >= 3:
+                word |= raw[raw_offset + 2] << 8
+            transformed = ((n10_mul * ((word + offsets[full_blocks + 2]) % n10_mod)) + n10_add) % n10_mod
+            parts[full_blocks + 4] = f"{transformed:010d}"
 
         return "".join(parts)
 
@@ -4329,17 +4385,44 @@ class basefwx:
     def n10decode_bytes(digits: str):
         if not isinstance(digits, str):
             raise TypeError("n10decode expects string digits")
-        payload = digits.strip()
+        start = 0
+        end = len(digits)
+        while start < end and digits[start].isspace():
+            start += 1
+        while end > start and digits[end - 1].isspace():
+            end -= 1
+        payload = digits[start:end] if (start != 0 or end != len(digits)) else digits
         if len(payload) < basefwx.N10_HEADER_DIGITS:
             raise ValueError("n10 payload is too short")
         if payload[:6] != basefwx.N10_MAGIC or payload[6:8] != basefwx.N10_VERSION:
             raise ValueError("n10 header mismatch")
 
-        payload_len = basefwx._n10_inverse_transform(basefwx._n10_parse_fixed10(payload, 8), 0)
+        payload_len_encoded = basefwx._n10_parse_fixed10(payload, 8)
+        checksum_encoded = basefwx._n10_parse_fixed10(payload, 18)
+
+        n10_mod = basefwx.N10_MOD
+        n10_add = basefwx.N10_ADD
+        n10_mul_inv = basefwx.N10_MUL_INV
+        basefwx._n10_ensure_offsets(1)
+        offsets = basefwx.N10_OFFSET_CACHE
+
+        payload_len_step = payload_len_encoded - n10_add
+        if payload_len_step < 0:
+            payload_len_step += n10_mod
+        payload_len_mixed = (payload_len_step * n10_mul_inv) % n10_mod
+        payload_len = payload_len_mixed - offsets[0]
+        if payload_len < 0:
+            payload_len += n10_mod
         if payload_len >= basefwx.N10_MOD:
             raise ValueError("n10 decoded length is invalid")
 
-        checksum_expected = basefwx._n10_inverse_transform(basefwx._n10_parse_fixed10(payload, 18), 1)
+        checksum_step = checksum_encoded - n10_add
+        if checksum_step < 0:
+            checksum_step += n10_mod
+        checksum_mixed = (checksum_step * n10_mul_inv) % n10_mod
+        checksum_expected = checksum_mixed - offsets[1]
+        if checksum_expected < 0:
+            checksum_expected += n10_mod
         if checksum_expected > 0xFFFFFFFF:
             raise ValueError("n10 checksum is invalid")
 
@@ -4348,11 +4431,20 @@ class basefwx:
         if len(payload) != expected_digits:
             raise ValueError("n10 payload length mismatch")
 
+        basefwx._n10_ensure_offsets(block_count + 1)
+        offsets = basefwx.N10_OFFSET_CACHE
         out = bytearray(block_count * 4)
         in_offset = basefwx.N10_HEADER_DIGITS
         for block in range(block_count):
-            decoded = basefwx._n10_inverse_transform(basefwx._n10_parse_fixed10(payload, in_offset), block + 2)
+            encoded = basefwx._n10_parse_fixed10(payload, in_offset)
             in_offset += 10
+            step = encoded - n10_add
+            if step < 0:
+                step += n10_mod
+            mixed = (step * n10_mul_inv) % n10_mod
+            decoded = mixed - offsets[block + 2]
+            if decoded < 0:
+                decoded += n10_mod
             if decoded > 0xFFFFFFFF:
                 raise ValueError("n10 block out of range")
             out_offset = block * 4
@@ -4361,7 +4453,7 @@ class basefwx:
             out[out_offset + 2] = (decoded >> 8) & 0xFF
             out[out_offset + 3] = decoded & 0xFF
 
-        raw = bytes(out[:payload_len])
+        raw = bytes(memoryview(out)[:payload_len])
         if basefwx._n10_fnv1a32(raw) != checksum_expected:
             raise ValueError("n10 checksum mismatch")
         return raw
@@ -10771,6 +10863,18 @@ class basefwx:
         return chunk.translate(cls._CODE_TRANSLATION)
 
     @classmethod
+    def _code_bytes(cls, string: str) -> bytes:
+        if not string:
+            return b""
+        if not string.isascii():
+            return cls._code_chunk(string).encode("utf-8")
+        data = string.encode("ascii")
+        table = cls._CODE_TRANSLATION_TABLE_BYTES
+        if len(data) > cls._CODE_BYTES_ASCII_THRESHOLD:
+            return b"".join([table[b] for b in data])
+        return b"".join(table[b] for b in data)
+
+    @classmethod
     def code(cls, string: str) -> str:
         if not string:
             return string
@@ -10778,7 +10882,7 @@ class basefwx:
 
     @classmethod
     def fwx256bin(cls, string: str) -> str:
-        raw = cls.code(string).encode('utf-8')
+        raw = cls._code_bytes(string)
         padding_count = cls._b32_padding_count(len(raw))
         # Use fast NumPy encoder for large data
         if cls.np is not None and len(raw) >= cls._B32_FAST_THRESHOLD:
@@ -10791,7 +10895,7 @@ class basefwx:
 
     @classmethod
     def _fwx256bin_bytes(cls, string: str) -> bytes:
-        raw = cls.code(string).encode('utf-8')
+        raw = cls._code_bytes(string)
         padding_count = cls._b32_padding_count(len(raw))
         # Use fast NumPy encoder for large data
         if cls.np is not None and len(raw) >= cls._B32_FAST_THRESHOLD:
@@ -11264,7 +11368,7 @@ class basefwx:
     @classmethod
     def b256encode(cls, data: "basefwx.typing.Union[str, bytes, bytearray, memoryview]") -> str:
         text = cls._coerce_text(data)
-        raw = cls.code(text).encode('utf-8')
+        raw = cls._code_bytes(text)
         # Use fast NumPy encoder for large data
         if cls.np is not None and len(raw) >= cls._B32_FAST_THRESHOLD:
             encoded = cls._fast_b32hexencode(raw).decode('utf-8')

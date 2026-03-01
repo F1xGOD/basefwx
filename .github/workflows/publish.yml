@@ -849,29 +849,23 @@ jobs:
           fi
 
           # Public VT API free tier is 4 requests/minute.
-          # Enforce a strict 4 requests / 65s window.
-          rate_limit_max=4
-          rate_limit_window_sec=65
-          rate_window_start=$(date +%s)
-          rate_window_count=0
+          # Use a hard minimum interval to stay below that limit on rolling windows.
+          min_request_interval_sec=16
+          last_request_ts=0
           vt_rate_limit_wait() {
             local now elapsed sleep_for
             now=$(date +%s)
-            elapsed=$((now - rate_window_start))
-            if [ "$elapsed" -ge "$rate_limit_window_sec" ]; then
-              rate_window_start="$now"
-              rate_window_count=0
-              elapsed=0
-            fi
-            if [ "$rate_window_count" -ge "$rate_limit_max" ]; then
-              sleep_for=$((rate_limit_window_sec - elapsed))
-              if [ "$sleep_for" -gt 0 ]; then
-                sleep "$sleep_for"
+            if [ "$last_request_ts" -gt 0 ]; then
+              elapsed=$((now - last_request_ts))
+              if [ "$elapsed" -lt "$min_request_interval_sec" ]; then
+                sleep_for=$((min_request_interval_sec - elapsed))
+                if [ "$sleep_for" -gt 0 ]; then
+                  sleep "$sleep_for"
+                fi
+                now=$(date +%s)
               fi
-              rate_window_start=$(date +%s)
-              rate_window_count=0
             fi
-            rate_window_count=$((rate_window_count + 1))
+            last_request_ts="$now"
           }
           vt_request() {
             local method="$1"
@@ -885,7 +879,8 @@ jobs:
             body=$(printf '%s' "$response" | sed '$d')
 
             if [ "$http_code" = "429" ]; then
-              sleep 60
+              # Back off longer than one minute and re-apply guardrail.
+              sleep 65
               vt_rate_limit_wait
               response=$(curl -sS -w "\n%{http_code}" --request "$method" "$url" "$@")
               http_code=$(printf '%s' "$response" | tail -n1)
@@ -911,6 +906,18 @@ jobs:
           else
             allowlist_json='{"rules":[]}'
           fi
+          # Normalize allowlist to avoid jq runtime failures from malformed entries.
+          if ! printf '%s' "$allowlist_json" | jq -e 'type == "object"' >/dev/null 2>&1; then
+            echo "Warning: invalid VirusTotal allowlist JSON; ignoring allowlist"
+            allowlist_json='{"rules":[]}'
+          fi
+          allowlist_json="$(printf '%s' "$allowlist_json" | jq -c '
+            if type != "object" then
+              {rules: []}
+            else
+              {rules: ((.rules // []) | if type == "array" then map(select(type == "object")) else [] end)}
+            end
+          ')"
 
           # Scan canonical release artifacts (all supported arches + Java JAR).
           files=(
@@ -1025,13 +1032,16 @@ jobs:
                   | to_entries[]
                   | . as $engine_entry
                   | ($engine_entry.key) as $engine_name
-                  | ($engine_entry.value.result // "") as $result_name
-                  | ($engine_entry.value.category // "") as $category
+                  | ($engine_entry.value) as $engine_value
+                  | select(($engine_value | type) == "object")
+                  | ($engine_value.result // "") as $result_name
+                  | ($engine_value.category // "") as $category
                   | select($category == "malicious" or $category == "suspicious")
                   | ($allowlist.rules // [])[]
+                  | select(type == "object")
                   | select((.engine // "") == $engine_name)
-                  | select(($name | test((.file_regex // ".*"))))
-                  | select(($result_name | test((.result_regex // ".*"); "i")))
+                  | select(($name | try test((.file_regex // ".*")) catch false))
+                  | select(($result_name | try test((.result_regex // ".*"); "i") catch false))
                   | {
                       engine: $engine_name,
                       category: $category,

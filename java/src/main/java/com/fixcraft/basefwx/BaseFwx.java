@@ -24,6 +24,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.zip.CRC32;
 import java.awt.image.BufferedImage;
+import java.awt.image.DataBuffer;
+import java.awt.image.DataBufferByte;
 import java.awt.image.WritableRaster;
 import javax.imageio.ImageIO;
 import javax.crypto.AEADBadTagException;
@@ -4096,23 +4098,42 @@ public final class BaseFwx {
         BufferedImage image;
         if (bwMode) {
             image = new BufferedImage(width, height, BufferedImage.TYPE_BYTE_GRAY);
-            WritableRaster imageRaster = image.getRaster();
-            int idx = 0;
-            for (int y = 0; y < height; y++) {
-                for (int x = 0; x < width; x++) {
-                    int v = raster[idx++] & 0xFF;
-                    imageRaster.setSample(x, y, 0, v);
+            DataBuffer db = image.getRaster().getDataBuffer();
+            if (db instanceof DataBufferByte) {
+                byte[] out = ((DataBufferByte) db).getData();
+                System.arraycopy(raster, 0, out, 0, Math.min(out.length, raster.length));
+            } else {
+                WritableRaster imageRaster = image.getRaster();
+                int idx = 0;
+                for (int y = 0; y < height; y++) {
+                    for (int x = 0; x < width; x++) {
+                        int v = raster[idx++] & 0xFF;
+                        imageRaster.setSample(x, y, 0, v);
+                    }
                 }
             }
         } else {
-            image = new BufferedImage(width, height, BufferedImage.TYPE_INT_RGB);
-            int idx = 0;
-            for (int y = 0; y < height; y++) {
-                for (int x = 0; x < width; x++) {
-                    int r = raster[idx++] & 0xFF;
-                    int g = raster[idx++] & 0xFF;
-                    int b = raster[idx++] & 0xFF;
-                    image.setRGB(x, y, (r << 16) | (g << 8) | b);
+            image = new BufferedImage(width, height, BufferedImage.TYPE_3BYTE_BGR);
+            DataBuffer db = image.getRaster().getDataBuffer();
+            if (db instanceof DataBufferByte) {
+                byte[] out = ((DataBufferByte) db).getData();
+                int pxCount = Math.min(out.length / 3, raster.length / 3);
+                for (int i = 0; i < pxCount; i++) {
+                    int src = i * 3;
+                    int dst = i * 3;
+                    out[dst] = raster[src + 2];
+                    out[dst + 1] = raster[src + 1];
+                    out[dst + 2] = raster[src];
+                }
+            } else {
+                int idx = 0;
+                for (int y = 0; y < height; y++) {
+                    for (int x = 0; x < width; x++) {
+                        int r = raster[idx++] & 0xFF;
+                        int g = raster[idx++] & 0xFF;
+                        int b = raster[idx++] & 0xFF;
+                        image.setRGB(x, y, (r << 16) | (g << 8) | b);
+                    }
                 }
             }
         }
@@ -4136,12 +4157,34 @@ public final class BaseFwx {
             int height = image.getHeight();
             int bands = image.getRaster().getNumBands();
             if (bands == 1) {
+                DataBuffer db = image.getRaster().getDataBuffer();
+                if (db instanceof DataBufferByte) {
+                    byte[] src = ((DataBufferByte) db).getData();
+                    int need = width * height;
+                    if (src.length >= need) {
+                        return Arrays.copyOf(src, need);
+                    }
+                }
                 byte[] out = new byte[width * height];
                 int idx = 0;
                 for (int y = 0; y < height; y++) {
                     for (int x = 0; x < width; x++) {
                         out[idx++] = (byte) image.getRaster().getSample(x, y, 0);
                     }
+                }
+                return out;
+            }
+            DataBuffer db = image.getRaster().getDataBuffer();
+            if (image.getType() == BufferedImage.TYPE_3BYTE_BGR && db instanceof DataBufferByte) {
+                byte[] src = ((DataBufferByte) db).getData();
+                int pxCount = Math.min(src.length / 3, width * height);
+                byte[] out = new byte[pxCount * 3];
+                for (int i = 0; i < pxCount; i++) {
+                    int s = i * 3;
+                    int d = i * 3;
+                    out[d] = src[s + 2];
+                    out[d + 1] = src[s + 1];
+                    out[d + 2] = src[s];
                 }
                 return out;
             }

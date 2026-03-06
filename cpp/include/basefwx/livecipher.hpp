@@ -12,7 +12,7 @@ using Bytes = std::vector<std::uint8_t>;
 
 class LiveEncryptor {
 public:
-    explicit LiveEncryptor(const std::string& password, bool use_master = true);
+    explicit LiveEncryptor(const std::string& password, bool use_master = false);
 
     Bytes Start();
     Bytes Update(const Bytes& chunk);
@@ -23,7 +23,7 @@ private:
     Bytes InitSession();
 
     std::string password_;
-    bool use_master_ = true;
+    bool use_master_ = false;
     bool started_ = false;
     bool finalized_ = false;
     std::uint64_t sequence_ = 1;
@@ -33,7 +33,7 @@ private:
 
 class LiveDecryptor {
 public:
-    explicit LiveDecryptor(const std::string& password, bool use_master = true);
+    explicit LiveDecryptor(const std::string& password, bool use_master = false);
 
     std::vector<Bytes> Update(const Bytes& data);
     std::vector<Bytes> Update(const std::uint8_t* data, std::size_t len);
@@ -46,7 +46,7 @@ private:
     void CompactBufferIfNeeded(std::size_t incoming_len = 0);
 
     std::string password_;
-    bool use_master_ = true;
+    bool use_master_ = false;
     bool started_ = false;
     bool finished_ = false;
     std::uint64_t expected_sequence_ = 0;
@@ -58,22 +58,22 @@ private:
 
 std::vector<Bytes> EncryptChunks(const std::vector<Bytes>& chunks,
                                  const std::string& password,
-                                 bool use_master = true);
+                                 bool use_master = false);
 
 std::vector<Bytes> DecryptChunks(const std::vector<Bytes>& chunks,
                                  const std::string& password,
-                                 bool use_master = true);
+                                 bool use_master = false);
 
 std::uint64_t EncryptStream(std::istream& source,
                             std::ostream& dest,
                             const std::string& password,
-                            bool use_master = true,
+                            bool use_master = false,
                             std::size_t chunk_size = 0);
 
 std::uint64_t DecryptStream(std::istream& source,
                             std::ostream& dest,
                             const std::string& password,
-                            bool use_master = true,
+                            bool use_master = false,
                             std::size_t chunk_size = 0);
 
 }  // namespace basefwx::livecipher

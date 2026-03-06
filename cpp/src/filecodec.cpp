@@ -59,7 +59,9 @@ basefwx::pb512::KdfOptions HardenKdfOptionsForPassword(const std::string& passwo
 
 std::optional<Bytes> TryLoadEcPublic(bool create_if_missing) {
     try {
-        return basefwx::ec::LoadMasterPublicKey(create_if_missing);
+        const bool allow_create = create_if_missing
+            && basefwx::env::IsEnabled("BASEFWX_MASTER_EC_CREATE_IF_MISSING", false);
+        return basefwx::ec::LoadMasterPublicKey(allow_create);
     } catch (const std::exception&) {
         return std::nullopt;
     }

@@ -11,7 +11,7 @@ namespace basefwx::filecodec {
 
 struct FileOptions {
     bool strip_metadata = false;
-    bool use_master = true;
+    bool use_master = false;
     bool enable_aead = true;
     bool enable_obfuscation = true;
     bool compress = false;

@@ -1394,19 +1394,24 @@ std::string Jmge(const std::string& path,
                  const std::string& output,
                  bool keep_meta,
                  bool keep_input,
-                 bool archive_original) {
+                 bool archive_original,
+                 bool use_master) {
     return basefwx::imagecipher::EncryptMedia(
         path,
         ResolvePassword(password),
         output,
         keep_meta,
         keep_input,
-        archive_original
+        archive_original,
+        use_master
     );
 }
 
-std::string Jmgd(const std::string& path, const std::string& password, const std::string& output) {
-    return basefwx::imagecipher::DecryptMedia(path, ResolvePassword(password), output);
+std::string Jmgd(const std::string& path,
+                 const std::string& password,
+                 const std::string& output,
+                 bool use_master) {
+    return basefwx::imagecipher::DecryptMedia(path, ResolvePassword(password), output, use_master);
 }
 
 std::string Kfme(const std::string& path, const std::string& output, bool bw_mode) {

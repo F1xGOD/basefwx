@@ -143,8 +143,10 @@ MaskKeyResult PrepareMaskKey(const std::string& password,
     if (use_master) {
         pq_pub = basefwx::pq::LoadMasterPublicKey();
         if (!pq_pub.has_value()) {
+            const bool allow_ec_autogen =
+                basefwx::env::IsEnabled("BASEFWX_MASTER_EC_CREATE_IF_MISSING", false);
             try {
-                ec_pub = basefwx::ec::LoadMasterPublicKey(true);
+                ec_pub = basefwx::ec::LoadMasterPublicKey(allow_ec_autogen);
             } catch (const std::exception&) {
                 ec_pub = std::nullopt;
             }

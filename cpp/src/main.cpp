@@ -208,6 +208,59 @@ void ApplyMasterPubPath(const std::string& path) {
 #endif
 }
 
+void EnableMasterEcAutogen() {
+    SetCliEnvVar("BASEFWX_MASTER_EC_CREATE_IF_MISSING", "1");
+}
+
+void EnableBakedMasterPub() {
+    SetCliEnvVar("BASEFWX_MASTER_PQ_ALLOW_BAKED", "1");
+}
+
+bool HandleMasterFlag(const std::string& flag,
+                      int argc,
+                      char** argv,
+                      int* idx,
+                      bool* use_master) {
+    if (flag == "--use-master") {
+        if (use_master) {
+            *use_master = true;
+        }
+        return true;
+    }
+    if (flag == "--no-master") {
+        if (use_master) {
+            *use_master = false;
+        }
+        return true;
+    }
+    if (flag == "--master-autogen") {
+        EnableMasterEcAutogen();
+        if (use_master) {
+            *use_master = true;
+        }
+        return true;
+    }
+    if (flag == "--allow-embedded-master") {
+        EnableBakedMasterPub();
+        if (use_master) {
+            *use_master = true;
+        }
+        return true;
+    }
+    if (flag == "--master-pub" || flag == "--use-master-pub") {
+        if (!idx || *idx + 1 >= argc) {
+            throw std::runtime_error("Missing master public key path");
+        }
+        ApplyMasterPubPath(argv[*idx + 1]);
+        if (use_master) {
+            *use_master = true;
+        }
+        *idx += 1;
+        return true;
+    }
+    return false;
+}
+
 std::atomic<std::size_t> g_bench_sink{0};
 
 std::string ReadTextFile(const std::string& path) {
@@ -424,53 +477,122 @@ std::size_t RunParallel(std::size_t workers, Fn fn) {
 void PrintUsage() {
     bool plain = CliPlain();
     const char* cyan = "\033[36m";
-    std::cout << StyleText(EmojiPrefix("✨", plain) + "Usage:", cyan, plain) << "\n";
-    std::cout << "  [global] --verbose|-v --no-log --no-color\n";
-    std::cout << "  basefwx_cpp info <file.fwx>\n";
-    std::cout << "  basefwx_cpp b64-enc <text>\n";
-    std::cout << "  basefwx_cpp b64-dec <text>\n";
-    std::cout << "  basefwx_cpp n10-enc <text>\n";
-    std::cout << "  basefwx_cpp n10-dec <digits>\n";
-    std::cout << "  basefwx_cpp n10file-enc <in-file> <out-file>\n";
-    std::cout << "  basefwx_cpp n10file-dec <in-file> <out-file>\n";
-    std::cout << "  basefwx_cpp kFMe <in-file> [--out <path>] [--bw]\n";
-    std::cout << "  basefwx_cpp kFMd <in-file> [--out <path>] [--bw]\n";
-    std::cout << "  basefwx_cpp kFAe <in-file> [--out <path>] [--bw]    (deprecated alias)\n";
-    std::cout << "  basefwx_cpp kFAd <in-file> [--out <path>]           (deprecated alias)\n";
-    std::cout << "  basefwx_cpp hash512 <text>\n";
-    std::cout << "  basefwx_cpp uhash513 <text>\n";
-    std::cout << "  basefwx_cpp a512-enc <text>\n";
-    std::cout << "  basefwx_cpp a512-dec <text>\n";
-    std::cout << "  basefwx_cpp bi512-enc <text>\n";
-    std::cout << "  basefwx_cpp b1024-enc <text>\n";
-    std::cout << "  basefwx_cpp b256-enc <text>\n";
-    std::cout << "  basefwx_cpp b256-dec <text>\n";
-    std::cout << "  basefwx_cpp b512-enc <text> [-p <password>] [--master-pub <path>] [--no-master] [--kdf <label>] [--pbkdf2-iters <n>]\n";
-    std::cout << "  basefwx_cpp b512-dec <text> [-p <password>] [--master-pub <path>] [--no-master] [--kdf <label>] [--pbkdf2-iters <n>]\n";
-    std::cout << "  basefwx_cpp pb512-enc <text> [-p <password>] [--master-pub <path>] [--no-master] [--kdf <label>] [--pbkdf2-iters <n>]\n";
-    std::cout << "  basefwx_cpp pb512-dec <text> [-p <password>] [--master-pub <path>] [--no-master] [--kdf <label>] [--pbkdf2-iters <n>]\n";
-    std::cout << "  basefwx_cpp b512file-enc <file> [-p <password>] [--master-pub <path>] [--no-master] [--strip-meta] [--no-aead] [--compress] [--keep-input] [--kdf <label>] [--pbkdf2-iters <n>]\n";
-    std::cout << "  basefwx_cpp b512file-dec <file.fwx> [-p <password>] [--master-pub <path>] [--no-master] [--strip-meta] [--kdf <label>] [--pbkdf2-iters <n>]\n";
-    std::cout << "  basefwx_cpp b512file-bytes-rt <in> <out> [-p <password>] [--master-pub <path>] [--no-master] [--strip-meta] [--no-aead] [--kdf <label>] [--pbkdf2-iters <n>]\n";
-    std::cout << "  basefwx_cpp pb512file-bytes-rt <in> <out> [-p <password>] [--master-pub <path>] [--no-master] [--strip-meta] [--kdf <label>] [--pbkdf2-iters <n>]\n";
-    std::cout << "  basefwx_cpp pb512file-enc <file> [-p <password>] [--master-pub <path>] [--no-master] [--strip-meta] [--no-obf] [--compress] [--keep-input] [--kdf <label>] [--pbkdf2-iters <n>]\n";
-    std::cout << "  basefwx_cpp pb512file-dec <file.fwx> [-p <password>] [--master-pub <path>] [--no-master] [--strip-meta] [--kdf <label>] [--pbkdf2-iters <n>]\n";
-    std::cout << "  basefwx_cpp fwxaes-enc <file> [-p <password>] [--master-pub <path>] [--no-master] [--out <path>] [--normalize] [--threshold <n>] [--cover-phrase <text>] [--compress] [--ignore-media] [--keep-meta] [--keep-input] [--no-archive]\n";
-    std::cout << "  basefwx_cpp fwxaes-dec <file> [-p <password>] [--master-pub <path>] [--no-master] [--out <path>]\n";
-    std::cout << "  basefwx_cpp fwxaes-stream-enc <file> [-p <password>] [--master-pub <path>] [--no-master] [--out <path>]\n";
-    std::cout << "  basefwx_cpp fwxaes-stream-dec <file> [-p <password>] [--master-pub <path>] [--no-master] [--out <path>]\n";
-    std::cout << "  basefwx_cpp fwxaes-live-enc <file> [-p <password>] [--master-pub <path>] [--no-master] [--out <path>]\n";
-    std::cout << "  basefwx_cpp fwxaes-live-dec <file> [-p <password>] [--master-pub <path>] [--no-master] [--out <path>]\n";
-    std::cout << "  basefwx_cpp jmge <media> [-p <password>] [--master-pub <path>] [--out <path>] [--keep-meta] [--keep-input] [--no-archive]\n";
-    std::cout << "  basefwx_cpp jmgd <media> [-p <password>] [--master-pub <path>] [--out <path>]\n";
-    std::cout << "  basefwx_cpp bench-text <method> <text-file> [-p <password>] [--master-pub <path>] [--no-master]\n";
-    std::cout << "  basefwx_cpp bench-hash <method> <text-file>\n";
-    std::cout << "  basefwx_cpp bench-fwxaes <file> <password> [--master-pub <path>] [--no-master]\n";
-    std::cout << "  basefwx_cpp bench-fwxaes-par <file> <password> [--master-pub <path>] [--no-master]\n";
-    std::cout << "  basefwx_cpp bench-live <file> <password> [--master-pub <path>] [--no-master]\n";
-    std::cout << "  basefwx_cpp bench-b512file <file> <password> [--master-pub <path>] [--no-master] [--no-aead]\n";
-    std::cout << "  basefwx_cpp bench-pb512file <file> <password> [--master-pub <path>] [--no-master] [--no-aead]\n";
-    std::cout << "  basefwx_cpp bench-jmg <media> <password> [--master-pub <path>] [--no-master]\n";
+    const std::string master_flags =
+        "[--use-master] [--master-pub <path>] [--master-autogen] [--allow-embedded-master] [--no-master]";
+    std::cout << StyleText(EmojiPrefix("✨", plain) + "basefwx_cpp help", cyan, plain) << "\n";
+    std::cout << "Usage: basefwx_cpp [global] <command> [args]\n";
+    std::cout << "Global: --verbose|-v --no-log --no-color\n";
+    std::cout << "\n";
+    std::cout << "General commands:\n";
+    std::cout << "  help\n";
+    std::cout << "  completion bash\n";
+    std::cout << "  info <file.fwx>\n";
+    std::cout << "\n";
+    std::cout << "Codec commands:\n";
+    std::cout << "  b64-enc <text>\n";
+    std::cout << "  b64-dec <text>\n";
+    std::cout << "  n10-enc <text>\n";
+    std::cout << "  n10-dec <digits>\n";
+    std::cout << "  n10file-enc <in-file> <out-file>\n";
+    std::cout << "  n10file-dec <in-file> <out-file>\n";
+    std::cout << "  b256-enc <text>\n";
+    std::cout << "  b256-dec <text>\n";
+    std::cout << "  a512-enc <text>\n";
+    std::cout << "  a512-dec <text>\n";
+    std::cout << "  bi512-enc <text>\n";
+    std::cout << "  b1024-enc <text>\n";
+    std::cout << "  hash512 <text>\n";
+    std::cout << "  uhash513 <text>\n";
+    std::cout << "  b512-enc <text> [-p <password>] " << master_flags << " [--kdf <label>] [--pbkdf2-iters <n>] [--no-fallback]\n";
+    std::cout << "  b512-dec <text> [-p <password>] " << master_flags << " [--kdf <label>] [--pbkdf2-iters <n>] [--no-fallback]\n";
+    std::cout << "  pb512-enc <text> [-p <password>] " << master_flags << " [--kdf <label>] [--pbkdf2-iters <n>] [--no-fallback]\n";
+    std::cout << "  pb512-dec <text> [-p <password>] " << master_flags << " [--kdf <label>] [--pbkdf2-iters <n>] [--no-fallback]\n";
+    std::cout << "\n";
+    std::cout << "File commands:\n";
+    std::cout << "  b512file-enc <file> [-p <password>] " << master_flags << " [--strip-meta] [--no-aead] [--compress] [--keep-input] [--kdf <label>] [--pbkdf2-iters <n>] [--no-fallback]\n";
+    std::cout << "  b512file-dec <file.fwx> [-p <password>] " << master_flags << " [--strip-meta] [--kdf <label>] [--pbkdf2-iters <n>] [--no-fallback]\n";
+    std::cout << "  b512file-bytes-rt <in> <out> [-p <password>] " << master_flags << " [--strip-meta] [--no-aead] [--kdf <label>] [--pbkdf2-iters <n>] [--no-fallback]\n";
+    std::cout << "  pb512file-bytes-rt <in> <out> [-p <password>] " << master_flags << " [--strip-meta] [--kdf <label>] [--pbkdf2-iters <n>] [--no-fallback]\n";
+    std::cout << "  pb512file-enc <file> [-p <password>] " << master_flags << " [--strip-meta] [--no-obf] [--compress] [--keep-input] [--kdf <label>] [--pbkdf2-iters <n>] [--no-fallback]\n";
+    std::cout << "  pb512file-dec <file.fwx> [-p <password>] " << master_flags << " [--strip-meta] [--kdf <label>] [--pbkdf2-iters <n>] [--no-fallback]\n";
+    std::cout << "\n";
+    std::cout << "fwxAES commands:\n";
+    std::cout << "  fwxaes-enc <file> [-p <password>] " << master_flags << " [--out <path>] [--normalize] [--threshold <n>] [--cover-phrase <text>] [--compress] [--ignore-media] [--keep-meta] [--keep-input] [--no-archive]\n";
+    std::cout << "  fwxaes-dec <file> [-p <password>] " << master_flags << " [--out <path>]\n";
+    std::cout << "  fwxaes-stream-enc <file> [-p <password>] " << master_flags << " [--out <path>]\n";
+    std::cout << "  fwxaes-stream-dec <file> [-p <password>] " << master_flags << " [--out <path>]\n";
+    std::cout << "  fwxaes-live-enc <file|- > [-p <password>] " << master_flags << " [--out <path|- >]\n";
+    std::cout << "  fwxaes-live-dec <file|- > [-p <password>] " << master_flags << " [--out <path|- >]\n";
+    std::cout << "\n";
+    std::cout << "Media/carrier commands:\n";
+    std::cout << "  jmge <media> [-p <password>] " << master_flags << " [--out <path>] [--keep-meta] [--keep-input] [--no-archive]\n";
+    std::cout << "  jmgd <media> [-p <password>] " << master_flags << " [--out <path>]\n";
+    std::cout << "  kFMe <in-file> [--out <path>] [--bw]\n";
+    std::cout << "  kFMd <in-file> [--out <path>] [--bw]\n";
+    std::cout << "  kFAe <in-file> [--out <path>] [--bw]    (deprecated alias)\n";
+    std::cout << "  kFAd <in-file> [--out <path>]           (deprecated alias)\n";
+    std::cout << "\n";
+    std::cout << "Benchmark commands:\n";
+    std::cout << "  bench-text <method> <text-file> [-p <password>] " << master_flags << "\n";
+    std::cout << "  bench-hash <method> <text-file>\n";
+    std::cout << "  bench-fwxaes <file> <password> " << master_flags << "\n";
+    std::cout << "  bench-fwxaes-par <file> <password> " << master_flags << "\n";
+    std::cout << "  bench-live <file> <password> " << master_flags << "\n";
+    std::cout << "  bench-b512file <file> <password> " << master_flags << " [--no-aead]\n";
+    std::cout << "  bench-pb512file <file> <password> " << master_flags << " [--no-aead]\n";
+    std::cout << "  bench-jmg <media> <password> " << master_flags << "\n";
+}
+
+void PrintBashCompletion(const std::string& argv0) {
+    std::string bin = std::filesystem::path(argv0).filename().string();
+    if (bin.empty()) {
+        bin = "basefwx_cpp";
+    }
+    std::cout
+        << "# bash completion for " << bin << "\n"
+        << "_basefwx_complete() {\n"
+        << "  local cur cmd\n"
+        << "  cur=\"${COMP_WORDS[COMP_CWORD]}\"\n"
+        << "  cmd=\"${COMP_WORDS[1]}\"\n"
+        << "  local commands=\"help completion info b64-enc b64-dec n10-enc n10-dec n10file-enc n10file-dec "
+           "kFMe kFMd kFAe kFAd hash512 uhash513 a512-enc a512-dec bi512-enc b1024-enc b256-enc b256-dec "
+           "b512-enc b512-dec pb512-enc pb512-dec b512file-enc b512file-dec b512file-bytes-rt pb512file-bytes-rt "
+           "pb512file-enc pb512file-dec fwxaes-enc fwxaes-dec fwxaes-stream-enc fwxaes-stream-dec fwxaes-live-enc "
+           "fwxaes-live-dec jmge jmgd bench-text bench-hash bench-fwxaes bench-fwxaes-par bench-live bench-b512file "
+           "bench-pb512file bench-jmg\"\n"
+        << "  local master_opts=\"--use-master --no-master --master-pub --use-master-pub --master-autogen --allow-embedded-master\"\n"
+        << "  if [[ ${COMP_CWORD} -eq 1 ]]; then\n"
+        << "    COMPREPLY=( $(compgen -W \"$commands\" -- \"$cur\") )\n"
+        << "    return 0\n"
+        << "  fi\n"
+        << "  case \"$cmd\" in\n"
+        << "    completion)\n"
+        << "      COMPREPLY=( $(compgen -W \"bash\" -- \"$cur\") )\n"
+        << "      ;;\n"
+        << "    b512-enc|b512-dec|pb512-enc|pb512-dec)\n"
+        << "      COMPREPLY=( $(compgen -W \"-p --password --kdf --pbkdf2-iters --no-fallback $master_opts\" -- \"$cur\") )\n"
+        << "      ;;\n"
+        << "    b512file-enc|b512file-dec|b512file-bytes-rt|pb512file-bytes-rt|pb512file-enc|pb512file-dec)\n"
+        << "      COMPREPLY=( $(compgen -W \"-p --password --strip-meta --no-aead --no-obf --compress --keep-input --kdf --pbkdf2-iters --no-fallback $master_opts\" -- \"$cur\") )\n"
+        << "      ;;\n"
+        << "    fwxaes-enc|fwxaes-dec|fwxaes-stream-enc|fwxaes-stream-dec|fwxaes-live-enc|fwxaes-live-dec)\n"
+        << "      COMPREPLY=( $(compgen -W \"-p --password --out -o --normalize --threshold --cover-phrase --compress --ignore-media --keep-meta --keep-input --no-archive $master_opts\" -- \"$cur\") )\n"
+        << "      ;;\n"
+        << "    jmge|jmgd|bench-jmg)\n"
+        << "      COMPREPLY=( $(compgen -W \"-p --password --out -o --keep-meta --keep-input --no-archive $master_opts\" -- \"$cur\") )\n"
+        << "      ;;\n"
+        << "    kFMe|kFMd|kFAe|kFAd)\n"
+        << "      COMPREPLY=( $(compgen -W \"--out -o --bw\" -- \"$cur\") )\n"
+        << "      ;;\n"
+        << "    bench-text|bench-fwxaes|bench-fwxaes-par|bench-live|bench-b512file|bench-pb512file)\n"
+        << "      COMPREPLY=( $(compgen -W \"-p --password --no-aead $master_opts\" -- \"$cur\") )\n"
+        << "      ;;\n"
+        << "    *)\n"
+        << "      COMPREPLY=()\n"
+        << "      ;;\n"
+        << "  esac\n"
+        << "}\n"
+        << "complete -F _basefwx_complete " << bin << "\n";
 }
 
 struct CommandHwPlan {
@@ -801,7 +923,7 @@ CommandHwPlan BuildHwPlan(const std::string& command) {
 struct ParsedOptions {
     std::string input;
     std::string password;
-    bool use_master = true;
+    bool use_master = false;
     basefwx::KdfOptions kdf;
 };
 
@@ -809,7 +931,7 @@ struct FwxAesArgs {
     std::string input;
     std::string output;
     std::string password;
-    bool use_master = true;
+    bool use_master = false;
     bool normalize = false;
     std::size_t threshold = 8 * 1024;
     std::string cover_phrase = "low taper fade";
@@ -824,6 +946,7 @@ struct ImageArgs {
     std::string input;
     std::string output;
     std::string password;
+    bool use_master = false;
     bool keep_meta = false;
     bool keep_input = false;
     bool archive_original = true;
@@ -832,7 +955,7 @@ struct ImageArgs {
 struct FileArgs {
     std::string input;
     std::string password;
-    bool use_master = true;
+    bool use_master = false;
     bool strip_metadata = false;
     bool enable_aead = true;
     bool enable_obf = true;
@@ -856,15 +979,8 @@ ParsedOptions ParseCodecArgs(int argc, char** argv, int start_index) {
             }
             opts.password = argv[idx + 1];
             idx += 2;
-        } else if (flag == "--no-master") {
-            opts.use_master = false;
+        } else if (HandleMasterFlag(flag, argc, argv, &idx, &opts.use_master)) {
             idx += 1;
-        } else if (flag == "--master-pub" || flag == "--use-master-pub") {
-            if (idx + 1 >= argc) {
-                throw std::runtime_error("Missing master public key path");
-            }
-            ApplyMasterPubPath(argv[idx + 1]);
-            idx += 2;
         } else if (flag == "--kdf") {
             if (idx + 1 >= argc) {
                 throw std::runtime_error("Missing kdf label");
@@ -902,15 +1018,8 @@ FileArgs ParseFileArgs(int argc, char** argv, int start_index) {
             }
             opts.password = argv[idx + 1];
             idx += 2;
-        } else if (flag == "--no-master") {
-            opts.use_master = false;
+        } else if (HandleMasterFlag(flag, argc, argv, &idx, &opts.use_master)) {
             idx += 1;
-        } else if (flag == "--master-pub" || flag == "--use-master-pub") {
-            if (idx + 1 >= argc) {
-                throw std::runtime_error("Missing master public key path");
-            }
-            ApplyMasterPubPath(argv[idx + 1]);
-            idx += 2;
         } else if (flag == "--strip-meta") {
             opts.strip_metadata = true;
             idx += 1;
@@ -963,15 +1072,8 @@ FwxAesArgs ParseFwxAesArgs(int argc, char** argv, int start_index) {
             }
             opts.password = argv[idx + 1];
             idx += 2;
-        } else if (flag == "--no-master") {
-            opts.use_master = false;
+        } else if (HandleMasterFlag(flag, argc, argv, &idx, &opts.use_master)) {
             idx += 1;
-        } else if (flag == "--master-pub" || flag == "--use-master-pub") {
-            if (idx + 1 >= argc) {
-                throw std::runtime_error("Missing master public key path");
-            }
-            ApplyMasterPubPath(argv[idx + 1]);
-            idx += 2;
         } else if (flag == "--out" || flag == "-o") {
             if (idx + 1 >= argc) {
                 throw std::runtime_error("Missing output path");
@@ -1030,12 +1132,8 @@ ImageArgs ParseImageArgs(int argc, char** argv, int start_index) {
             }
             opts.password = argv[idx + 1];
             idx += 2;
-        } else if (flag == "--master-pub" || flag == "--use-master-pub") {
-            if (idx + 1 >= argc) {
-                throw std::runtime_error("Missing master public key path");
-            }
-            ApplyMasterPubPath(argv[idx + 1]);
-            idx += 2;
+        } else if (HandleMasterFlag(flag, argc, argv, &idx, &opts.use_master)) {
+            idx += 1;
         } else if (flag == "--out" || flag == "-o") {
             if (idx + 1 >= argc) {
                 throw std::runtime_error("Missing output path");
@@ -1097,6 +1195,23 @@ int main(int argc, char** argv) {
         return 2;
     }
     std::string command(argv[1]);
+    if (command == "help" || command == "--help" || command == "-h") {
+        PrintUsage();
+        return 0;
+    }
+    if (command == "completion") {
+        if (argc < 3) {
+            PrintUsage();
+            return 2;
+        }
+        std::string shell = ToLower(argv[2]);
+        if (shell != "bash") {
+            std::cerr << "Error: unsupported shell for completion: " << shell << "\n";
+            return 1;
+        }
+        PrintBashCompletion(argv[0]);
+        return 0;
+    }
     std::optional<CommandTelemetry> telemetry;
     if (command != "jmge" && command != "jmgd") {
         telemetry.emplace(BuildHwPlan(command));
@@ -1265,17 +1380,10 @@ int main(int argc, char** argv) {
             }
             std::string input = argv[2];
             std::string password = argv[3];
-            bool use_master = true;
+            bool use_master = false;
             for (int idx = 4; idx < argc; ++idx) {
                 std::string flag(argv[idx]);
-                if (flag == "--no-master") {
-                    use_master = false;
-                } else if (flag == "--master-pub" || flag == "--use-master-pub") {
-                    if (idx + 1 >= argc) {
-                        throw std::runtime_error("Missing master public key path");
-                    }
-                    ApplyMasterPubPath(argv[idx + 1]);
-                    idx += 1;
+                if (HandleMasterFlag(flag, argc, argv, &idx, &use_master)) {
                 } else {
                     throw std::runtime_error("Unknown flag: " + flag);
                 }
@@ -1301,17 +1409,10 @@ int main(int argc, char** argv) {
             }
             std::string input = argv[2];
             std::string password = argv[3];
-            bool use_master = true;
+            bool use_master = false;
             for (int idx = 4; idx < argc; ++idx) {
                 std::string flag(argv[idx]);
-                if (flag == "--no-master") {
-                    use_master = false;
-                } else if (flag == "--master-pub" || flag == "--use-master-pub") {
-                    if (idx + 1 >= argc) {
-                        throw std::runtime_error("Missing master public key path");
-                    }
-                    ApplyMasterPubPath(argv[idx + 1]);
-                    idx += 1;
+                if (HandleMasterFlag(flag, argc, argv, &idx, &use_master)) {
                 } else {
                     throw std::runtime_error("Unknown flag: " + flag);
                 }
@@ -1356,17 +1457,10 @@ int main(int argc, char** argv) {
             }
             std::string input = argv[2];
             std::string password = argv[3];
-            bool use_master = true;
+            bool use_master = false;
             for (int idx = 4; idx < argc; ++idx) {
                 std::string flag(argv[idx]);
-                if (flag == "--no-master") {
-                    use_master = false;
-                } else if (flag == "--master-pub" || flag == "--use-master-pub") {
-                    if (idx + 1 >= argc) {
-                        throw std::runtime_error("Missing master public key path");
-                    }
-                    ApplyMasterPubPath(argv[idx + 1]);
-                    idx += 1;
+                if (HandleMasterFlag(flag, argc, argv, &idx, &use_master)) {
                 } else {
                     throw std::runtime_error("Unknown flag: " + flag);
                 }
@@ -1410,20 +1504,13 @@ int main(int argc, char** argv) {
             }
             std::string input = argv[2];
             std::string password = argv[3];
-            bool use_master = true;
+            bool use_master = false;
             bool disable_aead = false;
             for (int idx = 4; idx < argc; ++idx) {
                 std::string flag(argv[idx]);
-                if (flag == "--no-master") {
-                    use_master = false;
+                if (HandleMasterFlag(flag, argc, argv, &idx, &use_master)) {
                 } else if (flag == "--no-aead") {
                     disable_aead = true;
-                } else if (flag == "--master-pub" || flag == "--use-master-pub") {
-                    if (idx + 1 >= argc) {
-                        throw std::runtime_error("Missing master public key path");
-                    }
-                    ApplyMasterPubPath(argv[idx + 1]);
-                    idx += 1;
                 } else {
                     throw std::runtime_error("Unknown flag: " + flag);
                 }
@@ -1508,17 +1595,10 @@ int main(int argc, char** argv) {
             }
             std::string media_path = argv[2];
             std::string password = argv[3];
-            bool use_master = true;
+            bool use_master = false;
             for (int idx = 4; idx < argc; ++idx) {
                 std::string flag(argv[idx]);
-                if (flag == "--no-master") {
-                    use_master = false;
-                } else if (flag == "--master-pub" || flag == "--use-master-pub") {
-                    if (idx + 1 >= argc) {
-                        throw std::runtime_error("Missing master public key path");
-                    }
-                    ApplyMasterPubPath(argv[idx + 1]);
-                    idx += 1;
+                if (HandleMasterFlag(flag, argc, argv, &idx, &use_master)) {
                 } else {
                     throw std::runtime_error("Unknown flag: " + flag);
                 }
@@ -1551,8 +1631,8 @@ int main(int argc, char** argv) {
                     std::filesystem::path enc_path = temp_dir / enc_name;
                     std::filesystem::path dec_path = temp_dir / dec_name;
                     
-                    basefwx::Jmge(src_path.string(), password, enc_path.string(), false, true);
-                    basefwx::Jmgd(enc_path.string(), password, dec_path.string());
+                    basefwx::Jmge(src_path.string(), password, enc_path.string(), false, true, true, use_master);
+                    basefwx::Jmgd(enc_path.string(), password, dec_path.string(), use_master);
                     
                     std::error_code size_ec;
                     auto dec_size = std::filesystem::file_size(dec_path, size_ec);
@@ -1772,15 +1852,8 @@ int main(int argc, char** argv) {
                         }
                         opts.password = argv[idx + 1];
                         idx += 2;
-                    } else if (flag == "--no-master") {
-                        opts.use_master = false;
+                    } else if (HandleMasterFlag(flag, argc, argv, &idx, &opts.use_master)) {
                         idx += 1;
-                    } else if (flag == "--master-pub" || flag == "--use-master-pub") {
-                        if (idx + 1 >= argc) {
-                            throw std::runtime_error("Missing master public key path");
-                        }
-                        ApplyMasterPubPath(argv[idx + 1]);
-                        idx += 2;
                     } else if (flag == "--strip-meta") {
                         opts.strip_metadata = true;
                         idx += 1;
@@ -1946,7 +2019,8 @@ int main(int argc, char** argv) {
                             opts.output,
                             opts.keep_meta,
                             opts.keep_input,
-                            opts.archive_original
+                            opts.archive_original,
+                            opts.use_master
                         ) << "\n";
                         return 0;
                     } catch (const std::exception&) {
@@ -1976,10 +2050,11 @@ int main(int argc, char** argv) {
                     opts.output,
                     opts.keep_meta,
                     opts.keep_input,
-                    opts.archive_original
+                    opts.archive_original,
+                    opts.use_master
                 ) << "\n";
             } else {
-                std::cout << basefwx::Jmgd(opts.input, opts.password, opts.output) << "\n";
+                std::cout << basefwx::Jmgd(opts.input, opts.password, opts.output, opts.use_master) << "\n";
             }
             return 0;
         }

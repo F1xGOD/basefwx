@@ -146,7 +146,8 @@ std::optional<Bytes> LoadMasterPublicKey() {
         }
         return DecodeKeyBytes(ReadFileBytes(candidate));
     }
-    if (basefwx::env::IsEnabled("ALLOW_BAKED_PUB", false)) {
+    if (basefwx::env::IsEnabled("BASEFWX_MASTER_PQ_ALLOW_BAKED", false)
+        || basefwx::env::IsEnabled("ALLOW_BAKED_PUB", false)) {
         Bytes baked(constants::kMasterPqPublicB64.begin(), constants::kMasterPqPublicB64.end());
         return DecodeKeyBytes(baked);
     }

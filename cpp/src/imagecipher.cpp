@@ -652,6 +652,7 @@ void AppendTrailerStream(const std::filesystem::path& output_path,
 bool TryDecryptTrailerStream(const std::filesystem::path& input_path,
                              const std::string& password,
                              const std::filesystem::path& output_path,
+                             bool use_master,
                              const std::function<void(double)>& progress_cb = {}) {
     auto magic = basefwx::constants::kImageCipherTrailerMagic;
     const std::size_t footer_len = magic.size() + 4;
@@ -754,7 +755,7 @@ bool TryDecryptTrailerStream(const std::filesystem::path& input_path,
                 user_blob,
                 master_blob,
                 password,
-                true,
+                use_master,
                 basefwx::constants::kJmgMaskInfo,
                 basefwx::constants::kMaskAadJmg,
                 kdf
@@ -998,7 +999,9 @@ struct JmgResolvedKeys {
     Bytes archive_key;
 };
 
-std::optional<JmgResolvedKeys> ResolveJmgHeaderKeys(const Bytes& blob, const std::string& password) {
+std::optional<JmgResolvedKeys> ResolveJmgHeaderKeys(const Bytes& blob,
+                                                    const std::string& password,
+                                                    bool use_master) {
     std::size_t header_len = 0;
     Bytes user_blob;
     Bytes master_blob;
@@ -1011,7 +1014,7 @@ std::optional<JmgResolvedKeys> ResolveJmgHeaderKeys(const Bytes& blob, const std
         user_blob,
         master_blob,
         password,
-        true,
+        use_master,
         basefwx::constants::kJmgMaskInfo,
         basefwx::constants::kMaskAadJmg,
         kdf
@@ -1027,6 +1030,7 @@ std::optional<JmgResolvedKeys> ResolveJmgHeaderKeys(const Bytes& blob, const std
 
 Bytes LoadBaseKeyFromKeyTrailerFile(const std::filesystem::path& input_path,
                                     const std::string& password,
+                                    bool use_master,
                                     std::uint8_t* profile_id_out = nullptr) {
     auto trailer_info = ExtractBalancedTrailerInfo(input_path, basefwx::constants::kImageCipherKeyTrailerMagic);
     if (!trailer_info.has_value() || trailer_info->blob_len == 0) {
@@ -1045,7 +1049,7 @@ Bytes LoadBaseKeyFromKeyTrailerFile(const std::filesystem::path& input_path,
     if (input.gcount() != static_cast<std::streamsize>(blob.size())) {
         throw std::runtime_error("Failed to read JMG key trailer");
     }
-    auto keys = ResolveJmgHeaderKeys(blob, password);
+    auto keys = ResolveJmgHeaderKeys(blob, password, use_master);
     if (!keys.has_value()) {
         throw std::runtime_error("Invalid JMG key trailer");
     }
@@ -1060,6 +1064,7 @@ Bytes LoadBaseKeyFromKeyTrailerFile(const std::filesystem::path& input_path,
 
 Bytes LoadBaseKeyFromKeyTrailerBytes(const Bytes& file_bytes,
                                      const std::string& password,
+                                     bool use_master,
                                      std::uint8_t* profile_id_out = nullptr) {
     Bytes payload;
     Bytes trailer;
@@ -1067,7 +1072,7 @@ Bytes LoadBaseKeyFromKeyTrailerBytes(const Bytes& file_bytes,
         || trailer.empty()) {
         return {};
     }
-    auto keys = ResolveJmgHeaderKeys(trailer, password);
+    auto keys = ResolveJmgHeaderKeys(trailer, password, use_master);
     if (!keys.has_value()) {
         throw std::runtime_error("Invalid JMG key trailer");
     }
@@ -1207,7 +1212,8 @@ std::string EncryptImageInv(const std::string& path,
                             const std::string& password,
                             const std::string& output,
                             bool include_trailer,
-                            bool archive_original) {
+                            bool archive_original,
+                            bool use_master) {
     std::string resolved = basefwx::ResolvePassword(password);
     if (!include_trailer) {
         if (basefwx::env::Get("BASEFWX_ALLOW_INSECURE_IMAGE_OBFUSCATION") != "1") {
@@ -1241,7 +1247,7 @@ std::string EncryptImageInv(const std::string& path,
         basefwx::pb512::KdfOptions kdf;
         auto mask_key = basefwx::keywrap::PrepareMaskKey(
             resolved,
-            true,
+            use_master,
             basefwx::constants::kJmgMaskInfo,
             false,
             basefwx::constants::kMaskAadJmg,
@@ -1288,7 +1294,8 @@ std::string EncryptImageInv(const std::string& path,
 
 std::string DecryptImageInv(const std::string& path,
                             const std::string& password,
-                            const std::string& output) {
+                            const std::string& output,
+                            bool use_master) {
     std::string resolved = basefwx::ResolvePassword(password);
     std::filesystem::path input_path = NormalizePath(path);
     if (!std::filesystem::exists(input_path)) {
@@ -1326,7 +1333,7 @@ std::string DecryptImageInv(const std::string& path,
                 && std::memcmp(trailer.data(), basefwx::constants::kJmgKeyMagic.data(), magic_len) == 0) {
                 header_detected = true;
             }
-            std::optional<JmgResolvedKeys> header_keys = ResolveJmgHeaderKeys(trailer, resolved);
+            std::optional<JmgResolvedKeys> header_keys = ResolveJmgHeaderKeys(trailer, resolved, use_master);
             if (header_detected && !header_keys.has_value()) {
                 throw std::runtime_error("Invalid JMG key header");
             }
@@ -1359,7 +1366,7 @@ std::string DecryptImageInv(const std::string& path,
     }
 
     if (has_key_trailer && !key_trailer.empty()) {
-        auto header_keys = ResolveJmgHeaderKeys(key_trailer, resolved);
+        auto header_keys = ResolveJmgHeaderKeys(key_trailer, resolved, use_master);
         if (!header_keys.has_value()) {
             throw std::runtime_error("Invalid JMG key trailer");
         }
@@ -3001,7 +3008,8 @@ std::string EncryptMedia(const std::string& path,
                          const std::string& output,
                          bool keep_meta,
                          bool keep_input,
-                         bool archive_original) {
+                         bool archive_original,
+                         bool use_master) {
     std::string resolved = basefwx::ResolvePassword(password);
     std::filesystem::path input_path = NormalizePath(path);
     if (!std::filesystem::exists(input_path)) {
@@ -3018,7 +3026,8 @@ std::string EncryptMedia(const std::string& path,
             resolved,
             temp_output.string(),
             true,
-            archive_original
+            archive_original,
+            use_master
         );
         std::filesystem::path result_path = NormalizePath(result);
         if (result_path != temp_output) {
@@ -3112,7 +3121,7 @@ std::string EncryptMedia(const std::string& path,
         basefwx::pb512::KdfOptions kdf;
         auto mask_key = basefwx::keywrap::PrepareMaskKey(
             resolved,
-            true,
+            use_master,
             basefwx::constants::kJmgMaskInfo,
             false,
             basefwx::constants::kMaskAadJmg,
@@ -3247,14 +3256,15 @@ std::string EncryptMedia(const std::string& path,
 
 std::string DecryptMedia(const std::string& path,
                          const std::string& password,
-                         const std::string& output) {
+                         const std::string& output,
+                         bool use_master) {
     std::string resolved = basefwx::ResolvePassword(password);
     std::filesystem::path input_path = NormalizePath(path);
     if (!std::filesystem::exists(input_path)) {
         throw std::runtime_error("Input file not found: " + input_path.string());
     }
     if (IsImageExt(input_path)) {
-        return DecryptImageInv(input_path.string(), resolved, output);
+        return DecryptImageInv(input_path.string(), resolved, output, use_master);
     }
     try {
         VideoInfo gate_video = ProbeVideo(input_path);
@@ -3281,7 +3291,7 @@ std::string DecryptMedia(const std::string& path,
     auto trailer_cb = [&](double frac) {
         progress.Update(0.05 + 0.90 * frac, "archive", input_path);
     };
-    if (TryDecryptTrailerStream(input_path, resolved, temp_output, trailer_cb)) {
+    if (TryDecryptTrailerStream(input_path, resolved, temp_output, use_master, trailer_cb)) {
         progress.Update(1.0, "done", input_path);
         if (!output_path.empty() && !std::filesystem::equivalent(output_path, temp_output, ec)) {
             std::filesystem::rename(temp_output, output_path);
@@ -3292,7 +3302,7 @@ std::string DecryptMedia(const std::string& path,
     }
 
     std::uint8_t trailer_profile = basefwx::constants::kJmgSecurityProfileLegacy;
-    Bytes base_key_override = LoadBaseKeyFromKeyTrailerFile(input_path, resolved, &trailer_profile);
+    Bytes base_key_override = LoadBaseKeyFromKeyTrailerFile(input_path, resolved, use_master, &trailer_profile);
     bool has_base_key_override = !base_key_override.empty();
     if (has_base_key_override) {
         WarnNoArchivePayload();
@@ -3303,7 +3313,7 @@ std::string DecryptMedia(const std::string& path,
     if (!ec && file_size <= fallback_limit) {
         Bytes file_bytes = ReadFileBytes(input_path);
         if (!has_base_key_override) {
-            base_key_override = LoadBaseKeyFromKeyTrailerBytes(file_bytes, resolved, &trailer_profile);
+            base_key_override = LoadBaseKeyFromKeyTrailerBytes(file_bytes, resolved, use_master, &trailer_profile);
             has_base_key_override = !base_key_override.empty();
             if (has_base_key_override) {
                 WarnNoArchivePayload();
@@ -3342,7 +3352,7 @@ std::string DecryptMedia(const std::string& path,
                         user_blob,
                         master_blob,
                         resolved,
-                        true,
+                        use_master,
                         basefwx::constants::kJmgMaskInfo,
                         basefwx::constants::kMaskAadJmg,
                         kdf

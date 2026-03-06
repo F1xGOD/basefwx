@@ -14,7 +14,7 @@ struct Options {
     std::uint32_t pbkdf2_iters = 200000;
     std::uint8_t salt_len = 16;
     std::uint8_t iv_len = 12;
-    bool use_master = true;
+    bool use_master = false;
 };
 
 struct NormalizeOptions {
@@ -28,7 +28,7 @@ struct PackOptions {
 };
 
 Bytes EncryptRaw(const Bytes& plaintext, const std::string& password, const Options& options = {});
-Bytes DecryptRaw(const Bytes& blob, const std::string& password, bool use_master = true);
+Bytes DecryptRaw(const Bytes& blob, const std::string& password, bool use_master = false);
 std::uint64_t EncryptStream(std::istream& source,
                             std::ostream& dest,
                             const std::string& password,
@@ -36,7 +36,7 @@ std::uint64_t EncryptStream(std::istream& source,
 std::uint64_t DecryptStream(std::istream& source,
                             std::ostream& dest,
                             const std::string& password,
-                            bool use_master = true);
+                            bool use_master = false);
 
 std::string NormalizeWrap(const Bytes& blob, const std::string& cover_phrase = "low taper fade");
 Bytes NormalizeUnwrap(const std::string& text);
@@ -52,6 +52,6 @@ void EncryptFile(const std::string& path_in,
 void DecryptFile(const std::string& path_in,
                  const std::string& path_out,
                  const std::string& password,
-                 bool use_master = true);
+                 bool use_master = false);
 
 }  // namespace basefwx::fwxaes

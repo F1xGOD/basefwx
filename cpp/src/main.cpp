@@ -44,6 +44,38 @@ std::string ToLower(std::string value) {
     return value;
 }
 
+std::string MoveOutputPath(const std::string& current_path, const std::string& requested_path) {
+    if (requested_path.empty() || current_path == requested_path) {
+        return current_path;
+    }
+    std::filesystem::path src(current_path);
+    std::filesystem::path dst(requested_path);
+    std::error_code ec;
+    if (std::filesystem::exists(dst, ec) && std::filesystem::is_directory(dst, ec)) {
+        dst /= src.filename();
+    }
+    if (!dst.parent_path().empty()) {
+        std::filesystem::create_directories(dst.parent_path(), ec);
+        if (ec) {
+            throw std::runtime_error("Failed to prepare output path: " + dst.string());
+        }
+    }
+    std::filesystem::rename(src, dst, ec);
+    if (ec) {
+        ec.clear();
+        std::filesystem::copy_file(src, dst, std::filesystem::copy_options::overwrite_existing, ec);
+        if (ec) {
+            throw std::runtime_error("Failed to move output to: " + dst.string());
+        }
+        ec.clear();
+        std::filesystem::remove(src, ec);
+        if (ec) {
+            throw std::runtime_error("Failed to finalize moved output: " + dst.string());
+        }
+    }
+    return dst.string();
+}
+
 bool IsTruthy(std::string value) {
     value = ToLower(std::move(value));
     return value == "1" || value == "true" || value == "yes" || value == "on";
@@ -517,8 +549,10 @@ void PrintUsage() {
     std::cout << "  pb512file-dec <file.fwx> [-p <password>] " << master_flags << " [--strip-meta] [--kdf <label>] [--pbkdf2-iters <n>] [--no-fallback]\n";
     std::cout << "\n";
     std::cout << "fwxAES commands:\n";
-    std::cout << "  fwxaes-enc <file> [-p <password>] " << master_flags << " [--out <path>] [--normalize] [--threshold <n>] [--cover-phrase <text>] [--compress] [--ignore-media] [--keep-meta] [--keep-input] [--no-archive]\n";
-    std::cout << "  fwxaes-dec <file> [-p <password>] " << master_flags << " [--out <path>]\n";
+    std::cout << "  fwxaes-enc <file> [-p <password>] " << master_flags << " [--out <path>] [--heavy] [--normalize] [--threshold <n>] [--cover-phrase <text>] [--compress] [--ignore-media] [--keep-meta] [--keep-input] [--no-archive]\n";
+    std::cout << "  fwxaes-dec <file> [-p <password>] " << master_flags << " [--out <path>] [--heavy]\n";
+    std::cout << "  fwxaes-heavy-enc <file> [-p <password>] " << master_flags << " [--out <path>] [--compress] [--keep-input]\n";
+    std::cout << "  fwxaes-heavy-dec <file> [-p <password>] " << master_flags << " [--out <path>]\n";
     std::cout << "  fwxaes-stream-enc <file> [-p <password>] " << master_flags << " [--out <path>]\n";
     std::cout << "  fwxaes-stream-dec <file> [-p <password>] " << master_flags << " [--out <path>]\n";
     std::cout << "  fwxaes-live-enc <file|- > [-p <password>] " << master_flags << " [--out <path|- >]\n";
@@ -557,7 +591,7 @@ void PrintBashCompletion(const std::string& argv0) {
         << "  local commands=\"help completion info b64-enc b64-dec n10-enc n10-dec n10file-enc n10file-dec "
            "kFMe kFMd kFAe kFAd hash512 uhash513 a512-enc a512-dec bi512-enc b1024-enc b256-enc b256-dec "
            "b512-enc b512-dec pb512-enc pb512-dec b512file-enc b512file-dec b512file-bytes-rt pb512file-bytes-rt "
-           "pb512file-enc pb512file-dec fwxaes-enc fwxaes-dec fwxaes-stream-enc fwxaes-stream-dec fwxaes-live-enc "
+           "pb512file-enc pb512file-dec fwxaes-enc fwxaes-dec fwxaes-heavy-enc fwxaes-heavy-dec fwxaes-stream-enc fwxaes-stream-dec fwxaes-live-enc "
            "fwxaes-live-dec jmge jmgd bench-text bench-hash bench-fwxaes bench-fwxaes-par bench-live bench-b512file "
            "bench-pb512file bench-jmg\"\n"
         << "  local master_opts=\"--use-master --no-master --master-pub --use-master-pub --master-autogen --allow-embedded-master\"\n"
@@ -575,8 +609,8 @@ void PrintBashCompletion(const std::string& argv0) {
         << "    b512file-enc|b512file-dec|b512file-bytes-rt|pb512file-bytes-rt|pb512file-enc|pb512file-dec)\n"
         << "      COMPREPLY=( $(compgen -W \"-p --password --strip-meta --no-aead --no-obf --compress --keep-input --kdf --pbkdf2-iters --no-fallback $master_opts\" -- \"$cur\") )\n"
         << "      ;;\n"
-        << "    fwxaes-enc|fwxaes-dec|fwxaes-stream-enc|fwxaes-stream-dec|fwxaes-live-enc|fwxaes-live-dec)\n"
-        << "      COMPREPLY=( $(compgen -W \"-p --password --out -o --normalize --threshold --cover-phrase --compress --ignore-media --keep-meta --keep-input --no-archive $master_opts\" -- \"$cur\") )\n"
+        << "    fwxaes-enc|fwxaes-dec|fwxaes-heavy-enc|fwxaes-heavy-dec|fwxaes-stream-enc|fwxaes-stream-dec|fwxaes-live-enc|fwxaes-live-dec)\n"
+        << "      COMPREPLY=( $(compgen -W \"-p --password --out -o --heavy --light --normalize --threshold --cover-phrase --compress --ignore-media --keep-meta --keep-input --no-archive $master_opts\" -- \"$cur\") )\n"
         << "      ;;\n"
         << "    jmge|jmgd|bench-jmg)\n"
         << "      COMPREPLY=( $(compgen -W \"-p --password --out -o --keep-meta --keep-input --no-archive $master_opts\" -- \"$cur\") )\n"
@@ -932,6 +966,7 @@ struct FwxAesArgs {
     std::string output;
     std::string password;
     bool use_master = false;
+    bool heavy = false;
     bool normalize = false;
     std::size_t threshold = 8 * 1024;
     std::string cover_phrase = "low taper fade";
@@ -1082,6 +1117,12 @@ FwxAesArgs ParseFwxAesArgs(int argc, char** argv, int start_index) {
             idx += 2;
         } else if (flag == "--normalize") {
             opts.normalize = true;
+            idx += 1;
+        } else if (flag == "--heavy") {
+            opts.heavy = true;
+            idx += 1;
+        } else if (flag == "--light") {
+            opts.heavy = false;
             idx += 1;
         } else if (flag == "--threshold") {
             if (idx + 1 >= argc) {
@@ -1928,14 +1969,19 @@ int main(int argc, char** argv) {
             return 0;
         }
         if (command == "fwxaes-enc" || command == "fwxaes-dec"
+            || command == "fwxaes-heavy-enc" || command == "fwxaes-heavy-dec"
             || command == "fwxaes-stream-enc" || command == "fwxaes-stream-dec"
             || command == "fwxaes-live-enc" || command == "fwxaes-live-dec") {
             FwxAesArgs opts = ParseFwxAesArgs(argc, argv, 2);
+            if (command == "fwxaes-heavy-enc" || command == "fwxaes-heavy-dec") {
+                opts.heavy = true;
+            }
+            bool user_output = !opts.output.empty();
             if (opts.password.empty() && !opts.use_master) {
                 throw std::runtime_error("Password required when master key usage is disabled");
             }
             if (opts.output.empty()) {
-                if (command == "fwxaes-enc") {
+                if (command == "fwxaes-enc" || command == "fwxaes-heavy-enc") {
                     if (!opts.ignore_media && LooksLikeMediaPath(std::filesystem::path(opts.input))) {
                         opts.output = opts.input;
                     } else {
@@ -1952,6 +1998,9 @@ int main(int argc, char** argv) {
                 }
             }
             if (command == "fwxaes-live-enc" || command == "fwxaes-live-dec") {
+                if (opts.heavy) {
+                    throw std::runtime_error("Live fwxAES does not support heavy mode");
+                }
                 if (opts.normalize || opts.compress) {
                     throw std::runtime_error("Live fwxAES does not support normalize or pack options");
                 }
@@ -1990,6 +2039,9 @@ int main(int argc, char** argv) {
                 return 0;
             }
             if (command == "fwxaes-stream-enc" || command == "fwxaes-stream-dec") {
+                if (opts.heavy) {
+                    throw std::runtime_error("Streaming fwxAES does not support heavy mode");
+                }
                 if (opts.normalize || opts.compress) {
                     throw std::runtime_error("Streaming fwxAES does not support normalize or pack options");
                 }
@@ -2010,7 +2062,32 @@ int main(int argc, char** argv) {
                 }
                 return 0;
             }
-            if (command == "fwxaes-enc") {
+            if (opts.heavy) {
+                if (opts.normalize) {
+                    throw std::runtime_error("fwxAES heavy mode does not support normalize options");
+                }
+                if (opts.threshold != 8 * 1024 || opts.cover_phrase != "low taper fade") {
+                    throw std::runtime_error("fwxAES heavy mode does not support normalize options");
+                }
+                if (opts.ignore_media || opts.keep_meta || !opts.archive_original) {
+                    throw std::runtime_error("fwxAES heavy mode does not support media-only options");
+                }
+                basefwx::filecodec::FileOptions file_opts;
+                file_opts.use_master = opts.use_master;
+                file_opts.compress = opts.compress;
+                file_opts.keep_input = opts.keep_input;
+                if (command == "fwxaes-enc" || command == "fwxaes-heavy-enc") {
+                    std::string produced = basefwx::filecodec::Pb512EncodeFile(opts.input, opts.password, file_opts);
+                    if (user_output) {
+                        MoveOutputPath(produced, opts.output);
+                    }
+                } else {
+                    std::string produced = basefwx::filecodec::Pb512DecodeFile(opts.input, opts.password, file_opts);
+                    if (user_output) {
+                        MoveOutputPath(produced, opts.output);
+                    }
+                }
+            } else if (command == "fwxaes-enc" || command == "fwxaes-heavy-enc") {
                 if (!opts.ignore_media && LooksLikeMediaPath(std::filesystem::path(opts.input))) {
                     try {
                         std::cout << basefwx::Jmge(

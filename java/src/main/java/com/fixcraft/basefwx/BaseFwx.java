@@ -1106,8 +1106,9 @@ public final class BaseFwx {
             byte[] userBlob = readExactBytes(in, lenUser, "Ciphertext payload truncated");
             int lenMaster = readU32(in, "Ciphertext payload truncated");
             byte[] masterBlob = readExactBytes(in, lenMaster, "Ciphertext payload truncated");
-            int lenPayload = readU32(in, "Ciphertext payload truncated");
-            if (lenPayload < 4 + Constants.AEAD_NONCE_LEN + Constants.AEAD_TAG_LEN) {
+            int lenPayloadHeader = readU32(in, "Ciphertext payload truncated");
+            long lenPayload = resolvePayloadLengthFromFileSize(input, lenUser, lenMaster, lenPayloadHeader);
+            if (lenPayload < 4L + Constants.AEAD_NONCE_LEN + Constants.AEAD_TAG_LEN) {
                 throw new IllegalArgumentException("Ciphertext payload truncated");
             }
             int metaLen = readU32(in, "Ciphertext payload truncated");
@@ -1126,7 +1127,7 @@ public final class BaseFwx {
             obfuscateStream = !"no".equalsIgnoreCase(obfHint);
             fastObfStream = "fast".equalsIgnoreCase(obfHint);
             byte[] nonce = readExactBytes(in, Constants.AEAD_NONCE_LEN, "Ciphertext payload truncated");
-            long cipherBodyLen = (lenPayload & 0xFFFFFFFFL) - 4L - metaLen
+            long cipherBodyLen = lenPayload - 4L - metaLen
                 - Constants.AEAD_NONCE_LEN - Constants.AEAD_TAG_LEN;
             if (cipherBodyLen < 0) {
                 throw new IllegalArgumentException("Ciphertext payload truncated");
@@ -1394,8 +1395,9 @@ public final class BaseFwx {
             byte[] userBlob = readExactBytes(in, lenUser, "Ciphertext payload truncated");
             int lenMaster = readU32(in, "Ciphertext payload truncated");
             byte[] masterBlob = readExactBytes(in, lenMaster, "Ciphertext payload truncated");
-            int lenPayload = readU32(in, "Ciphertext payload truncated");
-            if (lenPayload < 4 + Constants.AEAD_NONCE_LEN + Constants.AEAD_TAG_LEN) {
+            int lenPayloadHeader = readU32(in, "Ciphertext payload truncated");
+            long lenPayload = resolvePayloadLengthFromFileSize(input, lenUser, lenMaster, lenPayloadHeader);
+            if (lenPayload < 4L + Constants.AEAD_NONCE_LEN + Constants.AEAD_TAG_LEN) {
                 throw new IllegalArgumentException("Ciphertext payload truncated");
             }
             int metaLen = readU32(in, "Ciphertext payload truncated");
@@ -1420,7 +1422,7 @@ public final class BaseFwx {
             int kdfIterHint = parseMetadataInt(metaValue(metadataBlob, "ENC-KDF-ITER"), Constants.HEAVY_PBKDF2_ITERATIONS);
 
             byte[] nonce = readExactBytes(in, Constants.AEAD_NONCE_LEN, "Ciphertext payload truncated");
-            long cipherBodyLen = (lenPayload & 0xFFFFFFFFL) - 4L - metaLen
+            long cipherBodyLen = lenPayload - 4L - metaLen
                 - Constants.AEAD_NONCE_LEN - Constants.AEAD_TAG_LEN;
             if (cipherBodyLen < 0) {
                 throw new IllegalArgumentException("Ciphertext payload truncated");
@@ -3219,6 +3221,29 @@ public final class BaseFwx {
             }
             remaining -= read;
         }
+    }
+
+    private static long resolvePayloadLengthFromFileSize(File input,
+                                                         int lenUser,
+                                                         int lenMaster,
+                                                         int encodedPayloadLen) {
+        long payloadLen = encodedPayloadLen & 0xFFFFFFFFL;
+        long prefixLen = 4L + (lenUser & 0xFFFFFFFFL)
+            + 4L + (lenMaster & 0xFFFFFFFFL)
+            + 4L;
+        long fileSize = input.length();
+        if (fileSize < prefixLen) {
+            return payloadLen;
+        }
+        long actualPayloadLen = fileSize - prefixLen;
+        if (actualPayloadLen == payloadLen) {
+            return payloadLen;
+        }
+        long mod = 1L << 32;
+        if (actualPayloadLen > payloadLen && ((actualPayloadLen - payloadLen) % mod) == 0L) {
+            return actualPayloadLen;
+        }
+        return payloadLen;
     }
 
     private static int readU32(InputStream input, String error) throws IOException {

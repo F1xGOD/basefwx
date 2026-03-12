@@ -1,5 +1,7 @@
 #pragma once
 
+#include "basefwx/archive.hpp"
+
 #include <cstddef>
 #include <cstdint>
 #include <iosfwd>
@@ -25,6 +27,7 @@ struct NormalizeOptions {
 
 struct PackOptions {
     bool compress = false;
+    basefwx::archive::CompressionPreset compression = basefwx::archive::CompressionPreset::Auto;
 };
 
 Bytes EncryptRaw(const Bytes& plaintext, const std::string& password, const Options& options = {});

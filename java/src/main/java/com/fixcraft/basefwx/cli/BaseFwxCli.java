@@ -1,6 +1,8 @@
 package com.fixcraft.basefwx.cli;
 
 import com.fixcraft.basefwx.BaseFwx;
+import com.fixcraft.basefwx.Base64Codec;
+import com.fixcraft.basefwx.Constants;
 import com.fixcraft.basefwx.MediaCipher;
 import com.fixcraft.basefwx.RuntimeLog;
 
@@ -13,8 +15,10 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Arrays;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.Locale;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -593,6 +597,384 @@ public final class BaseFwxCli {
         return new String[] {encode, decode, pixels, reason};
     }
 
+    private static boolean isPassiveCommand(String command) {
+        return "help".equals(command)
+            || "--help".equals(command)
+            || "-h".equals(command)
+            || "version".equals(command)
+            || "--version".equals(command)
+            || "-V".equals(command)
+            || "info".equals(command)
+            || "probe".equals(command)
+            || "identify".equals(command);
+    }
+
+    private static final class BaseContainerInspect {
+        long userBlobLen;
+        long masterBlobLen;
+        long payloadLen;
+        long payloadLenHeader;
+        long metadataLen;
+        String metadataBlob = "";
+        Map<String, String> metadata = new LinkedHashMap<String, String>();
+        String containerState = "unknown";
+    }
+
+    private static final class RawFwxInspect {
+        int algo;
+        int kdf;
+        int saltLen;
+        int ivLen;
+        long kdfParam;
+        long ciphertextLen;
+        long totalLen;
+        long expectedLen;
+        String containerState = "unknown";
+    }
+
+    private static long readU32(byte[] data, int offset) {
+        if (offset < 0 || offset + 4 > data.length) {
+            throw new IllegalArgumentException("Malformed length-prefixed blob (missing length)");
+        }
+        return ((long) (data[offset] & 0xFF) << 24)
+            | ((long) (data[offset + 1] & 0xFF) << 16)
+            | ((long) (data[offset + 2] & 0xFF) << 8)
+            | (long) (data[offset + 3] & 0xFF);
+    }
+
+    private static String decodePackMode(String raw) {
+        if ("g".equals(raw)) {
+            return "tgz";
+        }
+        if ("x".equals(raw)) {
+            return "txz";
+        }
+        return "none";
+    }
+
+    private static String kdfLabel(int kdf) {
+        if (kdf == Constants.FWXAES_KDF_PBKDF2) {
+            return "pbkdf2";
+        }
+        if (kdf == Constants.FWXAES_KDF_WRAP) {
+            return "keywrap";
+        }
+        return String.format(Locale.US, "unknown(0x%02x)", kdf);
+    }
+
+    private static String algoLabel(int algo) {
+        if (algo == Constants.FWXAES_ALGO) {
+            return "aes-256-gcm";
+        }
+        return String.format(Locale.US, "unknown(0x%02x)", algo);
+    }
+
+    private static Map<String, String> decodeMetadataMap(String blob) {
+        Map<String, String> out = new LinkedHashMap<String, String>();
+        if (blob == null || blob.isEmpty()) {
+            return out;
+        }
+        final String json;
+        try {
+            byte[] decoded = Base64Codec.decode(blob);
+            json = new String(decoded, StandardCharsets.UTF_8);
+        } catch (Exception exc) {
+            return out;
+        }
+        int pos = 0;
+        while (true) {
+            int keyStart = json.indexOf('"', pos);
+            if (keyStart < 0) {
+                break;
+            }
+            int keyEnd = json.indexOf('"', keyStart + 1);
+            if (keyEnd < 0) {
+                break;
+            }
+            String key = json.substring(keyStart + 1, keyEnd);
+            int colon = json.indexOf(':', keyEnd + 1);
+            if (colon < 0) {
+                break;
+            }
+            int valStart = json.indexOf('"', colon + 1);
+            if (valStart < 0) {
+                break;
+            }
+            int valEnd = json.indexOf('"', valStart + 1);
+            if (valEnd < 0) {
+                break;
+            }
+            String value = json.substring(valStart + 1, valEnd);
+            out.put(key, value);
+            pos = valEnd + 1;
+        }
+        return out;
+    }
+
+    private static long resolvePayloadLengthFromFileSize(File input,
+                                                         long lenUser,
+                                                         long lenMaster,
+                                                         long encodedPayloadLen) {
+        final long u32Mod = (1L << 32);
+        long payloadLen = encodedPayloadLen;
+        long prefixLen = 4L + lenUser + 4L + lenMaster + 4L;
+        long fileSize = input.length();
+        if (fileSize < prefixLen) {
+            return payloadLen;
+        }
+        long actualPayloadLen = fileSize - prefixLen;
+        if (actualPayloadLen == payloadLen) {
+            return payloadLen;
+        }
+        if (actualPayloadLen > payloadLen && ((actualPayloadLen - payloadLen) % u32Mod) == 0L) {
+            return actualPayloadLen;
+        }
+        return payloadLen;
+    }
+
+    private static BaseContainerInspect inspectBaseContainer(File path, byte[] blob) {
+        if (blob.length < 12) {
+            throw new IllegalArgumentException("Malformed length-prefixed blob (truncated part)");
+        }
+        int offset = 0;
+        long lenUser = readU32(blob, offset);
+        offset += 4;
+        if (offset + lenUser + 4L > blob.length) {
+            throw new IllegalArgumentException("Malformed length-prefixed blob (truncated part)");
+        }
+        offset += (int) lenUser;
+
+        long lenMaster = readU32(blob, offset);
+        offset += 4;
+        if (offset + lenMaster + 4L > blob.length) {
+            throw new IllegalArgumentException("Malformed length-prefixed blob (truncated part)");
+        }
+        offset += (int) lenMaster;
+
+        long payloadLenHeader = readU32(blob, offset);
+        offset += 4;
+        long payloadLen = resolvePayloadLengthFromFileSize(path, lenUser, lenMaster, payloadLenHeader);
+        long actualPayloadLen = blob.length - offset;
+        if (payloadLen < 0L || payloadLen > actualPayloadLen) {
+            throw new IllegalArgumentException("Malformed length-prefixed blob (truncated part)");
+        }
+
+        byte[] payload = Arrays.copyOfRange(blob, offset, offset + (int) payloadLen);
+        String state = actualPayloadLen > payloadLen
+            ? "extra-bytes"
+            : (actualPayloadLen < payloadLen ? "truncated" : "exact");
+
+        long metadataLen = 0L;
+        String metadataBlob = "";
+        Map<String, String> metadataMap = new LinkedHashMap<String, String>();
+        if (payload.length >= 4) {
+            long candidateLen = readU32(payload, 0);
+            if (4L + candidateLen <= payload.length) {
+                String candidateBlob = candidateLen > 0
+                    ? new String(payload, 4, (int) candidateLen, StandardCharsets.UTF_8)
+                    : "";
+                Map<String, String> candidateMap = decodeMetadataMap(candidateBlob);
+                if (candidateLen == 0 || !candidateMap.isEmpty()) {
+                    metadataLen = candidateLen;
+                    metadataBlob = candidateBlob;
+                    metadataMap = candidateMap;
+                }
+            }
+        }
+        BaseContainerInspect out = new BaseContainerInspect();
+        out.userBlobLen = lenUser;
+        out.masterBlobLen = lenMaster;
+        out.payloadLen = payloadLen;
+        out.payloadLenHeader = payloadLenHeader;
+        out.metadataLen = metadataLen;
+        out.metadataBlob = metadataBlob;
+        out.metadata = metadataMap;
+        out.containerState = state;
+        return out;
+    }
+
+    private static RawFwxInspect inspectRawFwx(byte[] blob) {
+        if (blob.length < 16) {
+            throw new IllegalArgumentException("not raw FWX1");
+        }
+        for (int i = 0; i < Constants.FWXAES_MAGIC.length; i++) {
+            if (blob[i] != Constants.FWXAES_MAGIC[i]) {
+                throw new IllegalArgumentException("not raw FWX1");
+            }
+        }
+        RawFwxInspect out = new RawFwxInspect();
+        out.algo = blob[4] & 0xFF;
+        out.kdf = blob[5] & 0xFF;
+        out.saltLen = blob[6] & 0xFF;
+        out.ivLen = blob[7] & 0xFF;
+        out.kdfParam = readU32(blob, 8);
+        out.ciphertextLen = readU32(blob, 12);
+        long variableLen = out.kdf == Constants.FWXAES_KDF_WRAP ? out.kdfParam : out.saltLen;
+        out.expectedLen = 16L + variableLen + out.ivLen + out.ciphertextLen;
+        out.totalLen = blob.length;
+        if (out.totalLen < out.expectedLen) {
+            out.containerState = "truncated";
+        } else if (out.totalLen > out.expectedLen) {
+            out.containerState = "extra-bytes";
+        } else {
+            out.containerState = "exact";
+        }
+        return out;
+    }
+
+    private static String metadataField(Map<String, String> metadata, String key) {
+        String value = metadata.get(key);
+        return (value == null || value.isEmpty()) ? "unknown" : value;
+    }
+
+    private static void printVersionInfo() {
+        System.out.println("basefwx_java " + Constants.ENGINE_VERSION);
+        System.out.println("java: " + System.getProperty("java.version", "unknown"));
+        System.out.println("vm: " + System.getProperty("java.vm.name", "unknown"));
+        System.out.println(
+            "os: "
+                + System.getProperty("os.name", "unknown")
+                + " "
+                + System.getProperty("os.arch", "unknown")
+        );
+    }
+
+    private static void runInspect(String command, String[] args) {
+        if (args.length < 2) {
+            throw new IllegalArgumentException("Missing file path");
+        }
+        File path = new File(args[1]);
+        if (!path.isFile()) {
+            throw new IllegalArgumentException("File not found: " + path.getPath());
+        }
+        boolean includeJson = "info".equals(command);
+        for (int i = 2; i < args.length; i++) {
+            String flag = args[i];
+            if ("--json".equals(flag)) {
+                includeJson = true;
+            } else {
+                throw new IllegalArgumentException("Unknown flag: " + flag);
+            }
+        }
+
+        byte[] blob = readAllBytes(path);
+        BaseContainerInspect baseInfo = null;
+        RawFwxInspect rawInfo = null;
+        try {
+            baseInfo = inspectBaseContainer(path, blob);
+        } catch (RuntimeException ignored) {
+            baseInfo = null;
+        }
+        if (baseInfo == null) {
+            try {
+                rawInfo = inspectRawFwx(blob);
+            } catch (RuntimeException ignored) {
+                rawInfo = null;
+            }
+        }
+        if (baseInfo == null && rawInfo == null) {
+            throw new IllegalArgumentException("Not a recognizable BaseFWX payload");
+        }
+
+        if (baseInfo != null) {
+            if ("info".equals(command)) {
+                System.out.println("user_blob_len: " + baseInfo.userBlobLen + " bytes");
+                System.out.println("master_blob_len: " + baseInfo.masterBlobLen + " bytes");
+                System.out.println("payload_len: " + baseInfo.payloadLen + " bytes");
+                if (baseInfo.metadataLen > 0) {
+                    System.out.println("metadata_len: " + baseInfo.metadataLen + " bytes");
+                }
+                if (!baseInfo.metadataBlob.isEmpty()) {
+                    System.out.println("metadata_json: " + baseInfo.metadataBlob);
+                } else {
+                    System.out.println("metadata_json: <unavailable>");
+                }
+                return;
+            }
+
+            System.out.println("file: " + path.getPath());
+            System.out.println("format: basefwx");
+            System.out.println("user_blob_len: " + baseInfo.userBlobLen + " bytes");
+            System.out.println("master_blob_len: " + baseInfo.masterBlobLen + " bytes");
+            System.out.println("payload_len: " + baseInfo.payloadLen + " bytes");
+            System.out.println("engine_version: " + metadataField(baseInfo.metadata, "ENC-VERSION"));
+            System.out.println("method: " + metadataField(baseInfo.metadata, "ENC-METHOD"));
+            System.out.println("time_utc: " + metadataField(baseInfo.metadata, "ENC-TIME"));
+            StringBuilder kdf = new StringBuilder("kdf: " + metadataField(baseInfo.metadata, "ENC-KDF"));
+            String kdfIter = baseInfo.metadata.get("ENC-KDF-ITER");
+            if (kdfIter != null && !kdfIter.isEmpty()) {
+                kdf.append(" iter=").append(kdfIter);
+            }
+            String argonTc = baseInfo.metadata.get("ENC-ARGON2-TC");
+            String argonMem = baseInfo.metadata.get("ENC-ARGON2-MEM");
+            String argonPar = baseInfo.metadata.get("ENC-ARGON2-PAR");
+            if ((argonTc != null && !argonTc.isEmpty())
+                    || (argonMem != null && !argonMem.isEmpty())
+                    || (argonPar != null && !argonPar.isEmpty())) {
+                kdf.append(" argon2(tc=").append(argonTc == null ? "?" : argonTc)
+                    .append(",mem=").append(argonMem == null ? "?" : argonMem)
+                    .append(",par=").append(argonPar == null ? "?" : argonPar)
+                    .append(")");
+            }
+            System.out.println(kdf.toString());
+            System.out.println("aead: " + metadataField(baseInfo.metadata, "ENC-AEAD"));
+            System.out.println("obfuscation: " + metadataField(baseInfo.metadata, "ENC-OBF"));
+            System.out.println("master_mode: " + metadataField(baseInfo.metadata, "ENC-MASTER"));
+            System.out.println("kem: " + metadataField(baseInfo.metadata, "ENC-KEM"));
+            System.out.println("pack_mode: " + decodePackMode(baseInfo.metadata.get("ENC-P")));
+            if (includeJson) {
+                if (!baseInfo.metadataBlob.isEmpty()) {
+                    System.out.println("metadata_json: " + baseInfo.metadataBlob);
+                } else {
+                    System.out.println("metadata_json: <unavailable>");
+                }
+            }
+            return;
+        }
+
+        if ("info".equals(command)) {
+            System.out.println("format: fwxaes-raw");
+            System.out.println("algo: " + algoLabel(rawInfo.algo));
+            System.out.println("kdf: " + kdfLabel(rawInfo.kdf));
+            if (rawInfo.kdf == Constants.FWXAES_KDF_PBKDF2) {
+                System.out.println("kdf_iters: " + rawInfo.kdfParam);
+            } else if (rawInfo.kdf == Constants.FWXAES_KDF_WRAP) {
+                System.out.println("key_header_len: " + rawInfo.kdfParam + " bytes");
+            }
+            System.out.println("salt_len: " + rawInfo.saltLen + " bytes");
+            System.out.println("iv_len: " + rawInfo.ivLen + " bytes");
+            System.out.println("ciphertext_len: " + rawInfo.ciphertextLen + " bytes");
+            System.out.println("container_len: " + rawInfo.totalLen + " bytes");
+            System.out.println("expected_len: " + rawInfo.expectedLen + " bytes");
+            System.out.println("container_state: " + rawInfo.containerState);
+            if (includeJson) {
+                System.out.println("metadata_json: <unavailable>");
+            }
+            return;
+        }
+
+        System.out.println("file: " + path.getPath());
+        System.out.println("format: fwxaes-raw");
+        System.out.println("engine_version: n/a");
+        System.out.println("method: fwxaes-raw");
+        StringBuilder kdf = new StringBuilder("kdf: " + kdfLabel(rawInfo.kdf));
+        if (rawInfo.kdf == Constants.FWXAES_KDF_PBKDF2) {
+            kdf.append(" iter=").append(rawInfo.kdfParam);
+        } else if (rawInfo.kdf == Constants.FWXAES_KDF_WRAP) {
+            kdf.append(" key_header_len=").append(rawInfo.kdfParam);
+        }
+        System.out.println(kdf.toString());
+        System.out.println("algo: " + algoLabel(rawInfo.algo));
+        System.out.println("salt_len: " + rawInfo.saltLen + " bytes");
+        System.out.println("iv_len: " + rawInfo.ivLen + " bytes");
+        System.out.println("ciphertext_len: " + rawInfo.ciphertextLen + " bytes");
+        System.out.println("metadata: unavailable");
+        System.out.println("container_state: " + rawInfo.containerState);
+        if (includeJson) {
+            System.out.println("metadata_json: <unavailable>");
+        }
+    }
+
     public static void main(String[] args) {
         if (args == null || args.length == 0) {
             usage();
@@ -607,6 +989,24 @@ public final class BaseFwxCli {
         }
 
         String command = args[0];
+        if ("help".equals(command) || "--help".equals(command) || "-h".equals(command)) {
+            usage();
+            return;
+        }
+        if ("version".equals(command) || "--version".equals(command) || "-V".equals(command)) {
+            printVersionInfo();
+            return;
+        }
+        if ("info".equals(command) || "probe".equals(command) || "identify".equals(command)) {
+            try {
+                runInspect(command, args);
+            } catch (RuntimeException exc) {
+                System.err.println("Error: " + exc.getMessage());
+                System.exit(1);
+            }
+            return;
+        }
+
         boolean useMaster = true;
         int argc = args.length;
         for (String arg : args) {
@@ -615,19 +1015,22 @@ public final class BaseFwxCli {
             }
         }
 
-        String[] hw = hwPlanForCommand(command);
-        RuntimeLog.hwLine(
-            "🎛 [basefwx.hw] op=" + command
-                + " encode=" + hw[0]
-                + " decode=" + hw[1]
-                + " pixels=" + hw[2]
-                + " parallel=" + parallelText()
-                + " crypto=CPU"
-                + " aes_accel=" + aesAccelState()
-        );
-        RuntimeLog.hwReason(hw[3] + "; AES operations remain on CPU (JCE/OpenSSL-backed providers)");
-        boolean expectGpu = "NVENC".equals(hw[0]) || "QSV".equals(hw[0]) || "VAAPI".equals(hw[0]);
-        CommandTelemetry telemetry = new CommandTelemetry(RuntimeLog.shouldLog(), expectGpu);
+        CommandTelemetry telemetry = null;
+        if (!isPassiveCommand(command)) {
+            String[] hw = hwPlanForCommand(command);
+            RuntimeLog.hwLine(
+                "🎛 [basefwx.hw] op=" + command
+                    + " encode=" + hw[0]
+                    + " decode=" + hw[1]
+                    + " pixels=" + hw[2]
+                    + " parallel=" + parallelText()
+                    + " crypto=CPU"
+                    + " aes_accel=" + aesAccelState()
+            );
+            RuntimeLog.hwReason(hw[3] + "; AES operations remain on CPU (JCE/OpenSSL-backed providers)");
+            boolean expectGpu = "NVENC".equals(hw[0]) || "QSV".equals(hw[0]) || "VAAPI".equals(hw[0]);
+            telemetry = new CommandTelemetry(RuntimeLog.shouldLog(), expectGpu);
+        }
 
         try {
             switch (command) {
@@ -1344,49 +1747,69 @@ public final class BaseFwxCli {
             System.err.println("Error: " + exc.getMessage());
             System.exit(1);
         } finally {
-            telemetry.close();
+            if (telemetry != null) {
+                telemetry.close();
+            }
         }
     }
 
     private static void usage() {
-        System.out.println("BaseFWX Java CLI");
-        System.out.println("  [global] --verbose|-v --no-log");
-        System.out.println("  fwxaes-enc <in> <out> <password> [--no-master]");
-        System.out.println("  fwxaes-dec <in> <out> <password> [--no-master]");
-        System.out.println("  fwxaes-stream-enc <in> <out> <password> [--no-master]");
-        System.out.println("  fwxaes-stream-dec <in> <out> <password> [--no-master]");
-        System.out.println("  fwxaes-live-enc <in> <out> <password> [--no-master]");
-        System.out.println("  fwxaes-live-dec <in> <out> <password> [--no-master]");
+        System.out.println("basefwx_java");
+        System.out.println("Usage: basefwx_java [global] <command> [args]");
+        System.out.println("Global: --verbose|-v --no-log");
+        System.out.println();
+        System.out.println("General:");
+        System.out.println("  help");
+        System.out.println("  version");
+        System.out.println("  info <file> [--json]");
+        System.out.println("  probe <file> [--json]");
+        System.out.println("  identify <file> [--json]");
+        System.out.println();
+        System.out.println("Codec:");
         System.out.println("  b64-enc <text>");
         System.out.println("  b64-dec <text>");
         System.out.println("  n10-enc <text>");
         System.out.println("  n10-dec <digits>");
         System.out.println("  n10file-enc <in> <out>");
         System.out.println("  n10file-dec <in> <out>");
-        System.out.println("  kFMe <in> [--out <out>] [--bw]");
-        System.out.println("  kFMd <in> [--out <out>] [--bw]");
-        System.out.println("  kFAe <in> [--out <out>] [--bw]   (deprecated alias)");
-        System.out.println("  kFAd <in> [--out <out>]          (deprecated alias)");
-        System.out.println("  hash512 <text>");
-        System.out.println("  uhash513 <text>");
+        System.out.println("  b256-enc <text>");
+        System.out.println("  b256-dec <text>");
         System.out.println("  a512-enc <text>");
         System.out.println("  a512-dec <text>");
         System.out.println("  bi512-enc <text>");
         System.out.println("  b1024-enc <text>");
+        System.out.println("  hash512 <text>");
+        System.out.println("  uhash513 <text>");
         System.out.println("  b512-enc <text> <password> [--no-master]");
         System.out.println("  b512-dec <text> <password> [--no-master]");
         System.out.println("  pb512-enc <text> <password> [--no-master]");
         System.out.println("  pb512-dec <text> <password> [--no-master]");
+        System.out.println();
+        System.out.println("File:");
         System.out.println("  b512file-enc <in> <out> <password> [--no-master]");
-        System.out.println("  b512file-bytes-rt <in> <out> <password> [--no-master]");
         System.out.println("  b512file-dec <in> <out> <password> [--no-master]");
+        System.out.println("  b512file-bytes-rt <in> <out> <password> [--no-master]");
         System.out.println("  pb512file-enc <in> <out> <password> [--no-master]");
-        System.out.println("  pb512file-bytes-rt <in> <out> <password> [--no-master]");
         System.out.println("  pb512file-dec <in> <out> <password> [--no-master]");
+        System.out.println("  pb512file-bytes-rt <in> <out> <password> [--no-master]");
+        System.out.println();
+        System.out.println("fwxAES:");
+        System.out.println("  fwxaes-enc <in> <out> <password> [--no-master]");
+        System.out.println("  fwxaes-dec <in> <out> <password> [--no-master]");
+        System.out.println("  fwxaes-stream-enc <in> <out> <password> [--no-master]");
+        System.out.println("  fwxaes-stream-dec <in> <out> <password> [--no-master]");
+        System.out.println("  fwxaes-live-enc <in> <out> <password> [--no-master]");
+        System.out.println("  fwxaes-live-dec <in> <out> <password> [--no-master]");
+        System.out.println();
+        System.out.println("Media:");
         System.out.println("  jmge <in> <out> <password> [--keep-meta] [--keep-input] [--no-archive] [--no-master]");
         System.out.println("  jmgd <in> <out> <password> [--no-master]");
-        System.out.println("  b256-enc <text>");
-        System.out.println("  b256-dec <text>");
+        System.out.println("  kFMe <in> [--out <out>] [--bw]");
+        System.out.println("  kFMd <in> [--out <out>] [--bw]");
+        System.out.println("  kFAe <in> [--out <out>] [--bw]  (deprecated alias)");
+        System.out.println("  kFAd <in> [--out <out>]         (deprecated alias)");
+        System.out.println();
+        System.out.println("Bench:");
         System.out.println("  bench-text <method> <text-file> <password> [--no-master]");
         System.out.println("  bench-hash <method> <text-file>");
         System.out.println("  bench-fwxaes <file> <password> [--no-master]");

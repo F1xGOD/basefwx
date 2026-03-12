@@ -112,6 +112,32 @@ std::uint64_t FileSize(const std::filesystem::path& path) {
     return static_cast<std::uint64_t>(size);
 }
 
+std::uint64_t ResolvePayloadLengthFromFileSize(const std::filesystem::path& input,
+                                               std::uint32_t len_user,
+                                               std::uint32_t len_master,
+                                               std::uint32_t encoded_payload_len) {
+    constexpr std::uint64_t kU32Mod = (1ULL << 32);
+    std::uint64_t payload_len = encoded_payload_len;
+    std::uint64_t prefix_len = 4ULL + static_cast<std::uint64_t>(len_user)
+                             + 4ULL + static_cast<std::uint64_t>(len_master)
+                             + 4ULL;
+    std::uint64_t file_size = FileSize(input);
+    if (file_size < prefix_len) {
+        return payload_len;
+    }
+    std::uint64_t actual_payload_len = file_size - prefix_len;
+    if (actual_payload_len == payload_len) {
+        return payload_len;
+    }
+    // Legacy stream format stores payload length in 32-bit BE. For payloads over
+    // 4 GiB this field wraps; recover true length using total file size.
+    if (actual_payload_len > payload_len
+        && ((actual_payload_len - payload_len) % kU32Mod) == 0) {
+        return actual_payload_len;
+    }
+    return payload_len;
+}
+
 Bytes ToBytes(const std::string& text) {
     return Bytes(text.begin(), text.end());
 }
@@ -830,7 +856,8 @@ std::string B512DecodeFileStream(const std::filesystem::path& input,
     }
     std::uint32_t len_payload = 0;
     read_u32(len_payload);
-    if (len_payload < 4 + constants::kAeadNonceLen + constants::kAeadTagLen) {
+    std::uint64_t payload_len = ResolvePayloadLengthFromFileSize(input, len_user, len_master, len_payload);
+    if (payload_len < 4 + constants::kAeadNonceLen + constants::kAeadTagLen) {
         throw std::runtime_error("Ciphertext payload truncated");
     }
     std::uint32_t metadata_len = 0;
@@ -849,7 +876,12 @@ std::string B512DecodeFileStream(const std::filesystem::path& input,
         throw std::runtime_error("Ciphertext payload truncated");
     }
 
-    std::uint64_t cipher_body_len = len_payload - 4 - metadata_len - constants::kAeadNonceLen - constants::kAeadTagLen;
+    std::uint64_t payload_overhead = 4ULL + static_cast<std::uint64_t>(metadata_len)
+                                   + constants::kAeadNonceLen + constants::kAeadTagLen;
+    if (payload_len < payload_overhead) {
+        throw std::runtime_error("Ciphertext payload truncated");
+    }
+    std::uint64_t cipher_body_len = payload_len - payload_overhead;
     std::uint64_t cipher_body_start = static_cast<std::uint64_t>(handle.tellg());
     handle.seekg(static_cast<std::streamoff>(cipher_body_len), std::ios::cur);
     Bytes tag(constants::kAeadTagLen);
@@ -1442,7 +1474,8 @@ std::string Pb512DecodeFileStream(const std::filesystem::path& input,
     }
     std::uint32_t len_payload = 0;
     read_u32(len_payload);
-    if (len_payload < 4 + constants::kAeadNonceLen + constants::kAeadTagLen) {
+    std::uint64_t payload_len = ResolvePayloadLengthFromFileSize(input, len_user, len_master, len_payload);
+    if (payload_len < 4 + constants::kAeadNonceLen + constants::kAeadTagLen) {
         throw std::runtime_error("Ciphertext payload truncated");
     }
     std::uint32_t metadata_len = 0;
@@ -1460,7 +1493,12 @@ std::string Pb512DecodeFileStream(const std::filesystem::path& input,
         throw std::runtime_error("Ciphertext payload truncated");
     }
 
-    std::uint64_t cipher_body_len = len_payload - 4 - metadata_len - constants::kAeadNonceLen - constants::kAeadTagLen;
+    std::uint64_t payload_overhead = 4ULL + static_cast<std::uint64_t>(metadata_len)
+                                   + constants::kAeadNonceLen + constants::kAeadTagLen;
+    if (payload_len < payload_overhead) {
+        throw std::runtime_error("Ciphertext payload truncated");
+    }
+    std::uint64_t cipher_body_len = payload_len - payload_overhead;
     std::uint64_t cipher_body_start = static_cast<std::uint64_t>(handle.tellg());
     handle.seekg(static_cast<std::streamoff>(cipher_body_len), std::ios::cur);
     Bytes tag(constants::kAeadTagLen);
@@ -1683,7 +1721,7 @@ std::string B512EncodeFile(const std::string& path,
     if (!std::filesystem::exists(input)) {
         throw std::runtime_error("Input file not found: " + input.string());
     }
-    auto pack = basefwx::archive::PackInput(input, options.compress);
+    auto pack = basefwx::archive::PackInput(input, options.compress, options.compression);
     std::filesystem::path source = pack.used ? pack.source : input;
     std::string pack_flag = basefwx::archive::PackFlag(pack.mode);
     std::string output;
@@ -1971,7 +2009,7 @@ std::string Pb512EncodeFile(const std::string& path,
     if (!std::filesystem::exists(input)) {
         throw std::runtime_error("Input file not found: " + input.string());
     }
-    auto pack = basefwx::archive::PackInput(input, options.compress);
+    auto pack = basefwx::archive::PackInput(input, options.compress, options.compression);
     std::filesystem::path source = pack.used ? pack.source : input;
     std::string pack_flag = basefwx::archive::PackFlag(pack.mode);
     std::string output;

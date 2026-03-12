@@ -2055,6 +2055,31 @@ class basefwx:
         return tuple(parts)
 
     @staticmethod
+    def _resolve_payload_length_from_file_size(
+        path: "basefwx.pathlib.Path",
+        len_user: int,
+        len_master: int,
+        encoded_payload_len: int
+    ) -> int:
+        payload_len = int(encoded_payload_len)
+        if payload_len < 0:
+            payload_len = 0
+        try:
+            file_size = int(path.stat().st_size)
+        except Exception:
+            return payload_len
+        prefix_len = 4 + int(len_user) + 4 + int(len_master) + 4
+        if file_size < prefix_len:
+            return payload_len
+        actual_payload_len = file_size - prefix_len
+        if actual_payload_len == payload_len:
+            return payload_len
+        mod = 1 << 32
+        if actual_payload_len > payload_len and ((actual_payload_len - payload_len) % mod) == 0:
+            return actual_payload_len
+        return payload_len
+
+    @staticmethod
     def _mask_payload(mask_key: bytes, payload: bytes, *, info: bytes) -> bytes:
         if not payload:
             return b""
@@ -6137,6 +6162,12 @@ class basefwx:
                 if len(len_payload_bytes) < 4:
                     raise ValueError("Ciphertext payload truncated")
                 len_payload = int.from_bytes(len_payload_bytes, 'big')
+                len_payload = basefwx._resolve_payload_length_from_file_size(
+                    path,
+                    len_user,
+                    len_master,
+                    len_payload
+                )
                 if len_payload < 4 + basefwx.AEAD_NONCE_LEN + basefwx.AEAD_TAG_LEN:
                     raise ValueError("Ciphertext payload truncated")
                 metadata_len_bytes = handle.read(4)
@@ -10277,6 +10308,12 @@ class basefwx:
                 if len(len_payload_bytes) < 4:
                     raise ValueError("Ciphertext payload truncated")
                 len_payload = int.from_bytes(len_payload_bytes, 'big')
+                len_payload = basefwx._resolve_payload_length_from_file_size(
+                    path,
+                    len_user,
+                    len_master,
+                    len_payload
+                )
                 if len_payload < 4 + basefwx.AEAD_NONCE_LEN + basefwx.AEAD_TAG_LEN:
                     raise ValueError("Ciphertext payload truncated")
                 metadata_len_bytes = handle.read(4)
@@ -11559,8 +11596,256 @@ def cli(argv=None) -> int:
         if response.strip() != "YES":
             raise SystemExit(theme.err("Aborted: multi-thread disabled by user override"))
 
-    parser = argparse.ArgumentParser(prog="basefwx", description="BASEFWX encryption toolkit")
+    def _decode_pack_mode(flag: str) -> str:
+        if flag == "g":
+            return "tgz"
+        if flag == "x":
+            return "txz"
+        return "none"
+
+    def _is_fwx_raw(blob: bytes) -> bool:
+        return len(blob) >= 16 and blob[:4] == basefwx.FWXAES_MAGIC
+
+    def _inspect_raw_fwx(blob: bytes) -> dict:
+        if not _is_fwx_raw(blob):
+            raise ValueError("not raw FWX1")
+        algo = blob[4]
+        kdf = blob[5]
+        salt_len = blob[6]
+        iv_len = blob[7]
+        kdf_param = int.from_bytes(blob[8:12], "big")
+        ciphertext_len = int.from_bytes(blob[12:16], "big")
+        variable_len = kdf_param if kdf == 0x02 else salt_len
+        expected_len = 16 + int(variable_len) + int(iv_len) + int(ciphertext_len)
+        total_len = len(blob)
+        if total_len < expected_len:
+            state = "truncated"
+        elif total_len > expected_len:
+            state = "extra-bytes"
+        else:
+            state = "exact"
+        return {
+            "format": "fwxaes-raw",
+            "algo": algo,
+            "kdf": kdf,
+            "salt_len": int(salt_len),
+            "iv_len": int(iv_len),
+            "kdf_param": int(kdf_param),
+            "ciphertext_len": int(ciphertext_len),
+            "total_len": int(total_len),
+            "expected_len": int(expected_len),
+            "container_state": state,
+        }
+
+    def _inspect_basefwx_blob(path: "basefwx.pathlib.Path", blob: bytes) -> dict:
+        total = len(blob)
+        if total < 12:
+            raise ValueError("too short")
+        offset = 0
+        len_user = int.from_bytes(blob[offset:offset + 4], "big")
+        offset += 4
+        if offset + len_user + 4 > total:
+            raise ValueError("Malformed length-prefixed blob (truncated part)")
+        user_blob = blob[offset:offset + len_user]
+        offset += len_user
+        len_master = int.from_bytes(blob[offset:offset + 4], "big")
+        offset += 4
+        if offset + len_master + 4 > total:
+            raise ValueError("Malformed length-prefixed blob (truncated part)")
+        master_blob = blob[offset:offset + len_master]
+        offset += len_master
+        payload_len_header = int.from_bytes(blob[offset:offset + 4], "big")
+        offset += 4
+
+        payload_len = basefwx._resolve_payload_length_from_file_size(
+            path,
+            len_user,
+            len_master,
+            payload_len_header
+        )
+        actual_payload_len = total - offset
+        if payload_len < 0 or payload_len > actual_payload_len:
+            raise ValueError("Malformed length-prefixed blob (truncated part)")
+        if actual_payload_len > payload_len:
+            state = "extra-bytes"
+        elif actual_payload_len < payload_len:
+            state = "truncated"
+        else:
+            state = "exact"
+
+        payload = blob[offset:offset + payload_len]
+        metadata_len = 0
+        metadata_blob = ""
+        metadata_map = {}
+        if len(payload) >= 4:
+            metadata_len_candidate = int.from_bytes(payload[:4], "big")
+            if 4 + metadata_len_candidate <= len(payload):
+                metadata_bytes = payload[4:4 + metadata_len_candidate]
+                metadata_blob_candidate = metadata_bytes.decode("utf-8", errors="replace") if metadata_bytes else ""
+                metadata_map_candidate = basefwx._decode_metadata(metadata_blob_candidate)
+                if metadata_len_candidate == 0 or metadata_map_candidate:
+                    metadata_len = int(metadata_len_candidate)
+                    metadata_blob = metadata_blob_candidate
+                    metadata_map = metadata_map_candidate
+        return {
+            "format": "basefwx",
+            "user_blob_len": len(user_blob),
+            "master_blob_len": len(master_blob),
+            "payload_len": int(payload_len),
+            "payload_len_header": int(payload_len_header),
+            "metadata_len": int(metadata_len),
+            "metadata_blob": metadata_blob,
+            "metadata": metadata_map,
+            "container_state": state,
+        }
+
+    def _kdf_label(kdf_id: int) -> str:
+        if kdf_id == 0x01:
+            return "pbkdf2"
+        if kdf_id == 0x02:
+            return "keywrap"
+        return f"unknown(0x{kdf_id:02x})"
+
+    def _algo_label(algo_id: int) -> str:
+        if algo_id == 0x01:
+            return "aes-256-gcm"
+        return f"unknown(0x{algo_id:02x})"
+
+    def _run_inspect(command: str, file_path: str, include_json: bool) -> int:
+        path_obj = basefwx.pathlib.Path(file_path)
+        if not path_obj.exists():
+            print(theme.err(f"File not found: {path_obj}"))
+            return 1
+        blob = path_obj.read_bytes()
+
+        base_info = None
+        raw_info = None
+        try:
+            base_info = _inspect_basefwx_blob(path_obj, blob)
+        except Exception:
+            base_info = None
+        if base_info is None:
+            try:
+                raw_info = _inspect_raw_fwx(blob)
+            except Exception:
+                raw_info = None
+        if base_info is None and raw_info is None:
+            print(theme.err("Not a recognizable BaseFWX payload"))
+            return 1
+
+        if base_info is not None:
+            meta = base_info["metadata"] or {}
+            if command == "info":
+                print(f"user_blob_len: {base_info['user_blob_len']} bytes")
+                print(f"master_blob_len: {base_info['master_blob_len']} bytes")
+                print(f"payload_len: {base_info['payload_len']} bytes")
+                if base_info["metadata_len"] > 0:
+                    print(f"metadata_len: {base_info['metadata_len']} bytes")
+                if base_info["metadata_blob"]:
+                    print(f"metadata_json: {base_info['metadata_blob']}")
+                else:
+                    print("metadata_json: <unavailable>")
+                return 0
+
+            print(f"file: {path_obj}")
+            print("format: basefwx")
+            print(f"user_blob_len: {base_info['user_blob_len']} bytes")
+            print(f"master_blob_len: {base_info['master_blob_len']} bytes")
+            print(f"payload_len: {base_info['payload_len']} bytes")
+            print(f"engine_version: {meta.get('ENC-VERSION', 'unknown')}")
+            print(f"method: {meta.get('ENC-METHOD', 'unknown')}")
+            print(f"time_utc: {meta.get('ENC-TIME', 'unknown')}")
+            kdf_line = f"kdf: {meta.get('ENC-KDF', 'unknown')}"
+            if meta.get("ENC-KDF-ITER"):
+                kdf_line += f" iter={meta.get('ENC-KDF-ITER')}"
+            if meta.get("ENC-ARGON2-TC") or meta.get("ENC-ARGON2-MEM") or meta.get("ENC-ARGON2-PAR"):
+                kdf_line += (
+                    f" argon2(tc={meta.get('ENC-ARGON2-TC', '?')},"
+                    f"mem={meta.get('ENC-ARGON2-MEM', '?')},"
+                    f"par={meta.get('ENC-ARGON2-PAR', '?')})"
+                )
+            print(kdf_line)
+            print(f"aead: {meta.get('ENC-AEAD', 'unknown')}")
+            print(f"obfuscation: {meta.get('ENC-OBF', 'unknown')}")
+            print(f"master_mode: {meta.get('ENC-MASTER', 'unknown')}")
+            print(f"kem: {meta.get('ENC-KEM', 'unknown')}")
+            print(f"pack_mode: {_decode_pack_mode(str(meta.get('ENC-P', '')))}")
+            if include_json:
+                if base_info["metadata_blob"]:
+                    print(f"metadata_json: {base_info['metadata_blob']}")
+                else:
+                    print("metadata_json: <unavailable>")
+            return 0
+
+        if command == "info":
+            print("format: fwxaes-raw")
+            print(f"algo: {_algo_label(raw_info['algo'])}")
+            print(f"kdf: {_kdf_label(raw_info['kdf'])}")
+            if raw_info["kdf"] == 0x01:
+                print(f"kdf_iters: {raw_info['kdf_param']}")
+            elif raw_info["kdf"] == 0x02:
+                print(f"key_header_len: {raw_info['kdf_param']} bytes")
+            print(f"salt_len: {raw_info['salt_len']} bytes")
+            print(f"iv_len: {raw_info['iv_len']} bytes")
+            print(f"ciphertext_len: {raw_info['ciphertext_len']} bytes")
+            print(f"container_len: {raw_info['total_len']} bytes")
+            print(f"expected_len: {raw_info['expected_len']} bytes")
+            print(f"container_state: {raw_info['container_state']}")
+            if include_json:
+                print("metadata_json: <unavailable>")
+            return 0
+
+        print(f"file: {path_obj}")
+        print("format: fwxaes-raw")
+        print("engine_version: n/a")
+        print("method: fwxaes-raw")
+        kdf_line = f"kdf: {_kdf_label(raw_info['kdf'])}"
+        if raw_info["kdf"] == 0x01:
+            kdf_line += f" iter={raw_info['kdf_param']}"
+        elif raw_info["kdf"] == 0x02:
+            kdf_line += f" key_header_len={raw_info['kdf_param']}"
+        print(kdf_line)
+        print(f"algo: {_algo_label(raw_info['algo'])}")
+        print(f"salt_len: {raw_info['salt_len']} bytes")
+        print(f"iv_len: {raw_info['iv_len']} bytes")
+        print(f"ciphertext_len: {raw_info['ciphertext_len']} bytes")
+        print("metadata: unavailable")
+        print(f"container_state: {raw_info['container_state']}")
+        if include_json:
+            print("metadata_json: <unavailable>")
+        return 0
+
+    parser = argparse.ArgumentParser(
+        prog="basefwx",
+        description="BASEFWX encryption toolkit"
+    )
     subparsers = parser.add_subparsers(dest="command", required=True)
+
+    subparsers.add_parser(
+        "version",
+        help="Show engine and build/runtime information"
+    )
+
+    info_cmd = subparsers.add_parser(
+        "info",
+        help="Inspect container internals for a BaseFWX file"
+    )
+    info_cmd.add_argument("file", help="Input file path")
+    info_cmd.add_argument("--json", action="store_true", help="Include metadata_json in output")
+
+    probe_cmd = subparsers.add_parser(
+        "probe",
+        help="Identify file format and encryption metadata"
+    )
+    probe_cmd.add_argument("file", help="Input file path")
+    probe_cmd.add_argument("--json", action="store_true", help="Include metadata_json in output")
+
+    identify_cmd = subparsers.add_parser(
+        "identify",
+        help="Alias for probe"
+    )
+    identify_cmd.add_argument("file", help="Input file path")
+    identify_cmd.add_argument("--json", action="store_true", help="Include metadata_json in output")
 
     cryptin = subparsers.add_parser(
         "cryptin",
@@ -11653,6 +11938,16 @@ def cli(argv=None) -> int:
         action="store_true",
         help="Do not delete the input after encryption"
     )
+    cryptin.add_argument(
+        "--no-stats",
+        action="store_true",
+        help="Disable live CPU/RAM/GPU telemetry in progress output"
+    )
+    cryptin.add_argument(
+        "--stats",
+        action="store_true",
+        help="Force-enable live CPU/RAM/GPU telemetry in progress output"
+    )
 
     n10_enc = subparsers.add_parser(
         "n10-enc",
@@ -11722,6 +12017,24 @@ def cli(argv=None) -> int:
     args = parser.parse_args(argv)
 
     _confirm_single_thread_cli()
+
+    if args.command == "version":
+        argon2_state = "ON" if basefwx.hash_secret_raw is not None else "OFF"
+        pq_state = "ON" if getattr(basefwx.ml_kem_768, "CIPHERTEXT_SIZE", 0) else "OFF"
+        pillow_state = "ON" if basefwx.Image is not None else "OFF"
+        numpy_state = "ON" if basefwx.np is not None else "OFF"
+        cupy_state = "ON" if basefwx.cp is not None else "OFF"
+        print(f"basefwx_python {basefwx.ENGINE_VERSION}")
+        print(f"python: {basefwx.sys.version.split()[0]}")
+        print(
+            "features: "
+            f"argon2={argon2_state} pq={pq_state} pillow={pillow_state} "
+            f"numpy={numpy_state} cupy={cupy_state}"
+        )
+        return 0
+
+    if args.command in {"info", "probe", "identify"}:
+        return _run_inspect(args.command, args.file, bool(args.json))
 
     if args.command == "n10-enc":
         print(basefwx.n10encode(args.text))
@@ -11794,113 +12107,126 @@ def cli(argv=None) -> int:
             return 1
 
     if args.command == "cryptin":
-        method = args.method.lower()
-        password = args.password or ""
-        use_master = args.use_master
-        if args.strip_metadata:
-            use_master = False
-        if not args.obfuscate:
-            basefwx.ENABLE_OBFUSCATION = False
+        prev_progress_telemetry = _os_module.getenv("BASEFWX_PROGRESS_TELEMETRY")
+        prev_master_pub_override = getattr(basefwx, "_MASTER_PUBKEY_OVERRIDE", None)
+        if args.no_stats:
+            _os_module.environ["BASEFWX_PROGRESS_TELEMETRY"] = "0"
+        elif args.stats:
+            _os_module.environ["BASEFWX_PROGRESS_TELEMETRY"] = "1"
         try:
-            master_pub_bytes = basefwx._resolve_master_pubkey_path(args.master_pub_path)
-        except FileNotFoundError as exc:
-            print(theme.err(f"Failed to load master public key: {exc}"))
-            return 1
-        basefwx._set_master_pubkey_override(master_pub_bytes)
-        method_map = {
-            "512": "b512",
-            "b512": "b512",
-            "fwx512": "b512",
-            "fwxaes": "fwxaes",
-            "fwxaes-light": "fwxaes",
-            "fwxaes-heavy": "fwxaes-heavy",
-            "aes": "aes-light",
-            "aes-light": "aes-light",
-            "256": "aes-light",
-            "light": "aes-light",
-            "aes-heavy": "fwxaes-heavy",
-            "heavy": "fwxaes-heavy",
-            "pb512": "fwxaes-heavy",
-            "aes512": "fwxaes-heavy"
-        }
+            method = args.method.lower()
+            password = args.password or ""
+            use_master = args.use_master
+            if args.strip_metadata:
+                use_master = False
+            if not args.obfuscate:
+                basefwx.ENABLE_OBFUSCATION = False
+            try:
+                master_pub_bytes = basefwx._resolve_master_pubkey_path(args.master_pub_path)
+            except FileNotFoundError as exc:
+                print(theme.err(f"Failed to load master public key: {exc}"))
+                return 1
+            basefwx._set_master_pubkey_override(master_pub_bytes)
+            method_map = {
+                "512": "b512",
+                "b512": "b512",
+                "fwx512": "b512",
+                "fwxaes": "fwxaes",
+                "fwxaes-light": "fwxaes",
+                "fwxaes-heavy": "fwxaes-heavy",
+                "aes": "aes-light",
+                "aes-light": "aes-light",
+                "256": "aes-light",
+                "light": "aes-light",
+                "aes-heavy": "fwxaes-heavy",
+                "heavy": "fwxaes-heavy",
+                "pb512": "fwxaes-heavy",
+                "aes512": "fwxaes-heavy"
+            }
 
-        normalized = method_map.get(method)
-        if not normalized:
-            parser.error(f"Unsupported method '{args.method}'")
+            normalized = method_map.get(method)
+            if not normalized:
+                parser.error(f"Unsupported method '{args.method}'")
 
-        if normalized in {"b512", "aes-light", "fwxaes-heavy"}:
-            hw_plan = basefwx.MediaCipher._build_hw_execution_plan(
-                f"cryptin-{normalized}",
-                stream_type="bytes",
-                allow_pixel_gpu=False,
-                prefer_cpu_decode=True,
-            )
-            basefwx.MediaCipher._log_hw_execution_plan(hw_plan)
+            if normalized in {"b512", "aes-light", "fwxaes-heavy"}:
+                hw_plan = basefwx.MediaCipher._build_hw_execution_plan(
+                    f"cryptin-{normalized}",
+                    stream_type="bytes",
+                    allow_pixel_gpu=False,
+                    prefer_cpu_decode=True,
+                )
+                basefwx.MediaCipher._log_hw_execution_plan(hw_plan)
 
-        if normalized in {"fwxaes", "fwxaes-heavy"}:
-            results = {}
-            for raw_path in args.paths:
-                try:
-                    basefwx.fwxAES_file(
-                        raw_path,
-                        password,
-                        use_master=use_master,
-                        heavy=(normalized == "fwxaes-heavy"),
-                        strip_metadata=args.strip_metadata,
-                        normalize=args.normalize,
-                        normalize_threshold=args.normalize_threshold,
-                        cover_phrase=args.cover_phrase,
-                        compress=args.compress,
-                        ignore_media=args.ignore_media,
-                        keep_meta=args.keep_meta,
-                        archive_original=args.archive_original,
-                        keep_input=args.keep_input
-                    )
-                    results[str(raw_path)] = "SUCCESS!"
-                except Exception as exc:
-                    results[str(raw_path)] = f"FAIL! {exc}"
-            result = results if len(args.paths) > 1 else next(iter(results.values()))
-        elif normalized == "b512":
-            result = basefwx.b512file(
-                args.paths,
-                password,
-                strip_metadata=args.strip_metadata,
-                use_master=use_master,
-                master_pubkey=master_pub_bytes,
-                compress=args.compress,
-                keep_input=args.keep_input
-            )
-        elif normalized == "aes-light":
-            result = basefwx.AESfile(
-                args.paths,
-                password,
-                light=True,
-                strip_metadata=args.strip_metadata,
-                use_master=use_master,
-                master_pubkey=master_pub_bytes,
-                compress=args.compress,
-                keep_input=args.keep_input
-            )
-        else:
-            parser.error(f"Unsupported method '{args.method}'")
+            if normalized in {"fwxaes", "fwxaes-heavy"}:
+                results = {}
+                for raw_path in args.paths:
+                    try:
+                        basefwx.fwxAES_file(
+                            raw_path,
+                            password,
+                            use_master=use_master,
+                            heavy=(normalized == "fwxaes-heavy"),
+                            strip_metadata=args.strip_metadata,
+                            normalize=args.normalize,
+                            normalize_threshold=args.normalize_threshold,
+                            cover_phrase=args.cover_phrase,
+                            compress=args.compress,
+                            ignore_media=args.ignore_media,
+                            keep_meta=args.keep_meta,
+                            archive_original=args.archive_original,
+                            keep_input=args.keep_input
+                        )
+                        results[str(raw_path)] = "SUCCESS!"
+                    except Exception as exc:
+                        results[str(raw_path)] = f"FAIL! {exc}"
+                result = results if len(args.paths) > 1 else next(iter(results.values()))
+            elif normalized == "b512":
+                result = basefwx.b512file(
+                    args.paths,
+                    password,
+                    strip_metadata=args.strip_metadata,
+                    use_master=use_master,
+                    master_pubkey=master_pub_bytes,
+                    compress=args.compress,
+                    keep_input=args.keep_input
+                )
+            elif normalized == "aes-light":
+                result = basefwx.AESfile(
+                    args.paths,
+                    password,
+                    light=True,
+                    strip_metadata=args.strip_metadata,
+                    use_master=use_master,
+                    master_pubkey=master_pub_bytes,
+                    compress=args.compress,
+                    keep_input=args.keep_input
+                )
+            else:
+                parser.error(f"Unsupported method '{args.method}'")
 
-        if isinstance(result, dict):
-            failures = 0
-            for path, status in result.items():
-                if status == "SUCCESS!":
-                    print(theme.ok(f"{path}: {status}"))
-                else:
-                    print(theme.err(f"{path}: {status}"))
-                if status != "SUCCESS!":
-                    failures += 1
-            return 0 if failures == 0 else 1
+            if isinstance(result, dict):
+                failures = 0
+                for path, status in result.items():
+                    if status == "SUCCESS!":
+                        print(theme.ok(f"{path}: {status}"))
+                    else:
+                        print(theme.err(f"{path}: {status}"))
+                    if status != "SUCCESS!":
+                        failures += 1
+                return 0 if failures == 0 else 1
 
-        # Print an extra newline to ensure separation from progress output
-        if result == "SUCCESS!":
-            print(theme.ok(result))
-        else:
-            print(result)
-        return 0 if result == "SUCCESS!" else 1
+            # Print an extra newline to ensure separation from progress output
+            if result == "SUCCESS!":
+                print(theme.ok(result))
+            else:
+                print(result)
+            return 0 if result == "SUCCESS!" else 1
+        finally:
+            if prev_progress_telemetry is None:
+                _os_module.environ.pop("BASEFWX_PROGRESS_TELEMETRY", None)
+            else:
+                _os_module.environ["BASEFWX_PROGRESS_TELEMETRY"] = prev_progress_telemetry
+            basefwx._set_master_pubkey_override(prev_master_pub_override)
 
     return 0
 

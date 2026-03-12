@@ -826,7 +826,7 @@ void EncryptFile(const std::string& path_in,
                  const PackOptions& pack,
                  bool keep_input) {
     std::filesystem::path input_path(path_in);
-    auto pack_result = basefwx::archive::PackInput(input_path, pack.compress);
+    auto pack_result = basefwx::archive::PackInput(input_path, pack.compress, pack.compression);
     Bytes plaintext;
     try {
         plaintext = basefwx::ReadFile(pack_result.source.string());

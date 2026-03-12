@@ -53,6 +53,22 @@ std::string B512Decode(const std::string& input, const std::string& password, bo
 std::string Pb512Encode(const std::string& input, const std::string& password, bool use_master, const KdfOptions& kdf);
 std::string Pb512Decode(const std::string& input, const std::string& password, bool use_master, const KdfOptions& kdf);
 
+enum class FwxAesProfile {
+    Light,
+    Heavy,
+};
+
+std::string FwxAesFile(const std::string& path,
+                       const std::string& password,
+                       const std::string& output = {},
+                       bool use_master = false,
+                       FwxAesProfile profile = FwxAesProfile::Light,
+                       bool normalize = false,
+                       std::size_t normalize_threshold = 8 * 1024,
+                       const std::string& cover_phrase = "low taper fade",
+                       bool compress = false,
+                       bool keep_input = false);
+
 std::string Jmge(const std::string& path,
                  const std::string& password,
                  const std::string& output = {},

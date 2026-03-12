@@ -78,6 +78,46 @@ if(CMAKE_CROSSCOMPILING AND VCPKG_INSTALLED_DIR AND VCPKG_TARGET_TRIPLET)
     list(APPEND CMAKE_FIND_ROOT_PATH "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}")
 endif()
 
+# Harden static OpenSSL selection: some environments still resolve OpenSSL::Crypto
+# to libcrypto.so even with OPENSSL_USE_STATIC_LIBS=TRUE.
+if(OPENSSL_USE_STATIC_LIBS)
+    set(_basefwx_openssl_crypto_static "")
+    if(DEFINED OPENSSL_CRYPTO_LIBRARY
+       AND OPENSSL_CRYPTO_LIBRARY
+       AND OPENSSL_CRYPTO_LIBRARY MATCHES "\\.a$"
+       AND EXISTS "${OPENSSL_CRYPTO_LIBRARY}")
+        set(_basefwx_openssl_crypto_static "${OPENSSL_CRYPTO_LIBRARY}")
+    endif()
+
+    if(NOT _basefwx_openssl_crypto_static AND DEFINED OPENSSL_CRYPTO_LIBRARY AND OPENSSL_CRYPTO_LIBRARY)
+        get_filename_component(_basefwx_openssl_libdir "${OPENSSL_CRYPTO_LIBRARY}" DIRECTORY)
+        if(EXISTS "${_basefwx_openssl_libdir}/libcrypto.a")
+            set(_basefwx_openssl_crypto_static "${_basefwx_openssl_libdir}/libcrypto.a")
+        endif()
+    endif()
+
+    if(NOT _basefwx_openssl_crypto_static)
+        find_library(_basefwx_openssl_crypto_static
+            NAMES crypto libcrypto
+            PATHS /usr/lib /usr/lib64 /usr/local/lib /usr/lib/x86_64-linux-gnu
+        )
+    endif()
+
+    if(NOT _basefwx_openssl_crypto_static OR NOT _basefwx_openssl_crypto_static MATCHES "\\.a$")
+        message(FATAL_ERROR
+            "OPENSSL_USE_STATIC_LIBS=TRUE but static libcrypto.a was not selected. "
+            "Set -DOPENSSL_CRYPTO_LIBRARY=/path/to/libcrypto.a (and optionally OPENSSL_SSL_LIBRARY).")
+    endif()
+
+    set(OPENSSL_CRYPTO_LIBRARY "${_basefwx_openssl_crypto_static}" CACHE FILEPATH "OpenSSL crypto library" FORCE)
+    if(TARGET OpenSSL::Crypto)
+        set_target_properties(OpenSSL::Crypto PROPERTIES IMPORTED_LOCATION "${OPENSSL_CRYPTO_LIBRARY}")
+        foreach(_cfg RELEASE RELWITHDEBINFO MINSIZEREL DEBUG)
+            set_target_properties(OpenSSL::Crypto PROPERTIES "IMPORTED_LOCATION_${_cfg}" "${OPENSSL_CRYPTO_LIBRARY}")
+        endforeach()
+    endif()
+endif()
+
 set(BASEFWX_HAS_ARGON2 0)
 set(BASEFWX_HAS_OQS 0)
 set(BASEFWX_HAS_LZMA 0)

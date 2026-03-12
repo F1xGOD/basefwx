@@ -8,6 +8,8 @@
 #include <array>
 #include <atomic>
 #include <cctype>
+#include <cstdint>
+#include <cstring>
 #include <cstdlib>
 #include <condition_variable>
 #include <cstdio>
@@ -30,6 +32,8 @@
 #ifdef _WIN32
 #include <fcntl.h>
 #include <io.h>
+#else
+#include <unistd.h>
 #endif
 
 namespace {
@@ -139,6 +143,14 @@ bool CliPlain() {
         }
     }
     return false;
+}
+
+bool IsStderrTty() {
+#if defined(_WIN32)
+    return _isatty(_fileno(stderr)) != 0;
+#else
+    return isatty(fileno(stderr)) != 0;
+#endif
 }
 
 std::string StyleText(const std::string& text, const char* color, bool plain) {
@@ -327,6 +339,305 @@ std::string StripAsciiWhitespace(std::string value) {
     return value;
 }
 
+std::string DecodePackModeLabel(const std::string& pack_flag) {
+    if (pack_flag == "g") {
+        return "tgz";
+    }
+    if (pack_flag == "x") {
+        return "txz";
+    }
+    return "none";
+}
+
+std::optional<std::string> ExtractJsonField(const std::string& json, const std::string& key) {
+    if (json.empty() || key.empty()) {
+        return std::nullopt;
+    }
+    std::string needle = "\"" + key + "\"";
+    std::size_t key_pos = json.find(needle);
+    if (key_pos == std::string::npos) {
+        return std::nullopt;
+    }
+    std::size_t colon = json.find(':', key_pos + needle.size());
+    if (colon == std::string::npos) {
+        return std::nullopt;
+    }
+    std::size_t value_pos = colon + 1;
+    while (value_pos < json.size() && std::isspace(static_cast<unsigned char>(json[value_pos])) != 0) {
+        ++value_pos;
+    }
+    if (value_pos >= json.size()) {
+        return std::nullopt;
+    }
+    if (json[value_pos] == '"') {
+        ++value_pos;
+        std::string out;
+        out.reserve(32);
+        bool escape = false;
+        for (std::size_t i = value_pos; i < json.size(); ++i) {
+            char ch = json[i];
+            if (escape) {
+                out.push_back(ch);
+                escape = false;
+                continue;
+            }
+            if (ch == '\\') {
+                escape = true;
+                continue;
+            }
+            if (ch == '"') {
+                return out;
+            }
+            out.push_back(ch);
+        }
+        return std::nullopt;
+    }
+    std::size_t end = value_pos;
+    while (end < json.size() && json[end] != ',' && json[end] != '}') {
+        ++end;
+    }
+    std::string raw = json.substr(value_pos, end - value_pos);
+    raw = StripAsciiWhitespace(raw);
+    if (raw.empty()) {
+        return std::nullopt;
+    }
+    return raw;
+}
+
+struct RawFwxInspectResult {
+    std::uint8_t algo = 0;
+    std::uint8_t kdf = 0;
+    std::uint8_t salt_len = 0;
+    std::uint8_t iv_len = 0;
+    std::uint32_t kdf_param = 0;
+    std::uint32_t ciphertext_len = 0;
+    std::size_t total_len = 0;
+    std::size_t expected_len = 0;
+    bool expected_len_valid = false;
+    bool truncated = false;
+    bool extra_bytes = false;
+};
+
+std::uint32_t ReadBe32(const std::uint8_t* ptr) {
+    return (static_cast<std::uint32_t>(ptr[0]) << 24)
+           | (static_cast<std::uint32_t>(ptr[1]) << 16)
+           | (static_cast<std::uint32_t>(ptr[2]) << 8)
+           | static_cast<std::uint32_t>(ptr[3]);
+}
+
+std::optional<RawFwxInspectResult> TryInspectRawFwx(const std::vector<std::uint8_t>& blob) {
+    static constexpr std::uint8_t kMagic[4] = {'F', 'W', 'X', '1'};
+    static constexpr std::size_t kHeaderLen = 16;
+    if (blob.size() < kHeaderLen) {
+        return std::nullopt;
+    }
+    if (std::memcmp(blob.data(), kMagic, sizeof(kMagic)) != 0) {
+        return std::nullopt;
+    }
+    RawFwxInspectResult out;
+    out.algo = blob[4];
+    out.kdf = blob[5];
+    out.salt_len = blob[6];
+    out.iv_len = blob[7];
+    out.kdf_param = ReadBe32(blob.data() + 8);
+    out.ciphertext_len = ReadBe32(blob.data() + 12);
+    out.total_len = blob.size();
+
+    std::size_t variable_len = out.kdf == 0x02 ? static_cast<std::size_t>(out.kdf_param)
+                                               : static_cast<std::size_t>(out.salt_len);
+
+    std::size_t expected = kHeaderLen;
+    if (variable_len > std::numeric_limits<std::size_t>::max() - expected) {
+        return out;
+    }
+    expected += variable_len;
+    if (static_cast<std::size_t>(out.iv_len) > std::numeric_limits<std::size_t>::max() - expected) {
+        return out;
+    }
+    expected += static_cast<std::size_t>(out.iv_len);
+    if (static_cast<std::size_t>(out.ciphertext_len) > std::numeric_limits<std::size_t>::max() - expected) {
+        return out;
+    }
+    expected += static_cast<std::size_t>(out.ciphertext_len);
+    out.expected_len = expected;
+    out.expected_len_valid = true;
+    out.truncated = out.total_len < out.expected_len;
+    out.extra_bytes = out.total_len > out.expected_len;
+    return out;
+}
+
+std::string FwxAlgoLabel(std::uint8_t algo) {
+    if (algo == 0x01) {
+        return "aes-256-gcm";
+    }
+    std::ostringstream oss;
+    oss << "unknown(0x" << std::hex << std::setw(2) << std::setfill('0')
+        << static_cast<unsigned int>(algo) << ")";
+    return oss.str();
+}
+
+std::string FwxKdfLabel(std::uint8_t kdf) {
+    if (kdf == 0x01) {
+        return "pbkdf2";
+    }
+    if (kdf == 0x02) {
+        return "keywrap";
+    }
+    std::ostringstream oss;
+    oss << "unknown(0x" << std::hex << std::setw(2) << std::setfill('0')
+        << static_cast<unsigned int>(kdf) << ")";
+    return oss.str();
+}
+
+void PrintRawFwxInspectLegacy(const RawFwxInspectResult& info, bool include_json) {
+    std::cout << "format: fwxaes-raw\n";
+    std::cout << "algo: " << FwxAlgoLabel(info.algo) << "\n";
+    std::cout << "kdf: " << FwxKdfLabel(info.kdf) << "\n";
+    if (info.kdf == 0x01) {
+        std::cout << "kdf_iters: " << info.kdf_param << "\n";
+    } else if (info.kdf == 0x02) {
+        std::cout << "key_header_len: " << info.kdf_param << " bytes\n";
+    }
+    std::cout << "salt_len: " << static_cast<unsigned int>(info.salt_len) << " bytes\n";
+    std::cout << "iv_len: " << static_cast<unsigned int>(info.iv_len) << " bytes\n";
+    std::cout << "ciphertext_len: " << info.ciphertext_len << " bytes\n";
+    std::cout << "container_len: " << info.total_len << " bytes\n";
+    if (info.expected_len_valid) {
+        std::cout << "expected_len: " << info.expected_len << " bytes\n";
+        if (info.truncated) {
+            std::cout << "container_state: truncated\n";
+        } else if (info.extra_bytes) {
+            std::cout << "container_state: extra-bytes\n";
+        } else {
+            std::cout << "container_state: exact\n";
+        }
+    } else {
+        std::cout << "container_state: unknown\n";
+    }
+    if (include_json) {
+        std::cout << "metadata_json: <unavailable>\n";
+    }
+}
+
+void PrintRawFwxProbeResult(const std::string& path, const RawFwxInspectResult& info, bool include_json) {
+    std::cout << "file: " << path << "\n";
+    std::cout << "format: fwxaes-raw\n";
+    std::cout << "engine_version: n/a\n";
+    std::cout << "method: fwxaes-raw\n";
+    std::cout << "kdf: " << FwxKdfLabel(info.kdf);
+    if (info.kdf == 0x01) {
+        std::cout << " iter=" << info.kdf_param;
+    } else if (info.kdf == 0x02) {
+        std::cout << " key_header_len=" << info.kdf_param;
+    }
+    std::cout << "\n";
+    std::cout << "algo: " << FwxAlgoLabel(info.algo) << "\n";
+    std::cout << "salt_len: " << static_cast<unsigned int>(info.salt_len) << " bytes\n";
+    std::cout << "iv_len: " << static_cast<unsigned int>(info.iv_len) << " bytes\n";
+    std::cout << "ciphertext_len: " << info.ciphertext_len << " bytes\n";
+    std::cout << "metadata: unavailable\n";
+    if (info.expected_len_valid) {
+        if (info.truncated) {
+            std::cout << "container_state: truncated\n";
+        } else if (info.extra_bytes) {
+            std::cout << "container_state: extra-bytes\n";
+        } else {
+            std::cout << "container_state: exact\n";
+        }
+    } else {
+        std::cout << "container_state: unknown\n";
+    }
+    if (include_json) {
+        std::cout << "metadata_json: <unavailable>\n";
+    }
+}
+
+void PrintVersionInfo() {
+    std::cout << "basefwx_cpp " << basefwx::constants::kEngineVersion << "\n";
+    std::cout << "build_time: " << __DATE__ << " " << __TIME__ << "\n";
+#if defined(__clang__)
+    std::cout << "compiler: clang " << __clang_major__ << "." << __clang_minor__ << "." << __clang_patchlevel__
+              << "\n";
+#elif defined(__GNUC__)
+    std::cout << "compiler: gcc " << __GNUC__ << "." << __GNUC_MINOR__ << "." << __GNUC_PATCHLEVEL__ << "\n";
+#else
+    std::cout << "compiler: unknown\n";
+#endif
+    std::cout << "cpp_standard: " << __cplusplus << "\n";
+#if defined(NDEBUG)
+    std::cout << "build_type: Release\n";
+#else
+    std::cout << "build_type: Debug\n";
+#endif
+#if defined(BASEFWX_HAS_ARGON2) && BASEFWX_HAS_ARGON2
+    constexpr const char* argon2 = "ON";
+#else
+    constexpr const char* argon2 = "OFF";
+#endif
+#if defined(BASEFWX_HAS_OQS) && BASEFWX_HAS_OQS
+    constexpr const char* oqs = "ON";
+#else
+    constexpr const char* oqs = "OFF";
+#endif
+#if defined(BASEFWX_HAS_LZMA) && BASEFWX_HAS_LZMA
+    constexpr const char* lzma = "ON";
+#else
+    constexpr const char* lzma = "OFF";
+#endif
+    std::cout << "features: argon2=" << argon2 << " oqs=" << oqs << " lzma=" << lzma << "\n";
+}
+
+void PrintProbeResult(const std::string& path, const basefwx::InspectResult& info, bool include_json) {
+    std::cout << "file: " << path << "\n";
+    std::cout << "format: basefwx\n";
+    std::cout << "user_blob_len: " << info.user_blob_len << " bytes\n";
+    std::cout << "master_blob_len: " << info.master_blob_len << " bytes\n";
+    std::cout << "payload_len: " << info.payload_len << " bytes\n";
+    if (!info.has_metadata) {
+        std::cout << "metadata: unavailable\n";
+        return;
+    }
+    std::cout << "metadata_len: " << info.metadata_len << " bytes\n";
+    auto enc_version = ExtractJsonField(info.metadata_json, "ENC-VERSION");
+    auto enc_method = ExtractJsonField(info.metadata_json, "ENC-METHOD");
+    auto enc_time = ExtractJsonField(info.metadata_json, "ENC-TIME");
+    auto enc_kdf = ExtractJsonField(info.metadata_json, "ENC-KDF");
+    auto enc_p = ExtractJsonField(info.metadata_json, "ENC-P");
+    auto enc_master = ExtractJsonField(info.metadata_json, "ENC-MASTER");
+    auto enc_kem = ExtractJsonField(info.metadata_json, "ENC-KEM");
+    auto enc_aead = ExtractJsonField(info.metadata_json, "ENC-AEAD");
+    auto enc_obf = ExtractJsonField(info.metadata_json, "ENC-OBF");
+    auto enc_kdf_iter = ExtractJsonField(info.metadata_json, "ENC-KDF-ITER");
+    auto enc_argon_tc = ExtractJsonField(info.metadata_json, "ENC-ARGON2-TC");
+    auto enc_argon_mem = ExtractJsonField(info.metadata_json, "ENC-ARGON2-MEM");
+    auto enc_argon_par = ExtractJsonField(info.metadata_json, "ENC-ARGON2-PAR");
+    std::cout << "engine_version: " << enc_version.value_or("unknown") << "\n";
+    std::cout << "method: " << enc_method.value_or("unknown") << "\n";
+    std::cout << "time_utc: " << enc_time.value_or("unknown") << "\n";
+    std::cout << "kdf: " << enc_kdf.value_or("unknown");
+    if (enc_kdf_iter.has_value()) {
+        std::cout << " iter=" << *enc_kdf_iter;
+    }
+    if (enc_argon_tc.has_value() || enc_argon_mem.has_value() || enc_argon_par.has_value()) {
+        std::cout << " argon2(tc=" << enc_argon_tc.value_or("?")
+                  << ",mem=" << enc_argon_mem.value_or("?")
+                  << ",par=" << enc_argon_par.value_or("?") << ")";
+    }
+    std::cout << "\n";
+    std::cout << "aead: " << enc_aead.value_or("unknown") << "\n";
+    std::cout << "obfuscation: " << enc_obf.value_or("unknown") << "\n";
+    std::cout << "master_mode: " << enc_master.value_or("unknown") << "\n";
+    std::cout << "kem: " << enc_kem.value_or("unknown") << "\n";
+    std::cout << "pack_mode: " << DecodePackModeLabel(enc_p.value_or("")) << "\n";
+    if (include_json) {
+        if (!info.metadata_json.empty()) {
+            std::cout << "metadata_json: " << info.metadata_json << "\n";
+        } else {
+            std::cout << "metadata_json: <unavailable>\n";
+        }
+    }
+}
+
 int ReadEnvInt(const char* name, int default_value, int min_value) {
     const char* raw = std::getenv(name);
     if (!raw || !*raw) {
@@ -513,12 +824,15 @@ void PrintUsage() {
         "[--use-master] [--master-pub <path>] [--master-autogen] [--allow-embedded-master] [--no-master]";
     std::cout << StyleText(EmojiPrefix("✨", plain) + "basefwx_cpp help", cyan, plain) << "\n";
     std::cout << "Usage: basefwx_cpp [global] <command> [args]\n";
-    std::cout << "Global: --verbose|-v --no-log --no-color\n";
+    std::cout << "Global: --verbose|-v --no-log --no-color --version|-V\n";
     std::cout << "\n";
     std::cout << "General commands:\n";
+    std::cout << "  version\n";
     std::cout << "  help\n";
     std::cout << "  completion bash\n";
     std::cout << "  info <file.fwx>\n";
+    std::cout << "  probe <file.fwx> [--json]\n";
+    std::cout << "  identify <file.fwx> [--json]\n";
     std::cout << "\n";
     std::cout << "Codec commands:\n";
     std::cout << "  b64-enc <text>\n";
@@ -541,22 +855,23 @@ void PrintUsage() {
     std::cout << "  pb512-dec <text> [-p <password>] " << master_flags << " [--kdf <label>] [--pbkdf2-iters <n>] [--no-fallback]\n";
     std::cout << "\n";
     std::cout << "File commands:\n";
-    std::cout << "  b512file-enc <file> [-p <password>] " << master_flags << " [--strip-meta] [--no-aead] [--compress] [--keep-input] [--kdf <label>] [--pbkdf2-iters <n>] [--no-fallback]\n";
+    std::cout << "  b512file-enc <file> [-p <password>] " << master_flags << " [--strip-meta] [--no-aead] [--compress] [--compress-level <auto|fast|balanced|max>] [--keep-input] [--kdf <label>] [--pbkdf2-iters <n>] [--no-fallback]\n";
     std::cout << "  b512file-dec <file.fwx> [-p <password>] " << master_flags << " [--strip-meta] [--kdf <label>] [--pbkdf2-iters <n>] [--no-fallback]\n";
     std::cout << "  b512file-bytes-rt <in> <out> [-p <password>] " << master_flags << " [--strip-meta] [--no-aead] [--kdf <label>] [--pbkdf2-iters <n>] [--no-fallback]\n";
     std::cout << "  pb512file-bytes-rt <in> <out> [-p <password>] " << master_flags << " [--strip-meta] [--kdf <label>] [--pbkdf2-iters <n>] [--no-fallback]\n";
-    std::cout << "  pb512file-enc <file> [-p <password>] " << master_flags << " [--strip-meta] [--no-obf] [--compress] [--keep-input] [--kdf <label>] [--pbkdf2-iters <n>] [--no-fallback]\n";
+    std::cout << "  pb512file-enc <file> [-p <password>] " << master_flags << " [--strip-meta] [--no-obf] [--compress] [--compress-level <auto|fast|balanced|max>] [--keep-input] [--kdf <label>] [--pbkdf2-iters <n>] [--no-fallback]\n";
     std::cout << "  pb512file-dec <file.fwx> [-p <password>] " << master_flags << " [--strip-meta] [--kdf <label>] [--pbkdf2-iters <n>] [--no-fallback]\n";
     std::cout << "\n";
     std::cout << "fwxAES commands:\n";
-    std::cout << "  fwxaes-enc <file> [-p <password>] " << master_flags << " [--out <path>] [--heavy] [--normalize] [--threshold <n>] [--cover-phrase <text>] [--compress] [--ignore-media] [--keep-meta] [--keep-input] [--no-archive]\n";
+    std::cout << "  fwxaes-enc <file> [-p <password>] " << master_flags << " [--out <path>] [--heavy] [--normalize] [--threshold <n>] [--cover-phrase <text>] [--compress] [--compress-level <auto|fast|balanced|max>] [--ignore-media] [--keep-meta] [--keep-input] [--no-archive]\n";
     std::cout << "  fwxaes-dec <file> [-p <password>] " << master_flags << " [--out <path>] [--heavy]\n";
-    std::cout << "  fwxaes-heavy-enc <file> [-p <password>] " << master_flags << " [--out <path>] [--compress] [--keep-input]\n";
+    std::cout << "  fwxaes-heavy-enc <file> [-p <password>] " << master_flags << " [--out <path>] [--compress] [--compress-level <auto|fast|balanced|max>] [--keep-input]\n";
     std::cout << "  fwxaes-heavy-dec <file> [-p <password>] " << master_flags << " [--out <path>]\n";
     std::cout << "  fwxaes-stream-enc <file> [-p <password>] " << master_flags << " [--out <path>]\n";
     std::cout << "  fwxaes-stream-dec <file> [-p <password>] " << master_flags << " [--out <path>]\n";
     std::cout << "  fwxaes-live-enc <file|- > [-p <password>] " << master_flags << " [--out <path|- >]\n";
     std::cout << "  fwxaes-live-dec <file|- > [-p <password>] " << master_flags << " [--out <path|- >]\n";
+    std::cout << "    Compression presets: auto(legacy), fast(light), balanced, max(heavy)\n";
     std::cout << "\n";
     std::cout << "Media/carrier commands:\n";
     std::cout << "  jmge <media> [-p <password>] " << master_flags << " [--out <path>] [--keep-meta] [--keep-input] [--no-archive]\n";
@@ -588,7 +903,7 @@ void PrintBashCompletion(const std::string& argv0) {
         << "  local cur cmd\n"
         << "  cur=\"${COMP_WORDS[COMP_CWORD]}\"\n"
         << "  cmd=\"${COMP_WORDS[1]}\"\n"
-        << "  local commands=\"help completion info b64-enc b64-dec n10-enc n10-dec n10file-enc n10file-dec "
+        << "  local commands=\"version help completion info probe identify b64-enc b64-dec n10-enc n10-dec n10file-enc n10file-dec "
            "kFMe kFMd kFAe kFAd hash512 uhash513 a512-enc a512-dec bi512-enc b1024-enc b256-enc b256-dec "
            "b512-enc b512-dec pb512-enc pb512-dec b512file-enc b512file-dec b512file-bytes-rt pb512file-bytes-rt "
            "pb512file-enc pb512file-dec fwxaes-enc fwxaes-dec fwxaes-heavy-enc fwxaes-heavy-dec fwxaes-stream-enc fwxaes-stream-dec fwxaes-live-enc "
@@ -603,14 +918,17 @@ void PrintBashCompletion(const std::string& argv0) {
         << "    completion)\n"
         << "      COMPREPLY=( $(compgen -W \"bash\" -- \"$cur\") )\n"
         << "      ;;\n"
+        << "    info|probe|identify)\n"
+        << "      COMPREPLY=( $(compgen -W \"--json\" -- \"$cur\") )\n"
+        << "      ;;\n"
         << "    b512-enc|b512-dec|pb512-enc|pb512-dec)\n"
         << "      COMPREPLY=( $(compgen -W \"-p --password --kdf --pbkdf2-iters --no-fallback $master_opts\" -- \"$cur\") )\n"
         << "      ;;\n"
         << "    b512file-enc|b512file-dec|b512file-bytes-rt|pb512file-bytes-rt|pb512file-enc|pb512file-dec)\n"
-        << "      COMPREPLY=( $(compgen -W \"-p --password --strip-meta --no-aead --no-obf --compress --keep-input --kdf --pbkdf2-iters --no-fallback $master_opts\" -- \"$cur\") )\n"
+        << "      COMPREPLY=( $(compgen -W \"-p --password --strip-meta --no-aead --no-obf --compress --compress-level --compress-mode --keep-input --kdf --pbkdf2-iters --no-fallback $master_opts\" -- \"$cur\") )\n"
         << "      ;;\n"
         << "    fwxaes-enc|fwxaes-dec|fwxaes-heavy-enc|fwxaes-heavy-dec|fwxaes-stream-enc|fwxaes-stream-dec|fwxaes-live-enc|fwxaes-live-dec)\n"
-        << "      COMPREPLY=( $(compgen -W \"-p --password --out -o --heavy --light --normalize --threshold --cover-phrase --compress --ignore-media --keep-meta --keep-input --no-archive $master_opts\" -- \"$cur\") )\n"
+        << "      COMPREPLY=( $(compgen -W \"-p --password --out -o --heavy --light --normalize --threshold --cover-phrase --compress --compress-level --compress-mode --ignore-media --keep-meta --keep-input --no-archive $master_opts\" -- \"$cur\") )\n"
         << "      ;;\n"
         << "    jmge|jmgd|bench-jmg)\n"
         << "      COMPREPLY=( $(compgen -W \"-p --password --out -o --keep-meta --keep-input --no-archive $master_opts\" -- \"$cur\") )\n"
@@ -714,6 +1032,7 @@ class CommandTelemetry {
         if (!enabled_) {
             return;
         }
+        dynamic_line_ = IsStderrTty() && basefwx::env::IsEnabled("BASEFWX_LIVE_STATUS", true);
         EmitHeader();
         running_.store(true, std::memory_order_relaxed);
         worker_ = std::thread([this]() { Loop(); });
@@ -735,6 +1054,12 @@ class CommandTelemetry {
         cv_.notify_all();
         if (worker_.joinable()) {
             worker_.join();
+        }
+        if (dynamic_line_ && line_active_) {
+            std::lock_guard<std::mutex> lock(render_mu_);
+            std::cerr << "\r" << std::string(last_render_width_, ' ') << "\r" << std::flush;
+            line_active_ = false;
+            last_render_width_ = 0;
         }
         enabled_ = false;
     }
@@ -775,7 +1100,7 @@ class CommandTelemetry {
     void Loop() {
         while (running_.load(std::memory_order_relaxed)) {
             std::unique_lock<std::mutex> lock(mu_);
-            cv_.wait_for(lock, std::chrono::seconds(5));
+            cv_.wait_for(lock, std::chrono::seconds(1));
             if (!running_.load(std::memory_order_relaxed)) {
                 break;
             }
@@ -804,15 +1129,26 @@ class CommandTelemetry {
             }
             if (gpu.second.has_value()) {
                 line << " \\ " << std::fixed << std::setprecision(0) << *gpu.second << "C";
-                std::cerr << line.str() << "\n";
-                return;
             }
         }
         auto cpu_temp = ProbeCpuTempC();
         if (cpu_temp.has_value()) {
             line << " \\ " << std::fixed << std::setprecision(0) << *cpu_temp << "C";
         }
-        std::cerr << line.str() << "\n";
+        std::string rendered = line.str();
+        if (!dynamic_line_) {
+            std::cerr << rendered << "\n";
+            return;
+        }
+        std::lock_guard<std::mutex> lock(render_mu_);
+        std::size_t width = rendered.size();
+        if (width < last_render_width_) {
+            rendered.append(last_render_width_ - width, ' ');
+        } else {
+            last_render_width_ = width;
+        }
+        line_active_ = true;
+        std::cerr << "\r" << rendered << std::flush;
     }
 
     std::pair<std::optional<double>, std::optional<double>> SampleGpuPercentTemp() {
@@ -912,6 +1248,10 @@ class CommandTelemetry {
     std::thread worker_;
     std::mutex mu_;
     std::condition_variable cv_;
+    std::mutex render_mu_;
+    bool dynamic_line_ = false;
+    bool line_active_ = false;
+    std::size_t last_render_width_ = 0;
     std::uint64_t prev_total_ = 0;
     std::uint64_t prev_idle_ = 0;
 };
@@ -971,6 +1311,7 @@ struct FwxAesArgs {
     std::size_t threshold = 8 * 1024;
     std::string cover_phrase = "low taper fade";
     bool compress = false;
+    basefwx::archive::CompressionPreset compression = basefwx::archive::CompressionPreset::Auto;
     bool ignore_media = false;
     bool keep_meta = false;
     bool keep_input = false;
@@ -995,9 +1336,18 @@ struct FileArgs {
     bool enable_aead = true;
     bool enable_obf = true;
     bool compress = false;
+    basefwx::archive::CompressionPreset compression = basefwx::archive::CompressionPreset::Auto;
     bool keep_input = false;
     basefwx::pb512::KdfOptions kdf;
 };
+
+basefwx::archive::CompressionPreset ParseCompressionPreset(const std::string& value) {
+    try {
+        return basefwx::archive::CompressionPresetFromString(value);
+    } catch (const std::invalid_argument& exc) {
+        throw std::runtime_error(exc.what());
+    }
+}
 
 ParsedOptions ParseCodecArgs(int argc, char** argv, int start_index) {
     ParsedOptions opts;
@@ -1067,6 +1417,13 @@ FileArgs ParseFileArgs(int argc, char** argv, int start_index) {
         } else if (flag == "--compress") {
             opts.compress = true;
             idx += 1;
+        } else if (flag == "--compress-mode" || flag == "--compress-level") {
+            if (idx + 1 >= argc) {
+                throw std::runtime_error("Missing compression mode (expected auto|fast|balanced|max)");
+            }
+            opts.compress = true;
+            opts.compression = ParseCompressionPreset(argv[idx + 1]);
+            idx += 2;
         } else if (flag == "--keep-input") {
             opts.keep_input = true;
             idx += 1;
@@ -1139,6 +1496,13 @@ FwxAesArgs ParseFwxAesArgs(int argc, char** argv, int start_index) {
         } else if (flag == "--compress") {
             opts.compress = true;
             idx += 1;
+        } else if (flag == "--compress-mode" || flag == "--compress-level") {
+            if (idx + 1 >= argc) {
+                throw std::runtime_error("Missing compression mode (expected auto|fast|balanced|max)");
+            }
+            opts.compress = true;
+            opts.compression = ParseCompressionPreset(argv[idx + 1]);
+            idx += 2;
         } else if (flag == "--ignore-media") {
             opts.ignore_media = true;
             idx += 1;
@@ -1236,6 +1600,10 @@ int main(int argc, char** argv) {
         return 2;
     }
     std::string command(argv[1]);
+    if (command == "--version" || command == "-V" || command == "version") {
+        PrintVersionInfo();
+        return 0;
+    }
     if (command == "help" || command == "--help" || command == "-h") {
         PrintUsage();
         return 0;
@@ -1254,7 +1622,8 @@ int main(int argc, char** argv) {
         return 0;
     }
     std::optional<CommandTelemetry> telemetry;
-    if (command != "jmge" && command != "jmgd") {
+    if (command != "jmge" && command != "jmgd"
+        && command != "info" && command != "probe" && command != "identify") {
         telemetry.emplace(BuildHwPlan(command));
     }
 
@@ -1262,27 +1631,57 @@ int main(int argc, char** argv) {
     PrintSystemInfo();
 
     try {
-        if (command == "info") {
+        if (command == "info" || command == "probe" || command == "identify") {
             if (argc < 3) {
                 PrintUsage();
                 return 2;
             }
-            auto data = basefwx::ReadFile(argv[2]);
-            auto info = basefwx::InspectBlob(data);
-            std::cout << "user_blob_len: " << info.user_blob_len << " bytes\n";
-            std::cout << "master_blob_len: " << info.master_blob_len << " bytes\n";
-            std::cout << "payload_len: " << info.payload_len << " bytes\n";
-            if (info.has_metadata) {
-                std::cout << "metadata_len: " << info.metadata_len << " bytes\n";
-                if (!info.metadata_json.empty()) {
-                    std::cout << "metadata_json: " << info.metadata_json << "\n";
-                } else if (info.metadata_len == 0) {
-                    std::cout << "metadata_json: <empty>\n";
+            bool include_json = false;
+            if (command == "info") {
+                // Keep legacy info behavior by default.
+                include_json = true;
+            }
+            for (int idx = 3; idx < argc; ++idx) {
+                std::string flag(argv[idx]);
+                if (flag == "--json") {
+                    include_json = true;
                 } else {
-                    std::cout << "metadata_json: <unavailable>\n";
+                    throw std::runtime_error("Unknown flag: " + flag);
                 }
-            } else {
-                std::cout << "metadata_json: <unavailable>\n";
+            }
+            std::string path = argv[2];
+            auto data = basefwx::ReadFile(path);
+            try {
+                auto info = basefwx::InspectBlob(data);
+                if (command == "info") {
+                    std::cout << "user_blob_len: " << info.user_blob_len << " bytes\n";
+                    std::cout << "master_blob_len: " << info.master_blob_len << " bytes\n";
+                    std::cout << "payload_len: " << info.payload_len << " bytes\n";
+                    if (info.has_metadata) {
+                        std::cout << "metadata_len: " << info.metadata_len << " bytes\n";
+                        if (!info.metadata_json.empty()) {
+                            std::cout << "metadata_json: " << info.metadata_json << "\n";
+                        } else if (info.metadata_len == 0) {
+                            std::cout << "metadata_json: <empty>\n";
+                        } else {
+                            std::cout << "metadata_json: <unavailable>\n";
+                        }
+                    } else {
+                        std::cout << "metadata_json: <unavailable>\n";
+                    }
+                } else {
+                    PrintProbeResult(path, info, include_json);
+                }
+            } catch (const std::exception&) {
+                auto raw = TryInspectRawFwx(data);
+                if (!raw.has_value()) {
+                    throw;
+                }
+                if (command == "info") {
+                    PrintRawFwxInspectLegacy(*raw, include_json);
+                } else {
+                    PrintRawFwxProbeResult(path, *raw, include_json);
+                }
             }
             return 0;
         }
@@ -1956,6 +2355,7 @@ int main(int argc, char** argv) {
             file_opts.enable_aead = opts.enable_aead;
             file_opts.enable_obfuscation = opts.enable_obf;
             file_opts.compress = opts.compress;
+            file_opts.compression = opts.compression;
             file_opts.keep_input = opts.keep_input;
             if (command == "b512file-enc") {
                 std::cout << basefwx::filecodec::B512EncodeFile(opts.input, opts.password, file_opts, opts.kdf) << "\n";
@@ -2075,6 +2475,7 @@ int main(int argc, char** argv) {
                 basefwx::filecodec::FileOptions file_opts;
                 file_opts.use_master = opts.use_master;
                 file_opts.compress = opts.compress;
+                file_opts.compression = opts.compression;
                 file_opts.keep_input = opts.keep_input;
                 if (command == "fwxaes-enc" || command == "fwxaes-heavy-enc") {
                     std::string produced = basefwx::filecodec::Pb512EncodeFile(opts.input, opts.password, file_opts);
@@ -2110,6 +2511,7 @@ int main(int argc, char** argv) {
                 norm.cover_phrase = opts.cover_phrase;
                 basefwx::fwxaes::PackOptions pack_opts;
                 pack_opts.compress = opts.compress;
+                pack_opts.compression = opts.compression;
                 basefwx::fwxaes::Options fwxaes_opts;
                 fwxaes_opts.use_master = opts.use_master;
                 basefwx::fwxaes::EncryptFile(opts.input, opts.output, opts.password, fwxaes_opts, norm, pack_opts, opts.keep_input);

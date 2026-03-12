@@ -60,6 +60,50 @@ std::string ToLower(std::string value) {
     return value;
 }
 
+CompressionPreset NormalizeCompressionPreset(CompressionPreset preset) {
+    switch (preset) {
+        case CompressionPreset::Auto:
+        case CompressionPreset::Fast:
+        case CompressionPreset::Balanced:
+        case CompressionPreset::Max:
+            return preset;
+    }
+    return CompressionPreset::Auto;
+}
+
+int GzipLevelForPreset(bool compress, CompressionPreset preset) {
+    if (!compress) {
+        // Legacy non-compress mode keeps fast directory packing behavior.
+        return 1;
+    }
+    switch (NormalizeCompressionPreset(preset)) {
+        case CompressionPreset::Fast:
+            return 1;
+        case CompressionPreset::Balanced:
+            return 6;
+        case CompressionPreset::Max:
+            return 9;
+        case CompressionPreset::Auto:
+        default:
+            return 1;
+    }
+}
+
+#if BASEFWX_HAS_LZMA
+std::uint32_t XzPresetForPreset(CompressionPreset preset) {
+    switch (NormalizeCompressionPreset(preset)) {
+        case CompressionPreset::Fast:
+            return 3;
+        case CompressionPreset::Balanced:
+            return 6;
+        case CompressionPreset::Max:
+        case CompressionPreset::Auto:
+        default:
+            return 9 | LZMA_PRESET_EXTREME;
+    }
+}
+#endif
+
 std::filesystem::path CreateTempDir(const std::string& prefix) {
     auto base = std::filesystem::temp_directory_path();
     std::random_device rd;
@@ -388,7 +432,9 @@ void DecompressGzip(const std::filesystem::path& input,
 }
 
 #if BASEFWX_HAS_LZMA
-void CompressXz(const std::filesystem::path& input, const std::filesystem::path& output) {
+void CompressXz(const std::filesystem::path& input,
+                const std::filesystem::path& output,
+                std::uint32_t preset) {
     std::ifstream in(input, std::ios::binary);
     if (!in) {
         throw std::runtime_error("Failed to open input for xz: " + input.string());
@@ -398,9 +444,7 @@ void CompressXz(const std::filesystem::path& input, const std::filesystem::path&
         throw std::runtime_error("Failed to open xz output: " + output.string());
     }
     lzma_stream strm = LZMA_STREAM_INIT;
-    lzma_ret ret = lzma_easy_encoder(&strm,
-                                     9 | LZMA_PRESET_EXTREME,
-                                     LZMA_CHECK_CRC64);
+    lzma_ret ret = lzma_easy_encoder(&strm, preset, LZMA_CHECK_CRC64);
     if (ret != LZMA_OK) {
         throw std::runtime_error("Failed to initialize xz encoder");
     }
@@ -486,14 +530,16 @@ void DecompressXz(const std::filesystem::path& input, const std::filesystem::pat
 
 void CompressArchive(const std::filesystem::path& tar_path,
                      const std::filesystem::path& archive_path,
-                     PackMode mode) {
+                     PackMode mode,
+                     bool compress,
+                     CompressionPreset preset) {
     if (mode == PackMode::Tgz) {
-        CompressGzip(tar_path, archive_path, 1);
+        CompressGzip(tar_path, archive_path, GzipLevelForPreset(compress, preset));
         return;
     }
     if (mode == PackMode::Txz) {
 #if BASEFWX_HAS_LZMA
-        CompressXz(tar_path, archive_path);
+        CompressXz(tar_path, archive_path, XzPresetForPreset(preset));
 #else
         throw std::runtime_error("XZ support unavailable (liblzma missing)");
 #endif
@@ -518,14 +564,57 @@ void DecompressArchive(const std::filesystem::path& archive_path,
 
 }  // namespace
 
-PackMode DecidePackMode(const std::filesystem::path& input, bool compress) {
+CompressionPreset CompressionPresetFromString(const std::string& value) {
+    std::string lower = ToLower(value);
+    if (lower.empty() || lower == "auto" || lower == "legacy" || lower == "default") {
+        return CompressionPreset::Auto;
+    }
+    if (lower == "fast" || lower == "light" || lower == "quick" || lower == "gzip") {
+        return CompressionPreset::Fast;
+    }
+    if (lower == "balanced" || lower == "balance" || lower == "normal" || lower == "medium") {
+        return CompressionPreset::Balanced;
+    }
+    if (lower == "max" || lower == "maximum" || lower == "best" || lower == "heavy" || lower == "xz") {
+        return CompressionPreset::Max;
+    }
+    throw std::invalid_argument(
+        "Unknown compression mode: " + value + " (expected auto|fast|balanced|max)");
+}
+
+std::string CompressionPresetName(CompressionPreset preset) {
+    switch (NormalizeCompressionPreset(preset)) {
+        case CompressionPreset::Fast:
+            return "fast";
+        case CompressionPreset::Balanced:
+            return "balanced";
+        case CompressionPreset::Max:
+            return "max";
+        case CompressionPreset::Auto:
+        default:
+            return "auto";
+    }
+}
+
+PackMode DecidePackMode(const std::filesystem::path& input,
+                        bool compress,
+                        CompressionPreset preset) {
     std::error_code ec;
     bool is_dir = std::filesystem::is_directory(input, ec);
     if (is_dir) {
-        return compress ? PackMode::Txz : PackMode::Tgz;
+        if (!compress) {
+            return PackMode::Tgz;
+        }
+        CompressionPreset normalized = NormalizeCompressionPreset(preset);
+        return (normalized == CompressionPreset::Fast || normalized == CompressionPreset::Balanced)
+                   ? PackMode::Tgz
+                   : PackMode::Txz;
     }
     if (compress) {
-        return PackMode::Txz;
+        CompressionPreset normalized = NormalizeCompressionPreset(preset);
+        return (normalized == CompressionPreset::Fast || normalized == CompressionPreset::Balanced)
+                   ? PackMode::Tgz
+                   : PackMode::Txz;
     }
     return PackMode::None;
 }
@@ -562,8 +651,10 @@ std::string PackFlag(PackMode mode) {
     return {};
 }
 
-PackResult PackInput(const std::filesystem::path& input, bool compress) {
-    PackMode mode = DecidePackMode(input, compress);
+PackResult PackInput(const std::filesystem::path& input,
+                     bool compress,
+                     CompressionPreset preset) {
+    PackMode mode = DecidePackMode(input, compress, preset);
     if (mode == PackMode::None) {
         return {input, mode, false, {}};
     }
@@ -583,7 +674,7 @@ PackResult PackInput(const std::filesystem::path& input, bool compress) {
     auto archive_path = temp_dir / (base_name + archive_ext);
     try {
         WriteTarArchive(input, tar_path);
-        CompressArchive(tar_path, archive_path, mode);
+        CompressArchive(tar_path, archive_path, mode, compress, preset);
         std::error_code ec;
         std::filesystem::remove(tar_path, ec);
         return {archive_path, mode, true, temp_dir};

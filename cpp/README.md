@@ -47,6 +47,10 @@ cmake --build cpp/build
 ./cpp/build/basefwx_cpp pb512file-dec secret.bin.fwx -p "pw"
 ./cpp/build/basefwx_cpp fwxaes-enc secret.bin -p "pw" --normalize
 ./cpp/build/basefwx_cpp fwxaes-dec secret.bin.fwx -p "pw"
+./cpp/build/basefwx_cpp fwxaes-enc secret.bin -p "pw" --heavy
+./cpp/build/basefwx_cpp fwxaes-dec secret.bin.fwx -p "pw" --heavy
+./cpp/build/basefwx_cpp fwxaes-heavy-enc secret.bin -p "pw"
+./cpp/build/basefwx_cpp fwxaes-heavy-dec secret.bin.fwx -p "pw"
 ./cpp/build/basefwx_cpp fwxaes-live-enc secret.bin -p "pw" --out secret.live.fwx
 ./cpp/build/basefwx_cpp fwxaes-live-dec secret.live.fwx -p "pw" --out secret.bin
 ffmpeg -hide_banner -loglevel error -i input.m4a -vn -ac 1 -ar 16000 -f wav pipe:1 \
@@ -88,6 +92,8 @@ payload matches the AES file format.
 - Current C++ codec support covers b256/b512/pb512 plus b512file/pb512file
   (AES-heavy) and fwxaes. Argon2id + ML-KEM-768 support is enabled when the
   dependencies are installed.
+- `fwxaes --heavy` and `fwxaes-heavy-*` use the same AES-heavy container
+  as `pb512file-*` for consistent heavy-mode behavior across APIs.
 
 ## Dependencies
 

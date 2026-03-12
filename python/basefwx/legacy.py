@@ -4107,6 +4107,8 @@ class basefwx:
         *,
         use_master: bool = True,
         output: "basefwx.typing.Optional[str]" = None,
+        heavy: bool = False,
+        strip_metadata: bool = False,
         normalize: bool = False,
         normalize_threshold: "basefwx.typing.Optional[int]" = None,
         cover_phrase: str = "low taper fade",
@@ -4126,11 +4128,25 @@ class basefwx:
             local_reporter = basefwx._ProgressReporter(1)
             created_reporter = True
 
+        if heavy:
+            if strip_metadata:
+                raise ValueError("fwxAES heavy mode does not support strip-metadata")
+            if normalize:
+                raise ValueError("fwxAES heavy mode does not support normalize wrapping")
+            if normalize_threshold is not None:
+                raise ValueError("fwxAES heavy mode does not support normalize thresholds")
+            if cover_phrase != "low taper fade":
+                raise ValueError("fwxAES heavy mode does not support cover phrases")
+            if keep_meta:
+                raise ValueError("fwxAES heavy mode does not support media metadata options")
+            if archive_original:
+                raise ValueError("fwxAES heavy mode does not support media archive options")
+
         def _set_bytes_hw_plan() -> None:
             if not local_reporter:
                 return
             plan = basefwx.MediaCipher._build_hw_execution_plan(
-                "fwxAES_file",
+                "fwxAES_file-heavy" if heavy else "fwxAES_file",
                 stream_type="bytes",
                 allow_pixel_gpu=False,
                 prefer_cpu_decode=True,
@@ -4139,6 +4155,63 @@ class basefwx:
             local_reporter.set_hw_execution_plan(plan)
 
         try:
+            if heavy:
+                _set_bytes_hw_plan()
+                pubkey_bytes, master_available = basefwx._resolve_master_usage(
+                    use_master,
+                    None,
+                    create_if_missing=True
+                )
+                encode_use_master = use_master and master_available
+                decode_use_master = use_master
+                password = basefwx._resolve_password(password, use_master=encode_use_master)
+                out_path_override = basefwx._normalize_path(output) if output else None
+
+                if path.suffix.lower() == ".fwx":
+                    target, _ = basefwx._aes_heavy_decode_path(
+                        path,
+                        password,
+                        local_reporter,
+                        0,
+                        False,
+                        decode_use_master
+                    )
+                    if out_path_override and out_path_override != target:
+                        if out_path_override.exists() and out_path_override.is_dir():
+                            target_out = out_path_override / target.name
+                        else:
+                            target_out = out_path_override
+                            target_out.parent.mkdir(parents=True, exist_ok=True)
+                        basefwx.shutil.move(str(target), str(target_out))
+                        target = target_out
+                    return str(target)
+
+                pack_ctx = basefwx._pack_input_to_archive(path, compress, local_reporter, 0)
+                pack_flag = pack_ctx[1] if pack_ctx else ""
+                pack_temp = pack_ctx[2] if pack_ctx else None
+                source_path = pack_ctx[0] if pack_ctx else path
+                out_path = out_path_override if out_path_override else path.with_suffix(".fwx")
+                try:
+                    target, _ = basefwx._aes_heavy_encode_path(
+                        source_path,
+                        password,
+                        local_reporter,
+                        0,
+                        False,
+                        encode_use_master,
+                        pubkey_bytes,
+                        pack_flag=pack_flag,
+                        output_path=out_path,
+                        display_path=display_path,
+                        keep_input=keep_input
+                    )
+                    if pack_ctx:
+                        basefwx._remove_input(path, keep_input, output_path=target)
+                    return str(target)
+                finally:
+                    if pack_temp is not None:
+                        pack_temp.cleanup()
+
             if path.suffix.lower() == ".fwx":
                 _set_bytes_hw_plan()
                 if local_reporter:
@@ -11495,7 +11568,7 @@ def cli(argv=None) -> int:
     )
     cryptin.add_argument(
         "method",
-        help="Method name: 512, b512, pb512, aes, aes-light, aes-heavy"
+        help="Method name: 512, b512, pb512, aes, aes-light, aes-heavy, fwxaes-heavy"
     )
     cryptin.add_argument(
         "paths",
@@ -11739,21 +11812,23 @@ def cli(argv=None) -> int:
             "b512": "b512",
             "fwx512": "b512",
             "fwxaes": "fwxaes",
+            "fwxaes-light": "fwxaes",
+            "fwxaes-heavy": "fwxaes-heavy",
             "aes": "aes-light",
             "aes-light": "aes-light",
             "256": "aes-light",
             "light": "aes-light",
-            "aes-heavy": "aes-heavy",
-            "heavy": "aes-heavy",
-            "pb512": "aes-heavy",
-            "aes512": "aes-heavy"
+            "aes-heavy": "fwxaes-heavy",
+            "heavy": "fwxaes-heavy",
+            "pb512": "fwxaes-heavy",
+            "aes512": "fwxaes-heavy"
         }
 
         normalized = method_map.get(method)
         if not normalized:
             parser.error(f"Unsupported method '{args.method}'")
 
-        if normalized in {"b512", "aes-light", "aes-heavy"}:
+        if normalized in {"b512", "aes-light", "fwxaes-heavy"}:
             hw_plan = basefwx.MediaCipher._build_hw_execution_plan(
                 f"cryptin-{normalized}",
                 stream_type="bytes",
@@ -11762,7 +11837,7 @@ def cli(argv=None) -> int:
             )
             basefwx.MediaCipher._log_hw_execution_plan(hw_plan)
 
-        if normalized == "fwxaes":
+        if normalized in {"fwxaes", "fwxaes-heavy"}:
             results = {}
             for raw_path in args.paths:
                 try:
@@ -11770,6 +11845,8 @@ def cli(argv=None) -> int:
                         raw_path,
                         password,
                         use_master=use_master,
+                        heavy=(normalized == "fwxaes-heavy"),
+                        strip_metadata=args.strip_metadata,
                         normalize=args.normalize,
                         normalize_threshold=args.normalize_threshold,
                         cover_phrase=args.cover_phrase,
@@ -11805,16 +11882,7 @@ def cli(argv=None) -> int:
                 keep_input=args.keep_input
             )
         else:
-            result = basefwx.AESfile(
-                args.paths,
-                password,
-                light=False,
-                strip_metadata=args.strip_metadata,
-                use_master=use_master,
-                master_pubkey=master_pub_bytes,
-                compress=args.compress,
-                keep_input=args.keep_input
-            )
+            parser.error(f"Unsupported method '{args.method}'")
 
         if isinstance(result, dict):
             failures = 0

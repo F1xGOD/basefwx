@@ -1086,6 +1086,38 @@ void WritePngCarrierBytes(const std::filesystem::path& path,
     }
 }
 
+std::string MoveOutputPath(const std::string& current_path, const std::string& requested_path) {
+    if (requested_path.empty() || current_path == requested_path) {
+        return current_path;
+    }
+    std::filesystem::path src(current_path);
+    std::filesystem::path dst(requested_path);
+    std::error_code ec;
+    if (std::filesystem::exists(dst, ec) && std::filesystem::is_directory(dst, ec)) {
+        dst /= src.filename();
+    }
+    if (!dst.parent_path().empty()) {
+        std::filesystem::create_directories(dst.parent_path(), ec);
+        if (ec) {
+            throw std::runtime_error("Failed to prepare output path: " + dst.string());
+        }
+    }
+    std::filesystem::rename(src, dst, ec);
+    if (ec) {
+        ec.clear();
+        std::filesystem::copy_file(src, dst, std::filesystem::copy_options::overwrite_existing, ec);
+        if (ec) {
+            throw std::runtime_error("Failed to move output to: " + dst.string());
+        }
+        ec.clear();
+        std::filesystem::remove(src, ec);
+        if (ec) {
+            throw std::runtime_error("Failed to finalize moved output: " + dst.string());
+        }
+    }
+    return dst.string();
+}
+
 }  // namespace
 
 namespace basefwx {
@@ -1387,6 +1419,66 @@ std::string Pb512Decode(const std::string& input, const std::string& password, b
     opts.argon2_parallelism = kdf.argon2_parallelism;
     opts.allow_pbkdf2_fallback = kdf.allow_pbkdf2_fallback;
     return basefwx::pb512::Pb512Decode(input, ResolvePassword(password), use_master, opts);
+}
+
+std::string FwxAesFile(const std::string& path,
+                       const std::string& password,
+                       const std::string& output,
+                       bool use_master,
+                       FwxAesProfile profile,
+                       bool normalize,
+                       std::size_t normalize_threshold,
+                       const std::string& cover_phrase,
+                       bool compress,
+                       bool keep_input) {
+    std::string resolved = ResolvePassword(password);
+    std::filesystem::path input_path(path);
+    std::string ext = input_path.extension().string();
+    std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char ch) {
+        return static_cast<char>(std::tolower(ch));
+    });
+    bool decrypt = (ext == ".fwx");
+
+    if (profile == FwxAesProfile::Heavy) {
+        if (normalize || normalize_threshold != 8 * 1024 || cover_phrase != "low taper fade") {
+            throw std::runtime_error("fwxAES heavy mode does not support normalize options");
+        }
+        basefwx::filecodec::FileOptions file_opts;
+        file_opts.use_master = use_master;
+        file_opts.compress = compress;
+        file_opts.keep_input = keep_input;
+        std::string produced = decrypt
+            ? basefwx::filecodec::Pb512DecodeFile(path, resolved, file_opts)
+            : basefwx::filecodec::Pb512EncodeFile(path, resolved, file_opts);
+        return MoveOutputPath(produced, output);
+    }
+
+    std::string out = output;
+    if (out.empty()) {
+        if (!decrypt) {
+            out = path + ".fwx";
+        } else if (path.size() >= 4 && path.rfind(".fwx") == path.size() - 4) {
+            out = path.substr(0, path.size() - 4);
+        } else {
+            out = path + ".out";
+        }
+    }
+
+    if (decrypt) {
+        basefwx::fwxaes::DecryptFile(path, out, resolved, use_master);
+        return out;
+    }
+
+    basefwx::fwxaes::Options fwxaes_opts;
+    fwxaes_opts.use_master = use_master;
+    basefwx::fwxaes::NormalizeOptions norm;
+    norm.enabled = normalize;
+    norm.threshold = normalize_threshold;
+    norm.cover_phrase = cover_phrase;
+    basefwx::fwxaes::PackOptions pack_opts;
+    pack_opts.compress = compress;
+    basefwx::fwxaes::EncryptFile(path, out, resolved, fwxaes_opts, norm, pack_opts, keep_input);
+    return out;
 }
 
 std::string Jmge(const std::string& path,

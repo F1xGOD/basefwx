@@ -3108,7 +3108,7 @@ def _bench_an7_init(mode: str, input_path: str, pw: str) -> None:
     basefwx.fwxAES_file(str(local_input), pw, use_master=False, output=str(seed_fwx), keep_input=True)
     _BENCH_AN7_SEED_FWX = seed_fwx
     seed_an7 = Path(tmp.name) / "seed.an7"
-    basefwx.an7_file(seed_fwx, pw, out=seed_an7, keep_input=True)
+    basefwx.an7_file(str(seed_fwx), pw, out=str(seed_an7), keep_input=True)
     _BENCH_AN7_SEED_AN7 = seed_an7
 
 def _bench_an7_worker(worker_id: int) -> int:
@@ -3119,9 +3119,9 @@ def _bench_an7_worker(worker_id: int) -> int:
     except FileNotFoundError:
         pass
     if _BENCH_AN7_MODE == "an7":
-        produced = Path(basefwx.an7_file(_BENCH_AN7_SEED_FWX, _BENCH_AN7_PW, out=out, keep_input=True))
+        produced = Path(basefwx.an7_file(str(_BENCH_AN7_SEED_FWX), _BENCH_AN7_PW, out=str(out), keep_input=True))
     else:
-        result = basefwx.dean7_file(_BENCH_AN7_SEED_AN7, _BENCH_AN7_PW, out=out, keep_input=True)
+        result = basefwx.dean7_file(str(_BENCH_AN7_SEED_AN7), _BENCH_AN7_PW, out=str(out), keep_input=True)
         produced = Path(result["output_path"])
     size = produced.stat().st_size
     try:
@@ -3129,6 +3129,60 @@ def _bench_an7_worker(worker_id: int) -> int:
     except FileNotFoundError:
         pass
     return size
+
+def _an7_workers_env() -> int:
+    value = os.getenv("BASEFWX_BENCH_AN7_WORKERS")
+    if value:
+        try:
+            parsed = int(value)
+            if parsed > 0:
+                return parsed
+        except ValueError:
+            pass
+    # AN7/DEAN7 benchmarks are file-heavy and can exhaust runner RAM/tmp when
+    # spawned at full core count. Default to serial unless explicitly overridden.
+    return 1
+
+def _bench_an7_serial(mode: str, input_path: str, pw: str, warmup: int, iters: int) -> None:
+    source = Path(input_path)
+    with tempfile.TemporaryDirectory(prefix="basefwx-bench-an7-") as tmpdir:
+        tmp = Path(tmpdir)
+        worker_input = tmp / source.name
+        shutil.copyfile(source, worker_input)
+        seed_fwx = tmp / "seed.fwx"
+        basefwx.fwxAES_file(str(worker_input), pw, use_master=False, output=str(seed_fwx), keep_input=True)
+        seed_an7 = tmp / "seed.an7"
+        basefwx.an7_file(str(seed_fwx), pw, out=str(seed_an7), keep_input=True)
+        if mode == "an7":
+            def run() -> int:
+                out = tmp / "bench_an7.out"
+                try:
+                    out.unlink()
+                except FileNotFoundError:
+                    pass
+                produced = Path(basefwx.an7_file(str(seed_fwx), pw, out=str(out), keep_input=True))
+                size = produced.stat().st_size
+                try:
+                    produced.unlink()
+                except FileNotFoundError:
+                    pass
+                return size
+        else:
+            def run() -> int:
+                out = tmp / "bench_dean7.out"
+                try:
+                    out.unlink()
+                except FileNotFoundError:
+                    pass
+                result = basefwx.dean7_file(str(seed_an7), pw, out=str(out), keep_input=True)
+                produced = Path(result["output_path"])
+                size = produced.stat().st_size
+                try:
+                    produced.unlink()
+                except FileNotFoundError:
+                    pass
+                return size
+        _bench(warmup, iters, run)
 
 def _bench_parallel(warmup: int, iters: int, workers: int, worker, *, initializer=None, initargs=()) -> None:
     if warmup < 0:
@@ -3249,38 +3303,21 @@ def cmd_bench_an7(args: list[str]) -> int:
     inp, pw = args[:2]
     warmup = _warmup_env()
     iters = _iters_env()
-    workers = _workers_env()
+    workers = _an7_workers_env()
     if workers > 1:
-        _bench_parallel(
-            warmup,
-            iters,
-            workers,
-            _bench_an7_worker,
-            initializer=_bench_an7_init,
-            initargs=("an7", inp, pw),
-        )
+        try:
+            _bench_parallel(
+                warmup,
+                iters,
+                workers,
+                _bench_an7_worker,
+                initializer=_bench_an7_init,
+                initargs=("an7", inp, pw),
+            )
+        except Exception:
+            _bench_an7_serial("an7", inp, pw, warmup, iters)
     else:
-        source = Path(inp)
-        with tempfile.TemporaryDirectory(prefix="basefwx-bench-an7-") as tmpdir:
-            tmp = Path(tmpdir)
-            worker_input = tmp / source.name
-            shutil.copyfile(source, worker_input)
-            seed_fwx = tmp / "seed.fwx"
-            basefwx.fwxAES_file(str(worker_input), pw, use_master=False, output=str(seed_fwx), keep_input=True)
-            def run() -> int:
-                out = tmp / "bench_an7.out"
-                try:
-                    out.unlink()
-                except FileNotFoundError:
-                    pass
-                produced = Path(basefwx.an7_file(seed_fwx, pw, out=out, keep_input=True))
-                size = produced.stat().st_size
-                try:
-                    produced.unlink()
-                except FileNotFoundError:
-                    pass
-                return size
-            _bench(warmup, iters, run)
+        _bench_an7_serial("an7", inp, pw, warmup, iters)
     return 0
 
 def cmd_bench_dean7(args: list[str]) -> int:
@@ -3289,41 +3326,21 @@ def cmd_bench_dean7(args: list[str]) -> int:
     inp, pw = args[:2]
     warmup = _warmup_env()
     iters = _iters_env()
-    workers = _workers_env()
+    workers = _an7_workers_env()
     if workers > 1:
-        _bench_parallel(
-            warmup,
-            iters,
-            workers,
-            _bench_an7_worker,
-            initializer=_bench_an7_init,
-            initargs=("dean7", inp, pw),
-        )
+        try:
+            _bench_parallel(
+                warmup,
+                iters,
+                workers,
+                _bench_an7_worker,
+                initializer=_bench_an7_init,
+                initargs=("dean7", inp, pw),
+            )
+        except Exception:
+            _bench_an7_serial("dean7", inp, pw, warmup, iters)
     else:
-        source = Path(inp)
-        with tempfile.TemporaryDirectory(prefix="basefwx-bench-an7-") as tmpdir:
-            tmp = Path(tmpdir)
-            worker_input = tmp / source.name
-            shutil.copyfile(source, worker_input)
-            seed_fwx = tmp / "seed.fwx"
-            basefwx.fwxAES_file(str(worker_input), pw, use_master=False, output=str(seed_fwx), keep_input=True)
-            seed_an7 = tmp / "seed.an7"
-            basefwx.an7_file(seed_fwx, pw, out=seed_an7, keep_input=True)
-            def run() -> int:
-                out = tmp / "bench_dean7.out"
-                try:
-                    out.unlink()
-                except FileNotFoundError:
-                    pass
-                result = basefwx.dean7_file(seed_an7, pw, out=out, keep_input=True)
-                produced = Path(result["output_path"])
-                size = produced.stat().st_size
-                try:
-                    produced.unlink()
-                except FileNotFoundError:
-                    pass
-                return size
-            _bench(warmup, iters, run)
+        _bench_an7_serial("dean7", inp, pw, warmup, iters)
     return 0
 
 def cmd_bench_b512file(args: list[str]) -> int:
@@ -5211,10 +5228,12 @@ for idx in "${!BENCH_LANGS[@]}"; do
             time_cmd_bench "an7_py_total" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_FILE" \
                 BASEFWX_BENCH_ITERS="$BENCH_ITERS_FILE" \
                 BASEFWX_BENCH_WORKERS="$BENCH_FILE_WORKERS" \
+                BASEFWX_BENCH_AN7_WORKERS=1 \
                 "$PYTHON_BIN" "$PY_HELPER" bench-an7 "$BENCH_BYTES_FILE" "$PW"
             time_cmd_bench "dean7_py_total" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_FILE" \
                 BASEFWX_BENCH_ITERS="$BENCH_ITERS_FILE" \
                 BASEFWX_BENCH_WORKERS="$BENCH_FILE_WORKERS" \
+                BASEFWX_BENCH_AN7_WORKERS=1 \
                 "$PYTHON_BIN" "$PY_HELPER" bench-dean7 "$BENCH_BYTES_FILE" "$PW"
             for jmg_file in "${JMG_CASES[@]}"; do
                 time_cmd_bench "jmg_py_${jmg_file%.*}" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_FILE" \
@@ -5272,10 +5291,12 @@ for idx in "${!BENCH_LANGS[@]}"; do
             time_cmd_bench "an7_pypy_total" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_FILE" \
                 BASEFWX_BENCH_ITERS="$BENCH_ITERS_FILE" \
                 BASEFWX_BENCH_WORKERS="$BENCH_FILE_WORKERS" \
+                BASEFWX_BENCH_AN7_WORKERS=1 \
                 "$PYPY_BIN" "$PY_HELPER" bench-an7 "$BENCH_BYTES_FILE" "$PW"
             time_cmd_bench "dean7_pypy_total" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_FILE" \
                 BASEFWX_BENCH_ITERS="$BENCH_ITERS_FILE" \
                 BASEFWX_BENCH_WORKERS="$BENCH_FILE_WORKERS" \
+                BASEFWX_BENCH_AN7_WORKERS=1 \
                 "$PYPY_BIN" "$PY_HELPER" bench-dean7 "$BENCH_BYTES_FILE" "$PW"
             for jmg_file in "${JMG_CASES[@]}"; do
                 time_cmd_bench "jmg_pypy_${jmg_file%.*}" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_FILE" \

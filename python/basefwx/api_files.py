@@ -90,6 +90,38 @@ def fwxAES(
     )
 
 
+def an7_file(
+    file: str,
+    code: str,
+    *,
+    out: str | None = None,
+    keep_input: bool = False,
+    force_any: bool = False,
+):
+    return basefwx.an7_file(
+        file,
+        code,
+        out=out,
+        keep_input=keep_input,
+        force_any=force_any,
+    )
+
+
+def dean7_file(
+    file: str,
+    code: str,
+    *,
+    out: str | None = None,
+    keep_input: bool = False,
+):
+    return basefwx.dean7_file(
+        file,
+        code,
+        out=out,
+        keep_input=keep_input,
+    )
+
+
 def fwxAES_encrypt_raw(plaintext: bytes, password: str | bytes, use_master: bool = True):
     return basefwx.fwxAES_encrypt_raw(plaintext, password, use_master=use_master)
 
@@ -293,11 +325,13 @@ def pb512file_decode_bytes(
 
 
 __all__ = [
+    "an7_file",
     "b512decodefile",
     "b512encodefile",
     "b512file_decode_bytes",
     "b512file_encode_bytes",
     "b512handlefile",
+    "dean7_file",
     "fwxAES",
     "fwxAES_decrypt_raw",
     "fwxAES_decrypt_stream",

@@ -8,6 +8,8 @@
 #include <string>
 #include <vector>
 
+#include "basefwx/pb512.hpp"
+
 namespace basefwx::fwxaes {
 
 using Bytes = std::vector<std::uint8_t>;
@@ -17,6 +19,8 @@ struct Options {
     std::uint8_t salt_len = 16;
     std::uint8_t iv_len = 12;
     bool use_master = false;
+    bool force_legacy_pbkdf2 = false;
+    basefwx::pb512::KdfOptions user_kdf{};
 };
 
 struct NormalizeOptions {

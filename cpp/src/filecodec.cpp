@@ -14,6 +14,7 @@
 #include "basefwx/obfuscation.hpp"
 #include "basefwx/pb512.hpp"
 #include "basefwx/pq.hpp"
+#include "basefwx/runtime.hpp"
 
 #include <algorithm>
 #include <array>
@@ -112,32 +113,6 @@ std::uint64_t FileSize(const std::filesystem::path& path) {
     return static_cast<std::uint64_t>(size);
 }
 
-std::uint64_t ResolvePayloadLengthFromFileSize(const std::filesystem::path& input,
-                                               std::uint32_t len_user,
-                                               std::uint32_t len_master,
-                                               std::uint32_t encoded_payload_len) {
-    constexpr std::uint64_t kU32Mod = (1ULL << 32);
-    std::uint64_t payload_len = encoded_payload_len;
-    std::uint64_t prefix_len = 4ULL + static_cast<std::uint64_t>(len_user)
-                             + 4ULL + static_cast<std::uint64_t>(len_master)
-                             + 4ULL;
-    std::uint64_t file_size = FileSize(input);
-    if (file_size < prefix_len) {
-        return payload_len;
-    }
-    std::uint64_t actual_payload_len = file_size - prefix_len;
-    if (actual_payload_len == payload_len) {
-        return payload_len;
-    }
-    // Legacy stream format stores payload length in 32-bit BE. For payloads over
-    // 4 GiB this field wraps; recover true length using total file size.
-    if (actual_payload_len > payload_len
-        && ((actual_payload_len - payload_len) % kU32Mod) == 0) {
-        return actual_payload_len;
-    }
-    return payload_len;
-}
-
 Bytes ToBytes(const std::string& text) {
     return Bytes(text.begin(), text.end());
 }
@@ -233,6 +208,75 @@ Bytes Uint16Be(std::uint16_t value) {
         static_cast<std::uint8_t>((value >> 8) & 0xFF),
         static_cast<std::uint8_t>(value & 0xFF)
     };
+}
+
+struct StreamCipherLayout {
+    std::uint64_t body_start = 0;
+    std::uint64_t body_len = 0;
+};
+
+class TempFileCleanup {
+public:
+    explicit TempFileCleanup(std::filesystem::path path)
+        : path_(std::move(path)) {}
+
+    TempFileCleanup(const TempFileCleanup&) = delete;
+    TempFileCleanup& operator=(const TempFileCleanup&) = delete;
+
+    ~TempFileCleanup() {
+        if (!active_) {
+            return;
+        }
+        std::error_code ec;
+        std::filesystem::remove(path_, ec);
+    }
+
+    void Dismiss() noexcept {
+        active_ = false;
+    }
+
+private:
+    std::filesystem::path path_;
+    bool active_ = true;
+};
+
+void ThrowIfInterrupted() {
+    if (basefwx::runtime::StopRequested()) {
+        throw std::runtime_error("Interrupted");
+    }
+}
+
+std::uint64_t TellPosOrThrow(std::istream& stream) {
+    std::streampos pos = stream.tellg();
+    if (pos < 0) {
+        throw std::runtime_error("Failed to determine stream position");
+    }
+    return static_cast<std::uint64_t>(pos);
+}
+
+StreamCipherLayout ResolveStreamCipherLayout(const std::filesystem::path& input,
+                                             std::istream& stream,
+                                             std::uint32_t encoded_payload_len,
+                                             std::uint32_t metadata_len) {
+    StreamCipherLayout layout;
+    layout.body_start = TellPosOrThrow(stream);
+
+    std::uint64_t file_size = FileSize(input);
+    constexpr std::uint64_t tag_len = static_cast<std::uint64_t>(constants::kAeadTagLen);
+    if (file_size < layout.body_start + tag_len) {
+        throw std::runtime_error("Ciphertext payload truncated");
+    }
+    layout.body_len = file_size - layout.body_start - tag_len;
+
+    std::uint64_t payload_len_64 = 4ull
+        + static_cast<std::uint64_t>(metadata_len)
+        + static_cast<std::uint64_t>(constants::kAeadNonceLen)
+        + layout.body_len
+        + static_cast<std::uint64_t>(constants::kAeadTagLen);
+    if (static_cast<std::uint32_t>(payload_len_64) != encoded_payload_len) {
+        throw std::runtime_error("Malformed length-prefixed blob (payload length mismatch)");
+    }
+    return layout;
 }
 
 class AesGcmEncryptor {
@@ -856,8 +900,7 @@ std::string B512DecodeFileStream(const std::filesystem::path& input,
     }
     std::uint32_t len_payload = 0;
     read_u32(len_payload);
-    std::uint64_t payload_len = ResolvePayloadLengthFromFileSize(input, len_user, len_master, len_payload);
-    if (payload_len < 4 + constants::kAeadNonceLen + constants::kAeadTagLen) {
+    if (len_payload < 4 + constants::kAeadNonceLen + constants::kAeadTagLen) {
         throw std::runtime_error("Ciphertext payload truncated");
     }
     std::uint32_t metadata_len = 0;
@@ -876,14 +919,10 @@ std::string B512DecodeFileStream(const std::filesystem::path& input,
         throw std::runtime_error("Ciphertext payload truncated");
     }
 
-    std::uint64_t payload_overhead = 4ULL + static_cast<std::uint64_t>(metadata_len)
-                                   + constants::kAeadNonceLen + constants::kAeadTagLen;
-    if (payload_len < payload_overhead) {
-        throw std::runtime_error("Ciphertext payload truncated");
-    }
-    std::uint64_t cipher_body_len = payload_len - payload_overhead;
-    std::uint64_t cipher_body_start = static_cast<std::uint64_t>(handle.tellg());
-    handle.seekg(static_cast<std::streamoff>(cipher_body_len), std::ios::cur);
+    StreamCipherLayout layout = ResolveStreamCipherLayout(input, handle, len_payload, metadata_len);
+    std::uint64_t cipher_body_len = layout.body_len;
+    std::uint64_t cipher_body_start = layout.body_start;
+    handle.seekg(static_cast<std::streamoff>(cipher_body_start + cipher_body_len), std::ios::beg);
     Bytes tag(constants::kAeadTagLen);
     handle.read(reinterpret_cast<char*>(tag.data()), tag.size());
     if (handle.gcount() != static_cast<std::streamsize>(tag.size())) {
@@ -910,6 +949,7 @@ std::string B512DecodeFileStream(const std::filesystem::path& input,
     AesGcmDecryptor decryptor(aead_key, nonce, metadata_bytes);
     std::filesystem::path temp_plain = input;
     temp_plain += ".plain.tmp";
+    TempFileCleanup temp_plain_cleanup(temp_plain);
     std::ofstream plain_out(temp_plain, std::ios::binary);
     if (!plain_out) {
         throw std::runtime_error("Failed to create temp file");
@@ -918,6 +958,7 @@ std::string B512DecodeFileStream(const std::filesystem::path& input,
     std::uint64_t remaining = cipher_body_len;
     Bytes buffer(options.stream_chunk_size);
     while (remaining > 0) {
+        ThrowIfInterrupted();
         std::size_t take = static_cast<std::size_t>(std::min<std::uint64_t>(remaining, buffer.size()));
         buffer.resize(take);
         handle.read(reinterpret_cast<char*>(buffer.data()), static_cast<std::streamsize>(take));
@@ -932,6 +973,11 @@ std::string B512DecodeFileStream(const std::filesystem::path& input,
     }
     decryptor.Final(tag);
     plain_out.flush();
+    if (!plain_out) {
+        throw std::runtime_error("Failed to write plaintext temp file");
+    }
+    plain_out.close();
+    ThrowIfInterrupted();
 
     if (resolved.empty()) {
         throw std::runtime_error("Password required for streaming b512 decode");
@@ -1026,6 +1072,7 @@ std::string B512DecodeFileStream(const std::filesystem::path& input,
     Bytes chunk_buf_bytes(chunk_size);
     std::uint64_t processed = 0;
     while (processed < original_size) {
+        ThrowIfInterrupted();
         std::size_t take = static_cast<std::size_t>(
             std::min<std::uint64_t>(chunk_size, original_size - processed));
         chunk_buf_bytes.resize(take);
@@ -1039,8 +1086,16 @@ std::string B512DecodeFileStream(const std::filesystem::path& input,
         processed += static_cast<std::uint64_t>(chunk_buf_bytes.size());
     }
     out.flush();
+    if (!out) {
+        throw std::runtime_error("Failed to write output file");
+    }
     plain_in.close();
-    std::filesystem::remove(temp_plain);
+    std::error_code remove_ec;
+    std::filesystem::remove(temp_plain, remove_ec);
+    if (remove_ec) {
+        throw std::runtime_error("Failed to remove temp file: " + remove_ec.message());
+    }
+    temp_plain_cleanup.Dismiss();
     if (!options.keep_input) {
         std::filesystem::remove(input);
     }
@@ -1474,8 +1529,7 @@ std::string Pb512DecodeFileStream(const std::filesystem::path& input,
     }
     std::uint32_t len_payload = 0;
     read_u32(len_payload);
-    std::uint64_t payload_len = ResolvePayloadLengthFromFileSize(input, len_user, len_master, len_payload);
-    if (payload_len < 4 + constants::kAeadNonceLen + constants::kAeadTagLen) {
+    if (len_payload < 4 + constants::kAeadNonceLen + constants::kAeadTagLen) {
         throw std::runtime_error("Ciphertext payload truncated");
     }
     std::uint32_t metadata_len = 0;
@@ -1493,14 +1547,10 @@ std::string Pb512DecodeFileStream(const std::filesystem::path& input,
         throw std::runtime_error("Ciphertext payload truncated");
     }
 
-    std::uint64_t payload_overhead = 4ULL + static_cast<std::uint64_t>(metadata_len)
-                                   + constants::kAeadNonceLen + constants::kAeadTagLen;
-    if (payload_len < payload_overhead) {
-        throw std::runtime_error("Ciphertext payload truncated");
-    }
-    std::uint64_t cipher_body_len = payload_len - payload_overhead;
-    std::uint64_t cipher_body_start = static_cast<std::uint64_t>(handle.tellg());
-    handle.seekg(static_cast<std::streamoff>(cipher_body_len), std::ios::cur);
+    StreamCipherLayout layout = ResolveStreamCipherLayout(input, handle, len_payload, metadata_len);
+    std::uint64_t cipher_body_len = layout.body_len;
+    std::uint64_t cipher_body_start = layout.body_start;
+    handle.seekg(static_cast<std::streamoff>(cipher_body_start + cipher_body_len), std::ios::beg);
     Bytes tag(constants::kAeadTagLen);
     handle.read(reinterpret_cast<char*>(tag.data()), tag.size());
     if (handle.gcount() != static_cast<std::streamsize>(tag.size())) {
@@ -1571,6 +1621,7 @@ std::string Pb512DecodeFileStream(const std::filesystem::path& input,
     AesGcmDecryptor decryptor(ephemeral_key, nonce, metadata_bytes);
     std::filesystem::path temp_plain = input;
     temp_plain += ".plain.tmp";
+    TempFileCleanup temp_plain_cleanup(temp_plain);
     std::ofstream plain_out(temp_plain, std::ios::binary);
     if (!plain_out) {
         throw std::runtime_error("Failed to create temp file");
@@ -1579,6 +1630,7 @@ std::string Pb512DecodeFileStream(const std::filesystem::path& input,
     std::uint64_t remaining = cipher_body_len;
     Bytes buffer(options.stream_chunk_size);
     while (remaining > 0) {
+        ThrowIfInterrupted();
         std::size_t take = static_cast<std::size_t>(std::min<std::uint64_t>(remaining, buffer.size()));
         buffer.resize(take);
         handle.read(reinterpret_cast<char*>(buffer.data()), static_cast<std::streamsize>(take));
@@ -1593,6 +1645,11 @@ std::string Pb512DecodeFileStream(const std::filesystem::path& input,
     }
     decryptor.Final(tag);
     plain_out.flush();
+    if (!plain_out) {
+        throw std::runtime_error("Failed to write plaintext temp file");
+    }
+    plain_out.close();
+    ThrowIfInterrupted();
 
     if (resolved.empty()) {
         throw std::runtime_error("Password required for AES-heavy streaming decode");
@@ -1687,6 +1744,7 @@ std::string Pb512DecodeFileStream(const std::filesystem::path& input,
     Bytes chunk_buf_bytes(chunk_size);
     std::uint64_t processed = 0;
     while (processed < original_size) {
+        ThrowIfInterrupted();
         std::size_t take = static_cast<std::size_t>(
             std::min<std::uint64_t>(chunk_size, original_size - processed));
         chunk_buf_bytes.resize(take);
@@ -1700,8 +1758,16 @@ std::string Pb512DecodeFileStream(const std::filesystem::path& input,
         processed += static_cast<std::uint64_t>(chunk_buf_bytes.size());
     }
     out.flush();
+    if (!out) {
+        throw std::runtime_error("Failed to write output file");
+    }
     plain_in.close();
-    std::filesystem::remove(temp_plain);
+    std::error_code remove_ec;
+    std::filesystem::remove(temp_plain, remove_ec);
+    if (remove_ec) {
+        throw std::runtime_error("Failed to remove temp file: " + remove_ec.message());
+    }
+    temp_plain_cleanup.Dismiss();
     if (!options.keep_input) {
         std::filesystem::remove(input);
     }
@@ -1721,7 +1787,7 @@ std::string B512EncodeFile(const std::string& path,
     if (!std::filesystem::exists(input)) {
         throw std::runtime_error("Input file not found: " + input.string());
     }
-    auto pack = basefwx::archive::PackInput(input, options.compress, options.compression);
+    auto pack = basefwx::archive::PackInput(input, options.compress);
     std::filesystem::path source = pack.used ? pack.source : input;
     std::string pack_flag = basefwx::archive::PackFlag(pack.mode);
     std::string output;
@@ -2009,7 +2075,7 @@ std::string Pb512EncodeFile(const std::string& path,
     if (!std::filesystem::exists(input)) {
         throw std::runtime_error("Input file not found: " + input.string());
     }
-    auto pack = basefwx::archive::PackInput(input, options.compress, options.compression);
+    auto pack = basefwx::archive::PackInput(input, options.compress);
     std::filesystem::path source = pack.used ? pack.source : input;
     std::string pack_flag = basefwx::archive::PackFlag(pack.mode);
     std::string output;

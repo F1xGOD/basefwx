@@ -9,6 +9,7 @@
 #include "basefwx/filecodec.hpp"
 #include "basefwx/fwxaes.hpp"
 #include "basefwx/livecipher.hpp"
+#include "basefwx/an7.hpp"
 
 namespace basefwx {
 

@@ -1079,18 +1079,30 @@ std::size_t RunFwxaesParallel(const std::vector<std::uint8_t>& data,
     threads.reserve(workers);
     basefwx::fwxaes::Options opts;
     opts.use_master = use_master;
+    std::exception_ptr first_exc = nullptr;
+    std::mutex exc_mutex;
     for (std::size_t i = 0; i < workers; ++i) {
         threads.emplace_back([&]() {
-            auto blob = basefwx::fwxaes::EncryptRaw(data, password, opts);
-            auto plain = basefwx::fwxaes::DecryptRaw(blob, password, use_master);
-            g_bench_sink.fetch_xor(plain.size(), std::memory_order_relaxed);
-            total.fetch_add(plain.size(), std::memory_order_relaxed);
+            try {
+                auto blob = basefwx::fwxaes::EncryptRaw(data, password, opts);
+                auto plain = basefwx::fwxaes::DecryptRaw(blob, password, use_master);
+                g_bench_sink.fetch_xor(plain.size(), std::memory_order_relaxed);
+                total.fetch_add(plain.size(), std::memory_order_relaxed);
+            } catch (...) {
+                std::lock_guard<std::mutex> lock(exc_mutex);
+                if (!first_exc) {
+                    first_exc = std::current_exception();
+                }
+            }
         });
     }
     for (auto& t : threads) {
         if (t.joinable()) {
             t.join();
         }
+    }
+    if (first_exc) {
+        std::rethrow_exception(first_exc);
     }
     return total.load(std::memory_order_relaxed);
 }
@@ -1244,6 +1256,8 @@ void PrintUsage() {
     std::cout << "  bench-hash <method> <text-file>\n";
     std::cout << "  bench-fwxaes <file> <password> " << master_flags << "\n";
     std::cout << "  bench-fwxaes-par <file> <password> " << master_flags << "\n";
+    std::cout << "  bench-an7 <file> <password> " << master_flags << "\n";
+    std::cout << "  bench-dean7 <file> <password> " << master_flags << "\n";
     std::cout << "  bench-live <file> <password> " << master_flags << "\n";
     std::cout << "  bench-b512file <file> <password> " << master_flags << " [--no-aead]\n";
     std::cout << "  bench-pb512file <file> <password> " << master_flags << " [--no-aead]\n";
@@ -1265,7 +1279,7 @@ void PrintBashCompletion(const std::string& argv0) {
            "kFMe kFMd kFAe kFAd hash512 uhash513 a512-enc a512-dec bi512-enc b1024-enc b256-enc b256-dec "
            "b512-enc b512-dec pb512-enc pb512-dec b512file-enc b512file-dec b512file-bytes-rt pb512file-bytes-rt "
            "pb512file-enc pb512file-dec fwxaes-enc fwxaes-dec fwxaes-heavy-enc fwxaes-heavy-dec fwxaes-stream-enc fwxaes-stream-dec fwxaes-live-enc "
-           "fwxaes-live-dec an7 dean7 jmge jmgd bench-text bench-hash bench-fwxaes bench-fwxaes-par bench-live bench-b512file "
+           "fwxaes-live-dec an7 dean7 jmge jmgd bench-text bench-hash bench-fwxaes bench-fwxaes-par bench-an7 bench-dean7 bench-live bench-b512file "
            "bench-pb512file bench-jmg\"\n"
         << "  local master_opts=\"--use-master --no-master --master-pub --use-master-pub --master-autogen --allow-embedded-master\"\n"
         << "  if [[ ${COMP_CWORD} -eq 1 ]]; then\n"
@@ -1297,7 +1311,7 @@ void PrintBashCompletion(const std::string& argv0) {
         << "    kFMe|kFMd|kFAe|kFAd)\n"
         << "      COMPREPLY=( $(compgen -W \"--out -o --bw\" -- \"$cur\") )\n"
         << "      ;;\n"
-        << "    bench-text|bench-fwxaes|bench-fwxaes-par|bench-live|bench-b512file|bench-pb512file)\n"
+        << "    bench-text|bench-fwxaes|bench-fwxaes-par|bench-an7|bench-dean7|bench-live|bench-b512file|bench-pb512file)\n"
         << "      COMPREPLY=( $(compgen -W \"-p --password --no-aead $master_opts\" -- \"$cur\") )\n"
         << "      ;;\n"
         << "    *)\n"
@@ -2546,6 +2560,144 @@ int main(int argc, char** argv) {
                 out.setf(std::ios::fixed);
                 out << std::setprecision(3) << throughput;
                 std::cout << "THROUGHPUT_GiBps=" << out.str() << " WORKERS=" << workers << "\n";
+            }
+            return 0;
+        }
+        if (command == "bench-an7" || command == "bench-dean7") {
+            if (argc < 4) {
+                PrintUsage();
+                return 2;
+            }
+            std::filesystem::path src_path(argv[2]);
+            std::string password = argv[3];
+            bool use_master = false;
+            for (int idx = 4; idx < argc; ++idx) {
+                std::string flag(argv[idx]);
+                if (HandleMasterFlag(flag, argc, argv, &idx, &use_master)) {
+                } else {
+                    throw std::runtime_error("Unknown flag: " + flag);
+                }
+            }
+            if (!std::filesystem::exists(src_path)) {
+                throw std::runtime_error("Failed to open file: " + src_path.string());
+            }
+            std::size_t workers = static_cast<std::size_t>(BenchWorkers());
+            if (workers == 0) {
+                workers = 1;
+            }
+            ConfirmSingleThreadCli(workers);
+            int warmup = BenchWarmup();
+            int iters = BenchIters();
+
+            auto stamp = std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
+            std::vector<std::filesystem::path> worker_dirs;
+            std::vector<std::filesystem::path> seed_fwx;
+            std::vector<std::filesystem::path> seed_an7;
+            worker_dirs.reserve(workers);
+            seed_fwx.reserve(workers);
+            seed_an7.reserve(workers);
+
+            basefwx::fwxaes::Options fwx_opts;
+            fwx_opts.use_master = use_master;
+            for (std::size_t i = 0; i < workers; ++i) {
+                std::filesystem::path temp_dir = std::filesystem::temp_directory_path()
+                    / ("basefwx-bench-an7-" + stamp + "-" + std::to_string(i));
+                std::filesystem::create_directories(temp_dir);
+                worker_dirs.push_back(temp_dir);
+
+                std::filesystem::path worker_input = temp_dir / src_path.filename();
+                std::filesystem::copy_file(src_path, worker_input, std::filesystem::copy_options::overwrite_existing);
+
+                std::filesystem::path worker_fwx = temp_dir / ("seed_" + std::to_string(i) + ".fwx");
+                basefwx::fwxaes::EncryptFile(
+                    worker_input.string(),
+                    worker_fwx.string(),
+                    password,
+                    fwx_opts,
+                    {},
+                    {},
+                    true
+                );
+                std::error_code remove_ec;
+                std::filesystem::remove(worker_input, remove_ec);
+                seed_fwx.push_back(worker_fwx);
+
+                std::filesystem::path worker_an7 = temp_dir / ("seed_" + std::to_string(i) + ".an7");
+                basefwx::An7Options an7_seed_opts;
+                an7_seed_opts.keep_input = true;
+                an7_seed_opts.out = worker_an7;
+                basefwx::an7_file(worker_fwx, password, an7_seed_opts);
+                seed_an7.push_back(worker_an7);
+            }
+
+            auto run_an7_once = [&](std::size_t idx) -> std::size_t {
+                const auto& temp_dir = worker_dirs[idx];
+                std::filesystem::path out_path = temp_dir / ("bench_an7_" + std::to_string(idx) + ".out");
+                std::error_code cleanup_ec;
+                std::filesystem::remove(out_path, cleanup_ec);
+                basefwx::An7Options an7_opts;
+                an7_opts.keep_input = true;
+                an7_opts.out = out_path;
+                basefwx::an7_file(seed_fwx[idx], password, an7_opts);
+                std::error_code size_ec;
+                auto out_size = std::filesystem::file_size(out_path, size_ec);
+                std::filesystem::remove(out_path, cleanup_ec);
+                if (!size_ec) {
+                    g_bench_sink.fetch_xor(static_cast<std::size_t>(out_size), std::memory_order_relaxed);
+                    return static_cast<std::size_t>(out_size);
+                }
+                return 0;
+            };
+
+            auto run_dean7_once = [&](std::size_t idx) -> std::size_t {
+                const auto& temp_dir = worker_dirs[idx];
+                std::filesystem::path out_path = temp_dir / ("bench_dean7_" + std::to_string(idx) + ".out");
+                std::error_code cleanup_ec;
+                std::filesystem::remove(out_path, cleanup_ec);
+                basefwx::Dean7Options dean_opts;
+                dean_opts.keep_input = true;
+                dean_opts.out = out_path;
+                basefwx::Dean7Result result = basefwx::dean7_file(seed_an7[idx], password, dean_opts);
+                std::error_code size_ec;
+                auto out_size = std::filesystem::file_size(result.output_path, size_ec);
+                std::filesystem::remove(result.output_path, cleanup_ec);
+                if (!size_ec) {
+                    g_bench_sink.fetch_xor(static_cast<std::size_t>(out_size), std::memory_order_relaxed);
+                    return static_cast<std::size_t>(out_size);
+                }
+                return 0;
+            };
+
+            auto run = [&]() {
+                if (workers > 1) {
+                    if (command == "bench-an7") {
+                        RunParallel(workers, run_an7_once);
+                    } else {
+                        RunParallel(workers, run_dean7_once);
+                    }
+                    return;
+                }
+                if (command == "bench-an7") {
+                    run_an7_once(0);
+                } else {
+                    run_dean7_once(0);
+                }
+            };
+
+            long long ns = 0;
+            try {
+                ns = BenchMedian(warmup, iters, run);
+            } catch (...) {
+                for (const auto& dir : worker_dirs) {
+                    std::error_code ec;
+                    std::filesystem::remove_all(dir, ec);
+                }
+                throw;
+            }
+            std::cout << "BENCH_NS=" << ns << "\n";
+            for (const auto& dir : worker_dirs) {
+                std::error_code ec;
+                std::filesystem::remove_all(dir, ec);
             }
             return 0;
         }

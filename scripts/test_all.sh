@@ -3006,6 +3006,12 @@ _BENCH_JMG_PW = None
 _BENCH_JMG_SUFFIX = None
 _BENCH_JMG_TEMP = None
 
+_BENCH_AN7_MODE = None
+_BENCH_AN7_PW = None
+_BENCH_AN7_TEMP = None
+_BENCH_AN7_SEED_FWX = None
+_BENCH_AN7_SEED_AN7 = None
+
 def _bench_file_init(method: str, input_path: str, pw: str) -> None:
     global _BENCH_FILE_METHOD, _BENCH_FILE_PW, _BENCH_FILE_TEMP, _BENCH_FILE_INPUT
     _BENCH_FILE_METHOD = method
@@ -3088,6 +3094,41 @@ def _bench_jmg_worker(worker_id: int) -> int:
             dec_path.unlink()
         except FileNotFoundError:
             pass
+
+def _bench_an7_init(mode: str, input_path: str, pw: str) -> None:
+    global _BENCH_AN7_MODE, _BENCH_AN7_PW, _BENCH_AN7_TEMP, _BENCH_AN7_SEED_FWX, _BENCH_AN7_SEED_AN7
+    _BENCH_AN7_MODE = mode
+    _BENCH_AN7_PW = pw
+    tmp = tempfile.TemporaryDirectory(prefix="basefwx-bench-an7-")
+    _BENCH_AN7_TEMP = tmp
+    src = Path(input_path)
+    local_input = Path(tmp.name) / src.name
+    shutil.copyfile(src, local_input)
+    seed_fwx = Path(tmp.name) / "seed.fwx"
+    basefwx.fwxAES_file(str(local_input), pw, use_master=False, output=str(seed_fwx), keep_input=True)
+    _BENCH_AN7_SEED_FWX = seed_fwx
+    seed_an7 = Path(tmp.name) / "seed.an7"
+    basefwx.an7_file(seed_fwx, pw, out=seed_an7, keep_input=True)
+    _BENCH_AN7_SEED_AN7 = seed_an7
+
+def _bench_an7_worker(worker_id: int) -> int:
+    tmp = Path(_BENCH_AN7_TEMP.name)
+    out = tmp / f"bench_{_BENCH_AN7_MODE}_{worker_id}.out"
+    try:
+        out.unlink()
+    except FileNotFoundError:
+        pass
+    if _BENCH_AN7_MODE == "an7":
+        produced = Path(basefwx.an7_file(_BENCH_AN7_SEED_FWX, _BENCH_AN7_PW, out=out, keep_input=True))
+    else:
+        result = basefwx.dean7_file(_BENCH_AN7_SEED_AN7, _BENCH_AN7_PW, out=out, keep_input=True)
+        produced = Path(result["output_path"])
+    size = produced.stat().st_size
+    try:
+        produced.unlink()
+    except FileNotFoundError:
+        pass
+    return size
 
 def _bench_parallel(warmup: int, iters: int, workers: int, worker, *, initializer=None, initargs=()) -> None:
     if warmup < 0:
@@ -3200,6 +3241,89 @@ def cmd_bench_fwxaes_par(args: list[str]) -> int:
     if bytes_processed > 0 and median > 0:
         throughput = (bytes_processed / (median / 1_000_000_000)) / (1 << 30)
         print(f"THROUGHPUT_GiBps={throughput:.3f} WORKERS={workers}")
+    return 0
+
+def cmd_bench_an7(args: list[str]) -> int:
+    if len(args) < 2:
+        return 2
+    inp, pw = args[:2]
+    warmup = _warmup_env()
+    iters = _iters_env()
+    workers = _workers_env()
+    if workers > 1:
+        _bench_parallel(
+            warmup,
+            iters,
+            workers,
+            _bench_an7_worker,
+            initializer=_bench_an7_init,
+            initargs=("an7", inp, pw),
+        )
+    else:
+        source = Path(inp)
+        with tempfile.TemporaryDirectory(prefix="basefwx-bench-an7-") as tmpdir:
+            tmp = Path(tmpdir)
+            worker_input = tmp / source.name
+            shutil.copyfile(source, worker_input)
+            seed_fwx = tmp / "seed.fwx"
+            basefwx.fwxAES_file(str(worker_input), pw, use_master=False, output=str(seed_fwx), keep_input=True)
+            def run() -> int:
+                out = tmp / "bench_an7.out"
+                try:
+                    out.unlink()
+                except FileNotFoundError:
+                    pass
+                produced = Path(basefwx.an7_file(seed_fwx, pw, out=out, keep_input=True))
+                size = produced.stat().st_size
+                try:
+                    produced.unlink()
+                except FileNotFoundError:
+                    pass
+                return size
+            _bench(warmup, iters, run)
+    return 0
+
+def cmd_bench_dean7(args: list[str]) -> int:
+    if len(args) < 2:
+        return 2
+    inp, pw = args[:2]
+    warmup = _warmup_env()
+    iters = _iters_env()
+    workers = _workers_env()
+    if workers > 1:
+        _bench_parallel(
+            warmup,
+            iters,
+            workers,
+            _bench_an7_worker,
+            initializer=_bench_an7_init,
+            initargs=("dean7", inp, pw),
+        )
+    else:
+        source = Path(inp)
+        with tempfile.TemporaryDirectory(prefix="basefwx-bench-an7-") as tmpdir:
+            tmp = Path(tmpdir)
+            worker_input = tmp / source.name
+            shutil.copyfile(source, worker_input)
+            seed_fwx = tmp / "seed.fwx"
+            basefwx.fwxAES_file(str(worker_input), pw, use_master=False, output=str(seed_fwx), keep_input=True)
+            seed_an7 = tmp / "seed.an7"
+            basefwx.an7_file(seed_fwx, pw, out=seed_an7, keep_input=True)
+            def run() -> int:
+                out = tmp / "bench_dean7.out"
+                try:
+                    out.unlink()
+                except FileNotFoundError:
+                    pass
+                result = basefwx.dean7_file(seed_an7, pw, out=out, keep_input=True)
+                produced = Path(result["output_path"])
+                size = produced.stat().st_size
+                try:
+                    produced.unlink()
+                except FileNotFoundError:
+                    pass
+                return size
+            _bench(warmup, iters, run)
     return 0
 
 def cmd_bench_b512file(args: list[str]) -> int:
@@ -3435,6 +3559,10 @@ def main() -> int:
         return cmd_bench_fwxaes(args)
     if cmd == "bench-fwxaes-par":
         return cmd_bench_fwxaes_par(args)
+    if cmd == "bench-an7":
+        return cmd_bench_an7(args)
+    if cmd == "bench-dean7":
+        return cmd_bench_dean7(args)
     if cmd == "bench-b512file":
         return cmd_bench_b512file(args)
     if cmd == "bench-pb512file":
@@ -5080,6 +5208,14 @@ for idx in "${!BENCH_LANGS[@]}"; do
                 BASEFWX_BENCH_ITERS="$BENCH_ITERS_FILE" \
                 BASEFWX_BENCH_WORKERS="$BENCH_FILE_WORKERS" \
                 "$PYTHON_BIN" "$PY_HELPER" bench-pb512file "$BENCH_BYTES_FILE" "$PW"
+            time_cmd_bench "an7_py_total" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_FILE" \
+                BASEFWX_BENCH_ITERS="$BENCH_ITERS_FILE" \
+                BASEFWX_BENCH_WORKERS="$BENCH_FILE_WORKERS" \
+                "$PYTHON_BIN" "$PY_HELPER" bench-an7 "$BENCH_BYTES_FILE" "$PW"
+            time_cmd_bench "dean7_py_total" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_FILE" \
+                BASEFWX_BENCH_ITERS="$BENCH_ITERS_FILE" \
+                BASEFWX_BENCH_WORKERS="$BENCH_FILE_WORKERS" \
+                "$PYTHON_BIN" "$PY_HELPER" bench-dean7 "$BENCH_BYTES_FILE" "$PW"
             for jmg_file in "${JMG_CASES[@]}"; do
                 time_cmd_bench "jmg_py_${jmg_file%.*}" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_FILE" \
                     BASEFWX_BENCH_ITERS="$BENCH_ITERS_FILE" \
@@ -5133,6 +5269,14 @@ for idx in "${!BENCH_LANGS[@]}"; do
                 BASEFWX_BENCH_ITERS="$BENCH_ITERS_FILE" \
                 BASEFWX_BENCH_WORKERS="$BENCH_FILE_WORKERS" \
                 "$PYPY_BIN" "$PY_HELPER" bench-pb512file "$BENCH_BYTES_FILE" "$PW"
+            time_cmd_bench "an7_pypy_total" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_FILE" \
+                BASEFWX_BENCH_ITERS="$BENCH_ITERS_FILE" \
+                BASEFWX_BENCH_WORKERS="$BENCH_FILE_WORKERS" \
+                "$PYPY_BIN" "$PY_HELPER" bench-an7 "$BENCH_BYTES_FILE" "$PW"
+            time_cmd_bench "dean7_pypy_total" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_FILE" \
+                BASEFWX_BENCH_ITERS="$BENCH_ITERS_FILE" \
+                BASEFWX_BENCH_WORKERS="$BENCH_FILE_WORKERS" \
+                "$PYPY_BIN" "$PY_HELPER" bench-dean7 "$BENCH_BYTES_FILE" "$PW"
             for jmg_file in "${JMG_CASES[@]}"; do
                 time_cmd_bench "jmg_pypy_${jmg_file%.*}" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_FILE" \
                     BASEFWX_BENCH_ITERS="$BENCH_ITERS_FILE" \
@@ -5201,6 +5345,14 @@ for idx in "${!BENCH_LANGS[@]}"; do
                 BASEFWX_BENCH_ITERS="$BENCH_ITERS_FILE" \
                 BASEFWX_BENCH_WORKERS="$BENCH_FILE_WORKERS" \
                 "$CPP_BIN" bench-pb512file "$BENCH_BYTES_FILE" "$PW" --no-master
+            time_cmd_bench "an7_cpp_total" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_FILE" \
+                BASEFWX_BENCH_ITERS="$BENCH_ITERS_FILE" \
+                BASEFWX_BENCH_WORKERS="$BENCH_FILE_WORKERS" \
+                "$CPP_BIN" bench-an7 "$BENCH_BYTES_FILE" "$PW" --no-master
+            time_cmd_bench "dean7_cpp_total" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_FILE" \
+                BASEFWX_BENCH_ITERS="$BENCH_ITERS_FILE" \
+                BASEFWX_BENCH_WORKERS="$BENCH_FILE_WORKERS" \
+                "$CPP_BIN" bench-dean7 "$BENCH_BYTES_FILE" "$PW" --no-master
             for jmg_file in "${JMG_CASES[@]}"; do
                 time_cmd_bench "jmg_cpp_${jmg_file%.*}" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_FILE" \
                     BASEFWX_BENCH_ITERS="$BENCH_ITERS_FILE" \
@@ -5270,6 +5422,14 @@ for idx in "${!BENCH_LANGS[@]}"; do
                 BASEFWX_BENCH_ITERS="$BENCH_ITERS_FILE" \
                 BASEFWX_BENCH_WORKERS="$BENCH_FILE_WORKERS" \
                 "$JAVA_BIN" "${JAVA_BENCH_FLAGS_ARR[@]}" -jar "$JAVA_JAR" bench-pb512file "$BENCH_BYTES_FILE" "$PW" --no-master
+            time_cmd_bench "an7_java_total" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_FILE_JAVA" \
+                BASEFWX_BENCH_ITERS="$BENCH_ITERS_FILE" \
+                BASEFWX_BENCH_WORKERS="$BENCH_FILE_WORKERS" \
+                "$JAVA_BIN" "${JAVA_BENCH_FLAGS_ARR[@]}" -jar "$JAVA_JAR" bench-an7 "$BENCH_BYTES_FILE" "$PW" --no-master
+            time_cmd_bench "dean7_java_total" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_FILE_JAVA" \
+                BASEFWX_BENCH_ITERS="$BENCH_ITERS_FILE" \
+                BASEFWX_BENCH_WORKERS="$BENCH_FILE_WORKERS" \
+                "$JAVA_BIN" "${JAVA_BENCH_FLAGS_ARR[@]}" -jar "$JAVA_JAR" bench-dean7 "$BENCH_BYTES_FILE" "$PW" --no-master
             for jmg_file in "${JMG_CASES[@]}"; do
                 time_cmd_bench "jmg_java_${jmg_file%.*}" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_FILE_JAVA" \
                     BASEFWX_BENCH_ITERS="$BENCH_ITERS_FILE" \
@@ -5504,6 +5664,8 @@ BENCH_METHODS=(
     "b1024|b1024_py_correct|b1024_pypy_correct|b1024_cpp_correct|b1024_java_correct"
     "b512file|b512file_py_total|b512file_pypy_total|b512file_cpp_total|b512file_java_total"
     "pb512file|pb512file_py_total|pb512file_pypy_total|pb512file_cpp_total|pb512file_java_total"
+    "an7|an7_py_total|an7_pypy_total|an7_cpp_total|an7_java_total"
+    "dean7|dean7_py_total|dean7_pypy_total|dean7_cpp_total|dean7_java_total"
     "kFMe|kfme_py_total|kfme_pypy_total|kfme_cpp_total|kfme_java_total"
     "kFAe|kfae_py_total|kfae_pypy_total|kfae_cpp_total|kfae_java_total"
 )

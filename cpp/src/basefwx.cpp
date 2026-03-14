@@ -1167,17 +1167,61 @@ std::string ResolvePassword(const std::string& input) {
 
 InspectResult InspectBlob(const std::vector<std::uint8_t>& blob) {
     InspectResult result;
-    auto parts = basefwx::format::UnpackLengthPrefixed(blob, 3);
-    result.user_blob_len = parts[0].size();
-    result.master_blob_len = parts[1].size();
-    result.payload_len = parts[2].size();
+    auto read_u32 = [&](std::size_t offset) -> std::uint32_t {
+        if (offset + 4 > blob.size()) {
+            throw std::runtime_error("Malformed length-prefixed blob (missing length)");
+        }
+        return (static_cast<std::uint32_t>(blob[offset]) << 24)
+               | (static_cast<std::uint32_t>(blob[offset + 1]) << 16)
+               | (static_cast<std::uint32_t>(blob[offset + 2]) << 8)
+               | static_cast<std::uint32_t>(blob[offset + 3]);
+    };
 
-    auto preview = basefwx::format::TryDecodeMetadata(parts[2]);
-    if (preview) {
-        result.has_metadata = true;
-        result.metadata_len = preview->metadata_len;
-        result.metadata_base64 = preview->metadata_base64;
-        result.metadata_json = preview->metadata_json;
+    std::size_t offset = 0;
+    std::uint32_t len_user = read_u32(offset);
+    offset += 4;
+    if (offset + len_user > blob.size()) {
+        throw std::runtime_error("Malformed length-prefixed blob (truncated part)");
+    }
+    result.user_blob_len = len_user;
+    offset += len_user;
+
+    std::uint32_t len_master = read_u32(offset);
+    offset += 4;
+    if (offset + len_master > blob.size()) {
+        throw std::runtime_error("Malformed length-prefixed blob (truncated part)");
+    }
+    result.master_blob_len = len_master;
+    offset += len_master;
+
+    std::uint32_t len_payload_u32 = read_u32(offset);
+    offset += 4;
+    if (offset > blob.size()) {
+        throw std::runtime_error("Malformed length-prefixed blob (truncated part)");
+    }
+    std::size_t payload_available = blob.size() - offset;
+    if (static_cast<std::uint32_t>(payload_available) != len_payload_u32) {
+        throw std::runtime_error("Malformed length-prefixed blob (extra bytes)");
+    }
+    result.payload_len = payload_available;
+
+    if (payload_available >= 4) {
+        std::uint32_t meta_len = read_u32(offset);
+        std::size_t meta_end = 4 + static_cast<std::size_t>(meta_len);
+        if (meta_end <= payload_available) {
+            std::vector<std::uint8_t> payload_prefix;
+            payload_prefix.reserve(meta_end);
+            payload_prefix.insert(payload_prefix.end(),
+                                  blob.begin() + static_cast<std::ptrdiff_t>(offset),
+                                  blob.begin() + static_cast<std::ptrdiff_t>(offset + meta_end));
+            auto preview = basefwx::format::TryDecodeMetadata(payload_prefix);
+            if (preview) {
+                result.has_metadata = true;
+                result.metadata_len = preview->metadata_len;
+                result.metadata_base64 = preview->metadata_base64;
+                result.metadata_json = preview->metadata_json;
+            }
+        }
     }
     return result;
 }

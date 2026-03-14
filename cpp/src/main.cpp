@@ -1,6 +1,9 @@
 #include "basefwx/basefwx.hpp"
 #include "basefwx/cli_colors.hpp"
+#include "basefwx/constants.hpp"
 #include "basefwx/env.hpp"
+#include "basefwx/format.hpp"
+#include "basefwx/runtime.hpp"
 #include "basefwx/system_info.hpp"
 
 #include <chrono>
@@ -9,9 +12,9 @@
 #include <atomic>
 #include <cctype>
 #include <cstdint>
-#include <cstring>
 #include <cstdlib>
 #include <condition_variable>
+#include <csignal>
 #include <cstdio>
 #include <exception>
 #include <filesystem>
@@ -21,6 +24,7 @@
 #include <iostream>
 #include <limits>
 #include <mutex>
+#include <new>
 #include <optional>
 #include <sstream>
 #include <string>
@@ -41,11 +45,131 @@ namespace {
 bool g_verbose = false;
 bool g_no_log = false;
 
+#ifndef BASEFWX_CLI_GIT_COMMIT
+#define BASEFWX_CLI_GIT_COMMIT "unknown"
+#endif
+
+#ifndef BASEFWX_CLI_BUILD_UTC
+#define BASEFWX_CLI_BUILD_UTC "unknown"
+#endif
+
+#ifndef BASEFWX_CLI_BUILD_TYPE
+#define BASEFWX_CLI_BUILD_TYPE "unknown"
+#endif
+
+#ifndef BASEFWX_HAS_ARGON2
+#define BASEFWX_HAS_ARGON2 0
+#endif
+
+#ifndef BASEFWX_HAS_OQS
+#define BASEFWX_HAS_OQS 0
+#endif
+
+#ifndef BASEFWX_HAS_LZMA
+#define BASEFWX_HAS_LZMA 0
+#endif
+
+void HandleStopSignal(int /*signum*/) {
+    basefwx::runtime::RequestStop();
+}
+
+void InstallStopHandlers() {
+    std::signal(SIGINT, HandleStopSignal);
+#if defined(SIGTERM)
+    std::signal(SIGTERM, HandleStopSignal);
+#endif
+}
+
 std::string ToLower(std::string value) {
     for (char& ch : value) {
         ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
     }
     return value;
+}
+
+bool EndsWith(std::string_view value, std::string_view suffix) {
+    return value.size() >= suffix.size()
+        && value.substr(value.size() - suffix.size()) == suffix;
+}
+
+std::optional<std::uint32_t> ReadU32Be(std::ifstream& in) {
+    std::array<std::uint8_t, 4> buf{};
+    in.read(reinterpret_cast<char*>(buf.data()), static_cast<std::streamsize>(buf.size()));
+    if (in.gcount() != static_cast<std::streamsize>(buf.size())) {
+        return std::nullopt;
+    }
+    std::uint32_t value = (static_cast<std::uint32_t>(buf[0]) << 24)
+                        | (static_cast<std::uint32_t>(buf[1]) << 16)
+                        | (static_cast<std::uint32_t>(buf[2]) << 8)
+                        | static_cast<std::uint32_t>(buf[3]);
+    return value;
+}
+
+std::optional<std::uint64_t> EstimatePlainTmpTargetSize(const std::filesystem::path& input_path) {
+    constexpr std::uint64_t kTagLen = 16;
+    constexpr std::uint64_t kNonceLen = 12;
+    std::ifstream in(input_path, std::ios::binary);
+    if (!in) {
+        return std::nullopt;
+    }
+    auto len_user = ReadU32Be(in);
+    if (!len_user.has_value()) {
+        return std::nullopt;
+    }
+    in.seekg(static_cast<std::streamoff>(*len_user), std::ios::cur);
+    auto len_master = ReadU32Be(in);
+    if (!len_master.has_value()) {
+        return std::nullopt;
+    }
+    in.seekg(static_cast<std::streamoff>(*len_master), std::ios::cur);
+    auto len_payload = ReadU32Be(in);
+    if (!len_payload.has_value()) {
+        return std::nullopt;
+    }
+    auto metadata_len = ReadU32Be(in);
+    if (!metadata_len.has_value()) {
+        return std::nullopt;
+    }
+    in.seekg(static_cast<std::streamoff>(*metadata_len), std::ios::cur);
+    in.seekg(static_cast<std::streamoff>(kNonceLen), std::ios::cur);
+    std::streampos body_start_pos = in.tellg();
+    if (body_start_pos < 0) {
+        return std::nullopt;
+    }
+
+    std::error_code ec;
+    std::uint64_t file_size = static_cast<std::uint64_t>(std::filesystem::file_size(input_path, ec));
+    if (ec) {
+        return std::nullopt;
+    }
+    std::uint64_t body_start = static_cast<std::uint64_t>(body_start_pos);
+    if (file_size < body_start + kTagLen) {
+        return std::nullopt;
+    }
+    std::uint64_t body_len = file_size - body_start - kTagLen;
+
+    std::uint64_t payload_len = 4ull
+        + static_cast<std::uint64_t>(*metadata_len)
+        + kNonceLen
+        + body_len
+        + kTagLen;
+    if (payload_len != static_cast<std::uint64_t>(*len_payload)) {
+        return std::nullopt;
+    }
+    return body_len;
+}
+
+bool IsLightCommand(const std::string& command) {
+    static const std::unordered_set<std::string> kLightCommands = {
+        "info", "identify", "probe",
+        "b64-enc", "b64-dec",
+        "n10-enc", "n10-dec",
+        "b256-enc", "b256-dec",
+        "a512-enc", "a512-dec",
+        "bi512-enc", "b1024-enc",
+        "hash512", "uhash513"
+    };
+    return kLightCommands.count(command) > 0;
 }
 
 std::string MoveOutputPath(const std::string& current_path, const std::string& requested_path) {
@@ -145,7 +269,7 @@ bool CliPlain() {
     return false;
 }
 
-bool IsStderrTty() {
+bool IsStderrInteractive() {
 #if defined(_WIN32)
     return _isatty(_fileno(stderr)) != 0;
 #else
@@ -339,43 +463,29 @@ std::string StripAsciiWhitespace(std::string value) {
     return value;
 }
 
-std::string DecodePackModeLabel(const std::string& pack_flag) {
-    if (pack_flag == "g") {
-        return "tgz";
-    }
-    if (pack_flag == "x") {
-        return "txz";
-    }
-    return "none";
-}
-
-std::optional<std::string> ExtractJsonField(const std::string& json, const std::string& key) {
+std::string ExtractJsonField(const std::string& json, const std::string& key) {
     if (json.empty() || key.empty()) {
-        return std::nullopt;
+        return {};
     }
-    std::string needle = "\"" + key + "\"";
-    std::size_t key_pos = json.find(needle);
-    if (key_pos == std::string::npos) {
-        return std::nullopt;
+    std::string needle = "\"" + key + "\":";
+    std::size_t pos = json.find(needle);
+    if (pos == std::string::npos) {
+        return {};
     }
-    std::size_t colon = json.find(':', key_pos + needle.size());
-    if (colon == std::string::npos) {
-        return std::nullopt;
+    pos += needle.size();
+    while (pos < json.size() && std::isspace(static_cast<unsigned char>(json[pos])) != 0) {
+        ++pos;
     }
-    std::size_t value_pos = colon + 1;
-    while (value_pos < json.size() && std::isspace(static_cast<unsigned char>(json[value_pos])) != 0) {
-        ++value_pos;
+    if (pos >= json.size()) {
+        return {};
     }
-    if (value_pos >= json.size()) {
-        return std::nullopt;
-    }
-    if (json[value_pos] == '"') {
-        ++value_pos;
+    if (json[pos] == '"') {
+        ++pos;
         std::string out;
         out.reserve(32);
         bool escape = false;
-        for (std::size_t i = value_pos; i < json.size(); ++i) {
-            char ch = json[i];
+        while (pos < json.size()) {
+            char ch = json[pos++];
             if (escape) {
                 out.push_back(ch);
                 escape = false;
@@ -386,255 +496,453 @@ std::optional<std::string> ExtractJsonField(const std::string& json, const std::
                 continue;
             }
             if (ch == '"') {
-                return out;
+                break;
             }
             out.push_back(ch);
         }
-        return std::nullopt;
+        return out;
     }
-    std::size_t end = value_pos;
+    std::size_t end = pos;
     while (end < json.size() && json[end] != ',' && json[end] != '}') {
         ++end;
     }
-    std::string raw = json.substr(value_pos, end - value_pos);
-    raw = StripAsciiWhitespace(raw);
-    if (raw.empty()) {
-        return std::nullopt;
-    }
-    return raw;
+    return StripAsciiWhitespace(json.substr(pos, end - pos));
 }
 
-struct RawFwxInspectResult {
+std::string FormatSize(std::uint64_t bytes) {
+    std::ostringstream out;
+    out << bytes << " bytes (" << basefwx::system::FormatBytes(bytes) << ")";
+    return out.str();
+}
+
+void PrintIdentifyField(const std::string& key, const std::string& value) {
+    std::cout << basefwx::cli::Cyan(key) << ": " << value << "\n";
+}
+
+struct FwxAesHeaderInfo {
     std::uint8_t algo = 0;
     std::uint8_t kdf = 0;
     std::uint8_t salt_len = 0;
     std::uint8_t iv_len = 0;
-    std::uint32_t kdf_param = 0;
-    std::uint32_t ciphertext_len = 0;
-    std::size_t total_len = 0;
-    std::size_t expected_len = 0;
-    bool expected_len_valid = false;
-    bool truncated = false;
-    bool extra_bytes = false;
+    std::uint32_t field0 = 0;
+    std::uint32_t ct_len32 = 0;
+    std::optional<std::uint64_t> ct_len64;
+    std::uint64_t file_size = 0;
 };
 
-std::uint32_t ReadBe32(const std::uint8_t* ptr) {
-    return (static_cast<std::uint32_t>(ptr[0]) << 24)
-           | (static_cast<std::uint32_t>(ptr[1]) << 16)
-           | (static_cast<std::uint32_t>(ptr[2]) << 8)
-           | static_cast<std::uint32_t>(ptr[3]);
+bool ReadU32Be(std::istream& in, std::uint32_t* out) {
+    std::array<std::uint8_t, 4> buf{};
+    in.read(reinterpret_cast<char*>(buf.data()), static_cast<std::streamsize>(buf.size()));
+    if (in.gcount() != static_cast<std::streamsize>(buf.size())) {
+        return false;
+    }
+    *out = (static_cast<std::uint32_t>(buf[0]) << 24)
+           | (static_cast<std::uint32_t>(buf[1]) << 16)
+           | (static_cast<std::uint32_t>(buf[2]) << 8)
+           | static_cast<std::uint32_t>(buf[3]);
+    return true;
 }
 
-std::optional<RawFwxInspectResult> TryInspectRawFwx(const std::vector<std::uint8_t>& blob) {
-    static constexpr std::uint8_t kMagic[4] = {'F', 'W', 'X', '1'};
-    static constexpr std::size_t kHeaderLen = 16;
-    if (blob.size() < kHeaderLen) {
+struct LightweightInspect {
+    basefwx::InspectResult info;
+    std::uint64_t file_size = 0;
+};
+
+std::optional<LightweightInspect> InspectLengthPrefixedFile(const std::filesystem::path& path) {
+    std::error_code ec;
+    if (!std::filesystem::exists(path, ec) || !std::filesystem::is_regular_file(path, ec)) {
+        throw std::runtime_error("Failed to open file: " + path.string());
+    }
+    std::uint64_t file_size = static_cast<std::uint64_t>(std::filesystem::file_size(path, ec));
+    if (ec || file_size < 12) {
         return std::nullopt;
     }
-    if (std::memcmp(blob.data(), kMagic, sizeof(kMagic)) != 0) {
+
+    std::ifstream in(path, std::ios::binary);
+    if (!in) {
+        throw std::runtime_error("Failed to open file: " + path.string());
+    }
+
+    std::uint64_t offset = 0;
+    std::uint32_t len_user = 0;
+    if (!ReadU32Be(in, &len_user)) {
         return std::nullopt;
     }
-    RawFwxInspectResult out;
-    out.algo = blob[4];
-    out.kdf = blob[5];
-    out.salt_len = blob[6];
-    out.iv_len = blob[7];
-    out.kdf_param = ReadBe32(blob.data() + 8);
-    out.ciphertext_len = ReadBe32(blob.data() + 12);
-    out.total_len = blob.size();
+    offset += 4;
+    if (offset + len_user + 4 > file_size) {
+        return std::nullopt;
+    }
+    in.seekg(static_cast<std::streamoff>(len_user), std::ios::cur);
+    if (!in) {
+        return std::nullopt;
+    }
+    offset += len_user;
 
-    std::size_t variable_len = out.kdf == 0x02 ? static_cast<std::size_t>(out.kdf_param)
-                                               : static_cast<std::size_t>(out.salt_len);
+    std::uint32_t len_master = 0;
+    if (!ReadU32Be(in, &len_master)) {
+        return std::nullopt;
+    }
+    offset += 4;
+    if (offset + len_master + 4 > file_size) {
+        return std::nullopt;
+    }
+    in.seekg(static_cast<std::streamoff>(len_master), std::ios::cur);
+    if (!in) {
+        return std::nullopt;
+    }
+    offset += len_master;
 
-    std::size_t expected = kHeaderLen;
-    if (variable_len > std::numeric_limits<std::size_t>::max() - expected) {
-        return out;
+    std::uint32_t len_payload_u32 = 0;
+    if (!ReadU32Be(in, &len_payload_u32)) {
+        return std::nullopt;
     }
-    expected += variable_len;
-    if (static_cast<std::size_t>(out.iv_len) > std::numeric_limits<std::size_t>::max() - expected) {
-        return out;
+    offset += 4;
+    if (offset > file_size) {
+        return std::nullopt;
     }
-    expected += static_cast<std::size_t>(out.iv_len);
-    if (static_cast<std::size_t>(out.ciphertext_len) > std::numeric_limits<std::size_t>::max() - expected) {
-        return out;
+    std::uint64_t payload_available = file_size - offset;
+    if (static_cast<std::uint32_t>(payload_available) != len_payload_u32) {
+        return std::nullopt;
     }
-    expected += static_cast<std::size_t>(out.ciphertext_len);
-    out.expected_len = expected;
-    out.expected_len_valid = true;
-    out.truncated = out.total_len < out.expected_len;
-    out.extra_bytes = out.total_len > out.expected_len;
+
+    LightweightInspect result;
+    result.file_size = file_size;
+    result.info.user_blob_len = len_user;
+    result.info.master_blob_len = len_master;
+    result.info.payload_len = static_cast<std::size_t>(payload_available);
+
+    if (payload_available < 4) {
+        return result;
+    }
+
+    std::uint32_t metadata_len = 0;
+    if (!ReadU32Be(in, &metadata_len)) {
+        return std::nullopt;
+    }
+    if (metadata_len > payload_available - 4) {
+        return std::nullopt;
+    }
+
+    result.info.has_metadata = true;
+    result.info.metadata_len = metadata_len;
+    if (metadata_len == 0) {
+        return result;
+    }
+
+    constexpr std::uint32_t kMaxMetadataInspectBytes = 1u << 20;
+    if (metadata_len > kMaxMetadataInspectBytes) {
+        result.info.metadata_json = {};
+        return result;
+    }
+
+    std::vector<std::uint8_t> metadata_blob(metadata_len);
+    in.read(reinterpret_cast<char*>(metadata_blob.data()), static_cast<std::streamsize>(metadata_blob.size()));
+    if (in.gcount() != static_cast<std::streamsize>(metadata_blob.size())) {
+        return std::nullopt;
+    }
+    std::vector<std::uint8_t> payload_prefix;
+    payload_prefix.reserve(4u + metadata_blob.size());
+    payload_prefix.push_back(static_cast<std::uint8_t>((metadata_len >> 24) & 0xFF));
+    payload_prefix.push_back(static_cast<std::uint8_t>((metadata_len >> 16) & 0xFF));
+    payload_prefix.push_back(static_cast<std::uint8_t>((metadata_len >> 8) & 0xFF));
+    payload_prefix.push_back(static_cast<std::uint8_t>(metadata_len & 0xFF));
+    payload_prefix.insert(payload_prefix.end(), metadata_blob.begin(), metadata_blob.end());
+
+    auto preview = basefwx::format::TryDecodeMetadata(payload_prefix);
+    if (preview.has_value()) {
+        result.info.metadata_base64 = preview->metadata_base64;
+        result.info.metadata_json = preview->metadata_json;
+    } else {
+        result.info.metadata_json = {};
+    }
+    return result;
+}
+
+bool MetadataNeedsFullFallback(const basefwx::InspectResult& info) {
+    return info.has_metadata && info.metadata_len > 0 && info.metadata_json.empty();
+}
+
+std::uint64_t InspectFallbackMaxBytes() {
+    constexpr std::uint64_t kDefault = 256ull << 20;  // 256 MiB
+    std::string raw = basefwx::env::Get("BASEFWX_INSPECT_FALLBACK_MAX_BYTES");
+    if (raw.empty()) {
+        return kDefault;
+    }
+    try {
+        std::uint64_t parsed = std::stoull(raw);
+        if (parsed < (1ull << 20)) {
+            return 1ull << 20;
+        }
+        return parsed;
+    } catch (const std::exception&) {
+        return kDefault;
+    }
+}
+
+std::optional<std::vector<std::uint8_t>> TryReadFullInspectSafe(const std::filesystem::path& path,
+                                                                std::string* reason) {
+    std::error_code ec;
+    if (!std::filesystem::exists(path, ec) || !std::filesystem::is_regular_file(path, ec)) {
+        if (reason) {
+            *reason = "file does not exist or is not a regular file";
+        }
+        return std::nullopt;
+    }
+    std::uint64_t file_size = static_cast<std::uint64_t>(std::filesystem::file_size(path, ec));
+    if (ec) {
+        if (reason) {
+            *reason = "failed to stat file";
+        }
+        return std::nullopt;
+    }
+
+    bool unsafe = basefwx::env::IsEnabled("BASEFWX_INSPECT_FALLBACK_UNSAFE", false);
+    std::uint64_t max_bytes = InspectFallbackMaxBytes();
+    if (!unsafe && file_size > max_bytes) {
+        if (reason) {
+            std::ostringstream msg;
+            msg << "full-read fallback skipped for safety (file="
+                << basefwx::system::FormatBytes(file_size)
+                << ", limit=" << basefwx::system::FormatBytes(max_bytes)
+                << "; set BASEFWX_INSPECT_FALLBACK_UNSAFE=1 to force)";
+            *reason = msg.str();
+        }
+        return std::nullopt;
+    }
+
+    try {
+        return basefwx::ReadFile(path.string());
+    } catch (const std::bad_alloc&) {
+        if (reason) {
+            *reason = "full-read fallback aborted: out of memory";
+        }
+        return std::nullopt;
+    } catch (const std::exception& ex) {
+        if (reason) {
+            *reason = std::string("full-read fallback failed: ") + ex.what();
+        }
+        return std::nullopt;
+    }
+}
+
+void MaybeWarnInspectFallback(const std::string& reason) {
+    if (reason.empty() || !ShouldLog()) {
+        return;
+    }
+    std::cerr << basefwx::cli::BoldYellow("[WARN] ") << reason << "\n";
+}
+
+std::optional<FwxAesHeaderInfo> ParseFwxAesHeader(const std::filesystem::path& path) {
+    std::error_code ec;
+    if (!std::filesystem::exists(path, ec) || !std::filesystem::is_regular_file(path, ec)) {
+        throw std::runtime_error("Failed to open file: " + path.string());
+    }
+    std::uint64_t file_size = static_cast<std::uint64_t>(std::filesystem::file_size(path, ec));
+    if (ec || file_size < 16) {
+        return std::nullopt;
+    }
+
+    std::ifstream in(path, std::ios::binary);
+    if (!in) {
+        throw std::runtime_error("Failed to open file: " + path.string());
+    }
+    std::array<std::uint8_t, 16> head{};
+    in.read(reinterpret_cast<char*>(head.data()), static_cast<std::streamsize>(head.size()));
+    if (in.gcount() != static_cast<std::streamsize>(head.size())) {
+        return std::nullopt;
+    }
+    if (head[0] != 'F' || head[1] != 'W' || head[2] != 'X' || head[3] != '1') {
+        return std::nullopt;
+    }
+
+    auto u32 = [&](std::size_t off) -> std::uint32_t {
+        return (static_cast<std::uint32_t>(head[off]) << 24)
+               | (static_cast<std::uint32_t>(head[off + 1]) << 16)
+               | (static_cast<std::uint32_t>(head[off + 2]) << 8)
+               | static_cast<std::uint32_t>(head[off + 3]);
+    };
+
+    FwxAesHeaderInfo out;
+    out.algo = head[4];
+    out.kdf = head[5];
+    out.salt_len = head[6];
+    out.iv_len = head[7];
+    out.field0 = u32(8);
+    out.ct_len32 = u32(12);
+    out.file_size = file_size;
+
+    std::uint64_t offset = 16;
+    if (out.kdf == 0x01) {
+        offset += static_cast<std::uint64_t>(out.salt_len) + static_cast<std::uint64_t>(out.iv_len);
+    } else if (out.kdf == 0x02) {
+        offset += static_cast<std::uint64_t>(out.field0) + static_cast<std::uint64_t>(out.iv_len);
+    }
+
+    if (out.algo == 0x02 && offset + 8 <= file_size) {
+        in.seekg(static_cast<std::streamoff>(offset), std::ios::beg);
+        std::array<std::uint8_t, 8> buf{};
+        in.read(reinterpret_cast<char*>(buf.data()), static_cast<std::streamsize>(buf.size()));
+        if (in.gcount() == static_cast<std::streamsize>(buf.size())) {
+            std::uint64_t v = 0;
+            for (std::uint8_t b : buf) {
+                v = (v << 8) | b;
+            }
+            out.ct_len64 = v;
+        }
+    }
     return out;
 }
 
-std::string FwxAlgoLabel(std::uint8_t algo) {
-    if (algo == 0x01) {
-        return "aes-256-gcm";
-    }
-    std::ostringstream oss;
-    oss << "unknown(0x" << std::hex << std::setw(2) << std::setfill('0')
-        << static_cast<unsigned int>(algo) << ")";
-    return oss.str();
-}
+bool PrintIdentifyLengthPrefixed(const std::string& file_path,
+                                 const LightweightInspect& inspect) {
+    const basefwx::InspectResult& info = inspect.info;
+    std::string method = ExtractJsonField(info.metadata_json, "ENC-METHOD");
+    std::string version = ExtractJsonField(info.metadata_json, "ENC-VERSION");
+    std::string mode = ExtractJsonField(info.metadata_json, "ENC-MODE");
+    std::string kdf = ExtractJsonField(info.metadata_json, "ENC-KDF");
+    std::string aead = ExtractJsonField(info.metadata_json, "ENC-AEAD");
+    std::string master = ExtractJsonField(info.metadata_json, "ENC-MASTER");
+    std::string obf = ExtractJsonField(info.metadata_json, "ENC-OBF");
+    std::string time = ExtractJsonField(info.metadata_json, "ENC-TIME");
+    std::string kem = ExtractJsonField(info.metadata_json, "ENC-KEM");
 
-std::string FwxKdfLabel(std::uint8_t kdf) {
-    if (kdf == 0x01) {
-        return "pbkdf2";
+    if (method.empty()) {
+        method = "unknown";
     }
-    if (kdf == 0x02) {
-        return "keywrap";
+    if (version.empty()) {
+        version = "unknown";
     }
-    std::ostringstream oss;
-    oss << "unknown(0x" << std::hex << std::setw(2) << std::setfill('0')
-        << static_cast<unsigned int>(kdf) << ")";
-    return oss.str();
-}
+    if (mode.empty()) {
+        mode = "normal";
+    }
+    if (kdf.empty()) {
+        kdf = "unknown";
+    }
+    if (aead.empty()) {
+        aead = "unknown";
+    }
+    if (master.empty()) {
+        master = "unknown";
+    }
+    if (obf.empty()) {
+        obf = "unknown";
+    }
+    if (kem.empty()) {
+        kem = "unknown";
+    }
+    if (time.empty()) {
+        time = "unknown";
+    }
 
-void PrintRawFwxInspectLegacy(const RawFwxInspectResult& info, bool include_json) {
-    std::cout << "format: fwxaes-raw\n";
-    std::cout << "algo: " << FwxAlgoLabel(info.algo) << "\n";
-    std::cout << "kdf: " << FwxKdfLabel(info.kdf) << "\n";
-    if (info.kdf == 0x01) {
-        std::cout << "kdf_iters: " << info.kdf_param << "\n";
-    } else if (info.kdf == 0x02) {
-        std::cout << "key_header_len: " << info.kdf_param << " bytes\n";
-    }
-    std::cout << "salt_len: " << static_cast<unsigned int>(info.salt_len) << " bytes\n";
-    std::cout << "iv_len: " << static_cast<unsigned int>(info.iv_len) << " bytes\n";
-    std::cout << "ciphertext_len: " << info.ciphertext_len << " bytes\n";
-    std::cout << "container_len: " << info.total_len << " bytes\n";
-    if (info.expected_len_valid) {
-        std::cout << "expected_len: " << info.expected_len << " bytes\n";
-        if (info.truncated) {
-            std::cout << "container_state: truncated\n";
-        } else if (info.extra_bytes) {
-            std::cout << "container_state: extra-bytes\n";
-        } else {
-            std::cout << "container_state: exact\n";
-        }
+    std::cout << basefwx::cli::BoldBlue("basefwx identify") << "\n";
+    PrintIdentifyField("file", file_path);
+    PrintIdentifyField("format", "basefwx length-prefixed container");
+    PrintIdentifyField("integrity", basefwx::cli::BoldGreen("OK"));
+    PrintIdentifyField("method", method);
+    PrintIdentifyField("version", version);
+    PrintIdentifyField("mode", mode);
+    PrintIdentifyField("kdf", kdf);
+    PrintIdentifyField("aead", aead);
+    PrintIdentifyField("master", master);
+    PrintIdentifyField("kem", kem);
+    PrintIdentifyField("obfuscation", obf);
+    PrintIdentifyField("encrypted_at", time);
+    PrintIdentifyField("file_size", FormatSize(inspect.file_size));
+    PrintIdentifyField("payload_size", FormatSize(static_cast<std::uint64_t>(info.payload_len)));
+    PrintIdentifyField("user_blob", FormatSize(static_cast<std::uint64_t>(info.user_blob_len)));
+    PrintIdentifyField("master_blob", FormatSize(static_cast<std::uint64_t>(info.master_blob_len)));
+    if (info.has_metadata) {
+        PrintIdentifyField("metadata_size", FormatSize(static_cast<std::uint64_t>(info.metadata_len)));
     } else {
-        std::cout << "container_state: unknown\n";
+        PrintIdentifyField("metadata_size", "unavailable");
     }
-    if (include_json) {
-        std::cout << "metadata_json: <unavailable>\n";
-    }
+    return true;
 }
 
-void PrintRawFwxProbeResult(const std::string& path, const RawFwxInspectResult& info, bool include_json) {
-    std::cout << "file: " << path << "\n";
-    std::cout << "format: fwxaes-raw\n";
-    std::cout << "engine_version: n/a\n";
-    std::cout << "method: fwxaes-raw\n";
-    std::cout << "kdf: " << FwxKdfLabel(info.kdf);
-    if (info.kdf == 0x01) {
-        std::cout << " iter=" << info.kdf_param;
-    } else if (info.kdf == 0x02) {
-        std::cout << " key_header_len=" << info.kdf_param;
+bool PrintIdentifyFwxAes(const std::string& file_path, const FwxAesHeaderInfo& header) {
+    std::string algo_name = "unknown";
+    if (header.algo == 0x01) {
+        algo_name = "fwxaes-v1";
+    } else if (header.algo == 0x02) {
+        algo_name = "fwxaes-stream-v2";
     }
-    std::cout << "\n";
-    std::cout << "algo: " << FwxAlgoLabel(info.algo) << "\n";
-    std::cout << "salt_len: " << static_cast<unsigned int>(info.salt_len) << " bytes\n";
-    std::cout << "iv_len: " << static_cast<unsigned int>(info.iv_len) << " bytes\n";
-    std::cout << "ciphertext_len: " << info.ciphertext_len << " bytes\n";
-    std::cout << "metadata: unavailable\n";
-    if (info.expected_len_valid) {
-        if (info.truncated) {
-            std::cout << "container_state: truncated\n";
-        } else if (info.extra_bytes) {
-            std::cout << "container_state: extra-bytes\n";
-        } else {
-            std::cout << "container_state: exact\n";
-        }
+    std::string kdf_name = "unknown";
+    if (header.kdf == 0x01) {
+        kdf_name = "pbkdf2";
+    } else if (header.kdf == 0x02) {
+        kdf_name = "wrapped";
+    }
+
+    std::cout << basefwx::cli::BoldBlue("basefwx identify") << "\n";
+    PrintIdentifyField("file", file_path);
+    PrintIdentifyField("format", "FWX1 header container");
+    PrintIdentifyField("integrity", basefwx::cli::BoldGreen("OK"));
+    PrintIdentifyField("algo", algo_name + " (" + std::to_string(static_cast<unsigned int>(header.algo)) + ")");
+    PrintIdentifyField("kdf", kdf_name + " (" + std::to_string(static_cast<unsigned int>(header.kdf)) + ")");
+    PrintIdentifyField("salt_len", std::to_string(static_cast<unsigned int>(header.salt_len)) + " bytes");
+    PrintIdentifyField("iv_len", std::to_string(static_cast<unsigned int>(header.iv_len)) + " bytes");
+    if (header.kdf == 0x01) {
+        PrintIdentifyField("pbkdf2_iters", std::to_string(header.field0));
+    } else if (header.kdf == 0x02) {
+        PrintIdentifyField("key_header_len", std::to_string(header.field0) + " bytes");
+    }
+    if (header.ct_len64.has_value()) {
+        PrintIdentifyField("ciphertext_len", FormatSize(*header.ct_len64));
     } else {
-        std::cout << "container_state: unknown\n";
+        PrintIdentifyField("ciphertext_len", FormatSize(header.ct_len32));
     }
-    if (include_json) {
-        std::cout << "metadata_json: <unavailable>\n";
-    }
+    PrintIdentifyField("file_size", FormatSize(static_cast<std::uint64_t>(header.file_size)));
+    return true;
 }
 
-void PrintVersionInfo() {
-    std::cout << "basefwx_cpp " << basefwx::constants::kEngineVersion << "\n";
-    std::cout << "build_time: " << __DATE__ << " " << __TIME__ << "\n";
-#if defined(__clang__)
-    std::cout << "compiler: clang " << __clang_major__ << "." << __clang_minor__ << "." << __clang_patchlevel__
-              << "\n";
-#elif defined(__GNUC__)
-    std::cout << "compiler: gcc " << __GNUC__ << "." << __GNUC_MINOR__ << "." << __GNUC_PATCHLEVEL__ << "\n";
-#else
-    std::cout << "compiler: unknown\n";
-#endif
-    std::cout << "cpp_standard: " << __cplusplus << "\n";
-#if defined(NDEBUG)
-    std::cout << "build_type: Release\n";
-#else
-    std::cout << "build_type: Debug\n";
-#endif
-#if defined(BASEFWX_HAS_ARGON2) && BASEFWX_HAS_ARGON2
-    constexpr const char* argon2 = "ON";
-#else
-    constexpr const char* argon2 = "OFF";
-#endif
-#if defined(BASEFWX_HAS_OQS) && BASEFWX_HAS_OQS
-    constexpr const char* oqs = "ON";
-#else
-    constexpr const char* oqs = "OFF";
-#endif
-#if defined(BASEFWX_HAS_LZMA) && BASEFWX_HAS_LZMA
-    constexpr const char* lzma = "ON";
-#else
-    constexpr const char* lzma = "OFF";
-#endif
-    std::cout << "features: argon2=" << argon2 << " oqs=" << oqs << " lzma=" << lzma << "\n";
+void PrintFwxAesInfo(const FwxAesHeaderInfo& header) {
+
+    std::string algo_name = "unknown";
+    if (header.algo == 0x01) {
+        algo_name = "fwxaes-v1";
+    } else if (header.algo == 0x02) {
+        algo_name = "fwxaes-stream-v2";
+    }
+    std::string kdf_name = "unknown";
+    if (header.kdf == 0x01) {
+        kdf_name = "pbkdf2";
+    } else if (header.kdf == 0x02) {
+        kdf_name = "wrapped";
+    }
+
+    std::cout << "format: fwxAES\n";
+    std::cout << "algo: " << algo_name << " (" << static_cast<unsigned int>(header.algo) << ")\n";
+    std::cout << "kdf: " << kdf_name << " (" << static_cast<unsigned int>(header.kdf) << ")\n";
+    std::cout << "salt_len: " << static_cast<unsigned int>(header.salt_len) << " bytes\n";
+    std::cout << "iv_len: " << static_cast<unsigned int>(header.iv_len) << " bytes\n";
+    if (header.kdf == 0x01) {
+        std::cout << "pbkdf2_iters: " << header.field0 << "\n";
+    } else if (header.kdf == 0x02) {
+        std::cout << "key_header_len: " << header.field0 << " bytes\n";
+    }
+    if (header.ct_len64.has_value()) {
+        std::cout << "ciphertext_len: " << *header.ct_len64 << " bytes\n";
+    } else {
+        std::cout << "ciphertext_len: " << header.ct_len32 << " bytes\n";
+    }
+    std::cout << "file_size: " << header.file_size << " bytes\n";
 }
 
-void PrintProbeResult(const std::string& path, const basefwx::InspectResult& info, bool include_json) {
-    std::cout << "file: " << path << "\n";
-    std::cout << "format: basefwx\n";
+void PrintInspectInfo(const basefwx::InspectResult& info) {
     std::cout << "user_blob_len: " << info.user_blob_len << " bytes\n";
     std::cout << "master_blob_len: " << info.master_blob_len << " bytes\n";
     std::cout << "payload_len: " << info.payload_len << " bytes\n";
-    if (!info.has_metadata) {
-        std::cout << "metadata: unavailable\n";
-        return;
-    }
-    std::cout << "metadata_len: " << info.metadata_len << " bytes\n";
-    auto enc_version = ExtractJsonField(info.metadata_json, "ENC-VERSION");
-    auto enc_method = ExtractJsonField(info.metadata_json, "ENC-METHOD");
-    auto enc_time = ExtractJsonField(info.metadata_json, "ENC-TIME");
-    auto enc_kdf = ExtractJsonField(info.metadata_json, "ENC-KDF");
-    auto enc_p = ExtractJsonField(info.metadata_json, "ENC-P");
-    auto enc_master = ExtractJsonField(info.metadata_json, "ENC-MASTER");
-    auto enc_kem = ExtractJsonField(info.metadata_json, "ENC-KEM");
-    auto enc_aead = ExtractJsonField(info.metadata_json, "ENC-AEAD");
-    auto enc_obf = ExtractJsonField(info.metadata_json, "ENC-OBF");
-    auto enc_kdf_iter = ExtractJsonField(info.metadata_json, "ENC-KDF-ITER");
-    auto enc_argon_tc = ExtractJsonField(info.metadata_json, "ENC-ARGON2-TC");
-    auto enc_argon_mem = ExtractJsonField(info.metadata_json, "ENC-ARGON2-MEM");
-    auto enc_argon_par = ExtractJsonField(info.metadata_json, "ENC-ARGON2-PAR");
-    std::cout << "engine_version: " << enc_version.value_or("unknown") << "\n";
-    std::cout << "method: " << enc_method.value_or("unknown") << "\n";
-    std::cout << "time_utc: " << enc_time.value_or("unknown") << "\n";
-    std::cout << "kdf: " << enc_kdf.value_or("unknown");
-    if (enc_kdf_iter.has_value()) {
-        std::cout << " iter=" << *enc_kdf_iter;
-    }
-    if (enc_argon_tc.has_value() || enc_argon_mem.has_value() || enc_argon_par.has_value()) {
-        std::cout << " argon2(tc=" << enc_argon_tc.value_or("?")
-                  << ",mem=" << enc_argon_mem.value_or("?")
-                  << ",par=" << enc_argon_par.value_or("?") << ")";
-    }
-    std::cout << "\n";
-    std::cout << "aead: " << enc_aead.value_or("unknown") << "\n";
-    std::cout << "obfuscation: " << enc_obf.value_or("unknown") << "\n";
-    std::cout << "master_mode: " << enc_master.value_or("unknown") << "\n";
-    std::cout << "kem: " << enc_kem.value_or("unknown") << "\n";
-    std::cout << "pack_mode: " << DecodePackModeLabel(enc_p.value_or("")) << "\n";
-    if (include_json) {
+    if (info.has_metadata) {
+        std::cout << "metadata_len: " << info.metadata_len << " bytes\n";
         if (!info.metadata_json.empty()) {
             std::cout << "metadata_json: " << info.metadata_json << "\n";
+        } else if (info.metadata_len == 0) {
+            std::cout << "metadata_json: <empty>\n";
         } else {
             std::cout << "metadata_json: <unavailable>\n";
         }
+    } else {
+        std::cout << "metadata_json: <unavailable>\n";
     }
 }
 
@@ -817,6 +1125,55 @@ std::size_t RunParallel(std::size_t workers, Fn fn) {
     return total.load(std::memory_order_relaxed);
 }
 
+std::string CompilerVersionString() {
+#if defined(__clang__)
+    return std::string("clang ") + __clang_version__;
+#elif defined(__GNUC__)
+    return std::string("gcc ") + __VERSION__;
+#elif defined(_MSC_VER)
+    return std::string("msvc ") + std::to_string(_MSC_VER);
+#else
+    return "unknown";
+#endif
+}
+
+std::string CxxStdString() {
+#if __cplusplus >= 202302L
+    return "C++23";
+#elif __cplusplus >= 202002L
+    return "C++20";
+#elif __cplusplus >= 201703L
+    return "C++17";
+#elif __cplusplus >= 201402L
+    return "C++14";
+#elif __cplusplus >= 201103L
+    return "C++11";
+#else
+    return "pre-C++11";
+#endif
+}
+
+const char* OnOff(bool value) {
+    return value ? "ON" : "OFF";
+}
+
+void PrintVersionInfo() {
+    bool plain = CliPlain();
+    const char* cyan = "\033[36m";
+    std::string banner = "basefwx_cpp " + std::string(basefwx::constants::kEngineVersion);
+    std::cout << StyleText(banner, cyan, plain) << "\n";
+    std::cout << "git: " << BASEFWX_CLI_GIT_COMMIT << "\n";
+    std::cout << "build_utc: " << BASEFWX_CLI_BUILD_UTC << "\n";
+    std::cout << "build_type: " << BASEFWX_CLI_BUILD_TYPE << "\n";
+    std::cout << "compiler: " << CompilerVersionString() << "\n";
+    std::cout << "cxx_std: " << CxxStdString() << "\n";
+    std::cout << "features: "
+              << "argon2=" << OnOff(BASEFWX_HAS_ARGON2 != 0)
+              << " oqs=" << OnOff(BASEFWX_HAS_OQS != 0)
+              << " lzma=" << OnOff(BASEFWX_HAS_LZMA != 0)
+              << "\n";
+}
+
 void PrintUsage() {
     bool plain = CliPlain();
     const char* cyan = "\033[36m";
@@ -827,12 +1184,12 @@ void PrintUsage() {
     std::cout << "Global: --verbose|-v --no-log --no-color --version|-V\n";
     std::cout << "\n";
     std::cout << "General commands:\n";
-    std::cout << "  version\n";
     std::cout << "  help\n";
+    std::cout << "  version\n";
     std::cout << "  completion bash\n";
     std::cout << "  info <file.fwx>\n";
-    std::cout << "  probe <file.fwx> [--json]\n";
-    std::cout << "  identify <file.fwx> [--json]\n";
+    std::cout << "  identify <file>    (formatted container summary)\n";
+    std::cout << "  probe <file>       (alias of identify)\n";
     std::cout << "\n";
     std::cout << "Codec commands:\n";
     std::cout << "  b64-enc <text>\n";
@@ -855,23 +1212,24 @@ void PrintUsage() {
     std::cout << "  pb512-dec <text> [-p <password>] " << master_flags << " [--kdf <label>] [--pbkdf2-iters <n>] [--no-fallback]\n";
     std::cout << "\n";
     std::cout << "File commands:\n";
-    std::cout << "  b512file-enc <file> [-p <password>] " << master_flags << " [--strip-meta] [--no-aead] [--compress] [--compress-level <auto|fast|balanced|max>] [--keep-input] [--kdf <label>] [--pbkdf2-iters <n>] [--no-fallback]\n";
+    std::cout << "  b512file-enc <file> [-p <password>] " << master_flags << " [--strip-meta] [--no-aead] [--compress] [--keep-input] [--kdf <label>] [--pbkdf2-iters <n>] [--no-fallback]\n";
     std::cout << "  b512file-dec <file.fwx> [-p <password>] " << master_flags << " [--strip-meta] [--kdf <label>] [--pbkdf2-iters <n>] [--no-fallback]\n";
     std::cout << "  b512file-bytes-rt <in> <out> [-p <password>] " << master_flags << " [--strip-meta] [--no-aead] [--kdf <label>] [--pbkdf2-iters <n>] [--no-fallback]\n";
     std::cout << "  pb512file-bytes-rt <in> <out> [-p <password>] " << master_flags << " [--strip-meta] [--kdf <label>] [--pbkdf2-iters <n>] [--no-fallback]\n";
-    std::cout << "  pb512file-enc <file> [-p <password>] " << master_flags << " [--strip-meta] [--no-obf] [--compress] [--compress-level <auto|fast|balanced|max>] [--keep-input] [--kdf <label>] [--pbkdf2-iters <n>] [--no-fallback]\n";
+    std::cout << "  pb512file-enc <file> [-p <password>] " << master_flags << " [--strip-meta] [--no-obf] [--compress] [--keep-input] [--kdf <label>] [--pbkdf2-iters <n>] [--no-fallback]\n";
     std::cout << "  pb512file-dec <file.fwx> [-p <password>] " << master_flags << " [--strip-meta] [--kdf <label>] [--pbkdf2-iters <n>] [--no-fallback]\n";
     std::cout << "\n";
     std::cout << "fwxAES commands:\n";
-    std::cout << "  fwxaes-enc <file> [-p <password>] " << master_flags << " [--out <path>] [--heavy] [--normalize] [--threshold <n>] [--cover-phrase <text>] [--compress] [--compress-level <auto|fast|balanced|max>] [--ignore-media] [--keep-meta] [--keep-input] [--no-archive]\n";
+    std::cout << "  fwxaes-enc <file> [-p <password>] " << master_flags << " [--out <path>] [--heavy] [--normalize] [--threshold <n>] [--cover-phrase <text>] [--compress] [--ignore-media] [--keep-meta] [--keep-input] [--no-archive] [--kdf <label>] [--pbkdf2-iters <n>] [--argon2-time <n>] [--argon2-mem <n>] [--argon2-par <n>] [--no-fallback] [--legacy-pbkdf2]\n";
     std::cout << "  fwxaes-dec <file> [-p <password>] " << master_flags << " [--out <path>] [--heavy]\n";
-    std::cout << "  fwxaes-heavy-enc <file> [-p <password>] " << master_flags << " [--out <path>] [--compress] [--compress-level <auto|fast|balanced|max>] [--keep-input]\n";
+    std::cout << "  fwxaes-heavy-enc <file> [-p <password>] " << master_flags << " [--out <path>] [--compress] [--keep-input]\n";
     std::cout << "  fwxaes-heavy-dec <file> [-p <password>] " << master_flags << " [--out <path>]\n";
-    std::cout << "  fwxaes-stream-enc <file> [-p <password>] " << master_flags << " [--out <path>]\n";
+    std::cout << "  fwxaes-stream-enc <file> [-p <password>] " << master_flags << " [--out <path>] [--kdf <label>] [--pbkdf2-iters <n>] [--argon2-time <n>] [--argon2-mem <n>] [--argon2-par <n>] [--no-fallback] [--legacy-pbkdf2]\n";
     std::cout << "  fwxaes-stream-dec <file> [-p <password>] " << master_flags << " [--out <path>]\n";
     std::cout << "  fwxaes-live-enc <file|- > [-p <password>] " << master_flags << " [--out <path|- >]\n";
     std::cout << "  fwxaes-live-dec <file|- > [-p <password>] " << master_flags << " [--out <path|- >]\n";
-    std::cout << "    Compression presets: auto(legacy), fast(light), balanced, max(heavy)\n";
+    std::cout << "  an7 <file.fwx> -p <password> [--out <path>] [--keep-input] [--force-any]\n";
+    std::cout << "  dean7 <file> -p <password> [--out <path>] [--keep-input]\n";
     std::cout << "\n";
     std::cout << "Media/carrier commands:\n";
     std::cout << "  jmge <media> [-p <password>] " << master_flags << " [--out <path>] [--keep-meta] [--keep-input] [--no-archive]\n";
@@ -903,11 +1261,11 @@ void PrintBashCompletion(const std::string& argv0) {
         << "  local cur cmd\n"
         << "  cur=\"${COMP_WORDS[COMP_CWORD]}\"\n"
         << "  cmd=\"${COMP_WORDS[1]}\"\n"
-        << "  local commands=\"version help completion info probe identify b64-enc b64-dec n10-enc n10-dec n10file-enc n10file-dec "
+        << "  local commands=\"help version completion info identify probe b64-enc b64-dec n10-enc n10-dec n10file-enc n10file-dec "
            "kFMe kFMd kFAe kFAd hash512 uhash513 a512-enc a512-dec bi512-enc b1024-enc b256-enc b256-dec "
            "b512-enc b512-dec pb512-enc pb512-dec b512file-enc b512file-dec b512file-bytes-rt pb512file-bytes-rt "
            "pb512file-enc pb512file-dec fwxaes-enc fwxaes-dec fwxaes-heavy-enc fwxaes-heavy-dec fwxaes-stream-enc fwxaes-stream-dec fwxaes-live-enc "
-           "fwxaes-live-dec jmge jmgd bench-text bench-hash bench-fwxaes bench-fwxaes-par bench-live bench-b512file "
+           "fwxaes-live-dec an7 dean7 jmge jmgd bench-text bench-hash bench-fwxaes bench-fwxaes-par bench-live bench-b512file "
            "bench-pb512file bench-jmg\"\n"
         << "  local master_opts=\"--use-master --no-master --master-pub --use-master-pub --master-autogen --allow-embedded-master\"\n"
         << "  if [[ ${COMP_CWORD} -eq 1 ]]; then\n"
@@ -918,17 +1276,20 @@ void PrintBashCompletion(const std::string& argv0) {
         << "    completion)\n"
         << "      COMPREPLY=( $(compgen -W \"bash\" -- \"$cur\") )\n"
         << "      ;;\n"
-        << "    info|probe|identify)\n"
-        << "      COMPREPLY=( $(compgen -W \"--json\" -- \"$cur\") )\n"
-        << "      ;;\n"
         << "    b512-enc|b512-dec|pb512-enc|pb512-dec)\n"
         << "      COMPREPLY=( $(compgen -W \"-p --password --kdf --pbkdf2-iters --no-fallback $master_opts\" -- \"$cur\") )\n"
         << "      ;;\n"
         << "    b512file-enc|b512file-dec|b512file-bytes-rt|pb512file-bytes-rt|pb512file-enc|pb512file-dec)\n"
-        << "      COMPREPLY=( $(compgen -W \"-p --password --strip-meta --no-aead --no-obf --compress --compress-level --compress-mode --keep-input --kdf --pbkdf2-iters --no-fallback $master_opts\" -- \"$cur\") )\n"
+        << "      COMPREPLY=( $(compgen -W \"-p --password --strip-meta --no-aead --no-obf --compress --keep-input --kdf --pbkdf2-iters --no-fallback $master_opts\" -- \"$cur\") )\n"
         << "      ;;\n"
         << "    fwxaes-enc|fwxaes-dec|fwxaes-heavy-enc|fwxaes-heavy-dec|fwxaes-stream-enc|fwxaes-stream-dec|fwxaes-live-enc|fwxaes-live-dec)\n"
-        << "      COMPREPLY=( $(compgen -W \"-p --password --out -o --heavy --light --normalize --threshold --cover-phrase --compress --compress-level --compress-mode --ignore-media --keep-meta --keep-input --no-archive $master_opts\" -- \"$cur\") )\n"
+        << "      COMPREPLY=( $(compgen -W \"-p --password --out -o --heavy --light --normalize --threshold --cover-phrase --compress --ignore-media --keep-meta --keep-input --no-archive --kdf --pbkdf2-iters --argon2-time --argon2-mem --argon2-par --no-fallback --legacy-pbkdf2 --no-wrap-kdf $master_opts\" -- \"$cur\") )\n"
+        << "      ;;\n"
+        << "    an7)\n"
+        << "      COMPREPLY=( $(compgen -W \"-p --password --out -o --keep-input --force-any\" -- \"$cur\") )\n"
+        << "      ;;\n"
+        << "    dean7)\n"
+        << "      COMPREPLY=( $(compgen -W \"-p --password --out -o --keep-input\" -- \"$cur\") )\n"
         << "      ;;\n"
         << "    jmge|jmgd|bench-jmg)\n"
         << "      COMPREPLY=( $(compgen -W \"-p --password --out -o --keep-meta --keep-input --no-archive $master_opts\" -- \"$cur\") )\n"
@@ -1032,7 +1393,6 @@ class CommandTelemetry {
         if (!enabled_) {
             return;
         }
-        dynamic_line_ = IsStderrTty() && basefwx::env::IsEnabled("BASEFWX_LIVE_STATUS", true);
         EmitHeader();
         running_.store(true, std::memory_order_relaxed);
         worker_ = std::thread([this]() { Loop(); });
@@ -1045,6 +1405,55 @@ class CommandTelemetry {
     CommandTelemetry(const CommandTelemetry&) = delete;
     CommandTelemetry& operator=(const CommandTelemetry&) = delete;
 
+    void ConfigureFileProgress(const std::string& input_path, const std::string& output_path) {
+        if (!enabled_) {
+            return;
+        }
+        std::error_code ec;
+        std::filesystem::path in(input_path);
+        if (input_path.empty() || !std::filesystem::is_regular_file(in, ec)) {
+            return;
+        }
+        std::uint64_t in_size = static_cast<std::uint64_t>(std::filesystem::file_size(in, ec));
+        if (ec || in_size == 0) {
+            return;
+        }
+        std::filesystem::path out(output_path);
+        bool is_temp_plain = EndsWith(out.string(), ".plain.tmp");
+        if (is_temp_plain) {
+            auto estimated = EstimatePlainTmpTargetSize(in);
+            if (estimated.has_value() && *estimated > 0) {
+                in_size = *estimated;
+            }
+        }
+        std::lock_guard<std::mutex> lock(progress_mu_);
+        progress_input_path_ = in;
+        progress_output_path_ = out;
+        progress_input_size_ = in_size;
+        progress_enabled_ = true;
+        progress_sample_size_ = 0;
+        progress_sample_time_ = std::chrono::steady_clock::time_point{};
+        progress_sample_ready_ = false;
+        progress_rate_bps_ = 0.0;
+        progress_last_growth_time_ = std::chrono::steady_clock::now();
+        progress_is_temp_plain_ = is_temp_plain;
+        progress_completed_ = false;
+    }
+
+    void MarkProgressComplete() {
+        if (!enabled_) {
+            return;
+        }
+        {
+            std::lock_guard<std::mutex> lock(progress_mu_);
+            if (!progress_enabled_) {
+                return;
+            }
+            progress_completed_ = true;
+        }
+        EmitTelemetry();
+    }
+
   private:
     void Stop() {
         if (!enabled_) {
@@ -1055,11 +1464,10 @@ class CommandTelemetry {
         if (worker_.joinable()) {
             worker_.join();
         }
-        if (dynamic_line_ && line_active_) {
-            std::lock_guard<std::mutex> lock(render_mu_);
-            std::cerr << "\r" << std::string(last_render_width_, ' ') << "\r" << std::flush;
-            line_active_ = false;
-            last_render_width_ = 0;
+        if (inline_stats_ && had_stats_line_) {
+            std::cerr << "\n" << std::flush;
+            had_stats_line_ = false;
+            last_stats_width_ = 0;
         }
         enabled_ = false;
     }
@@ -1129,26 +1537,155 @@ class CommandTelemetry {
             }
             if (gpu.second.has_value()) {
                 line << " \\ " << std::fixed << std::setprecision(0) << *gpu.second << "C";
+                std::cerr << line.str() << "\n";
+                return;
             }
         }
         auto cpu_temp = ProbeCpuTempC();
         if (cpu_temp.has_value()) {
             line << " \\ " << std::fixed << std::setprecision(0) << *cpu_temp << "C";
         }
-        std::string rendered = line.str();
-        if (!dynamic_line_) {
-            std::cerr << rendered << "\n";
+        AppendProgress(line);
+        EmitStatsLine(line.str());
+    }
+
+    void AppendProgress(std::ostringstream& line) {
+        std::filesystem::path in_path;
+        std::filesystem::path out_path;
+        std::uint64_t in_size = 0;
+        bool is_temp_plain = false;
+        bool progress_completed = false;
+        {
+            std::lock_guard<std::mutex> lock(progress_mu_);
+            if (!progress_enabled_) {
+                return;
+            }
+            in_path = progress_input_path_;
+            out_path = progress_output_path_;
+            in_size = progress_input_size_;
+            is_temp_plain = progress_is_temp_plain_;
+            progress_completed = progress_completed_;
+        }
+        if (in_size == 0 || out_path.empty()) {
             return;
         }
-        std::lock_guard<std::mutex> lock(render_mu_);
-        std::size_t width = rendered.size();
-        if (width < last_render_width_) {
-            rendered.append(last_render_width_ - width, ' ');
+        std::uint64_t out_size = 0;
+        bool phase_finalize = false;
+        double pct = 0.0;
+        if (progress_completed) {
+            out_size = in_size;
+            pct = 100.0;
         } else {
-            last_render_width_ = width;
+            std::error_code ec;
+            if (!std::filesystem::exists(out_path, ec) || !std::filesystem::is_regular_file(out_path, ec)) {
+                return;
+            }
+            out_size = static_cast<std::uint64_t>(std::filesystem::file_size(out_path, ec));
+            if (ec) {
+                return;
+            }
+            phase_finalize = is_temp_plain && out_size >= in_size;
+            pct = (static_cast<double>(out_size) * 100.0) / static_cast<double>(in_size);
         }
-        line_active_ = true;
-        std::cerr << "\r" << rendered << std::flush;
+        if (pct < 0.0) {
+            pct = 0.0;
+        }
+        if (pct > 100.0) {
+            pct = 100.0;
+        }
+        if (phase_finalize && !progress_completed) {
+            // Keep bar just under 100% while follow-up stages are still running.
+            pct = 99.9;
+        }
+        constexpr std::size_t kBarWidth = 24;
+        std::size_t filled = static_cast<std::size_t>((pct * static_cast<double>(kBarWidth)) / 100.0);
+        if (progress_completed || pct >= 99.95) {
+            filled = kBarWidth;
+        }
+        if (filled > kBarWidth) {
+            filled = kBarWidth;
+        }
+
+        auto now = std::chrono::steady_clock::now();
+        std::optional<double> speed_bps;
+        std::optional<std::uint64_t> eta_seconds;
+        std::chrono::steady_clock::time_point last_growth_time = now;
+        {
+            std::lock_guard<std::mutex> lock(progress_mu_);
+            if (!progress_completed && progress_sample_ready_) {
+                double dt = std::chrono::duration<double>(now - progress_sample_time_).count();
+                if (dt > 0.15 && out_size > progress_sample_size_) {
+                    double inst_bps = static_cast<double>(out_size - progress_sample_size_) / dt;
+                    if (inst_bps >= 0.0) {
+                        if (progress_rate_bps_ <= 0.0) {
+                            progress_rate_bps_ = inst_bps;
+                        } else {
+                            progress_rate_bps_ = (progress_rate_bps_ * 0.7) + (inst_bps * 0.3);
+                        }
+                    }
+                    progress_last_growth_time_ = now;
+                }
+            }
+            progress_sample_size_ = out_size;
+            progress_sample_time_ = now;
+            progress_sample_ready_ = true;
+            last_growth_time = progress_last_growth_time_;
+            if (!progress_completed && !phase_finalize && progress_rate_bps_ > 1.0) {
+                speed_bps = progress_rate_bps_;
+                if (out_size < in_size) {
+                    std::uint64_t remain = in_size - out_size;
+                    eta_seconds = static_cast<std::uint64_t>(remain / progress_rate_bps_);
+                }
+            }
+        }
+
+        line << " \\ ["
+             << std::string(filled, '#')
+             << std::string(kBarWidth - filled, '-')
+             << "] "
+             << std::fixed << std::setprecision(1) << pct << "%"
+             << " " << basefwx::system::FormatBytes(out_size)
+             << "/" << basefwx::system::FormatBytes(in_size);
+        if (speed_bps.has_value()) {
+            line << " " << basefwx::system::FormatBytes(static_cast<std::uint64_t>(*speed_bps)) << "/s";
+        }
+        if (eta_seconds.has_value()) {
+            std::uint64_t total = *eta_seconds;
+            std::uint64_t h = total / 3600;
+            std::uint64_t m = (total % 3600) / 60;
+            std::uint64_t s = total % 60;
+            std::ostringstream eta;
+            eta << std::setw(2) << std::setfill('0') << h
+                << ":" << std::setw(2) << std::setfill('0') << m
+                << ":" << std::setw(2) << std::setfill('0') << s;
+            line << " ETA " << eta.str();
+        }
+        if (phase_finalize) {
+            static constexpr std::array<char, 4> kSpin = {'|', '/', '-', '\\'};
+            auto spin_tick = static_cast<std::size_t>(
+                std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count() / 1000);
+            char spin = kSpin[spin_tick % kSpin.size()];
+            double stall_s = std::chrono::duration<double>(now - last_growth_time).count();
+            if (stall_s >= 0.8) {
+                line << " phase2 " << spin << " deobf/unpack";
+            } else {
+                line << " phase1 " << spin;
+            }
+        }
+    }
+
+    void EmitStatsLine(const std::string& text) {
+        if (!inline_stats_) {
+            std::cerr << text << "\n";
+            return;
+        }
+        std::string line = text;
+        if (line.size() < last_stats_width_) {
+            line.append(last_stats_width_ - line.size(), ' ');
+        }
+        last_stats_width_ = line.size();
+        had_stats_line_ = true;
+        std::cerr << "\r" << line << std::flush;
     }
 
     std::pair<std::optional<double>, std::optional<double>> SampleGpuPercentTemp() {
@@ -1248,12 +1785,23 @@ class CommandTelemetry {
     std::thread worker_;
     std::mutex mu_;
     std::condition_variable cv_;
-    std::mutex render_mu_;
-    bool dynamic_line_ = false;
-    bool line_active_ = false;
-    std::size_t last_render_width_ = 0;
     std::uint64_t prev_total_ = 0;
     std::uint64_t prev_idle_ = 0;
+    bool inline_stats_ = IsStderrInteractive() && !basefwx::env::IsEnabled("BASEFWX_STATS_LINES", false);
+    bool had_stats_line_ = false;
+    std::size_t last_stats_width_ = 0;
+    std::mutex progress_mu_;
+    std::filesystem::path progress_input_path_;
+    std::filesystem::path progress_output_path_;
+    std::uint64_t progress_input_size_ = 0;
+    bool progress_enabled_ = false;
+    std::uint64_t progress_sample_size_ = 0;
+    std::chrono::steady_clock::time_point progress_sample_time_{};
+    bool progress_sample_ready_ = false;
+    double progress_rate_bps_ = 0.0;
+    std::chrono::steady_clock::time_point progress_last_growth_time_{};
+    bool progress_is_temp_plain_ = false;
+    bool progress_completed_ = false;
 };
 
 CommandHwPlan BuildHwPlan(const std::string& command) {
@@ -1306,12 +1854,13 @@ struct FwxAesArgs {
     std::string output;
     std::string password;
     bool use_master = false;
+    basefwx::pb512::KdfOptions kdf;
+    bool force_legacy_pbkdf2 = false;
     bool heavy = false;
     bool normalize = false;
     std::size_t threshold = 8 * 1024;
     std::string cover_phrase = "low taper fade";
     bool compress = false;
-    basefwx::archive::CompressionPreset compression = basefwx::archive::CompressionPreset::Auto;
     bool ignore_media = false;
     bool keep_meta = false;
     bool keep_input = false;
@@ -1328,6 +1877,14 @@ struct ImageArgs {
     bool archive_original = true;
 };
 
+struct An7Args {
+    std::string input;
+    std::string output;
+    std::string password;
+    bool keep_input = false;
+    bool force_any = false;
+};
+
 struct FileArgs {
     std::string input;
     std::string password;
@@ -1336,18 +1893,9 @@ struct FileArgs {
     bool enable_aead = true;
     bool enable_obf = true;
     bool compress = false;
-    basefwx::archive::CompressionPreset compression = basefwx::archive::CompressionPreset::Auto;
     bool keep_input = false;
     basefwx::pb512::KdfOptions kdf;
 };
-
-basefwx::archive::CompressionPreset ParseCompressionPreset(const std::string& value) {
-    try {
-        return basefwx::archive::CompressionPresetFromString(value);
-    } catch (const std::invalid_argument& exc) {
-        throw std::runtime_error(exc.what());
-    }
-}
 
 ParsedOptions ParseCodecArgs(int argc, char** argv, int start_index) {
     ParsedOptions opts;
@@ -1417,13 +1965,6 @@ FileArgs ParseFileArgs(int argc, char** argv, int start_index) {
         } else if (flag == "--compress") {
             opts.compress = true;
             idx += 1;
-        } else if (flag == "--compress-mode" || flag == "--compress-level") {
-            if (idx + 1 >= argc) {
-                throw std::runtime_error("Missing compression mode (expected auto|fast|balanced|max)");
-            }
-            opts.compress = true;
-            opts.compression = ParseCompressionPreset(argv[idx + 1]);
-            idx += 2;
         } else if (flag == "--keep-input") {
             opts.keep_input = true;
             idx += 1;
@@ -1472,6 +2013,42 @@ FwxAesArgs ParseFwxAesArgs(int argc, char** argv, int start_index) {
             }
             opts.output = argv[idx + 1];
             idx += 2;
+        } else if (flag == "--kdf") {
+            if (idx + 1 >= argc) {
+                throw std::runtime_error("Missing kdf label");
+            }
+            opts.kdf.label = argv[idx + 1];
+            idx += 2;
+        } else if (flag == "--pbkdf2-iters") {
+            if (idx + 1 >= argc) {
+                throw std::runtime_error("Missing pbkdf2 iteration count");
+            }
+            opts.kdf.pbkdf2_iterations = static_cast<std::size_t>(std::stoul(argv[idx + 1]));
+            idx += 2;
+        } else if (flag == "--argon2-time") {
+            if (idx + 1 >= argc) {
+                throw std::runtime_error("Missing argon2 time cost");
+            }
+            opts.kdf.argon2_time_cost = static_cast<std::uint32_t>(std::stoul(argv[idx + 1]));
+            idx += 2;
+        } else if (flag == "--argon2-mem") {
+            if (idx + 1 >= argc) {
+                throw std::runtime_error("Missing argon2 memory cost");
+            }
+            opts.kdf.argon2_memory_cost = static_cast<std::uint32_t>(std::stoul(argv[idx + 1]));
+            idx += 2;
+        } else if (flag == "--argon2-par") {
+            if (idx + 1 >= argc) {
+                throw std::runtime_error("Missing argon2 parallelism");
+            }
+            opts.kdf.argon2_parallelism = static_cast<std::uint32_t>(std::stoul(argv[idx + 1]));
+            idx += 2;
+        } else if (flag == "--no-fallback") {
+            opts.kdf.allow_pbkdf2_fallback = false;
+            idx += 1;
+        } else if (flag == "--legacy-pbkdf2" || flag == "--no-wrap-kdf") {
+            opts.force_legacy_pbkdf2 = true;
+            idx += 1;
         } else if (flag == "--normalize") {
             opts.normalize = true;
             idx += 1;
@@ -1496,13 +2073,6 @@ FwxAesArgs ParseFwxAesArgs(int argc, char** argv, int start_index) {
         } else if (flag == "--compress") {
             opts.compress = true;
             idx += 1;
-        } else if (flag == "--compress-mode" || flag == "--compress-level") {
-            if (idx + 1 >= argc) {
-                throw std::runtime_error("Missing compression mode (expected auto|fast|balanced|max)");
-            }
-            opts.compress = true;
-            opts.compression = ParseCompressionPreset(argv[idx + 1]);
-            idx += 2;
         } else if (flag == "--ignore-media") {
             opts.ignore_media = true;
             idx += 1;
@@ -1561,6 +2131,43 @@ ImageArgs ParseImageArgs(int argc, char** argv, int start_index) {
     return opts;
 }
 
+An7Args ParseAn7Args(int argc, char** argv, int start_index, bool allow_force_any) {
+    An7Args opts;
+    if (start_index >= argc) {
+        throw std::runtime_error("Missing input path");
+    }
+    opts.input = argv[start_index];
+    int idx = start_index + 1;
+    while (idx < argc) {
+        std::string flag(argv[idx]);
+        if (flag == "-p" || flag == "--password") {
+            if (idx + 1 >= argc) {
+                throw std::runtime_error("Missing password value");
+            }
+            opts.password = argv[idx + 1];
+            idx += 2;
+        } else if (flag == "--out" || flag == "-o") {
+            if (idx + 1 >= argc) {
+                throw std::runtime_error("Missing output path");
+            }
+            opts.output = argv[idx + 1];
+            idx += 2;
+        } else if (flag == "--keep-input") {
+            opts.keep_input = true;
+            idx += 1;
+        } else if (flag == "--force-any") {
+            if (!allow_force_any) {
+                throw std::runtime_error("--force-any is only valid for an7");
+            }
+            opts.force_any = true;
+            idx += 1;
+        } else {
+            throw std::runtime_error("Unknown flag: " + flag);
+        }
+    }
+    return opts;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -1600,7 +2207,7 @@ int main(int argc, char** argv) {
         return 2;
     }
     std::string command(argv[1]);
-    if (command == "--version" || command == "-V" || command == "version") {
+    if (command == "version" || command == "--version" || command == "-V") {
         PrintVersionInfo();
         return 0;
     }
@@ -1622,8 +2229,7 @@ int main(int argc, char** argv) {
         return 0;
     }
     std::optional<CommandTelemetry> telemetry;
-    if (command != "jmge" && command != "jmgd"
-        && command != "info" && command != "probe" && command != "identify") {
+    if (!IsLightCommand(command) && command != "jmge" && command != "jmgd") {
         telemetry.emplace(BuildHwPlan(command));
     }
 
@@ -1631,57 +2237,110 @@ int main(int argc, char** argv) {
     PrintSystemInfo();
 
     try {
-        if (command == "info" || command == "probe" || command == "identify") {
+        if (command == "info") {
             if (argc < 3) {
                 PrintUsage();
                 return 2;
             }
-            bool include_json = false;
-            if (command == "info") {
-                // Keep legacy info behavior by default.
-                include_json = true;
+            std::filesystem::path input_path(argv[2]);
+            auto lp = InspectLengthPrefixedFile(input_path);
+            if (lp.has_value() && !MetadataNeedsFullFallback(lp->info)) {
+                PrintInspectInfo(lp->info);
+                return 0;
             }
-            for (int idx = 3; idx < argc; ++idx) {
-                std::string flag(argv[idx]);
-                if (flag == "--json") {
-                    include_json = true;
-                } else {
-                    throw std::runtime_error("Unknown flag: " + flag);
-                }
+            auto fwx = ParseFwxAesHeader(input_path);
+            if (fwx.has_value()) {
+                PrintFwxAesInfo(*fwx);
+                return 0;
             }
-            std::string path = argv[2];
-            auto data = basefwx::ReadFile(path);
-            try {
-                auto info = basefwx::InspectBlob(data);
-                if (command == "info") {
-                    std::cout << "user_blob_len: " << info.user_blob_len << " bytes\n";
-                    std::cout << "master_blob_len: " << info.master_blob_len << " bytes\n";
-                    std::cout << "payload_len: " << info.payload_len << " bytes\n";
-                    if (info.has_metadata) {
-                        std::cout << "metadata_len: " << info.metadata_len << " bytes\n";
-                        if (!info.metadata_json.empty()) {
-                            std::cout << "metadata_json: " << info.metadata_json << "\n";
-                        } else if (info.metadata_len == 0) {
-                            std::cout << "metadata_json: <empty>\n";
-                        } else {
-                            std::cout << "metadata_json: <unavailable>\n";
-                        }
-                    } else {
-                        std::cout << "metadata_json: <unavailable>\n";
-                    }
-                } else {
-                    PrintProbeResult(path, info, include_json);
+            std::string fallback_reason;
+            auto full = TryReadFullInspectSafe(input_path, &fallback_reason);
+            if (full.has_value()) {
+                try {
+                    auto full_info = basefwx::InspectBlob(*full);
+                    PrintInspectInfo(full_info);
+                    return 0;
+                } catch (const std::exception&) {
+                    // Continue with lightweight output or error.
                 }
-            } catch (const std::exception&) {
-                auto raw = TryInspectRawFwx(data);
-                if (!raw.has_value()) {
-                    throw;
+            } else {
+                MaybeWarnInspectFallback(fallback_reason);
+            }
+            if (lp.has_value()) {
+                if (MetadataNeedsFullFallback(lp->info)) {
+                    MaybeWarnInspectFallback("metadata was incomplete in lightweight inspect; showing partial output");
                 }
-                if (command == "info") {
-                    PrintRawFwxInspectLegacy(*raw, include_json);
-                } else {
-                    PrintRawFwxProbeResult(path, *raw, include_json);
+                PrintInspectInfo(lp->info);
+                return 0;
+            }
+            throw std::runtime_error("Unsupported or corrupted BaseFWX container");
+        }
+        if (command == "identify" || command == "probe") {
+            if (argc < 3) {
+                PrintUsage();
+                return 2;
+            }
+            std::filesystem::path input_path(argv[2]);
+            auto lp = InspectLengthPrefixedFile(input_path);
+            if (lp.has_value() && !MetadataNeedsFullFallback(lp->info)) {
+                PrintIdentifyLengthPrefixed(input_path.string(), *lp);
+                return 0;
+            }
+            auto fwx = ParseFwxAesHeader(input_path);
+            if (fwx.has_value()) {
+                PrintIdentifyFwxAes(input_path.string(), *fwx);
+                return 0;
+            }
+            std::string fallback_reason;
+            auto full = TryReadFullInspectSafe(input_path, &fallback_reason);
+            if (full.has_value()) {
+                try {
+                    auto full_info = basefwx::InspectBlob(*full);
+                    LightweightInspect inspect;
+                    inspect.file_size = static_cast<std::uint64_t>(full->size());
+                    inspect.info = std::move(full_info);
+                    PrintIdentifyLengthPrefixed(input_path.string(), inspect);
+                    return 0;
+                } catch (const std::exception&) {
+                    // Continue with lightweight output or error.
                 }
+            } else {
+                MaybeWarnInspectFallback(fallback_reason);
+            }
+            if (lp.has_value()) {
+                if (MetadataNeedsFullFallback(lp->info)) {
+                    MaybeWarnInspectFallback("metadata was incomplete in lightweight inspect; showing partial output");
+                }
+                PrintIdentifyLengthPrefixed(input_path.string(), *lp);
+                return 0;
+            }
+            throw std::runtime_error("Unsupported or corrupted BaseFWX container");
+        }
+        if (command == "an7" || command == "dean7") {
+            An7Args parsed = ParseAn7Args(argc, argv, 2, command == "an7");
+            if (parsed.password.empty()) {
+                throw std::runtime_error("Password is required");
+            }
+            basefwx::runtime::ResetStop();
+            InstallStopHandlers();
+            if (command == "an7") {
+                basefwx::An7Options an7_opts;
+                an7_opts.keep_input = parsed.keep_input;
+                an7_opts.force_any = parsed.force_any;
+                if (!parsed.output.empty()) {
+                    an7_opts.out = std::filesystem::path(parsed.output);
+                }
+                basefwx::an7_file(std::filesystem::path(parsed.input), parsed.password, an7_opts);
+                std::cout << "an7 completed\n";
+            } else {
+                basefwx::Dean7Options dean_opts;
+                dean_opts.keep_input = parsed.keep_input;
+                if (!parsed.output.empty()) {
+                    dean_opts.out = std::filesystem::path(parsed.output);
+                }
+                basefwx::Dean7Result result =
+                    basefwx::dean7_file(std::filesystem::path(parsed.input), parsed.password, dean_opts);
+                std::cout << result.output_path.string() << "\n";
             }
             return 0;
         }
@@ -2355,7 +3014,6 @@ int main(int argc, char** argv) {
             file_opts.enable_aead = opts.enable_aead;
             file_opts.enable_obfuscation = opts.enable_obf;
             file_opts.compress = opts.compress;
-            file_opts.compression = opts.compression;
             file_opts.keep_input = opts.keep_input;
             if (command == "b512file-enc") {
                 std::cout << basefwx::filecodec::B512EncodeFile(opts.input, opts.password, file_opts, opts.kdf) << "\n";
@@ -2382,7 +3040,11 @@ int main(int argc, char** argv) {
             }
             if (opts.output.empty()) {
                 if (command == "fwxaes-enc" || command == "fwxaes-heavy-enc") {
-                    if (!opts.ignore_media && LooksLikeMediaPath(std::filesystem::path(opts.input))) {
+                    if (opts.heavy) {
+                        std::filesystem::path out_path(opts.input);
+                        out_path.replace_extension(".fwx");
+                        opts.output = out_path.string();
+                    } else if (!opts.ignore_media && LooksLikeMediaPath(std::filesystem::path(opts.input))) {
                         opts.output = opts.input;
                     } else {
                         opts.output = opts.input + ".fwx";
@@ -2397,6 +3059,19 @@ int main(int argc, char** argv) {
                     opts.output = opts.input + ".out";
                 }
             }
+            if (telemetry) {
+                std::string progress_output = opts.output;
+                bool is_decode = (command == "fwxaes-dec" || command == "fwxaes-heavy-dec");
+                if (is_decode && opts.heavy) {
+                    progress_output = opts.input + ".plain.tmp";
+                }
+                telemetry->ConfigureFileProgress(opts.input, progress_output);
+            }
+            auto complete_progress = [&telemetry]() {
+                if (telemetry) {
+                    telemetry->MarkProgressComplete();
+                }
+            };
             if (command == "fwxaes-live-enc" || command == "fwxaes-live-dec") {
                 if (opts.heavy) {
                     throw std::runtime_error("Live fwxAES does not support heavy mode");
@@ -2436,6 +3111,7 @@ int main(int argc, char** argv) {
                 } else {
                     basefwx::FwxAesLiveDecryptStream(*input, *output, opts.password, opts.use_master);
                 }
+                complete_progress();
                 return 0;
             }
             if (command == "fwxaes-stream-enc" || command == "fwxaes-stream-dec") {
@@ -2455,14 +3131,22 @@ int main(int argc, char** argv) {
                 }
                 basefwx::fwxaes::Options stream_opts;
                 stream_opts.use_master = opts.use_master;
+                stream_opts.user_kdf = opts.kdf;
+                stream_opts.force_legacy_pbkdf2 = opts.force_legacy_pbkdf2;
                 if (command == "fwxaes-stream-enc") {
                     basefwx::fwxaes::EncryptStream(input, output, opts.password, stream_opts);
                 } else {
                     basefwx::fwxaes::DecryptStream(input, output, opts.password, opts.use_master);
                 }
+                complete_progress();
                 return 0;
             }
             if (opts.heavy) {
+                bool is_decode = (command == "fwxaes-dec" || command == "fwxaes-heavy-dec");
+                if (is_decode) {
+                    basefwx::runtime::ResetStop();
+                    InstallStopHandlers();
+                }
                 if (opts.normalize) {
                     throw std::runtime_error("fwxAES heavy mode does not support normalize options");
                 }
@@ -2475,23 +3159,34 @@ int main(int argc, char** argv) {
                 basefwx::filecodec::FileOptions file_opts;
                 file_opts.use_master = opts.use_master;
                 file_opts.compress = opts.compress;
-                file_opts.compression = opts.compression;
                 file_opts.keep_input = opts.keep_input;
                 if (command == "fwxaes-enc" || command == "fwxaes-heavy-enc") {
-                    std::string produced = basefwx::filecodec::Pb512EncodeFile(opts.input, opts.password, file_opts);
+                    std::string produced = basefwx::filecodec::Pb512EncodeFile(opts.input, opts.password, file_opts, opts.kdf);
+                    std::string final_output = produced;
                     if (user_output) {
-                        MoveOutputPath(produced, opts.output);
+                        final_output = MoveOutputPath(produced, opts.output);
                     }
+                    if (telemetry) {
+                        telemetry->MarkProgressComplete();
+                        telemetry.reset();
+                    }
+                    std::cout << final_output << "\n";
                 } else {
-                    std::string produced = basefwx::filecodec::Pb512DecodeFile(opts.input, opts.password, file_opts);
+                    std::string produced = basefwx::filecodec::Pb512DecodeFile(opts.input, opts.password, file_opts, opts.kdf);
+                    std::string final_output = produced;
                     if (user_output) {
-                        MoveOutputPath(produced, opts.output);
+                        final_output = MoveOutputPath(produced, opts.output);
                     }
+                    if (telemetry) {
+                        telemetry->MarkProgressComplete();
+                        telemetry.reset();
+                    }
+                    std::cout << final_output << "\n";
                 }
             } else if (command == "fwxaes-enc" || command == "fwxaes-heavy-enc") {
                 if (!opts.ignore_media && LooksLikeMediaPath(std::filesystem::path(opts.input))) {
                     try {
-                        std::cout << basefwx::Jmge(
+                        std::string media_output = basefwx::Jmge(
                             opts.input,
                             opts.password,
                             opts.output,
@@ -2499,7 +3194,12 @@ int main(int argc, char** argv) {
                             opts.keep_input,
                             opts.archive_original,
                             opts.use_master
-                        ) << "\n";
+                        );
+                        if (telemetry) {
+                            telemetry->MarkProgressComplete();
+                            telemetry.reset();
+                        }
+                        std::cout << media_output << "\n";
                         return 0;
                     } catch (const std::exception&) {
                         // Fall back to standard fwxAES if media processing fails.
@@ -2511,13 +3211,15 @@ int main(int argc, char** argv) {
                 norm.cover_phrase = opts.cover_phrase;
                 basefwx::fwxaes::PackOptions pack_opts;
                 pack_opts.compress = opts.compress;
-                pack_opts.compression = opts.compression;
                 basefwx::fwxaes::Options fwxaes_opts;
                 fwxaes_opts.use_master = opts.use_master;
+                fwxaes_opts.user_kdf = opts.kdf;
+                fwxaes_opts.force_legacy_pbkdf2 = opts.force_legacy_pbkdf2;
                 basefwx::fwxaes::EncryptFile(opts.input, opts.output, opts.password, fwxaes_opts, norm, pack_opts, opts.keep_input);
             } else {
                 basefwx::fwxaes::DecryptFile(opts.input, opts.output, opts.password, opts.use_master);
             }
+            complete_progress();
             return 0;
         }
         if (command == "jmge" || command == "jmgd") {
@@ -2540,6 +3242,10 @@ int main(int argc, char** argv) {
         PrintUsage();
         return 2;
     } catch (const std::exception& exc) {
+        if (std::string_view(exc.what()) == "Interrupted") {
+            std::cerr << "Interrupted\n";
+            return 130;
+        }
         bool plain = CliPlain();
         const char* red = "\033[31m";
         std::string msg = EmojiPrefix("❌", plain) + "Error: " + exc.what();

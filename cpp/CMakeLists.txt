@@ -1,6 +1,19 @@
 cmake_minimum_required(VERSION 3.16)
 project(basefwx_cpp LANGUAGES CXX)
 
+string(TIMESTAMP BASEFWX_BUILD_UTC "%Y-%m-%dT%H:%M:%SZ" UTC)
+set(BASEFWX_GIT_COMMIT "unknown")
+execute_process(
+    COMMAND git -C ${CMAKE_CURRENT_SOURCE_DIR}/.. rev-parse --short=12 HEAD
+    OUTPUT_VARIABLE BASEFWX_GIT_COMMIT
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    ERROR_QUIET
+    RESULT_VARIABLE BASEFWX_GIT_RESULT
+)
+if(NOT BASEFWX_GIT_RESULT EQUAL 0 OR BASEFWX_GIT_COMMIT STREQUAL "")
+    set(BASEFWX_GIT_COMMIT "unknown")
+endif()
+
 option(BASEFWX_BUILD_CLI "Build basefwx_cpp CLI" ON)
 option(BASEFWX_REQUIRE_ARGON2 "Require libargon2 for Argon2id support" ON)
 option(BASEFWX_REQUIRE_OQS "Require liboqs for ML-KEM-768 support" OFF)
@@ -501,6 +514,7 @@ endif()
 
 add_library(basefwxcpp
     src/archive.cpp
+    src/an7.cpp
     src/base64.cpp
     src/cli_colors.cpp
     src/format.cpp
@@ -574,4 +588,9 @@ if(BASEFWX_BUILD_CLI)
         src/main.cpp
     )
     target_link_libraries(basefwx_cpp PRIVATE basefwxcpp)
+    target_compile_definitions(basefwx_cpp PRIVATE
+        BASEFWX_CLI_GIT_COMMIT="${BASEFWX_GIT_COMMIT}"
+        BASEFWX_CLI_BUILD_UTC="${BASEFWX_BUILD_UTC}"
+        BASEFWX_CLI_BUILD_TYPE="$<IF:$<BOOL:${CMAKE_BUILD_TYPE}>,${CMAKE_BUILD_TYPE},unknown>"
+    )
 endif()

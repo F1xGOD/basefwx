@@ -15,6 +15,8 @@
 #include <fstream>
 #include <limits>
 #include <memory>
+#include <optional>
+#include <sstream>
 #include <stdexcept>
 #include <vector>
 
@@ -26,6 +28,7 @@ namespace {
 
 const std::uint8_t kMagic[4] = {'F', 'W', 'X', '1'};
 const std::uint8_t kAlgo = 0x01;
+const std::uint8_t kAlgoStreamV2 = 0x02;
 const std::uint8_t kKdfPbkdf2 = 0x01;
 const std::uint8_t kKdfWrap = 0x02;
 const std::uint8_t kAadBytes[] = {'f', 'w', 'x', 'A', 'E', 'S'};
@@ -71,6 +74,24 @@ std::uint32_t HardenPbkdf2Iterations(const std::string& password, std::uint32_t 
     return iters;
 }
 
+std::uint32_t ClampToU32(std::size_t value) {
+    if (value > static_cast<std::size_t>(std::numeric_limits<std::uint32_t>::max())) {
+        return std::numeric_limits<std::uint32_t>::max();
+    }
+    return static_cast<std::uint32_t>(value);
+}
+
+basefwx::pb512::KdfOptions ResolveWrapKdfOptions(const Options& options,
+                                                 const std::string& password) {
+    basefwx::pb512::KdfOptions out = options.user_kdf;
+    if (out.pbkdf2_iterations == 200000
+        && options.pbkdf2_iters != 200000) {
+        out.pbkdf2_iterations = options.pbkdf2_iters;
+    }
+    out.pbkdf2_iterations = HardenPbkdf2Iterations(password, ClampToU32(out.pbkdf2_iterations));
+    return out;
+}
+
 bool IsSeekable(std::ostream& out) {
     auto pos = out.tellp();
     if (pos == std::streampos(-1)) {
@@ -78,6 +99,22 @@ bool IsSeekable(std::ostream& out) {
     }
     out.seekp(pos);
     return !out.fail();
+}
+
+std::optional<std::uint64_t> RemainingBytes(std::istream& in) {
+    auto pos = in.tellg();
+    if (pos == std::streampos(-1)) {
+        return std::nullopt;
+    }
+    in.seekg(0, std::ios::end);
+    auto end = in.tellg();
+    if (end == std::streampos(-1) || end < pos) {
+        in.clear();
+        in.seekg(pos);
+        return std::nullopt;
+    }
+    in.seekg(pos);
+    return static_cast<std::uint64_t>(end - pos);
 }
 
 void ReadExact(std::istream& in, std::uint8_t* data, std::size_t len, const char* label) {
@@ -94,6 +131,36 @@ void ReadExact(std::istream& in, std::uint8_t* data, std::size_t len, const char
         throw std::runtime_error(label);
     }
 }
+
+class ScopedPathCleanup {
+  public:
+    explicit ScopedPathCleanup(std::filesystem::path path, bool recursive = false)
+        : path_(std::move(path)), recursive_(recursive) {}
+
+    ScopedPathCleanup(const ScopedPathCleanup&) = delete;
+    ScopedPathCleanup& operator=(const ScopedPathCleanup&) = delete;
+
+    ~ScopedPathCleanup() {
+        if (!active_) {
+            return;
+        }
+        std::error_code ec;
+        if (recursive_) {
+            std::filesystem::remove_all(path_, ec);
+        } else {
+            std::filesystem::remove(path_, ec);
+        }
+    }
+
+    void Dismiss() noexcept {
+        active_ = false;
+    }
+
+  private:
+    std::filesystem::path path_;
+    bool recursive_ = false;
+    bool active_ = true;
+};
 
 void PutU32Be(std::vector<std::uint8_t>& out, std::uint32_t value) {
     out.push_back(static_cast<std::uint8_t>((value >> 24) & 0xFF));
@@ -114,6 +181,30 @@ std::uint32_t GetU32Be(const std::uint8_t* ptr) {
            | (static_cast<std::uint32_t>(ptr[1]) << 16)
            | (static_cast<std::uint32_t>(ptr[2]) << 8)
            | static_cast<std::uint32_t>(ptr[3]);
+}
+
+std::uint64_t GetU64Be(const std::uint8_t* ptr) {
+    return (static_cast<std::uint64_t>(ptr[0]) << 56)
+           | (static_cast<std::uint64_t>(ptr[1]) << 48)
+           | (static_cast<std::uint64_t>(ptr[2]) << 40)
+           | (static_cast<std::uint64_t>(ptr[3]) << 32)
+           | (static_cast<std::uint64_t>(ptr[4]) << 24)
+           | (static_cast<std::uint64_t>(ptr[5]) << 16)
+           | (static_cast<std::uint64_t>(ptr[6]) << 8)
+           | static_cast<std::uint64_t>(ptr[7]);
+}
+
+std::array<std::uint8_t, 8> ToU64Be(std::uint64_t value) {
+    return {
+        static_cast<std::uint8_t>((value >> 56) & 0xFF),
+        static_cast<std::uint8_t>((value >> 48) & 0xFF),
+        static_cast<std::uint8_t>((value >> 40) & 0xFF),
+        static_cast<std::uint8_t>((value >> 32) & 0xFF),
+        static_cast<std::uint8_t>((value >> 24) & 0xFF),
+        static_cast<std::uint8_t>((value >> 16) & 0xFF),
+        static_cast<std::uint8_t>((value >> 8) & 0xFF),
+        static_cast<std::uint8_t>(value & 0xFF),
+    };
 }
 
 Bytes WrapPackHeader(const Bytes& payload, basefwx::archive::PackMode mode) {
@@ -239,19 +330,21 @@ Bytes EncryptRaw(const Bytes& plaintext, const std::string& password, const Opti
         throw std::runtime_error("Password required when master key usage is disabled");
     }
     bool use_wrap = false;
+    bool prefer_wrap = !effective.force_legacy_pbkdf2;
     basefwx::keywrap::MaskKeyResult mask_key;
     Bytes key_header;
-    if (effective.use_master) {
-        basefwx::pb512::KdfOptions kdf;
+    bool request_wrap = effective.use_master || prefer_wrap;
+    if (request_wrap) {
+        basefwx::pb512::KdfOptions kdf = ResolveWrapKdfOptions(effective, resolved);
         mask_key = basefwx::keywrap::PrepareMaskKey(
             resolved,
-            true,
+            effective.use_master,
             basefwx::constants::kFwxAesMaskInfo,
             false,
             std::string_view(reinterpret_cast<const char*>(kAadBytes), sizeof(kAadBytes)),
             kdf
         );
-        use_wrap = mask_key.used_master || resolved.empty();
+        use_wrap = mask_key.used_master || (prefer_wrap && !resolved.empty()) || resolved.empty();
         if (use_wrap) {
             std::vector<basefwx::format::Bytes> parts = {mask_key.user_blob, mask_key.master_blob};
             key_header = basefwx::format::PackLengthPrefixed(parts);
@@ -349,6 +442,14 @@ Bytes DecryptRaw(const Bytes& blob, const std::string& password, bool use_master
     std::uint8_t kdf = blob[5];
     std::uint8_t salt_len = blob[6];
     std::uint8_t iv_len = blob[7];
+    if (algo == kAlgoStreamV2) {
+        std::string packed(reinterpret_cast<const char*>(blob.data()), blob.size());
+        std::istringstream input(packed, std::ios::binary);
+        std::ostringstream output(std::ios::binary);
+        DecryptStream(input, output, resolved, use_master);
+        std::string plain = output.str();
+        return Bytes(plain.begin(), plain.end());
+    }
     if (algo != kAlgo || (kdf != kKdfPbkdf2 && kdf != kKdfWrap)) {
         throw std::runtime_error("fwxAES unsupported algo/kdf");
     }
@@ -440,20 +541,29 @@ std::uint64_t EncryptStream(std::istream& source,
     }
 
     auto encrypt_to_seekable = [&](std::ostream& output) -> std::uint64_t {
+        bool stream_v2 = true;
+        if (auto remaining = RemainingBytes(source); remaining.has_value()) {
+            std::uint64_t max_ct = static_cast<std::uint64_t>(std::numeric_limits<std::uint32_t>::max());
+            if (*remaining <= max_ct - static_cast<std::uint64_t>(basefwx::constants::kAeadTagLen)) {
+                stream_v2 = false;
+            }
+        }
         bool use_wrap = false;
+        bool prefer_wrap = !effective.force_legacy_pbkdf2;
         basefwx::keywrap::MaskKeyResult mask_key;
         Bytes key_header;
-        if (effective.use_master) {
-            basefwx::pb512::KdfOptions kdf;
+        bool request_wrap = effective.use_master || prefer_wrap;
+        if (request_wrap) {
+            basefwx::pb512::KdfOptions kdf = ResolveWrapKdfOptions(effective, resolved);
             mask_key = basefwx::keywrap::PrepareMaskKey(
                 resolved,
-                true,
+                effective.use_master,
                 basefwx::constants::kFwxAesMaskInfo,
                 false,
                 std::string_view(reinterpret_cast<const char*>(kAadBytes), sizeof(kAadBytes)),
                 kdf
             );
-            use_wrap = mask_key.used_master || resolved.empty();
+            use_wrap = mask_key.used_master || (prefer_wrap && !resolved.empty()) || resolved.empty();
             if (use_wrap) {
                 std::vector<basefwx::format::Bytes> parts = {mask_key.user_blob, mask_key.master_blob};
                 key_header = basefwx::format::PackLengthPrefixed(parts);
@@ -474,7 +584,7 @@ std::uint64_t EncryptStream(std::istream& source,
             Bytes header;
             header.reserve(16 + salt.size() + iv.size());
             header.insert(header.end(), kMagic, kMagic + 4);
-            header.push_back(kAlgo);
+            header.push_back(stream_v2 ? kAlgoStreamV2 : kAlgo);
             header.push_back(kKdfPbkdf2);
             header.push_back(effective.salt_len);
             header.push_back(effective.iv_len);
@@ -492,7 +602,7 @@ std::uint64_t EncryptStream(std::istream& source,
             Bytes header;
             header.reserve(16 + key_header.size() + iv.size());
             header.insert(header.end(), kMagic, kMagic + 4);
-            header.push_back(kAlgo);
+            header.push_back(stream_v2 ? kAlgoStreamV2 : kAlgo);
             header.push_back(kKdfWrap);
             header.push_back(0);
             header.push_back(effective.iv_len);
@@ -501,6 +611,14 @@ std::uint64_t EncryptStream(std::istream& source,
             output.write(reinterpret_cast<const char*>(header.data()), static_cast<std::streamsize>(header.size()));
             output.write(reinterpret_cast<const char*>(key_header.data()), static_cast<std::streamsize>(key_header.size()));
             output.write(reinterpret_cast<const char*>(iv.data()), static_cast<std::streamsize>(iv.size()));
+        }
+
+        std::streampos ct_len64_pos = std::streampos(-1);
+        if (stream_v2) {
+            ct_len64_pos = output.tellp();
+            std::array<std::uint8_t, 8> zero_len = ToU64Be(0);
+            output.write(reinterpret_cast<const char*>(zero_len.data()),
+                         static_cast<std::streamsize>(zero_len.size()));
         }
 
         struct CtxDeleter {
@@ -566,13 +684,15 @@ std::uint64_t EncryptStream(std::istream& source,
                      static_cast<std::streamsize>(tag.size()));
         ct_len += static_cast<std::uint64_t>(tag.size());
 
-        if (ct_len > std::numeric_limits<std::uint32_t>::max()) {
+        if (!stream_v2 && ct_len > std::numeric_limits<std::uint32_t>::max()) {
             throw std::runtime_error("fwxAES ciphertext too large");
         }
         output.flush();
         std::streampos end_pos = output.tellp();
         output.seekp(12, std::ios::beg);
-        std::uint32_t ct_len32 = static_cast<std::uint32_t>(ct_len);
+        std::uint32_t ct_len32 = ct_len > std::numeric_limits<std::uint32_t>::max()
+                                     ? std::numeric_limits<std::uint32_t>::max()
+                                     : static_cast<std::uint32_t>(ct_len);
         std::array<std::uint8_t, 4> ct_buf{
             static_cast<std::uint8_t>((ct_len32 >> 24) & 0xFF),
             static_cast<std::uint8_t>((ct_len32 >> 16) & 0xFF),
@@ -581,6 +701,12 @@ std::uint64_t EncryptStream(std::istream& source,
         };
         output.write(reinterpret_cast<const char*>(ct_buf.data()),
                      static_cast<std::streamsize>(ct_buf.size()));
+        if (stream_v2 && ct_len64_pos != std::streampos(-1)) {
+            std::array<std::uint8_t, 8> ct64 = ToU64Be(ct_len);
+            output.seekp(ct_len64_pos, std::ios::beg);
+            output.write(reinterpret_cast<const char*>(ct64.data()),
+                         static_cast<std::streamsize>(ct64.size()));
+        }
         output.seekp(end_pos);
         output.flush();
         return ct_len;
@@ -592,11 +718,16 @@ std::uint64_t EncryptStream(std::istream& source,
 
     std::filesystem::path temp_path = std::filesystem::temp_directory_path()
         / ("basefwx-fwxaes-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".tmp");
+    ScopedPathCleanup temp_cleanup(temp_path);
     std::ofstream temp_out(temp_path, std::ios::binary);
     if (!temp_out) {
         throw std::runtime_error("Failed to open temp output for fwxaes stream");
     }
     std::uint64_t ct_len = encrypt_to_seekable(temp_out);
+    temp_out.flush();
+    if (!temp_out) {
+        throw std::runtime_error("Failed to flush temp output for fwxaes stream");
+    }
     temp_out.close();
 
     std::ifstream temp_in(temp_path, std::ios::binary);
@@ -604,9 +735,10 @@ std::uint64_t EncryptStream(std::istream& source,
         throw std::runtime_error("Failed to open temp output for fwxaes stream");
     }
     dest << temp_in.rdbuf();
+    if (!dest) {
+        throw std::runtime_error("Failed to write fwxaes stream output");
+    }
     temp_in.close();
-    std::error_code ec;
-    std::filesystem::remove(temp_path, ec);
     return ct_len;
 }
 
@@ -624,20 +756,17 @@ std::uint64_t DecryptStream(std::istream& source,
     std::uint8_t kdf = header[5];
     std::uint8_t salt_len = header[6];
     std::uint8_t iv_len = header[7];
-    if (algo != kAlgo || (kdf != kKdfPbkdf2 && kdf != kKdfWrap)) {
+    if ((algo != kAlgo && algo != kAlgoStreamV2) || (kdf != kKdfPbkdf2 && kdf != kKdfWrap)) {
         throw std::runtime_error("fwxAES unsupported algo/kdf");
     }
     std::uint32_t iters = (static_cast<std::uint32_t>(header[8]) << 24)
                           | (static_cast<std::uint32_t>(header[9]) << 16)
                           | (static_cast<std::uint32_t>(header[10]) << 8)
                           | static_cast<std::uint32_t>(header[11]);
-    std::uint32_t ct_len = (static_cast<std::uint32_t>(header[12]) << 24)
-                           | (static_cast<std::uint32_t>(header[13]) << 16)
-                           | (static_cast<std::uint32_t>(header[14]) << 8)
-                           | static_cast<std::uint32_t>(header[15]);
-    if (ct_len < 16) {
-        throw std::runtime_error("fwxAES ciphertext too short");
-    }
+    std::uint32_t ct_len32 = (static_cast<std::uint32_t>(header[12]) << 24)
+                             | (static_cast<std::uint32_t>(header[13]) << 16)
+                             | (static_cast<std::uint32_t>(header[14]) << 8)
+                             | static_cast<std::uint32_t>(header[15]);
 
     Bytes iv;
     Bytes key;
@@ -674,6 +803,16 @@ std::uint64_t DecryptStream(std::istream& source,
         key = basefwx::crypto::Pbkdf2HmacSha256(resolved, salt, iters, 32);
     }
 
+    std::uint64_t ct_len = ct_len32;
+    if (algo == kAlgoStreamV2) {
+        std::array<std::uint8_t, 8> ct_len64_buf{};
+        ReadExact(source, ct_len64_buf.data(), ct_len64_buf.size(), "fwxAES blob truncated");
+        ct_len = GetU64Be(ct_len64_buf.data());
+    }
+    if (ct_len < 16) {
+        throw std::runtime_error("fwxAES ciphertext too short");
+    }
+
     struct CtxDeleter {
         void operator()(EVP_CIPHER_CTX* ctx) const { EVP_CIPHER_CTX_free(ctx); }
     };
@@ -697,7 +836,7 @@ std::uint64_t DecryptStream(std::istream& source,
         throw std::runtime_error("fwxAES decrypt aad failed");
     }
 
-    std::uint64_t cipher_len = static_cast<std::uint64_t>(ct_len - 16);
+    std::uint64_t cipher_len = ct_len - 16;
     std::uint64_t remaining = cipher_len;
     Bytes in_buf(basefwx::constants::kStreamChunkSize);
     Bytes out_buf(basefwx::constants::kStreamChunkSize + 16);
@@ -826,7 +965,35 @@ void EncryptFile(const std::string& path_in,
                  const PackOptions& pack,
                  bool keep_input) {
     std::filesystem::path input_path(path_in);
-    auto pack_result = basefwx::archive::PackInput(input_path, pack.compress, pack.compression);
+    std::filesystem::path output_path(path_out);
+    std::error_code ec;
+
+    // Fast path for large files: stream encryption avoids full in-memory buffering.
+    if (!normalize.enabled
+        && !pack.compress
+        && std::filesystem::is_regular_file(input_path, ec)) {
+        ec.clear();
+        if (std::filesystem::exists(output_path, ec)
+            && std::filesystem::equivalent(input_path, output_path, ec)) {
+            throw std::runtime_error("Input and output paths must differ for stream encryption");
+        }
+        std::ifstream input(path_in, std::ios::binary);
+        if (!input) {
+            throw std::runtime_error("Failed to open input file: " + path_in);
+        }
+        std::ofstream output(path_out, std::ios::binary);
+        if (!output) {
+            throw std::runtime_error("Failed to open output file: " + path_out);
+        }
+        EncryptStream(input, output, password, options);
+        if (!keep_input) {
+            ec.clear();
+            std::filesystem::remove(input_path, ec);
+        }
+        return;
+    }
+
+    auto pack_result = basefwx::archive::PackInput(input_path, pack.compress);
     Bytes plaintext;
     try {
         plaintext = basefwx::ReadFile(pack_result.source.string());
@@ -864,6 +1031,17 @@ void DecryptFile(const std::string& path_in,
                  const std::string& password,
                  bool use_master) {
     Bytes data = basefwx::ReadFile(path_in);
+    if (data.size() >= 16
+        && std::equal(std::begin(kMagic), std::end(kMagic), data.begin())
+        && data[4] == kAlgoStreamV2) {
+        std::string packed(reinterpret_cast<const char*>(data.data()), data.size());
+        std::istringstream input(packed, std::ios::binary);
+        std::ostringstream output(std::ios::binary);
+        DecryptStream(input, output, password, use_master);
+        std::string plain = output.str();
+        WriteBinary(path_out, Bytes(plain.begin(), plain.end()));
+        return;
+    }
     Bytes blob;
     if (data.size() >= 4 && std::equal(std::begin(kMagic), std::end(kMagic), data.begin())) {
         blob = data;
@@ -886,13 +1064,16 @@ void DecryptFile(const std::string& path_in,
         auto temp_base = std::filesystem::temp_directory_path();
         auto temp_dir = temp_base / ("basefwx-pack-dec-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
         std::filesystem::create_directories(temp_dir, ec);
+        if (ec) {
+            throw std::runtime_error("Failed to create temp directory: " + ec.message());
+        }
+        ScopedPathCleanup temp_dir_cleanup(temp_dir, true);
         auto ext = (pack_mode == basefwx::archive::PackMode::Txz)
                        ? std::string(basefwx::constants::kPackTxzExt)
                        : std::string(basefwx::constants::kPackTgzExt);
         auto archive_path = temp_dir / (output_path.stem().string() + ext);
         WriteBinary(archive_path.string(), payload);
         basefwx::archive::UnpackArchive(archive_path, pack_mode, dest_dir);
-        std::filesystem::remove_all(temp_dir, ec);
         return;
     }
     WriteBinary(path_out, plaintext);

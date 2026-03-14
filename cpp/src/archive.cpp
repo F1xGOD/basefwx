@@ -30,6 +30,7 @@ namespace basefwx::archive {
 namespace {
 
 constexpr std::size_t kTarBlockSize = 512;
+constexpr std::size_t kIoBufferSize = 1 << 20;
 
 struct TarHeader {
     char name[100];
@@ -203,7 +204,7 @@ void WriteFileData(std::ofstream& out, const std::filesystem::path& path, std::u
     if (!input) {
         throw std::runtime_error("Failed to open file: " + path.string());
     }
-    std::array<char, 1 << 16> buffer{};
+    std::vector<char> buffer(kIoBufferSize);
     std::uint64_t remaining = size;
     while (remaining > 0) {
         std::size_t chunk = static_cast<std::size_t>(std::min<std::uint64_t>(remaining, buffer.size()));
@@ -346,7 +347,7 @@ std::filesystem::path ExtractTar(const std::filesystem::path& tar_path,
             if (!output) {
                 throw std::runtime_error("Failed to write output: " + out_path.string());
             }
-            std::array<char, 1 << 16> buffer{};
+            std::vector<char> buffer(kIoBufferSize);
             std::uint64_t remaining = size;
             while (remaining > 0) {
                 std::size_t chunk = static_cast<std::size_t>(std::min<std::uint64_t>(remaining, buffer.size()));
@@ -358,7 +359,7 @@ std::filesystem::path ExtractTar(const std::filesystem::path& tar_path,
                 remaining -= chunk;
             }
         } else {
-            std::array<char, 1 << 16> buffer{};
+            std::vector<char> buffer(kIoBufferSize);
             std::uint64_t remaining = size;
             while (remaining > 0) {
                 std::size_t chunk = static_cast<std::size_t>(std::min<std::uint64_t>(remaining, buffer.size()));
@@ -393,7 +394,8 @@ void CompressGzip(const std::filesystem::path& input,
     if (!gz) {
         throw std::runtime_error("Failed to open gzip output: " + output.string());
     }
-    std::array<char, 1 << 16> buffer{};
+    gzbuffer(gz, static_cast<unsigned int>(kIoBufferSize));
+    std::vector<char> buffer(kIoBufferSize);
     while (in) {
         in.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
         std::streamsize got = in.gcount();
@@ -419,7 +421,8 @@ void DecompressGzip(const std::filesystem::path& input,
         gzclose(gz);
         throw std::runtime_error("Failed to open gzip output: " + output.string());
     }
-    std::array<char, 1 << 16> buffer{};
+    gzbuffer(gz, static_cast<unsigned int>(kIoBufferSize));
+    std::vector<char> buffer(kIoBufferSize);
     int read_bytes = 0;
     while ((read_bytes = gzread(gz, buffer.data(), static_cast<unsigned int>(buffer.size()))) > 0) {
         out.write(buffer.data(), read_bytes);

@@ -92,6 +92,12 @@ basefwx::pb512::KdfOptions ResolveWrapKdfOptions(const Options& options,
     return out;
 }
 
+basefwx::pb512::KdfOptions ResolveWrapKdfOptionsForDecode() {
+    basefwx::pb512::KdfOptions out{};
+    out.pbkdf2_iterations = ResolveTestIters(ClampToU32(out.pbkdf2_iterations));
+    return out;
+}
+
 bool IsSeekable(std::ostream& out) {
     auto pos = out.tellp();
     if (pos == std::streampos(-1)) {
@@ -479,7 +485,7 @@ Bytes DecryptRaw(const Bytes& blob, const std::string& password, bool use_master
                  blob.begin() + static_cast<std::ptrdiff_t>(offset + iv_len));
         offset += iv_len;
         auto parts = basefwx::format::UnpackLengthPrefixed(header, 2);
-        basefwx::pb512::KdfOptions kdf_opts;
+        basefwx::pb512::KdfOptions kdf_opts = ResolveWrapKdfOptionsForDecode();
         Bytes mask_key = basefwx::keywrap::RecoverMaskKey(
             parts[0],
             parts[1],
@@ -789,7 +795,7 @@ std::uint64_t DecryptStream(std::istream& source,
             use_master,
             basefwx::constants::kFwxAesMaskInfo,
             std::string_view(reinterpret_cast<const char*>(kAadBytes), sizeof(kAadBytes)),
-            basefwx::pb512::KdfOptions{}
+            ResolveWrapKdfOptionsForDecode()
         );
         key = basefwx::crypto::HkdfSha256(mask_key, basefwx::constants::kFwxAesKeyInfo, 32);
     } else {

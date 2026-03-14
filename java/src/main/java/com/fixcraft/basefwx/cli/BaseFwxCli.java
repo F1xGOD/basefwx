@@ -290,6 +290,21 @@ public final class BaseFwxCli {
         return new String(data, StandardCharsets.UTF_8);
     }
 
+    private static void cleanupPath(File path) {
+        if (path == null || !path.exists()) {
+            return;
+        }
+        if (path.isDirectory()) {
+            File[] children = path.listFiles();
+            if (children != null) {
+                for (File child : children) {
+                    cleanupPath(child);
+                }
+            }
+        }
+        path.delete();
+    }
+
     private static int readEnvInt(String name, int defaultValue, int minValue) {
         String value = System.getenv(name);
         if (value == null || value.isEmpty()) {
@@ -1044,6 +1059,77 @@ public final class BaseFwxCli {
                         pool.shutdown();
                     }
                 }
+                case "bench-an7":
+                case "bench-dean7": {
+                    if (argc < 3) {
+                        usage();
+                        return;
+                    }
+                    File input = new File(args[1]);
+                    String benchPass = args[2];
+                    final String benchPassFinal = benchPass;
+                    final boolean useMasterFlag = useMaster;
+                    final String benchCommand = command;
+                    int warmup = benchWarmup();
+                    int iters = benchIters();
+                    int workers = benchWorkers();
+                    confirmSingleThreadCli(workers);
+
+                    File[] tempDirs = new File[workers];
+                    File[] seedFwx = new File[workers];
+                    File[] seedAn7 = new File[workers];
+                    try {
+                        for (int i = 0; i < workers; i++) {
+                            try {
+                                tempDirs[i] = Files.createTempDirectory("basefwx-bench-an7-" + i).toFile();
+                            } catch (java.io.IOException exc) {
+                                throw new RuntimeException("Failed to create bench temp dir", exc);
+                            }
+                            File workerInput = new File(tempDirs[i], input.getName());
+                            try {
+                                Files.copy(input.toPath(), workerInput.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+                            } catch (java.io.IOException exc) {
+                                throw new RuntimeException("Failed to copy bench input", exc);
+                            }
+                            seedFwx[i] = new File(tempDirs[i], "seed_" + i + ".fwx");
+                            BaseFwx.fwxAesEncryptFile(workerInput, seedFwx[i], benchPassFinal, useMasterFlag);
+                            workerInput.delete();
+
+                            seedAn7[i] = new File(tempDirs[i], "seed_" + i + ".an7");
+                            BaseFwx.an7File(seedFwx[i], benchPassFinal, seedAn7[i], true, false);
+                        }
+
+                        BenchWorker worker = (idx) -> {
+                            File out = new File(
+                                tempDirs[idx],
+                                ("bench-an7".equals(benchCommand) ? "an7_" : "dean7_") + idx + ".out"
+                            );
+                            out.delete();
+                            long size;
+                            if ("bench-an7".equals(benchCommand)) {
+                                File produced = BaseFwx.an7File(seedFwx[idx], benchPassFinal, out, true, false);
+                                size = produced.length();
+                                produced.delete();
+                            } else {
+                                BaseFwx.An7Result result = BaseFwx.dean7File(seedAn7[idx], benchPassFinal, out, true);
+                                size = result.outputPath.length();
+                                result.outputPath.delete();
+                            }
+                            BENCH_SINK ^= (int) size;
+                            return size;
+                        };
+
+                        long ns = workers > 1
+                            ? benchParallelMedian(warmup, iters, workers, worker)
+                            : benchMedian(warmup, iters, () -> worker.run(0));
+                        System.out.println("BENCH_NS=" + ns);
+                        return;
+                    } finally {
+                        for (int i = 0; i < workers; i++) {
+                            cleanupPath(tempDirs[i]);
+                        }
+                    }
+                }
                 case "bench-live": {
                     if (argc < 3) {
                         usage();
@@ -1416,6 +1502,8 @@ public final class BaseFwxCli {
         System.out.println("  bench-hash <method> <text-file>");
         System.out.println("  bench-fwxaes <file> <password> [--no-master]");
         System.out.println("  bench-fwxaes-par <file> <password> [--no-master]");
+        System.out.println("  bench-an7 <file> <password> [--no-master]");
+        System.out.println("  bench-dean7 <file> <password> [--no-master]");
         System.out.println("  bench-live <file> <password> [--no-master]");
         System.out.println("  bench-b512file <file> <password> [--no-master]");
         System.out.println("  bench-pb512file <file> <password> [--no-master]");

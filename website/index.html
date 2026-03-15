@@ -70,8 +70,8 @@
         <div class="download-grid">
           <article class="download-card" data-os="linux">
             <span class="chip">Linux</span>
-            <h3>basefwx-linux</h3>
-            <p class="section-lead">Optimized for Ubuntu runners and portable Linux distributions.</p>
+            <h3>basefwx Linux CLI</h3>
+            <p class="section-lead">Arch-specific Linux release binaries with full crypto support and detached signatures.</p>
             <div class="link-row">
               <a class="btn" data-download="linux-amd64" href="#">Download amd64</a>
               <a class="btn secondary" data-download="linux-arm64" href="#">Download arm64</a>
@@ -86,8 +86,8 @@
           </article>
           <article class="download-card" data-os="windows">
             <span class="chip">Windows</span>
-            <h3>basefwx-windows.exe</h3>
-            <p class="section-lead">Native Windows CLI build with vcpkg-managed dependencies.</p>
+            <h3>basefwx Windows CLI</h3>
+            <p class="section-lead">Arch-specific Windows release binaries with the same release signing flow.</p>
             <div class="link-row">
               <a class="btn" data-download="windows-amd64" href="#">Download amd64</a>
               <a class="btn secondary" data-download="windows-x86" href="#">Download x86</a>
@@ -102,8 +102,8 @@
           </article>
           <article class="download-card" data-os="mac">
             <span class="chip">macOS</span>
-            <h3>basefwx-mac</h3>
-            <p class="section-lead">macOS CLI build with OpenSSL 3 support.</p>
+            <h3>basefwx macOS CLI</h3>
+            <p class="section-lead">Separate Intel and Apple Silicon binaries with OpenSSL 3, Argon2, and PQ support.</p>
             <div class="link-row">
               <a class="btn" data-download="mac-amd64" href="#">Download amd64</a>
               <a class="btn secondary" data-download="mac-arm64" href="#">Download arm64</a>
@@ -140,7 +140,7 @@
             <p>Detached signatures are published for every binary.</p>
             <div class="hash-block" style="margin-top:12px;">
               <div class="hash-title">Verify</div>
-              <div class="hash-value">gpg --verify basefwx-linux.sig basefwx-linux</div>
+              <div class="hash-value">gpg --verify basefwx-linux-amd64.sig basefwx-linux-amd64</div>
             </div>
           </div>
           <div class="card">
@@ -148,7 +148,7 @@
             <p>Hashes are published in the release assets and mirrored here.</p>
             <div class="hash-block" style="margin-top:12px;">
               <div class="hash-title">Check</div>
-              <div class="hash-value">sha256sum -c basefwx-linux.sha256</div>
+              <div class="hash-value">sha256sum -c basefwx-linux-amd64.sha256</div>
             </div>
           </div>
           <div class="card">

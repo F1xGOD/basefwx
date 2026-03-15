@@ -37,12 +37,6 @@ const assetMap = {
     md5: "basefwx-linux-arm64.md5",
     sig: "basefwx-linux-arm64.sig"
   },
-  linux: {
-    bin: "basefwx-linux",
-    sha256: "basefwx-linux.sha256",
-    md5: "basefwx-linux.md5",
-    sig: "basefwx-linux.sig"
-  },
   "windows-amd64": {
     bin: "basefwx-windows-amd64.exe",
     sha256: "basefwx-windows-amd64.exe.sha256",
@@ -55,12 +49,6 @@ const assetMap = {
     md5: "basefwx-windows-x86.exe.md5",
     sig: "basefwx-windows-x86.exe.sig"
   },
-  windows: {
-    bin: "basefwx-windows.exe",
-    sha256: "basefwx-windows.exe.sha256",
-    md5: "basefwx-windows.exe.md5",
-    sig: "basefwx-windows.exe.sig"
-  },
   "mac-amd64": {
     bin: "basefwx-mac-amd64",
     sha256: "basefwx-mac-amd64.sha256",
@@ -72,12 +60,6 @@ const assetMap = {
     sha256: "basefwx-mac-arm64.sha256",
     md5: "basefwx-mac-arm64.md5",
     sig: "basefwx-mac-arm64.sig"
-  },
-  mac: {
-    bin: "basefwx-mac",
-    sha256: "basefwx-mac.sha256",
-    md5: "basefwx-mac.md5",
-    sig: "basefwx-mac.sig"
   },
   java: {
     bin: "basefwx-java.jar",

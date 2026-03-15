@@ -1,4 +1,5 @@
 #include "basefwx/basefwx.hpp"
+#include "basefwx_build_info.hpp"
 #include "basefwx/cli_colors.hpp"
 #include "basefwx/constants.hpp"
 #include "basefwx/env.hpp"
@@ -30,12 +31,16 @@
 #include <string>
 #include <string_view>
 #include <thread>
+#include <tuple>
 #include <unordered_set>
 #include <vector>
 
 #ifdef _WIN32
 #include <fcntl.h>
 #include <io.h>
+#include <windows.h>
+#elif defined(__APPLE__)
+#include <mach-o/dyld.h>
 #else
 #include <unistd.h>
 #endif
@@ -55,6 +60,30 @@ bool g_no_log = false;
 
 #ifndef BASEFWX_CLI_BUILD_TYPE
 #define BASEFWX_CLI_BUILD_TYPE "unknown"
+#endif
+
+#ifndef BASEFWX_CLI_GITHUB_BUILD
+#define BASEFWX_CLI_GITHUB_BUILD "no"
+#endif
+
+#ifndef BASEFWX_CLI_TARGET_ARCH
+#define BASEFWX_CLI_TARGET_ARCH "unknown"
+#endif
+
+#ifndef BASEFWX_CLI_LINKAGE
+#define BASEFWX_CLI_LINKAGE "unknown"
+#endif
+
+#ifndef BASEFWX_CLI_GPG_FINGERPRINT
+#define BASEFWX_CLI_GPG_FINGERPRINT ""
+#endif
+
+#ifndef BASEFWX_CLI_GPG_PUBLIC_KEY_AVAILABLE
+#define BASEFWX_CLI_GPG_PUBLIC_KEY_AVAILABLE 0
+#endif
+
+#ifndef BASEFWX_CLI_GPG_PUBLIC_KEY
+#define BASEFWX_CLI_GPG_PUBLIC_KEY ""
 #endif
 
 #ifndef BASEFWX_HAS_ARGON2
@@ -1169,16 +1198,215 @@ const char* OnOff(bool value) {
     return value ? "ON" : "OFF";
 }
 
+std::string HumanizeUtcTimestamp(std::string value) {
+    if (value.size() < 20 || value[4] != '-' || value[7] != '-' || value[10] != 'T') {
+        return value;
+    }
+    value[10] = ' ';
+    if (!value.empty() && value.back() == 'Z') {
+        value.pop_back();
+        value += " UTC";
+    }
+    return value;
+}
+
+std::string RuntimeArchString() {
+#if defined(__x86_64__) || defined(_M_X64)
+    return "amd64";
+#elif defined(__aarch64__) || defined(_M_ARM64)
+    return "arm64";
+#elif defined(__i386__) || defined(_M_IX86)
+    return "x86";
+#elif defined(__arm__) || defined(_M_ARM)
+    return "arm";
+#else
+    return "unknown";
+#endif
+}
+
+std::string EffectiveArchString() {
+    std::string arch = BASEFWX_CLI_TARGET_ARCH;
+    if (arch.empty() || arch == "unknown") {
+        return RuntimeArchString();
+    }
+    return arch;
+}
+
+std::string QuoteForShell(const std::string& value) {
+#if defined(_WIN32)
+    std::string out = "\"";
+    for (char ch : value) {
+        if (ch == '"') {
+            out += "\\\"";
+        } else {
+            out.push_back(ch);
+        }
+    }
+    out.push_back('"');
+    return out;
+#else
+    std::string out = "'";
+    for (char ch : value) {
+        if (ch == '\'') {
+            out += "'\\''";
+        } else {
+            out.push_back(ch);
+        }
+    }
+    out.push_back('\'');
+    return out;
+#endif
+}
+
+std::string QuietRedirect() {
+#if defined(_WIN32)
+    return " >NUL 2>&1";
+#else
+    return " >/dev/null 2>&1";
+#endif
+}
+
+std::filesystem::path CurrentExecutablePath() {
+#if defined(_WIN32)
+    std::string buffer(MAX_PATH, '\0');
+    DWORD len = GetModuleFileNameA(nullptr, buffer.data(), static_cast<DWORD>(buffer.size()));
+    if (len == 0) {
+        return {};
+    }
+    buffer.resize(static_cast<std::size_t>(len));
+    return std::filesystem::path(buffer);
+#elif defined(__APPLE__)
+    uint32_t size = 0;
+    _NSGetExecutablePath(nullptr, &size);
+    std::string buffer(size, '\0');
+    if (_NSGetExecutablePath(buffer.data(), &size) != 0) {
+        return {};
+    }
+    return std::filesystem::weakly_canonical(std::filesystem::path(buffer.c_str()));
+#else
+    std::error_code ec;
+    auto path = std::filesystem::read_symlink("/proc/self/exe", ec);
+    if (ec) {
+        return {};
+    }
+    return path;
+#endif
+}
+
+std::filesystem::path MakeTempDirectory() {
+    std::error_code ec;
+    std::filesystem::path base = std::filesystem::temp_directory_path(ec);
+    if (ec) {
+        throw std::runtime_error("Failed to resolve temp directory");
+    }
+    const auto seed = static_cast<unsigned long long>(
+        std::chrono::high_resolution_clock::now().time_since_epoch().count());
+    for (unsigned int i = 0; i < 128; ++i) {
+        auto candidate = base / ("basefwx-gpg-" + std::to_string(seed + i));
+        if (std::filesystem::create_directory(candidate, ec)) {
+            return candidate;
+        }
+        ec.clear();
+    }
+    throw std::runtime_error("Failed to create temp directory");
+}
+
+struct SignatureCheckResult {
+    std::string summary;
+    std::string detail;
+};
+
+SignatureCheckResult VerifyEmbeddedDetachedSignature() {
+    const std::string fingerprint = BASEFWX_CLI_GPG_FINGERPRINT;
+    const std::string public_key = BASEFWX_CLI_GPG_PUBLIC_KEY;
+    if (BASEFWX_CLI_GPG_PUBLIC_KEY_AVAILABLE == 0 || public_key.empty()) {
+        return {"metadata unavailable", "no embedded release public key"};
+    }
+
+    const auto exe_path = CurrentExecutablePath();
+    if (exe_path.empty()) {
+        return {"not checked", "failed to resolve executable path"};
+    }
+    std::filesystem::path sig_path = exe_path;
+    sig_path += ".sig";
+    if (!std::filesystem::exists(sig_path)) {
+        return {"not checked", "detached signature missing next to binary"};
+    }
+
+    std::filesystem::path temp_dir;
+    try {
+        temp_dir = MakeTempDirectory();
+        const auto key_path = temp_dir / "basefwx-release-public.asc";
+        {
+            std::ofstream out(key_path, std::ios::binary);
+            if (!out) {
+                return {"not checked", "failed to write embedded public key"};
+            }
+            out.write(public_key.data(), static_cast<std::streamsize>(public_key.size()));
+            if (!out) {
+                return {"not checked", "failed to persist embedded public key"};
+            }
+        }
+
+        const std::string homedir = QuoteForShell(temp_dir.string());
+        const std::string import_cmd =
+            "gpg --homedir " + homedir + " --batch --import "
+            + QuoteForShell(key_path.string()) + QuietRedirect();
+        if (std::system(import_cmd.c_str()) != 0) {
+            std::error_code cleanup_ec;
+            std::filesystem::remove_all(temp_dir, cleanup_ec);
+            return {"not checked", "gpg unavailable or embedded key import failed"};
+        }
+
+        const std::string verify_cmd =
+            "gpg --homedir " + homedir + " --batch --verify "
+            + QuoteForShell(sig_path.string()) + " "
+            + QuoteForShell(exe_path.string()) + QuietRedirect();
+        const int rc = std::system(verify_cmd.c_str());
+        std::error_code cleanup_ec;
+        std::filesystem::remove_all(temp_dir, cleanup_ec);
+        if (rc != 0) {
+            return {"verification failed", fingerprint.empty()
+                ? "adjacent detached signature did not validate"
+                : "adjacent detached signature did not validate for " + fingerprint};
+        }
+        return {"verified", fingerprint.empty()
+            ? "adjacent detached signature validated"
+            : "adjacent detached signature validated for " + fingerprint};
+    } catch (const std::exception& exc) {
+        if (!temp_dir.empty()) {
+            std::error_code cleanup_ec;
+            std::filesystem::remove_all(temp_dir, cleanup_ec);
+        }
+        return {"not checked", exc.what()};
+    }
+}
+
 void PrintVersionInfo() {
     bool plain = CliPlain();
     const char* cyan = "\033[36m";
     std::string banner = "basefwx_cpp " + std::string(basefwx::constants::kEngineVersion);
+    const auto signature = VerifyEmbeddedDetachedSignature();
     std::cout << StyleText(banner, cyan, plain) << "\n";
     std::cout << "git: " << BASEFWX_CLI_GIT_COMMIT << "\n";
-    std::cout << "build_utc: " << BASEFWX_CLI_BUILD_UTC << "\n";
+    std::cout << "build_time: " << HumanizeUtcTimestamp(BASEFWX_CLI_BUILD_UTC)
+              << " (" << BASEFWX_CLI_BUILD_UTC << ")\n";
+    std::cout << "build_origin: "
+              << (std::string(BASEFWX_CLI_GITHUB_BUILD) == "yes" ? "GitHub Actions" : "local/manual")
+              << "\n";
     std::cout << "build_type: " << BASEFWX_CLI_BUILD_TYPE << "\n";
+    std::cout << "arch: " << EffectiveArchString() << "\n";
+    std::cout << "linkage: " << BASEFWX_CLI_LINKAGE << "\n";
     std::cout << "compiler: " << CompilerVersionString() << "\n";
     std::cout << "cxx_std: " << CxxStdString() << "\n";
+    std::cout << "gpg_fingerprint: "
+              << (std::string(BASEFWX_CLI_GPG_FINGERPRINT).empty() ? "none" : BASEFWX_CLI_GPG_FINGERPRINT)
+              << "\n";
+    std::cout << "gpg_signature: " << signature.summary;
+    if (!signature.detail.empty()) {
+        std::cout << " (" << signature.detail << ")";
+    }
+    std::cout << "\n";
     std::cout << "features: "
               << "argon2=" << OnOff(BASEFWX_HAS_ARGON2 != 0)
               << " oqs=" << OnOff(BASEFWX_HAS_OQS != 0)

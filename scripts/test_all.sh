@@ -715,6 +715,7 @@ lang_cooldown() {
 
 ensure_venv() {
     local pip_cmd
+    local py_install_target="${PY_ROOT}[argon2]"
     if [[ "$USE_VENV" != "1" ]]; then
         if [[ -z "$PYTHON_BIN" ]]; then
             PYTHON_BIN="$(command -v python3 || command -v python || true)"
@@ -726,7 +727,7 @@ ensure_venv() {
         fi
         pip_cmd=("$PYTHON_BIN" "-m" "pip")
         time_cmd_no_fail "venv_pip" "${pip_cmd[@]}" install -U pip setuptools wheel
-        time_cmd_no_fail "venv_install" "${pip_cmd[@]}" install -e "$PY_ROOT"
+        time_cmd_no_fail "venv_install" "${pip_cmd[@]}" install -e "$py_install_target"
         return 0
     fi
     if [[ ! -x "$VENV_PY" ]]; then
@@ -745,7 +746,7 @@ ensure_venv() {
         pip_cmd=("$PYTHON_BIN" "-m" "pip")
     fi
     time_cmd_no_fail "venv_pip" "${pip_cmd[@]}" install -U pip setuptools wheel
-    time_cmd_no_fail "venv_install" "${pip_cmd[@]}" install -e "$PY_ROOT"
+    time_cmd_no_fail "venv_install" "${pip_cmd[@]}" install -e "$py_install_target"
     return 0
 }
 

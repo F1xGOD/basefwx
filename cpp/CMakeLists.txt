@@ -24,6 +24,8 @@ option(BASEFWX_USE_VENDOR_DEPS "Prefer vendored liboqs/argon2 when available" ON
 option(BASEFWX_FORCE_CROSS "Treat build as cross for dependency path hygiene" OFF)
 option(BASEFWX_WIN_IPO "Enable IPO/LTCG on Windows Release builds" OFF)
 set(BASEFWX_VENDOR_DIR "" CACHE PATH "Path to vendored dependencies root")
+set(BASEFWX_CLI_GPG_PUBLIC_KEY_FILE "" CACHE FILEPATH "ASCII-armored GPG public key to embed into the CLI for detached signature verification")
+set(BASEFWX_CLI_GPG_FINGERPRINT "" CACHE STRING "Expected GPG signing key fingerprint to display in CLI version output")
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -90,6 +92,55 @@ endif()
 if(CMAKE_CROSSCOMPILING AND VCPKG_INSTALLED_DIR AND VCPKG_TARGET_TRIPLET)
     list(APPEND CMAKE_FIND_ROOT_PATH "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}")
 endif()
+
+set(BASEFWX_GITHUB_BUILD "no")
+if(DEFINED ENV{GITHUB_ACTIONS} AND NOT "$ENV{GITHUB_ACTIONS}" STREQUAL "")
+    set(BASEFWX_GITHUB_BUILD "yes")
+endif()
+
+set(BASEFWX_TARGET_ARCH "${CMAKE_SYSTEM_PROCESSOR}")
+if(NOT BASEFWX_TARGET_ARCH)
+    set(BASEFWX_TARGET_ARCH "${CMAKE_HOST_SYSTEM_PROCESSOR}")
+endif()
+if(BASEFWX_TARGET_ARCH MATCHES "^(x86_64|amd64)$")
+    set(BASEFWX_TARGET_ARCH "amd64")
+elseif(BASEFWX_TARGET_ARCH MATCHES "^(aarch64|arm64)$")
+    set(BASEFWX_TARGET_ARCH "arm64")
+elseif(BASEFWX_TARGET_ARCH MATCHES "^(i[3-6]86|x86)$")
+    set(BASEFWX_TARGET_ARCH "x86")
+endif()
+
+set(BASEFWX_CLI_LINKAGE "dynamic")
+if((WIN32 AND DEFINED VCPKG_TARGET_TRIPLET AND VCPKG_TARGET_TRIPLET MATCHES "static")
+   OR CMAKE_EXE_LINKER_FLAGS MATCHES "(^| )-static($| )"
+   OR CMAKE_EXE_LINKER_FLAGS_RELEASE MATCHES "(^| )-static($| )")
+    set(BASEFWX_CLI_LINKAGE "static")
+elseif(OPENSSL_USE_STATIC_LIBS)
+    set(BASEFWX_CLI_LINKAGE "mixed")
+endif()
+
+set(BASEFWX_GPG_PUBLIC_KEY "")
+set(BASEFWX_GPG_PUBLIC_KEY_AVAILABLE 0)
+if(BASEFWX_CLI_GPG_PUBLIC_KEY_FILE AND EXISTS "${BASEFWX_CLI_GPG_PUBLIC_KEY_FILE}")
+    file(READ "${BASEFWX_CLI_GPG_PUBLIC_KEY_FILE}" BASEFWX_GPG_PUBLIC_KEY)
+    string(REPLACE "\r\n" "\n" BASEFWX_GPG_PUBLIC_KEY "${BASEFWX_GPG_PUBLIC_KEY}")
+    set(BASEFWX_GPG_PUBLIC_KEY_AVAILABLE 1)
+endif()
+
+set(_basefwx_build_info_content [=[
+#pragma once
+#define BASEFWX_CLI_GITHUB_BUILD "@BASEFWX_GITHUB_BUILD@"
+#define BASEFWX_CLI_TARGET_ARCH "@BASEFWX_TARGET_ARCH@"
+#define BASEFWX_CLI_LINKAGE "@BASEFWX_CLI_LINKAGE@"
+#define BASEFWX_CLI_GPG_FINGERPRINT "@BASEFWX_CLI_GPG_FINGERPRINT@"
+#define BASEFWX_CLI_GPG_PUBLIC_KEY_AVAILABLE @BASEFWX_GPG_PUBLIC_KEY_AVAILABLE@
+#define BASEFWX_CLI_GPG_PUBLIC_KEY R"BASEFWX_GPG(
+@BASEFWX_GPG_PUBLIC_KEY@
+)BASEFWX_GPG"
+]=])
+string(CONFIGURE "${_basefwx_build_info_content}" _basefwx_build_info_content @ONLY)
+file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/generated")
+file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/generated/basefwx_build_info.hpp" "${_basefwx_build_info_content}")
 
 # Harden static OpenSSL selection: some environments still resolve OpenSSL::Crypto
 # to libcrypto.so even with OPENSSL_USE_STATIC_LIBS=TRUE.
@@ -588,6 +639,7 @@ if(BASEFWX_BUILD_CLI)
         src/main.cpp
     )
     target_link_libraries(basefwx_cpp PRIVATE basefwxcpp)
+    target_include_directories(basefwx_cpp PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated")
     target_compile_definitions(basefwx_cpp PRIVATE
         BASEFWX_CLI_GIT_COMMIT="${BASEFWX_GIT_COMMIT}"
         BASEFWX_CLI_BUILD_UTC="${BASEFWX_BUILD_UTC}"

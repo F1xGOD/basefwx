@@ -199,6 +199,7 @@ jobs:
           fi
           apt-get install -y \
             build-essential \
+            gnupg \
             libssl-dev \
             zlib1g-dev \
             liblzma-dev \
@@ -251,6 +252,25 @@ jobs:
         run: |
           test -f /usr/local/include/oqs/oqs.h
           test -f /usr/local/lib/liboqs.a
+
+      - name: Prepare embedded signing metadata
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          keyfile="$(mktemp)"
+          export GNUPGHOME="$(mktemp -d)"
+          printf '%s' "$GPG_PRIVATE_KEY" > "$keyfile"
+          gpg --batch --import "$keyfile"
+          gpg --batch --armor --export > "${GITHUB_WORKSPACE}/cpp/embedded-gpg-public.asc"
+          fingerprint="$(gpg --batch --list-keys --with-colons | awk -F: '/^fpr:/ {print $10; exit}')"
+          rm -f "$keyfile"
+          rm -rf "$GNUPGHOME"
+          if [ -z "$fingerprint" ]; then
+            echo "Failed to derive GPG fingerprint" >&2
+            exit 1
+          fi
+          echo "BASEFWX_GPG_FINGERPRINT=${fingerprint}" >> "${GITHUB_ENV}"
 
       - name: Configure
         run: |
@@ -308,6 +328,8 @@ jobs:
             -DBASEFWX_REQUIRE_OQS=ON \
             -DBASEFWX_REQUIRE_LZMA=ON \
             -DBASEFWX_OQS_STATIC=ON \
+            -DBASEFWX_CLI_GPG_PUBLIC_KEY_FILE="${GITHUB_WORKSPACE}/cpp/embedded-gpg-public.asc" \
+            -DBASEFWX_CLI_GPG_FINGERPRINT="${BASEFWX_GPG_FINGERPRINT}" \
             -DOPENSSL_USE_STATIC_LIBS=TRUE \
             -DOPENSSL_CRYPTO_LIBRARY="${openssl_crypto_lib}" \
             -DOPENSSL_SSL_LIBRARY="${openssl_ssl_lib}" \
@@ -423,14 +445,14 @@ jobs:
           - arch: amd64
             triplet: x64-windows-static
             cmake_arch: x64
-            require_oqs: "OFF"
-            oqs_static: "OFF"
+            require_oqs: "ON"
+            oqs_static: "ON"
             output: basefwx-windows-amd64.exe
           - arch: x86
             triplet: x86-windows-static
             cmake_arch: Win32
-            require_oqs: "OFF"
-            oqs_static: "OFF"
+            require_oqs: "ON"
+            oqs_static: "ON"
             output: basefwx-windows-x86.exe
     permissions:
       contents: read
@@ -451,6 +473,33 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force "${{ github.workspace }}\\vcpkg_binary_cache" | Out-Null
+
+      - name: Ensure GPG is available
+        shell: pwsh
+        run: |
+          if (-not (Get-Command gpg.exe -ErrorAction SilentlyContinue)) {
+            choco install gnupg -y
+          }
+
+      - name: Prepare embedded signing metadata
+        shell: bash
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          keyfile="$(mktemp)"
+          export GNUPGHOME="$(mktemp -d)"
+          printf '%s' "$GPG_PRIVATE_KEY" > "$keyfile"
+          gpg --batch --import "$keyfile"
+          gpg --batch --armor --export > "${GITHUB_WORKSPACE}/cpp/embedded-gpg-public.asc"
+          fingerprint="$(gpg --batch --list-keys --with-colons | awk -F: '/^fpr:/ {print $10; exit}')"
+          rm -f "$keyfile"
+          rm -rf "$GNUPGHOME"
+          if [ -z "$fingerprint" ]; then
+            echo "Failed to derive GPG fingerprint" >&2
+            exit 1
+          fi
+          echo "BASEFWX_GPG_FINGERPRINT=${fingerprint}" >> "$GITHUB_ENV"
 
       - name: Setup vcpkg
         uses: lukka/run-vcpkg@v11
@@ -477,7 +526,9 @@ jobs:
             "-DBASEFWX_REQUIRE_ARGON2=ON",
             "-DBASEFWX_REQUIRE_OQS=${{ matrix.require_oqs }}",
             "-DBASEFWX_OQS_STATIC=${{ matrix.oqs_static }}",
-            "-DBASEFWX_WIN_IPO=OFF"
+            "-DBASEFWX_WIN_IPO=OFF",
+            "-DBASEFWX_CLI_GPG_PUBLIC_KEY_FILE=${{ github.workspace }}\\cpp\\embedded-gpg-public.asc",
+            "-DBASEFWX_CLI_GPG_FINGERPRINT=${{ env.BASEFWX_GPG_FINGERPRINT }}"
           )
           cmake @args
 
@@ -546,7 +597,26 @@ jobs:
             exit 1
           fi
           brew update
-          brew install openssl@3 argon2 liboqs
+          brew install openssl@3 argon2 liboqs gnupg
+
+      - name: Prepare embedded signing metadata
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          keyfile="$(mktemp)"
+          export GNUPGHOME="$(mktemp -d)"
+          printf '%s' "$GPG_PRIVATE_KEY" > "$keyfile"
+          gpg --batch --import "$keyfile"
+          gpg --batch --armor --export > "${GITHUB_WORKSPACE}/cpp/embedded-gpg-public.asc"
+          fingerprint="$(gpg --batch --list-keys --with-colons | awk -F: '/^fpr:/ {print $10; exit}')"
+          rm -f "$keyfile"
+          rm -rf "$GNUPGHOME"
+          if [ -z "$fingerprint" ]; then
+            echo "Failed to derive GPG fingerprint" >&2
+            exit 1
+          fi
+          echo "BASEFWX_GPG_FINGERPRINT=${fingerprint}" >> "${GITHUB_ENV}"
 
       - name: Configure
         run: |
@@ -589,6 +659,8 @@ jobs:
             -DBASEFWX_REQUIRE_ARGON2=ON \
             -DBASEFWX_REQUIRE_OQS=ON \
             -DBASEFWX_OQS_STATIC=ON \
+            -DBASEFWX_CLI_GPG_PUBLIC_KEY_FILE="${GITHUB_WORKSPACE}/cpp/embedded-gpg-public.asc" \
+            -DBASEFWX_CLI_GPG_FINGERPRINT="${BASEFWX_GPG_FINGERPRINT}" \
             -DBASEFWX_NATIVE_OPT=OFF \
             -DCMAKE_CXX_FLAGS="-Wno-deprecated-declarations" \
             -DOPENSSL_USE_STATIC_LIBS=TRUE \
@@ -753,11 +825,6 @@ jobs:
             dist_out/basefwx-linux-arm64 \
             dist_out/basefwx-mac-amd64 \
             dist_out/basefwx-mac-arm64
-          # Backward-compatible aliases for existing tooling/site links.
-          cp dist_out/basefwx-linux-amd64 dist_out/basefwx-linux
-          cp dist_out/basefwx-windows-amd64.exe dist_out/basefwx-windows.exe
-          cp dist_out/basefwx-mac-arm64 dist_out/basefwx-mac
-          chmod +x dist_out/basefwx-linux dist_out/basefwx-mac
 
       - name: Generate hashes
         run: |
@@ -770,9 +837,6 @@ jobs:
             "basefwx-mac-amd64"
             "basefwx-mac-arm64"
             "basefwx-java.jar"
-            "basefwx-linux"
-            "basefwx-windows.exe"
-            "basefwx-mac"
           )
           for file in "${files[@]}"; do
             sha256sum "$file" > "$file.sha256"
@@ -800,9 +864,6 @@ jobs:
             "basefwx-mac-amd64"
             "basefwx-mac-arm64"
             "basefwx-java.jar"
-            "basefwx-linux"
-            "basefwx-windows.exe"
-            "basefwx-mac"
           )
           for file in "${files[@]}"; do
             gpg --batch --yes --pinentry-mode loopback --passphrase "$GPG_PASSPHRASE" \
@@ -819,9 +880,6 @@ jobs:
             "basefwx-mac-amd64"
             "basefwx-mac-arm64"
             "basefwx-java.jar"
-            "basefwx-linux"
-            "basefwx-windows.exe"
-            "basefwx-mac"
           )
           for file in "${files[@]}"; do
             gpg --batch --verify "dist_out/${file}.sig" "dist_out/${file}"
@@ -1157,12 +1215,6 @@ jobs:
             "basefwx-mac-arm64.md5"
             "basefwx-java.jar.sha256"
             "basefwx-java.jar.md5"
-            "basefwx-linux.sha256"
-            "basefwx-linux.md5"
-            "basefwx-windows.exe.sha256"
-            "basefwx-windows.exe.md5"
-            "basefwx-mac.sha256"
-            "basefwx-mac.md5"
           )
           for hash_file in "${hash_files[@]}"; do
             cp "dist_out/${hash_file}" "website/results/${hash_file}"

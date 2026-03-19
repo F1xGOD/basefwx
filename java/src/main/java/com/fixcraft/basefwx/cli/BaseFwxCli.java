@@ -1,6 +1,7 @@
 package com.fixcraft.basefwx.cli;
 
 import com.fixcraft.basefwx.BaseFwx;
+import com.fixcraft.basefwx.Constants;
 import com.fixcraft.basefwx.MediaCipher;
 import com.fixcraft.basefwx.RuntimeLog;
 import com.fixcraft.basefwx.VersionInfo;

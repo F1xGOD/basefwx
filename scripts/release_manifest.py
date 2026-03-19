@@ -11,8 +11,8 @@ from pathlib import Path
 CANONICAL_ASSETS = {
     "basefwx-linux-amd64": {"os": "linux", "arch": "amd64", "kind": "native", "linkage": "static"},
     "basefwx-linux-arm64": {"os": "linux", "arch": "arm64", "kind": "native", "linkage": "static"},
-    "basefwx-windows-amd64.exe": {"os": "windows", "arch": "amd64", "kind": "native", "linkage": "static"},
-    "basefwx-windows-x86.exe": {"os": "windows", "arch": "x86", "kind": "native", "linkage": "static"},
+    "basefwx-windows-amd64.zip": {"os": "windows", "arch": "amd64", "kind": "native", "linkage": "dynamic-bundle"},
+    "basefwx-windows-x86.zip": {"os": "windows", "arch": "x86", "kind": "native", "linkage": "dynamic-bundle"},
     "basefwx-mac-amd64": {"os": "macos", "arch": "amd64", "kind": "native", "linkage": "static"},
     "basefwx-mac-arm64": {"os": "macos", "arch": "arm64", "kind": "native", "linkage": "static"},
     "basefwx-java.jar": {"os": "cross-platform", "arch": "jvm", "kind": "java", "linkage": "jar"},

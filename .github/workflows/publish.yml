@@ -61,6 +61,9 @@ jobs:
           BASEFWX_BENCH_RESULTS_DIR: results
           BASEFWX_RELEASE_TAG: ${{ github.ref_name }}
           BASEFWX_ENABLE_JMG_VIDEO: "0"
+          BASEFWX_TEST_REQUIRE_ARGON2: "ON"
+          BASEFWX_TEST_REQUIRE_OQS: "ON"
+          BASEFWX_TEST_REQUIRE_LZMA: "ON"
         run: |
           chmod +x scripts/test_all.sh
           # Run full test suite including cross-language compatibility

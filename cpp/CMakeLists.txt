@@ -133,6 +133,10 @@ if(BASEFWX_CLI_GPG_PUBLIC_KEY_FILE AND EXISTS "${BASEFWX_CLI_GPG_PUBLIC_KEY_FILE
     string(REPLACE "\r\n" "\n" BASEFWX_GPG_PUBLIC_KEY "${BASEFWX_GPG_PUBLIC_KEY}")
     set(BASEFWX_GPG_PUBLIC_KEY_AVAILABLE 1)
 endif()
+set(BASEFWX_GPG_PUBLIC_KEY_ESCAPED "${BASEFWX_GPG_PUBLIC_KEY}")
+string(REPLACE "\\" "\\\\" BASEFWX_GPG_PUBLIC_KEY_ESCAPED "${BASEFWX_GPG_PUBLIC_KEY_ESCAPED}")
+string(REPLACE "\"" "\\\"" BASEFWX_GPG_PUBLIC_KEY_ESCAPED "${BASEFWX_GPG_PUBLIC_KEY_ESCAPED}")
+string(REPLACE "\n" "\\n\"\n\"" BASEFWX_GPG_PUBLIC_KEY_ESCAPED "${BASEFWX_GPG_PUBLIC_KEY_ESCAPED}")
 
 set(_basefwx_build_info_content [=[
 #pragma once
@@ -141,9 +145,11 @@ set(_basefwx_build_info_content [=[
 #define BASEFWX_CLI_LINKAGE "@BASEFWX_CLI_LINKAGE@"
 #define BASEFWX_CLI_GPG_FINGERPRINT "@BASEFWX_CLI_GPG_FINGERPRINT@"
 #define BASEFWX_CLI_GPG_PUBLIC_KEY_AVAILABLE @BASEFWX_GPG_PUBLIC_KEY_AVAILABLE@
-#define BASEFWX_CLI_GPG_PUBLIC_KEY R"BASEFWX_GPG(
-@BASEFWX_GPG_PUBLIC_KEY@
-)BASEFWX_GPG"
+namespace basefwx_build_info {
+inline constexpr const char kCliGpgPublicKey[] =
+"@BASEFWX_GPG_PUBLIC_KEY_ESCAPED@";
+}  // namespace basefwx_build_info
+#define BASEFWX_CLI_GPG_PUBLIC_KEY basefwx_build_info::kCliGpgPublicKey
 ]=])
 string(CONFIGURE "${_basefwx_build_info_content}" _basefwx_build_info_content @ONLY)
 file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/generated")

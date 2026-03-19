@@ -7,9 +7,14 @@ def read_readme() -> str:
     return readme_path.read_text(encoding="utf-8") if readme_path.exists() else ""
 
 
+def read_version() -> str:
+    version_path = Path(__file__).resolve().parents[1] / "VERSION"
+    return version_path.read_text(encoding="utf-8").strip()
+
+
 setup(
     name="basefwx",
-    version="3.6.2",
+    version=read_version(),
     packages=find_packages(),
     install_requires=[
         "cryptography>=41.0.0",

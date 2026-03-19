@@ -23,6 +23,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Validate version metadata
+        run: python3 scripts/check_version_sync.py
+
       - name: Cache liboqs
         id: cache-liboqs
         uses: actions/cache@v4
@@ -525,6 +528,7 @@ jobs:
             "-DCMAKE_SYSTEM_VERSION=10.0",
             "-DBASEFWX_REQUIRE_ARGON2=ON",
             "-DBASEFWX_REQUIRE_OQS=${{ matrix.require_oqs }}",
+            "-DBASEFWX_REQUIRE_LZMA=ON",
             "-DBASEFWX_OQS_STATIC=${{ matrix.oqs_static }}",
             "-DBASEFWX_WIN_IPO=OFF",
             "-DBASEFWX_CLI_GPG_PUBLIC_KEY_FILE=${{ github.workspace }}\\cpp\\embedded-gpg-public.asc",
@@ -843,6 +847,11 @@ jobs:
             md5sum "$file" > "$file.md5"
           done
 
+      - name: Generate release manifest
+        run: |
+          python3 scripts/release_manifest.py dist_out "${{ github.ref_name }}"
+          cat dist_out/release-manifest.json
+
       - name: Import GPG key
         env:
           GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
@@ -895,6 +904,7 @@ jobs:
         with:
           files: |
             dist_out/basefwx-*
+            dist_out/release-manifest.json
 
       - name: VirusTotal scan
         env:

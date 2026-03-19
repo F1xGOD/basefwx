@@ -1,9 +1,16 @@
+import java.util.Date
+import java.util.TimeZone
+
 plugins {
     id 'java'
 }
 
 group = 'com.fixcraft'
-version = '3.6.2'
+def repoVersion = file('../VERSION').text.trim()
+def buildUtc = System.getenv('BASEFWX_BUILD_UTC') ?: new Date().format("yyyy-MM-dd'T'HH:mm:ss'Z'", TimeZone.getTimeZone('UTC'))
+def buildOrigin = System.getenv('GITHUB_ACTIONS') ? 'github' : 'local'
+def gpgFingerprint = System.getenv('BASEFWX_GPG_FINGERPRINT') ?: ''
+version = repoVersion
 
 repositories {
     mavenCentral()
@@ -18,6 +25,21 @@ dependencies {
     task.sourceCompatibility = '1.8'
     task.targetCompatibility = '1.8'
     task.options.encoding = 'UTF-8'
+}
+
+processResources {
+    inputs.property('basefwxVersion', repoVersion)
+    inputs.property('basefwxBuildUtc', buildUtc)
+    inputs.property('basefwxBuildOrigin', buildOrigin)
+    inputs.property('basefwxGpgFingerprint', gpgFingerprint)
+    filesMatching('basefwx-build.properties') {
+        expand(
+            basefwxVersion: repoVersion,
+            basefwxBuildUtc: buildUtc,
+            basefwxBuildOrigin: buildOrigin,
+            basefwxGpgFingerprint: gpgFingerprint
+        )
+    }
 }
 
 jar {

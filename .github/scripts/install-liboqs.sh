@@ -32,6 +32,42 @@ echo "install prefix: ${INSTALL_PREFIX}"
 echo "use apt: ${LIBOQS_USE_APT}"
 echo "build shared libs: ${LIBOQS_BUILD_SHARED}"
 
+have_header=0
+if [[ -f "${INSTALL_PREFIX}/include/oqs/oqs.h" ]]; then
+    have_header=1
+fi
+
+have_static=0
+for libdir in "${INSTALL_PREFIX}/lib" "${INSTALL_PREFIX}/lib64"; do
+    if [[ -f "${libdir}/liboqs.a" ]]; then
+        have_static=1
+        break
+    fi
+done
+
+have_shared=0
+if pkg-config --exists liboqs 2>/dev/null; then
+    have_shared=1
+else
+    for libdir in "${INSTALL_PREFIX}/lib" "${INSTALL_PREFIX}/lib64"; do
+        if compgen -G "${libdir}/liboqs.so*" >/dev/null; then
+            have_shared=1
+            break
+        fi
+    done
+fi
+
+if [[ "$have_header" == "1" ]]; then
+    if [[ "${LIBOQS_BUILD_SHARED}" == "OFF" && "$have_static" == "1" ]]; then
+        echo "✓ Reusing existing static liboqs install from ${INSTALL_PREFIX}"
+        exit 0
+    fi
+    if [[ "${LIBOQS_BUILD_SHARED}" != "OFF" && "$have_shared" == "1" ]]; then
+        echo "✓ Reusing existing shared liboqs install from ${INSTALL_PREFIX}"
+        exit 0
+    fi
+fi
+
 # Try installing from apt first only for shared-linking mode.
 if [[ "${LIBOQS_USE_APT}" == "1" && "${LIBOQS_BUILD_SHARED}" == "ON" ]]; then
     echo "Attempting to install liboqs-dev from apt..."

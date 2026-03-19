@@ -19,6 +19,10 @@ def main() -> int:
             f"cpp/vcpkg.json version-string {vcpkg.get('version-string')!r} does not match VERSION {version!r}"
         )
 
+    python_version = (repo_root / "python" / "VERSION").read_text(encoding="utf-8").strip()
+    if python_version != version:
+        raise SystemExit(f"python/VERSION {python_version!r} does not match VERSION {version!r}")
+
     changelog = (repo_root / "CHANGELOG.md").read_text(encoding="utf-8")
     if not re.search(rf"^## \[v{re.escape(version)}\](?:\s|$)", changelog, flags=re.MULTILINE):
         raise SystemExit(f"CHANGELOG.md does not contain a section for v{version}")

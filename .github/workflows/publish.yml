@@ -905,11 +905,6 @@ jobs:
             md5sum "$file" > "$file.md5"
           done
 
-      - name: Generate release manifest
-        run: |
-          python3 scripts/release_manifest.py dist_out "${{ github.ref_name }}"
-          cat dist_out/release-manifest.json
-
       - name: Import GPG key
         env:
           GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
@@ -936,6 +931,11 @@ jobs:
             gpg --batch --yes --pinentry-mode loopback --passphrase "$GPG_PASSPHRASE" \
               --detach-sign -o "dist_out/${file}.sig" "dist_out/${file}"
           done
+
+      - name: Generate release manifest
+        run: |
+          python3 scripts/release_manifest.py dist_out "${{ github.ref_name }}"
+          cat dist_out/release-manifest.json
 
       - name: Verify signatures + hashes
         run: |

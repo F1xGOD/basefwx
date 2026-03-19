@@ -1,74 +1,74 @@
 BaseFWX VirusTotal Results
 Release: v3.6.3
-Generated: 2026-03-19T07:29:01Z
+Generated: 2026-03-19T08:34:11Z
 Repository: F1xGOD/basefwx
 
 File: basefwx-linux-amd64
   Status: completed
-  VirusTotal analysis: https://www.virustotal.com/api/v3/analyses/ODZjYzkzODExNmQwNGYyMTBmZjVjMzc4YjE4OWY0Zjg6MTc3MzkwNTM0Mg==
-  VirusTotal file: https://www.virustotal.com/api/v3/files/c34eb5c984478c7312e624515efe96821f304ecad0555c18818d3de0596ee42c
+  VirusTotal analysis: https://www.virustotal.com/api/v3/analyses/ZWViYzQ5ZThlZjhlOGIzMDg2ZTkzYjZhMjVmNzZkMTM6MTc3MzkwOTI1NA==
+  VirusTotal file: https://www.virustotal.com/api/v3/files/6702746fdd065697b25f977bb2909e5417bf9ea78d1a7d0fc9791d1aab8cfbec
   Stats (raw): malicious=0, suspicious=0, undetected=65, harmless=0, timeout=0, failure=0, type-unsupported=11
   Stats (effective): malicious=0, suspicious=0, undetected=65, harmless=0, timeout=0, failure=0, type-unsupported=11
-  SHA256: c34eb5c984478c7312e624515efe96821f304ecad0555c18818d3de0596ee42c
-  SHA1: 1af0d34cbdf74cd036dbc592468c3cd64c9f2286
-  MD5: 86cc938116d04f210ff5c378b189f4f8
+  SHA256: 6702746fdd065697b25f977bb2909e5417bf9ea78d1a7d0fc9791d1aab8cfbec
+  SHA1: d36fcee659983911848b34813b0ad3c4eec8f635
+  MD5: eebc49e8ef8e8b3086e93b6a25f76d13
 
 File: basefwx-linux-arm64
   Status: completed
-  VirusTotal analysis: https://www.virustotal.com/api/v3/analyses/NGY3ZWY4NWMxMDgxNDY3NmY5NDc0NTk1OGE1NjI0MzU6MTc3MzkwNTM0NA==
-  VirusTotal file: https://www.virustotal.com/api/v3/files/96d4749546b08fee1262e5a5d1a41a6d38eff0d47c62db050dd18df6f3167cfe
-  Stats (raw): malicious=0, suspicious=0, undetected=60, harmless=0, timeout=0, failure=4, type-unsupported=12
-  Stats (effective): malicious=0, suspicious=0, undetected=60, harmless=0, timeout=0, failure=4, type-unsupported=12
-  SHA256: 96d4749546b08fee1262e5a5d1a41a6d38eff0d47c62db050dd18df6f3167cfe
-  SHA1: 29638cba9a4bc6b13ab12e1d59632d04f06b3976
-  MD5: 4f7ef85c10814676f94745958a562435
+  VirusTotal analysis: https://www.virustotal.com/api/v3/analyses/NDI5ZWY0OGRkZDQ2OWI2N2FlYzhjNGZjMGI4ZWRiYjc6MTc3MzkwOTI1NQ==
+  VirusTotal file: https://www.virustotal.com/api/v3/files/8e13940993dcf92b66801644cb4159735c22c5a0feec14275eff187271157898
+  Stats (raw): malicious=0, suspicious=0, undetected=63, harmless=0, timeout=0, failure=1, type-unsupported=12
+  Stats (effective): malicious=0, suspicious=0, undetected=63, harmless=0, timeout=0, failure=1, type-unsupported=12
+  SHA256: 8e13940993dcf92b66801644cb4159735c22c5a0feec14275eff187271157898
+  SHA1: 81f97c0946c068cd0bbd2df696888360a3251cbb
+  MD5: 429ef48ddd469b67aec8c4fc0b8edbb7
 
 File: basefwx-windows-amd64.zip
   Status: completed
-  VirusTotal analysis: https://www.virustotal.com/api/v3/analyses/YzA0YTgxNWIxNDEwZmQ3YzQ3Y2Q4MDAxMWYzMzc0ZDQ6MTc3MzkwNTM0NQ==
-  VirusTotal file: https://www.virustotal.com/api/v3/files/c60735c06b20f6dce867ab1dc010a13610af1759f32dc8bd5e2adc70a42f8c86
-  Stats (raw): malicious=1, suspicious=0, undetected=67, harmless=0, timeout=0, failure=1, type-unsupported=7
-  Stats (effective): malicious=1, suspicious=0, undetected=67, harmless=0, timeout=0, failure=1, type-unsupported=7
-  SHA256: c60735c06b20f6dce867ab1dc010a13610af1759f32dc8bd5e2adc70a42f8c86
-  SHA1: 43f470c003bc20240929584f23db2cfc062fd5da
-  MD5: c04a815b1410fd7c47cd80011f3374d4
+  VirusTotal analysis: https://www.virustotal.com/api/v3/analyses/MmI2ZTkxNjM0Y2I2ODAxYzY3NWIyZmE1OWRhNjQxMmM6MTc3MzkwOTI1Nw==
+  VirusTotal file: https://www.virustotal.com/api/v3/files/c05c15555ffe60bc96390b57c8cc05c063c04a5446108dfecd70a4283d6ff31e
+  Stats (raw): malicious=0, suspicious=0, undetected=67, harmless=0, timeout=1, failure=1, type-unsupported=7
+  Stats (effective): malicious=0, suspicious=0, undetected=67, harmless=0, timeout=1, failure=1, type-unsupported=7
+  SHA256: c05c15555ffe60bc96390b57c8cc05c063c04a5446108dfecd70a4283d6ff31e
+  SHA1: 1b1edd4d1334899ad0c25de6f04d7281c41f10ac
+  MD5: 2b6e91634cb6801c675b2fa59da6412c
 
 File: basefwx-windows-x86.zip
   Status: completed
-  VirusTotal analysis: https://www.virustotal.com/api/v3/analyses/MTQyNzIyYmJkNjk3MDQ0ZTQ5MjFmZDMxZDkwNzhiNzY6MTc3MzkwNTM0Ng==
-  VirusTotal file: https://www.virustotal.com/api/v3/files/9ee93ec609c0da7853c292ef748dcfbac909ed3e0bbac6c8a1cbaf189fcb0e40
-  Stats (raw): malicious=1, suspicious=0, undetected=67, harmless=0, timeout=0, failure=1, type-unsupported=7
-  Stats (effective): malicious=1, suspicious=0, undetected=67, harmless=0, timeout=0, failure=1, type-unsupported=7
-  SHA256: 9ee93ec609c0da7853c292ef748dcfbac909ed3e0bbac6c8a1cbaf189fcb0e40
-  SHA1: c680f01645165ebc807363bf8b576ebc0f9f30cf
-  MD5: 142722bbd697044e4921fd31d9078b76
+  VirusTotal analysis: https://www.virustotal.com/api/v3/analyses/ZjZkNTJlMGYzYTA4YWRiOWUzZGY0NDA4MjJhZmUxZmM6MTc3MzkwOTI1Nw==
+  VirusTotal file: https://www.virustotal.com/api/v3/files/34a64ceeede5ed473af4850c3bfea3b901a54baa0a747d7d3fe5230f25ade36f
+  Stats (raw): malicious=1, suspicious=0, undetected=68, harmless=0, timeout=0, failure=0, type-unsupported=7
+  Stats (effective): malicious=1, suspicious=0, undetected=68, harmless=0, timeout=0, failure=0, type-unsupported=7
+  SHA256: 34a64ceeede5ed473af4850c3bfea3b901a54baa0a747d7d3fe5230f25ade36f
+  SHA1: d47836a10b5b9b3817704adebe487238c37d73a4
+  MD5: f6d52e0f3a08adb9e3df440822afe1fc
 
 File: basefwx-mac-amd64
   Status: completed
-  VirusTotal analysis: https://www.virustotal.com/api/v3/analyses/MjhkNTQxNzQzNWU2OTc4MDNlMTI1MjMzMGU3ZDJlYmU6MTc3MzkwNTM0Nw==
-  VirusTotal file: https://www.virustotal.com/api/v3/files/f8f924d91a0dd46964ea1076dcdd86c05c1eaf78a90f5d9fa5a42626be1def2c
+  VirusTotal analysis: https://www.virustotal.com/api/v3/analyses/MjczMmIzOWMxYjI1MmVmYzU5Mzc4ZmI3NGM2Y2E4YjY6MTc3MzkwOTI2MA==
+  VirusTotal file: https://www.virustotal.com/api/v3/files/64dc5fd8c476de007db19106433659ea5feb482d58235757d90e1a2433b80ee5
   Stats (raw): malicious=0, suspicious=0, undetected=64, harmless=0, timeout=0, failure=0, type-unsupported=12
   Stats (effective): malicious=0, suspicious=0, undetected=64, harmless=0, timeout=0, failure=0, type-unsupported=12
-  SHA256: f8f924d91a0dd46964ea1076dcdd86c05c1eaf78a90f5d9fa5a42626be1def2c
-  SHA1: 0ba593e3febc2403d7d9caec2af6d6728c100e58
-  MD5: 28d5417435e697803e1252330e7d2ebe
+  SHA256: 64dc5fd8c476de007db19106433659ea5feb482d58235757d90e1a2433b80ee5
+  SHA1: 698c93faf1eb526050a5fda07048a1fd814fb045
+  MD5: 2732b39c1b252efc59378fb74c6ca8b6
 
 File: basefwx-mac-arm64
   Status: completed
-  VirusTotal analysis: https://www.virustotal.com/api/v3/analyses/MGU3MWUxZjJkZjE1NzE1MDA5ZmQ2ZjNhODNiNzNkNTQ6MTc3MzkwNTM0OA==
-  VirusTotal file: https://www.virustotal.com/api/v3/files/f981a2ec5a7c87e3d0a61a4a66e732fabf69cf08ae6ae4a20437bb8499fcb143
-  Stats (raw): malicious=0, suspicious=0, undetected=63, harmless=0, timeout=0, failure=0, type-unsupported=13
-  Stats (effective): malicious=0, suspicious=0, undetected=63, harmless=0, timeout=0, failure=0, type-unsupported=13
-  SHA256: f981a2ec5a7c87e3d0a61a4a66e732fabf69cf08ae6ae4a20437bb8499fcb143
-  SHA1: 07e9877c2ae65988443388b0423bb4556a18c36d
-  MD5: 0e71e1f2df15715009fd6f3a83b73d54
+  VirusTotal analysis: https://www.virustotal.com/api/v3/analyses/MDY1OTg4OTYyZTE2MTVjN2YwNDZlNWE1YzNlZWRiNzQ6MTc3MzkwOTI2MQ==
+  VirusTotal file: https://www.virustotal.com/api/v3/files/cb643aa2e18b174350487f8a892f33d341feec10a126ed70ce1d6668f75548c1
+  Stats (raw): malicious=0, suspicious=0, undetected=62, harmless=0, timeout=0, failure=1, type-unsupported=13
+  Stats (effective): malicious=0, suspicious=0, undetected=62, harmless=0, timeout=0, failure=1, type-unsupported=13
+  SHA256: cb643aa2e18b174350487f8a892f33d341feec10a126ed70ce1d6668f75548c1
+  SHA1: 590ebee4ac83f9911f1b44ccc99d1144796bc5ba
+  MD5: 065988962e1615c7f046e5a5c3eedb74
 
 File: basefwx-java.jar
-  Status: queued
-  VirusTotal analysis: https://www.virustotal.com/api/v3/analyses/MDlkYTcxYzFiMGIxZjYzZWM5NDAwYTYwZGVhNjMxYTE6MTc3MzkwNTM1MQ==
-  VirusTotal file: https://www.virustotal.com/api/v3/files/35621d10f7fc982ef6a6ea1f37def0679bd7cf6fb23326ab675922c0ae9b7f88
-  Stats (raw): malicious=0, suspicious=0, undetected=0, harmless=0, timeout=0, failure=0, type-unsupported=0
-  Stats (effective): malicious=0, suspicious=0, undetected=0, harmless=0, timeout=0, failure=0, type-unsupported=0
-  SHA256: 35621d10f7fc982ef6a6ea1f37def0679bd7cf6fb23326ab675922c0ae9b7f88
-  SHA1: c31283a967857fa543e12598b01ecf6b4fad256c
-  MD5: 09da71c1b0b1f63ec9400a60dea631a1
+  Status: completed
+  VirusTotal analysis: https://www.virustotal.com/api/v3/analyses/MjA3ZDkxMGQxNThmYTkyMzUwNTA4Y2VhOWFjZmNmOTg6MTc3MzkwOTI2NA==
+  VirusTotal file: https://www.virustotal.com/api/v3/files/f7dd3f6a84455dbdcb3f825f9b64be15605f891cd4f0c7b265c415137058f491
+  Stats (raw): malicious=0, suspicious=0, undetected=56, harmless=0, timeout=7, failure=3, type-unsupported=10
+  Stats (effective): malicious=0, suspicious=0, undetected=56, harmless=0, timeout=7, failure=3, type-unsupported=10
+  SHA256: f7dd3f6a84455dbdcb3f825f9b64be15605f891cd4f0c7b265c415137058f491
+  SHA1: 7c7a561d557b52f1411de61dbe3e0fad79a04e31
+  MD5: 207d910d158fa92350508cea9acfcf98

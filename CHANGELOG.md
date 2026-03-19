@@ -2,23 +2,30 @@
 
 ## [Unreleased]
 
+## [v3.6.3] - 2026-03-19
+
+Compare: <https://github.com/F1xGOD/basefwx/compare/v3.6.2...v3.6.3>
+
+### Added
+- New `AN7` / `DEAN7` reversible stealth anonymization support in C++, Python, and Java.
+- Shared repository `VERSION` source with cross-runtime build/version metadata plumbing.
+- Release manifest generation and version-sync validation for packaged artifacts.
+- C++ CLI completion and stronger version/build reporting for release diagnostics.
+
 ### Changed
-- Python live stream (`fwxAES_live_*`) internals were optimized to reduce allocation pressure:
-  - Reused AES-GCM contexts for session frame operations.
-  - Replaced repeated front-buffer deletion with offset+compact buffering in live decrypt paths.
-- C++ live stream internals were optimized for lower-copy operation:
-  - Switched data-frame AES-GCM operations to `*Into` APIs where possible.
-  - Replaced repeated `vector.erase(begin, ...)` usage with offset+compact buffering.
-- Java live stream internals were optimized similarly (slice-based updates and lower-copy decrypt buffering).
-- Python `n10` codec hot paths were optimized for large payloads:
-  - Cached per-index transform offsets across runs.
-  - Reduced conversion/parse overhead in encode/decode loops.
-- Python `b1024` hot path was optimized by removing large intermediate `str -> bytes` conversions in codec packing.
-- Java kFM PNG carrier paths (`kFAe`/PNG decode) were optimized with byte-raster fast paths to reduce per-pixel overhead.
+- Release workflows now enforce full-support artifacts instead of silently accepting degraded Argon2/OQS/LZMA builds.
+- Release asset handling was tightened around canonical, architecture-qualified outputs and shared metadata.
+- C++, Python, and Java version/capability reporting was aligned around the same repository version and build inputs.
+- Documentation, compatibility notes, and website release metadata were synchronized around the new release process.
+
+### Fixed
+- Java CLI build regression caused by missing version-command wiring/import coverage.
+- Redundant CI/release pre-build work, including unnecessary repeated `liboqs` setup in cached workflow paths.
+- Workflow/package inconsistencies that could ship artifacts without the intended full crypto feature set.
 
 ### Notes
-- Benchmarks remain expected to favor compiled runtimes (C++/Java) for very large `n10` workloads, but Python steady-state performance improved.
-- Documentation was synchronized across GitHub and website pages for support policy and benchmark interpretation.
+- `v3.6.3` is a release-hardening and interoperability release: stealth anonymization, stricter packaging, and consistent metadata are the main user-visible changes.
+- Python and Java now follow the repository `VERSION` file directly, so version bumps no longer need separate per-runtime edits beyond the shared source.
 
 ## [v3.6.2] - 2026-02-22
 

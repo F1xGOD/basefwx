@@ -1,27 +1,29 @@
-Generated: 2026-03-19T08:28:38Z
-Release: v3.6.2
+Generated: 2026-03-19T08:27:45Z
+Release: v3.6.3
 Baseline: python
 
 OVERALL
-python: 54789550728 ns (54.790s)
-cpp: 12812837533 ns (12.813s)
-java: 22083089988 ns (22.083s)
+python: 36220642158 ns (36.221s)
+cpp: 14298043547 ns (14.298s)
+java: 25919396874 ns (25.919s)
 
 TESTS
-fwxAES-light | python=239775513ns | cpp=139504601ns | java=1894960745ns
-fwxAES | python=644703153ns | cpp=543973072ns | java=2171885515ns
-fwxAES-live | python=383232837ns | cpp=721329079ns | java=721673139ns
-b256 | python=1837418723ns | cpp=233368435ns | java=275171642ns
-b512 | python=3165320436ns | cpp=888227838ns | java=535962179ns
-pb512 | python=3206839864ns | cpp=888746987ns | java=538819667ns
-b64 | python=20583139ns | cpp=9297480ns | java=13116175ns
-a512 | python=2830878889ns | cpp=238925719ns | java=282892181ns
-n10 | python=4118582155ns | cpp=44410842ns | java=72064181ns
-hash512 | python=5905989ns | cpp=5174883ns | java=6354515ns
-uhash513 | python=7630186ns | cpp=6559480ns | java=8478100ns
-bi512 | python=270761773ns | cpp=121508814ns | java=158418202ns
-b1024 | python=24733891151ns | cpp=2824010525ns | java=4779269132ns
-b512file | python=5995082730ns | cpp=2701825271ns | java=4666141020ns
-pb512file | python=6432632419ns | cpp=3376379834ns | java=5050693039ns
-kFMe | python=432867098ns | cpp=22913468ns | java=343612006ns
-kFAe | python=463444673ns | cpp=46681205ns | java=563578550ns
+fwxAES-light | python=235102285ns | cpp=142287491ns | java=1902746692ns
+fwxAES | python=637496407ns | cpp=543191921ns | java=2199938923ns
+fwxAES-live | python=369256588ns | cpp=707560704ns | java=529876532ns
+b256 | python=1822034553ns | cpp=233044562ns | java=287654052ns
+b512 | python=3202846293ns | cpp=891131324ns | java=561438718ns
+pb512 | python=3233027036ns | cpp=887625294ns | java=552045589ns
+b64 | python=19295586ns | cpp=9362968ns | java=13429522ns
+a512 | python=2829011711ns | cpp=240991157ns | java=289713448ns
+n10 | python=2285267825ns | cpp=44366414ns | java=73823281ns
+hash512 | python=5908446ns | cpp=5111903ns | java=7507552ns
+uhash513 | python=7718907ns | cpp=6578801ns | java=8515275ns
+bi512 | python=258553917ns | cpp=121577690ns | java=165036210ns
+b1024 | python=6175140751ns | cpp=2865233547ns | java=5307107938ns
+b512file | python=6391345742ns | cpp=2695480091ns | java=4888504343ns
+pb512file | python=6870218663ns | cpp=3411959490ns | java=5156415918ns
+an7 | python=495044695ns | cpp=724042514ns | java=1626495684ns
+dean7 | python=484944600ns | cpp=698964121ns | java=1479573660ns
+kFMe | python=435588096ns | cpp=23216601ns | java=346163947ns
+kFAe | python=462840057ns | cpp=46316954ns | java=523409590ns

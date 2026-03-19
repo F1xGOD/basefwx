@@ -1,6 +1,6 @@
 {
-  "generated_at": "2026-03-19T08:28:38Z",
-  "release_tag": "v3.6.2",
+  "generated_at": "2026-03-19T08:27:45Z",
+  "release_tag": "v3.6.3",
   "bench_iters": 3,
   "bench_warmup": 1,
   "bench_workers": 4,
@@ -38,156 +38,172 @@
   },
   "overall": {
     "python": {
-      "time_ns": 54789550728,
-      "baseline_ns": 54789550728,
-      "count": 17
+      "time_ns": 36220642158,
+      "baseline_ns": 36220642158,
+      "count": 19
     },
     "cpp": {
-      "time_ns": 12812837533,
-      "baseline_ns": 54789550728,
-      "count": 17
+      "time_ns": 14298043547,
+      "baseline_ns": 36220642158,
+      "count": 19
     },
     "java": {
-      "time_ns": 22083089988,
-      "baseline_ns": 54789550728,
-      "count": 17
+      "time_ns": 25919396874,
+      "baseline_ns": 36220642158,
+      "count": 19
     }
   },
   "tests": [
     {
       "label": "fwxAES-light",
       "times": {
-        "python": 239775513,
-        "cpp": 139504601,
-        "java": 1894960745
+        "python": 235102285,
+        "cpp": 142287491,
+        "java": 1902746692
       }
     },
     {
       "label": "fwxAES",
       "times": {
-        "python": 644703153,
-        "cpp": 543973072,
-        "java": 2171885515
+        "python": 637496407,
+        "cpp": 543191921,
+        "java": 2199938923
       }
     },
     {
       "label": "fwxAES-live",
       "times": {
-        "python": 383232837,
-        "cpp": 721329079,
-        "java": 721673139
+        "python": 369256588,
+        "cpp": 707560704,
+        "java": 529876532
       }
     },
     {
       "label": "b256",
       "times": {
-        "python": 1837418723,
-        "cpp": 233368435,
-        "java": 275171642
+        "python": 1822034553,
+        "cpp": 233044562,
+        "java": 287654052
       }
     },
     {
       "label": "b512",
       "times": {
-        "python": 3165320436,
-        "cpp": 888227838,
-        "java": 535962179
+        "python": 3202846293,
+        "cpp": 891131324,
+        "java": 561438718
       }
     },
     {
       "label": "pb512",
       "times": {
-        "python": 3206839864,
-        "cpp": 888746987,
-        "java": 538819667
+        "python": 3233027036,
+        "cpp": 887625294,
+        "java": 552045589
       }
     },
     {
       "label": "b64",
       "times": {
-        "python": 20583139,
-        "cpp": 9297480,
-        "java": 13116175
+        "python": 19295586,
+        "cpp": 9362968,
+        "java": 13429522
       }
     },
     {
       "label": "a512",
       "times": {
-        "python": 2830878889,
-        "cpp": 238925719,
-        "java": 282892181
+        "python": 2829011711,
+        "cpp": 240991157,
+        "java": 289713448
       }
     },
     {
       "label": "n10",
       "times": {
-        "python": 4118582155,
-        "cpp": 44410842,
-        "java": 72064181
+        "python": 2285267825,
+        "cpp": 44366414,
+        "java": 73823281
       }
     },
     {
       "label": "hash512",
       "times": {
-        "python": 5905989,
-        "cpp": 5174883,
-        "java": 6354515
+        "python": 5908446,
+        "cpp": 5111903,
+        "java": 7507552
       }
     },
     {
       "label": "uhash513",
       "times": {
-        "python": 7630186,
-        "cpp": 6559480,
-        "java": 8478100
+        "python": 7718907,
+        "cpp": 6578801,
+        "java": 8515275
       }
     },
     {
       "label": "bi512",
       "times": {
-        "python": 270761773,
-        "cpp": 121508814,
-        "java": 158418202
+        "python": 258553917,
+        "cpp": 121577690,
+        "java": 165036210
       }
     },
     {
       "label": "b1024",
       "times": {
-        "python": 24733891151,
-        "cpp": 2824010525,
-        "java": 4779269132
+        "python": 6175140751,
+        "cpp": 2865233547,
+        "java": 5307107938
       }
     },
     {
       "label": "b512file",
       "times": {
-        "python": 5995082730,
-        "cpp": 2701825271,
-        "java": 4666141020
+        "python": 6391345742,
+        "cpp": 2695480091,
+        "java": 4888504343
       }
     },
     {
       "label": "pb512file",
       "times": {
-        "python": 6432632419,
-        "cpp": 3376379834,
-        "java": 5050693039
+        "python": 6870218663,
+        "cpp": 3411959490,
+        "java": 5156415918
+      }
+    },
+    {
+      "label": "an7",
+      "times": {
+        "python": 495044695,
+        "cpp": 724042514,
+        "java": 1626495684
+      }
+    },
+    {
+      "label": "dean7",
+      "times": {
+        "python": 484944600,
+        "cpp": 698964121,
+        "java": 1479573660
       }
     },
     {
       "label": "kFMe",
       "times": {
-        "python": 432867098,
-        "cpp": 22913468,
-        "java": 343612006
+        "python": 435588096,
+        "cpp": 23216601,
+        "java": 346163947
       }
     },
     {
       "label": "kFAe",
       "times": {
-        "python": 463444673,
-        "cpp": 46681205,
-        "java": 563578550
+        "python": 462840057,
+        "cpp": 46316954,
+        "java": 523409590
       }
     }
   ]

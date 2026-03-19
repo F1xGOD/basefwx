@@ -2,7 +2,7 @@
 
 ## Supported Versions
 
-**Versioning note:** Current releases use `MAJOR.MINOR.PATCH` (e.g., `3.6.2`).
+**Versioning note:** Current releases use `MAJOR.MINOR.PATCH` (e.g., `3.6.3`).
 
 > [!CAUTION]
 > DO NOT USE ANY VERSION BELOW 2.6, you -> WILL <- get compromised!
@@ -17,20 +17,14 @@
 | **Latest release only** | 👑 Actively maintained. Receives all fixes: security, bugs, and compatibility. | ✅ |
 | **All older releases** | ❌ End-of-life immediately after a newer release ships. No support, no bug fixes, no security patches. | ❌ |
 
-### What's New in 3.6.2
+### What's New in 3.6.3
 
-* **Java Support:** Full cross-language compatibility with Java (pb512, b512, fwxAES)
-* **URL-Safe pb512:** pb512 now uses URL-safe base64 encoding (backward compatible)
-* **Argon2 Prioritized:** Argon2id is now the default KDF when sufficient RAM available (≥128 MiB)
-* **Performance Improvements:** 
-  - Python text encoding optimizations (20-30% faster for a512)
-  - C++ Trie-based decoder (2-3x faster)
-  - Efficient buffer construction
-* **Enhanced Security:**
-  - Automatic fallback with warnings when Argon2 fails
-  - RAM detection to prevent OOM errors
-  - Better error messages for cross-language compatibility
-* **Improved Documentation:** Comprehensive cross-language encryption guides
+* **AN7/DEAN7 Added:** New reversible stealth anonymization layer is now available in C++, Python, and Java.
+* **Release Metadata Unified:** C++, Python, and Java now read the same repository version and expose consistent build metadata.
+* **Full Crypto Support Enforced:** Release and CI workflows now fail instead of silently downgrading when Argon2/OQS/LZMA support is missing.
+* **CLI Improvements:** C++ CLI now has stricter master-key opt-in, richer version/build reporting, and better release metadata visibility.
+* **Release Hygiene Tightened:** Canonical asset naming, manifest generation, version-sync checks, and redundant workflow work were cleaned up.
+* **Java Build Fixes:** Java CLI/version packaging regressions were fixed so release and CI builds stay green.
 
 ### Compatibility policy
 

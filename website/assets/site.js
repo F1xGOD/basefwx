@@ -38,16 +38,16 @@ const assetMap = {
     sig: "basefwx-linux-arm64.sig"
   },
   "windows-amd64": {
-    bin: "basefwx-windows-amd64.exe",
-    sha256: "basefwx-windows-amd64.exe.sha256",
-    md5: "basefwx-windows-amd64.exe.md5",
-    sig: "basefwx-windows-amd64.exe.sig"
+    bin: "basefwx-windows-amd64.zip",
+    sha256: "basefwx-windows-amd64.zip.sha256",
+    md5: "basefwx-windows-amd64.zip.md5",
+    sig: "basefwx-windows-amd64.zip.sig"
   },
   "windows-x86": {
-    bin: "basefwx-windows-x86.exe",
-    sha256: "basefwx-windows-x86.exe.sha256",
-    md5: "basefwx-windows-x86.exe.md5",
-    sig: "basefwx-windows-x86.exe.sig"
+    bin: "basefwx-windows-x86.zip",
+    sha256: "basefwx-windows-x86.zip.sha256",
+    md5: "basefwx-windows-x86.zip.md5",
+    sig: "basefwx-windows-x86.zip.sig"
   },
   "mac-amd64": {
     bin: "basefwx-mac-amd64",

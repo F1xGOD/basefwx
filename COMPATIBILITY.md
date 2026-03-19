@@ -2,15 +2,29 @@
 
 ## Platform Support
 
+## Runtime Capability Matrix
+
+| Runtime | Argon2id | PQ/OQS | LZMA/XZ | AN7/DEAN7 | Notes |
+| :-- | :--: | :--: | :--: | :--: | :-- |
+| C++ | ✅ | ✅ | ✅ | ✅ | Reference release runtime for performance and full native feature set |
+| Python | ✅ with `basefwx[argon2]` | ✅ via `pqcrypto` | ✅ | ✅ | Feature-complete scripting/runtime path |
+| Java | ❌ | ❌ | ❌ | ✅ | Cross-compatible for supported formats, but not a full native crypto feature match |
+
+Release policy:
+
+- Native release binaries are expected to ship with Argon2, OQS, and LZMA enabled.
+- Language runtimes that do not implement a feature must report that explicitly in `version` output and docs.
+- Format changes must preserve declared cross-runtime compatibility or bump the format/version contract intentionally.
+
 ### Linux
 - **Minimum**: Debian 9+, Ubuntu 18.04+, RHEL/CentOS 7+
 - **Architecture**: x86_64 (amd64), aarch64 (arm64)
-- **Build**: Static linking for liboqs, dynamic for OpenSSL/glibc
+- **Build**: Release binaries target static third-party crypto/compression linkage where the workflow can provide it
 - **Optimizations**: Generic CPU (no -march=native for max compatibility)
 
 ### Windows
 - **Minimum**: Windows 10+
-- **Architecture**: x64
+- **Architecture**: x64, x86
 - **Build**: Uses vcpkg for dependencies
 
 ### macOS
@@ -63,13 +77,20 @@ For unexpected errors, you may see full tracebacks. Please report these as bugs.
 ## Compatibility Features
 
 ### Static Linking
-- **liboqs**: Statically linked in Linux builds for maximum portability
-- **Benefits**: No dependency on system liboqs version
+- **Third-party crypto/compression**: Release native binaries aim to statically link liboqs, Argon2, LZMA, and OpenSSL where supported by the target build pipeline
+- **Benefits**: Reduced runtime dependency drift across target systems
 
 ### Dynamic Linking
-- **OpenSSL**: Uses system OpenSSL for security updates
-- **glibc**: Dynamic (unavoidable on Linux)
-- **ZLIB**: Dynamic (ubiquitous library)
+- **glibc / system runtime**: Still platform-dependent on Linux/macOS/Windows runtime layers where full static linkage is not practical or desirable
+
+### Release Metadata
+
+Each release publishes:
+
+- canonical binaries/JARs only
+- detached `.sig` signatures
+- `.sha256` and `.md5` checksum files
+- `release-manifest.json` with machine-readable asset metadata
 
 ### Build Flags
 Release builds use:

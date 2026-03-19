@@ -5,6 +5,7 @@
     "openssl",
     "zlib",
     "argon2",
-    "liboqs"
+    "liboqs",
+    "liblzma"
   ]
 }

@@ -39,10 +39,11 @@
 #include <fcntl.h>
 #include <io.h>
 #include <windows.h>
-#elif defined(__APPLE__)
-#include <mach-o/dyld.h>
 #else
 #include <unistd.h>
+#if defined(__APPLE__)
+#include <mach-o/dyld.h>
+#endif
 #endif
 
 namespace {

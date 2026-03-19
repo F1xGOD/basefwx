@@ -557,8 +557,20 @@ jobs:
           $stage = Join-Path $PWD "dist/bundle-${{ matrix.arch }}"
           New-Item -ItemType Directory -Force $stage | Out-Null
           Copy-Item $bin (Join-Path $stage "${{ matrix.bundle_exe }}") -Force
-          $vcpkgBin = "${{ github.workspace }}\\vcpkg\\installed\\${{ matrix.triplet }}\\bin"
-          if (!(Test-Path $vcpkgBin)) { throw "vcpkg bin directory not found: $vcpkgBin" }
+          $vcpkgCandidates = @(
+            (Join-Path $PWD "cpp/build/vcpkg_installed/${{ matrix.triplet }}/bin"),
+            "${{ github.workspace }}\\vcpkg\\installed\\${{ matrix.triplet }}\\bin"
+          )
+          $vcpkgBin = $null
+          foreach ($candidate in $vcpkgCandidates) {
+            if (Test-Path $candidate) {
+              $vcpkgBin = $candidate
+              break
+            }
+          }
+          if (-not $vcpkgBin) {
+            throw ("vcpkg bin directory not found in candidates: " + ($vcpkgCandidates -join ', '))
+          }
           $dlls = Get-ChildItem $vcpkgBin -Filter *.dll -File
           if ($dlls.Count -eq 0) { throw "No runtime DLLs found in $vcpkgBin" }
           foreach ($dll in $dlls) {

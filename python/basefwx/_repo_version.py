@@ -1,12 +1,12 @@
-"""Build-time version loader sourced from the repository VERSION file."""
+"""Build-time version loader sourced from local project VERSION files."""
 
 from pathlib import Path
 
 
 def _load_version() -> str:
     candidates = (
+        Path(__file__).resolve().parents[1] / "VERSION",
         Path(__file__).resolve().parents[2] / "VERSION",
-        Path(__file__).resolve().parent / "VERSION",
     )
     for candidate in candidates:
         try:
@@ -19,4 +19,3 @@ def _load_version() -> str:
 
 
 __version__ = _load_version()
-

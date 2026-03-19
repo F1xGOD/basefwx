@@ -3,6 +3,7 @@ package com.fixcraft.basefwx.cli;
 import com.fixcraft.basefwx.BaseFwx;
 import com.fixcraft.basefwx.MediaCipher;
 import com.fixcraft.basefwx.RuntimeLog;
+import com.fixcraft.basefwx.VersionInfo;
 
 import java.io.BufferedReader;
 import java.io.File;
@@ -552,6 +553,56 @@ public final class BaseFwxCli {
         return new GlobalOptions(verbose, noLog, cleaned.toArray(new String[0]));
     }
 
+    private static String humanizeUtcTimestamp(String value) {
+        if (value == null || value.length() < 20 || value.charAt(4) != '-' || value.charAt(7) != '-' || value.charAt(10) != 'T') {
+            return value == null ? "unknown" : value;
+        }
+        String human = value.substring(0, 10) + " " + value.substring(11);
+        if (human.endsWith("Z")) {
+            human = human.substring(0, human.length() - 1) + " UTC";
+        }
+        return human;
+    }
+
+    private static String runtimeArch() {
+        String arch = System.getProperty("os.arch", "unknown").toLowerCase(Locale.ROOT);
+        if (arch.equals("x86_64") || arch.equals("amd64")) {
+            return "amd64";
+        }
+        if (arch.equals("aarch64") || arch.equals("arm64")) {
+            return "arm64";
+        }
+        if (arch.startsWith("arm")) {
+            return "arm";
+        }
+        if (arch.matches("i[3-6]86") || arch.equals("x86")) {
+            return "x86";
+        }
+        return arch;
+    }
+
+    private static String buildOriginLabel() {
+        String origin = VersionInfo.buildOrigin();
+        if ("github".equalsIgnoreCase(origin)) {
+            return "GitHub Actions";
+        }
+        return "local/manual";
+    }
+
+    private static void printVersionInfo() {
+        System.out.println("basefwx_java " + Constants.ENGINE_VERSION);
+        String buildUtc = VersionInfo.buildUtc();
+        System.out.println("build_time: " + humanizeUtcTimestamp(buildUtc) + " (" + buildUtc + ")");
+        System.out.println("build_origin: " + buildOriginLabel());
+        System.out.println("os: " + System.getProperty("os.name", "unknown"));
+        System.out.println("arch: " + runtimeArch());
+        System.out.println("linkage: java");
+        System.out.println("java: " + System.getProperty("java.version", "unknown"));
+        System.out.println("gpg_fingerprint: " + VersionInfo.gpgFingerprint());
+        System.out.println("gpg_signature: not checked (release signatures are detached)");
+        System.out.println("features: argon2=OFF oqs=OFF lzma=OFF");
+    }
+
     private static boolean truthy(String raw) {
         if (raw == null) {
             return false;
@@ -622,6 +673,14 @@ public final class BaseFwxCli {
         }
 
         String command = args[0];
+        if ("--version".equals(command) || "-V".equals(command)) {
+            printVersionInfo();
+            return;
+        }
+        if ("version".equals(command)) {
+            printVersionInfo();
+            return;
+        }
         boolean useMaster = true;
         int argc = args.length;
         for (String arg : args) {
@@ -1459,7 +1518,8 @@ public final class BaseFwxCli {
 
     private static void usage() {
         System.out.println("BaseFWX Java CLI");
-        System.out.println("  [global] --verbose|-v --no-log");
+        System.out.println("  [global] --verbose|-v --no-log --version|-V");
+        System.out.println("  version");
         System.out.println("  fwxaes-enc <in> <out> <password> [--no-master]");
         System.out.println("  fwxaes-dec <in> <out> <password> [--no-master]");
         System.out.println("  an7 <in.fwx> -p <password> [--out <path>] [--keep-input] [--force-any]");

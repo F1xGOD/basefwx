@@ -12,6 +12,13 @@
 
 BASEFWX is a hybrid post-quantum + AEAD encryption toolkit for files and media, with cross-compatible Python, C++, and Java implementations.
 
+Repository policy:
+
+- `main` is the release branch.
+- `DEV` is the integration branch.
+- This stays a monorepo; language-specific long-lived branches are intentionally not used.
+- Shared format/security changes must keep Python, C++, and Java compatibility in one repository.
+
 - Website: https://basefwx.fixcraft.jp
 - Documentation: https://basefwx.fixcraft.jp/docs/CLI
 - Source code: https://github.com/F1xGOD/basefwx
@@ -60,6 +67,8 @@ Notes:
 - Python `n10` was optimized for large payloads, but compiled runtimes (C++/Java) are still expected to benchmark faster for very large text workloads.
 - C++/Java CLI global flags: `--no-log` (suppress non-essential logs) and `--verbose` (show hardware routing reasons).
 - jMG video is disabled by default in Python/C++/Java; set `BASEFWX_ENABLE_JMG_VIDEO=1` to re-enable temporarily.
+- Canonical release assets are architecture-qualified only; alias artifacts without arch suffixes are intentionally not published.
+- Every GitHub release includes detached signatures, checksum files, and `release-manifest.json`.
 
 Python API quick refs:
 
@@ -125,6 +134,7 @@ Documentation
 - [Testing and benchmarks](https://basefwx.fixcraft.jp/docs/TESTING)
 - [Contributing and code of conduct](https://basefwx.fixcraft.jp/docs/CONTRIBUTING)
 - [Java module](https://basefwx.fixcraft.jp/docs/CLI#java-cli)
+- [Compatibility matrix](https://github.com/F1xGOD/basefwx/blob/main/COMPATIBILITY.md)
 
 License
 -------

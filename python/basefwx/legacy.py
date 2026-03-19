@@ -10,6 +10,32 @@ if hasattr(_sys_module, "set_int_max_str_digits"):
     _sys_module.set_int_max_str_digits(0)  # 0 = unlimited
 
 
+def _runtime_arch_label() -> str:
+    try:
+        machine = _os_module.uname().machine.lower()
+    except AttributeError:
+        machine = ""
+    if machine in ("x86_64", "amd64"):
+        return "amd64"
+    if machine in ("aarch64", "arm64"):
+        return "arm64"
+    if machine.startswith("arm"):
+        return "arm"
+    if machine in ("i386", "i486", "i586", "i686", "x86"):
+        return "x86"
+    return machine or "unknown"
+
+
+def _python_build_origin_label() -> str:
+    return "GitHub Actions" if _os_module.getenv("GITHUB_ACTIONS") else "local/manual"
+
+
+try:
+    from ._repo_version import __version__ as _BASEFWX_ENGINE_VERSION
+except Exception:  # pragma: no cover - fallback for direct execution
+    _BASEFWX_ENGINE_VERSION = "0.0.0"
+
+
 class basefwx:
     import base64
     import array
@@ -209,7 +235,7 @@ class basefwx:
     PACK_TAR_XZ = "x"
     PACK_SUFFIX_GZ = ".tgz"
     PACK_SUFFIX_XZ = ".txz"
-    ENGINE_VERSION = "3.6.2"
+    ENGINE_VERSION = _BASEFWX_ENGINE_VERSION
     N10_MOD = 10_000_000_000
     N10_MUL = 3_816_547_291
     N10_ADD = 7_261_940_353
@@ -12634,15 +12660,24 @@ def cli(argv=None) -> int:
     if args.command == "version":
         argon2_state = "ON" if basefwx.hash_secret_raw is not None else "OFF"
         pq_state = "ON" if getattr(basefwx.ml_kem_768, "CIPHERTEXT_SIZE", 0) else "OFF"
+        lzma_state = "ON" if getattr(basefwx, "lzma", None) is not None else "OFF"
         pillow_state = "ON" if basefwx.Image is not None else "OFF"
         numpy_state = "ON" if basefwx.np is not None else "OFF"
         cupy_state = "ON" if basefwx.cp is not None else "OFF"
+        build_utc = _os_module.getenv("BASEFWX_BUILD_UTC", "unavailable")
         print(f"basefwx_python {basefwx.ENGINE_VERSION}")
+        print(f"build_time: {build_utc}")
+        print(f"build_origin: {_python_build_origin_label()}")
+        print(f"os: {_sys_module.platform}")
+        print(f"arch: {_runtime_arch_label()}")
+        print("linkage: python")
         print(f"python: {basefwx.sys.version.split()[0]}")
+        print("gpg_fingerprint: none")
+        print("gpg_signature: not checked (release signatures are detached)")
         print(
             "features: "
-            f"argon2={argon2_state} pq={pq_state} pillow={pillow_state} "
-            f"numpy={numpy_state} cupy={cupy_state}"
+            f"argon2={argon2_state} oqs={pq_state} lzma={lzma_state} "
+            f"pillow={pillow_state} numpy={numpy_state} cupy={cupy_state}"
         )
         return 0
 

@@ -36,11 +36,6 @@ jobs:
           chmod +x .github/scripts/install-liboqs.sh
           .github/scripts/install-liboqs.sh
 
-      - name: Build C++ core with Argon2 + liboqs
-        run: |
-          cmake -S cpp -B cpp/build-ci -DCMAKE_BUILD_TYPE=Release -DBASEFWX_REQUIRE_ARGON2=ON -DBASEFWX_REQUIRE_OQS=ON
-          cmake --build cpp/build-ci --config Release
-
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -65,6 +60,9 @@ jobs:
           BASEFWX_OBFUSCATE: "1"
           ALLOW_BAKED_PUB: "0"
           BASEFWX_ENABLE_JMG_VIDEO: "0"
+          BASEFWX_TEST_REQUIRE_ARGON2: "ON"
+          BASEFWX_TEST_REQUIRE_OQS: "ON"
+          BASEFWX_TEST_REQUIRE_LZMA: "ON"
         run: |
           chmod +x scripts/test_all.sh
           ./scripts/test_all.sh --fast

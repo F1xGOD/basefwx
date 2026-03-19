@@ -26,6 +26,9 @@ JAR_BIN="${JAR_BIN:-}"
 RUN_JAVA_TESTS="${RUN_JAVA_TESTS:-1}"
 PYPY_BIN="${PYPY_BIN:-}"
 RUN_PYPY_TESTS="${RUN_PYPY_TESTS:-1}"
+CPP_REQUIRE_ARGON2="${BASEFWX_TEST_REQUIRE_ARGON2:-ON}"
+CPP_REQUIRE_OQS="${BASEFWX_TEST_REQUIRE_OQS:-OFF}"
+CPP_REQUIRE_LZMA="${BASEFWX_TEST_REQUIRE_LZMA:-OFF}"
 PY_VERSION_TAG=""
 PYPY_VERSION_TAG=""
 CPP_VERSION_TAG=""
@@ -931,7 +934,11 @@ copy_input() {
 ensure_cpp() {
     local build_dir="$ROOT/cpp/build"
     log "C++ binary missing or stale; attempting build"
-    time_cmd_no_fail "cpp_configure" cmake -S "$ROOT/cpp" -B "$build_dir" -DCMAKE_BUILD_TYPE=Release -DBASEFWX_REQUIRE_ARGON2=OFF -DBASEFWX_REQUIRE_OQS=OFF
+    time_cmd_no_fail "cpp_configure" cmake -S "$ROOT/cpp" -B "$build_dir" \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DBASEFWX_REQUIRE_ARGON2="$CPP_REQUIRE_ARGON2" \
+        -DBASEFWX_REQUIRE_OQS="$CPP_REQUIRE_OQS" \
+        -DBASEFWX_REQUIRE_LZMA="$CPP_REQUIRE_LZMA"
     if [[ ! -d "$build_dir" ]]; then
         log "CMake configure failed; build dir missing"
     fi

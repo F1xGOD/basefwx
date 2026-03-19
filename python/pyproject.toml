@@ -10,11 +10,10 @@ authors = [
 ]
 description = "Take your security to the next level!"
 readme = { file = "README.md", content-type = "text/markdown" }
-license = { text = "GPL-3.0-or-later" }
+license = "GPL-3.0-or-later"
 requires-python = ">=3.10"
 classifiers = [
     "Programming Language :: Python :: 3",
-    "License :: OSI Approved :: GNU General Public License v3 or later (GPLv3+)",
     "Operating System :: OS Independent",
 ]
 dependencies = [
@@ -37,3 +36,6 @@ PrivacyPolicy = "https://www.fixcraft.org/privacy-policy"
 
 [tool.setuptools.dynamic]
 version = {attr = "basefwx._repo_version.__version__"}
+
+[tool.setuptools.packages.find]
+include = ["basefwx"]

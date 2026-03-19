@@ -39,6 +39,12 @@
 #include <fcntl.h>
 #include <io.h>
 #include <windows.h>
+#ifdef EncryptFile
+#undef EncryptFile
+#endif
+#ifdef DecryptFile
+#undef DecryptFile
+#endif
 #else
 #include <unistd.h>
 #if defined(__APPLE__)

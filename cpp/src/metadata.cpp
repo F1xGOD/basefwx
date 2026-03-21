@@ -2,6 +2,7 @@
 
 #include "basefwx/base64.hpp"
 #include "basefwx/constants.hpp"
+#include "basefwx/pq.hpp"
 
 #include <chrono>
 #include <ctime>
@@ -53,7 +54,8 @@ std::string Build(const std::string& method,
                   std::optional<std::uint32_t> argon2_time,
                   std::optional<std::uint32_t> argon2_mem,
                   std::optional<std::uint32_t> argon2_par,
-                  std::string_view pack) {
+                  std::string_view pack,
+                  std::string_view key_separation) {
     if (strip) {
         return {};
     }
@@ -62,7 +64,7 @@ std::string Build(const std::string& method,
     fields.emplace_back("ENC-VERSION", std::string(constants::kEngineVersion));
     fields.emplace_back("ENC-METHOD", method);
     fields.emplace_back("ENC-MASTER", use_master ? "yes" : "no");
-    fields.emplace_back("ENC-KEM", use_master ? std::string(constants::kMasterPqAlg) : "none");
+    fields.emplace_back("ENC-KEM", use_master ? basefwx::pq::CurrentKemAlgorithm() : "none");
     fields.emplace_back("ENC-AEAD", std::string(aead));
     fields.emplace_back("ENC-KDF", std::string(kdf_label));
     if (!mode.empty()) {
@@ -85,6 +87,9 @@ std::string Build(const std::string& method,
     }
     if (!pack.empty()) {
         fields.emplace_back(std::string(constants::kPackMetaKey), std::string(pack));
+    }
+    if (!key_separation.empty()) {
+        fields.emplace_back("ENC-KSEP", std::string(key_separation));
     }
 
     std::string json;

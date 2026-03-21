@@ -20,6 +20,7 @@ public:
 
     static Bytes GenerateSalt();
     static StreamObfuscator ForPassword(const std::string& password, const Bytes& salt, bool fast = false);
+    static StreamObfuscator ForKey(const Bytes& secret, const Bytes& salt, bool fast = false);
 
     StreamObfuscator(StreamObfuscator&& other) noexcept;
     StreamObfuscator& operator=(StreamObfuscator&& other) noexcept;

@@ -616,7 +616,9 @@ StreamObfuscator& StreamObfuscator::operator=(StreamObfuscator&& other) noexcept
     return *this;
 }
 
-StreamObfuscator::~StreamObfuscator() = default;
+StreamObfuscator::~StreamObfuscator() {
+    basefwx::crypto::SecureClear(perm_material_);
+}
 
 Bytes StreamObfuscator::GenerateSalt() {
     return basefwx::crypto::RandomBytes(kSaltLen);
@@ -626,15 +628,28 @@ StreamObfuscator StreamObfuscator::ForPassword(const std::string& password, cons
     if (password.empty()) {
         throw std::runtime_error("Password required for streaming obfuscation");
     }
+    Bytes base_material(password.begin(), password.end());
+    StreamObfuscator out = ForKey(base_material, salt, fast);
+    basefwx::crypto::SecureClear(base_material);
+    return out;
+}
+
+StreamObfuscator StreamObfuscator::ForKey(const Bytes& secret, const Bytes& salt, bool fast) {
+    if (secret.empty()) {
+        throw std::runtime_error("Streaming obfuscation key must not be empty");
+    }
     if (salt.size() < kSaltLen) {
         throw std::runtime_error("Streaming obfuscation salt must be at least 16 bytes");
     }
-    Bytes base_material(password.begin(), password.end());
+    Bytes base_material = secret;
     base_material.insert(base_material.end(), salt.begin(), salt.end());
     Bytes mask_key = basefwx::crypto::HkdfSha256(base_material, constants::kStreamInfoKey, 32);
     Bytes iv = basefwx::crypto::HkdfSha256(base_material, constants::kStreamInfoIv, 16);
     Bytes perm_material = basefwx::crypto::HkdfSha256(base_material, constants::kStreamInfoPerm, 32);
     auto ctx = CreateAesCtrContext(mask_key, iv);
+    basefwx::crypto::SecureClear(base_material);
+    basefwx::crypto::SecureClear(mask_key);
+    basefwx::crypto::SecureClear(iv);
     return StreamObfuscator(std::move(perm_material), ctx.release(), fast);
 }
 

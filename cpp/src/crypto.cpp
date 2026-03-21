@@ -3,6 +3,7 @@
 #include "basefwx/constants.hpp"
 
 #include <openssl/evp.h>
+#include <openssl/crypto.h>
 #include <openssl/hmac.h>
 #include <openssl/kdf.h>
 #include <openssl/rand.h>
@@ -561,6 +562,48 @@ Bytes Sha3_512(const Bytes& data) {
     Ensure(EVP_DigestFinal_ex(ctx.get(), out.data(), &out_len) == 1, "SHA3-512 final failed");
     
     return Bytes(out.data(), out.data() + out_len);
+}
+
+void SecureClear(std::uint8_t* data, std::size_t length) {
+    if (!data || length == 0) {
+        return;
+    }
+    OPENSSL_cleanse(data, length);
+}
+
+void SecureClear(Bytes& bytes) {
+    if (!bytes.empty()) {
+        SecureClear(bytes.data(), bytes.size());
+    }
+    bytes.clear();
+}
+
+void SecureClear(std::string& text) {
+    if (!text.empty()) {
+        SecureClear(reinterpret_cast<std::uint8_t*>(text.data()), text.size());
+    }
+    text.clear();
+}
+
+SecretGuard::~SecretGuard() {
+    for (Bytes* bytes : byte_buffers_) {
+        if (bytes) {
+            SecureClear(*bytes);
+        }
+    }
+    for (std::string* text : string_buffers_) {
+        if (text) {
+            SecureClear(*text);
+        }
+    }
+}
+
+void SecretGuard::Add(Bytes& bytes) {
+    byte_buffers_.push_back(&bytes);
+}
+
+void SecretGuard::Add(std::string& text) {
+    string_buffers_.push_back(&text);
 }
 
 }  // namespace basefwx::crypto

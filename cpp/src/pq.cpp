@@ -21,6 +21,12 @@ namespace basefwx::pq {
 
 namespace {
 
+std::string NormalizeAlg(std::string value) {
+    std::transform(value.begin(), value.end(), value.begin(),
+                   [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+    return value;
+}
+
 Bytes ReadFileBytes(const std::filesystem::path& path) {
     std::ifstream input(path, std::ios::binary);
     if (!input) {
@@ -105,6 +111,31 @@ std::filesystem::path ExpandUser(const std::string& path) {
 
 }  // namespace
 
+bool IsSupportedKemAlgorithm(std::string_view algorithm) {
+    return algorithm == constants::kMasterPqAlg || algorithm == constants::kMasterPqAlgHigh;
+}
+
+std::string CurrentKemAlgorithm() {
+    std::string configured = NormalizeAlg(basefwx::env::Get("BASEFWX_MASTER_PQ_ALG"));
+    if (configured.empty()) {
+        if (basefwx::env::IsEnabled("BASEFWX_PQ_MAX", false)
+            || basefwx::env::IsEnabled("BASEFWX_PQ_1024", false)) {
+            return std::string(constants::kMasterPqAlgHigh);
+        }
+        return std::string(constants::kMasterPqAlg);
+    }
+    if (configured == "kyber1024") {
+        return std::string(constants::kMasterPqAlgHigh);
+    }
+    if (configured == "kyber768") {
+        return std::string(constants::kMasterPqAlg);
+    }
+    if (IsSupportedKemAlgorithm(configured)) {
+        return configured;
+    }
+    throw std::runtime_error("Unsupported ML-KEM algorithm: " + configured);
+}
+
 Bytes DecodeKeyBytes(const Bytes& raw) {
     if (raw.empty()) {
         return raw;
@@ -138,6 +169,7 @@ Bytes DecodeKeyBytes(const Bytes& raw) {
 }
 
 std::optional<Bytes> LoadMasterPublicKey() {
+    const std::string kem_alg = CurrentKemAlgorithm();
     std::string env_path = basefwx::env::Get("BASEFWX_MASTER_PQ_PUB");
     if (!env_path.empty()) {
         std::filesystem::path candidate = ExpandUser(env_path);
@@ -148,6 +180,9 @@ std::optional<Bytes> LoadMasterPublicKey() {
     }
     if (basefwx::env::IsEnabled("BASEFWX_MASTER_PQ_ALLOW_BAKED", false)
         || basefwx::env::IsEnabled("ALLOW_BAKED_PUB", false)) {
+        if (kem_alg != constants::kMasterPqAlg) {
+            throw std::runtime_error("Embedded PQ public key is available only for ml-kem-768");
+        }
         Bytes baked(constants::kMasterPqPublicB64.begin(), constants::kMasterPqPublicB64.end());
         return DecodeKeyBytes(baked);
     }
@@ -172,9 +207,10 @@ Bytes LoadMasterPrivateKey() {
 
 KemResult KemEncrypt(const Bytes& public_key) {
 #if defined(BASEFWX_HAS_OQS) && BASEFWX_HAS_OQS
-    OQS_KEM* kem = OQS_KEM_new(constants::kMasterPqAlg.data());
+    const std::string kem_alg = CurrentKemAlgorithm();
+    OQS_KEM* kem = OQS_KEM_new(kem_alg.c_str());
     if (!kem) {
-        throw std::runtime_error("Failed to initialize ML-KEM-768");
+        throw std::runtime_error("Failed to initialize " + kem_alg);
     }
     KemResult result;
     if (public_key.size() != kem->length_public_key) {
@@ -185,21 +221,22 @@ KemResult KemEncrypt(const Bytes& public_key) {
     result.shared.resize(kem->length_shared_secret);
     if (OQS_KEM_encaps(kem, result.ciphertext.data(), result.shared.data(), public_key.data()) != OQS_SUCCESS) {
         OQS_KEM_free(kem);
-        throw std::runtime_error("ML-KEM encapsulation failed");
+        throw std::runtime_error(kem_alg + " encapsulation failed");
     }
     OQS_KEM_free(kem);
     return result;
 #else
     (void)public_key;
-    throw std::runtime_error("ML-KEM-768 support is not enabled in this build");
+    throw std::runtime_error("ML-KEM support is not enabled in this build");
 #endif
 }
 
 Bytes KemDecrypt(const Bytes& private_key, const Bytes& ciphertext) {
 #if defined(BASEFWX_HAS_OQS) && BASEFWX_HAS_OQS
-    OQS_KEM* kem = OQS_KEM_new(constants::kMasterPqAlg.data());
+    const std::string kem_alg = CurrentKemAlgorithm();
+    OQS_KEM* kem = OQS_KEM_new(kem_alg.c_str());
     if (!kem) {
-        throw std::runtime_error("Failed to initialize ML-KEM-768");
+        throw std::runtime_error("Failed to initialize " + kem_alg);
     }
     if (private_key.size() != kem->length_secret_key) {
         OQS_KEM_free(kem);
@@ -212,14 +249,14 @@ Bytes KemDecrypt(const Bytes& private_key, const Bytes& ciphertext) {
     Bytes shared(kem->length_shared_secret);
     if (OQS_KEM_decaps(kem, shared.data(), ciphertext.data(), private_key.data()) != OQS_SUCCESS) {
         OQS_KEM_free(kem);
-        throw std::runtime_error("ML-KEM decapsulation failed");
+        throw std::runtime_error(kem_alg + " decapsulation failed");
     }
     OQS_KEM_free(kem);
     return shared;
 #else
     (void)private_key;
     (void)ciphertext;
-    throw std::runtime_error("ML-KEM-768 support is not enabled in this build");
+    throw std::runtime_error("ML-KEM support is not enabled in this build");
 #endif
 }
 

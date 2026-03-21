@@ -13,6 +13,7 @@ using Bytes = std::vector<std::uint8_t>;
 class LiveEncryptor {
 public:
     explicit LiveEncryptor(const std::string& password, bool use_master = false);
+    ~LiveEncryptor();
 
     Bytes Start();
     Bytes Update(const Bytes& chunk);
@@ -34,6 +35,7 @@ private:
 class LiveDecryptor {
 public:
     explicit LiveDecryptor(const std::string& password, bool use_master = false);
+    ~LiveDecryptor();
 
     std::vector<Bytes> Update(const Bytes& data);
     std::vector<Bytes> Update(const std::uint8_t* data, std::size_t len);

@@ -554,6 +554,7 @@ An7Keys DeriveKeys(const std::string& password, const Bytes& salt) {
     keys.perm = basefwx::crypto::HkdfSha256(root, "an7-perm", 32);
     keys.meta = basefwx::crypto::HkdfSha256(root, "an7-meta", 32);
     keys.tail = basefwx::crypto::HkdfSha256(root, "an7-tail", 32);
+    basefwx::crypto::SecureClear(root);
     return keys;
 #else
     (void)password;

@@ -2,6 +2,8 @@
 
 #include <cstdint>
 #include <optional>
+#include <string>
+#include <string_view>
 #include <vector>
 
 namespace basefwx::pq {
@@ -17,6 +19,8 @@ std::optional<Bytes> LoadMasterPublicKey();
 Bytes LoadMasterPrivateKey();
 KemResult KemEncrypt(const Bytes& public_key);
 Bytes KemDecrypt(const Bytes& private_key, const Bytes& ciphertext);
+std::string CurrentKemAlgorithm();
+bool IsSupportedKemAlgorithm(std::string_view algorithm);
 
 Bytes DecodeKeyBytes(const Bytes& raw);
 

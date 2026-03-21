@@ -45,5 +45,25 @@ std::size_t AesGcmDecryptWithIvInto(const Bytes& key,
                                     std::size_t out_len);
 Bytes AesCtrTransform(const Bytes& key, const Bytes& iv, const Bytes& data);
 Bytes Sha3_512(const Bytes& data);
+void SecureClear(std::uint8_t* data, std::size_t length);
+void SecureClear(Bytes& bytes);
+void SecureClear(std::string& text);
+
+class SecretGuard {
+public:
+    SecretGuard() = default;
+    SecretGuard(const SecretGuard&) = delete;
+    SecretGuard& operator=(const SecretGuard&) = delete;
+    SecretGuard(SecretGuard&&) = delete;
+    SecretGuard& operator=(SecretGuard&&) = delete;
+    ~SecretGuard();
+
+    void Add(Bytes& bytes);
+    void Add(std::string& text);
+
+private:
+    std::vector<Bytes*> byte_buffers_;
+    std::vector<std::string*> string_buffers_;
+};
 
 }  // namespace basefwx::crypto

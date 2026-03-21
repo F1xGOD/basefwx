@@ -18,6 +18,7 @@ Methods (aliases in parentheses):
 - `b512` (`512`, `fwx512`)
 - `aes-light` (`aes`, `256`, `light`)
 - `aes-heavy` (`pb512`, `aes512`, `heavy`)
+  `aes512` is a legacy alias; the cipher remains AES-256-GCM.
 
 Common flags:
 
@@ -80,6 +81,8 @@ Notes:
 
 - If a password string resolves to an existing file path, the file contents are used as the password.
 - PQ private key lookup defaults to `~/master_pq.sk` (or `W:\master_pq.sk` on Windows).
+- Set `BASEFWX_PQ_STRICT=1` (or `BASEFWX_PQ_ONLY=1`) to disable EC fallback and require ML-KEM master wrapping only.
+- Set `BASEFWX_MASTER_PQ_ALG=ml-kem-1024` (or `BASEFWX_PQ_MAX=1`) to opt the C++ core into the larger ML-KEM parameter set; embedded baked keys remain available only for `ml-kem-768`.
 - `kFMe` auto-detects source type (audio -> PNG, non-audio -> WAV).
 - `kFMd` strictly decodes BaseFWX carriers only.
 - `kFAe`/`kFAd` are deprecated compatibility aliases.

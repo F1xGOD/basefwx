@@ -172,6 +172,12 @@ LiveEncryptor::LiveEncryptor(const std::string& password, bool use_master)
     : password_(basefwx::ResolvePassword(password)),
       use_master_(use_master) {}
 
+LiveEncryptor::~LiveEncryptor() {
+    basefwx::crypto::SecureClear(password_);
+    basefwx::crypto::SecureClear(key_);
+    basefwx::crypto::SecureClear(nonce_prefix_);
+}
+
 Bytes LiveEncryptor::InitSession() {
     bool has_password = !password_.empty();
     std::uint8_t key_mode = basefwx::constants::kLiveKeyModePbkdf2;
@@ -289,6 +295,13 @@ Bytes LiveEncryptor::Finalize() {
 LiveDecryptor::LiveDecryptor(const std::string& password, bool use_master)
     : password_(basefwx::ResolvePassword(password)),
       use_master_(use_master) {}
+
+LiveDecryptor::~LiveDecryptor() {
+    basefwx::crypto::SecureClear(password_);
+    basefwx::crypto::SecureClear(key_);
+    basefwx::crypto::SecureClear(nonce_prefix_);
+    basefwx::crypto::SecureClear(buffer_);
+}
 
 void LiveDecryptor::ParseHeader(const std::uint8_t* body, std::size_t body_len) {
     if (body == nullptr || body_len < basefwx::constants::kLiveHeaderFixedLen) {

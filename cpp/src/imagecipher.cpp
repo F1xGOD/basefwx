@@ -204,7 +204,7 @@ std::uint32_t ResolveImageKdfIterations() {
         raw = basefwx::env::Get("BASEFWX_TEST_KDF_ITERS");
     }
     std::uint32_t parsed = ParseIterations(raw, basefwx::constants::kUserKdfIterations);
-    return std::max<std::uint32_t>(200000, parsed);
+    return std::max<std::uint32_t>(static_cast<std::uint32_t>(basefwx::constants::kUserKdfIterations), parsed);
 }
 
 std::uint32_t HardenImageIterations(const std::string& password, std::uint32_t iters) {
@@ -1215,6 +1215,7 @@ std::string EncryptImageInv(const std::string& path,
                             bool archive_original,
                             bool use_master) {
     std::string resolved = basefwx::ResolvePassword(password);
+    basefwx::RequireStrongPasswordForEncryption(resolved, "jMG");
     if (!include_trailer) {
         if (basefwx::env::Get("BASEFWX_ALLOW_INSECURE_IMAGE_OBFUSCATION") != "1") {
             throw std::runtime_error(
@@ -3011,6 +3012,7 @@ std::string EncryptMedia(const std::string& path,
                          bool archive_original,
                          bool use_master) {
     std::string resolved = basefwx::ResolvePassword(password);
+    basefwx::RequireStrongPasswordForEncryption(resolved, "jMG");
     std::filesystem::path input_path = NormalizePath(path);
     if (!std::filesystem::exists(input_path)) {
         throw std::runtime_error("Input file not found: " + input_path.string());

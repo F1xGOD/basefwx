@@ -1,9 +1,8 @@
-# basefwx C++ port (WIP)
+# basefwx C++
 
-This folder is the start of a C++ rewrite intended to stay wire-compatible with
-BaseFWX 3.6.3. The initial focus is shared codecs (b256/b512/pb512) and
-file-format parsing so we can inspect payloads and validate blob structure before
-porting the full AES file pipeline.
+This C++ implementation is wire-compatible with BaseFWX 3.6.4 and covers the
+current CLI/library surface used in release builds, including fwxAES, jMG, kFM,
+and the shared codec families.
 
 ## Build
 
@@ -35,8 +34,6 @@ cmake --build cpp/build
 ./cpp/build/basefwx_cpp kFMe input.mp3 --out input.png --bw
 ./cpp/build/basefwx_cpp kFMd input.wav --out restored.bin
 ./cpp/build/basefwx_cpp kFMd input.png --out restored.mp3
-./cpp/build/basefwx_cpp kFAe input.mp3 --out input.png --bw   # deprecated alias
-./cpp/build/basefwx_cpp kFAd input.png --out restored.mp3     # deprecated alias
 ./cpp/build/basefwx_cpp b512-enc "hello" -p "pw"
 ./cpp/build/basefwx_cpp b512-dec "<payload>" -p "pw"
 ./cpp/build/basefwx_cpp pb512-enc "hello" -p "pw"
@@ -56,11 +53,19 @@ cmake --build cpp/build
 ffmpeg -hide_banner -loglevel error -i input.m4a -vn -ac 1 -ar 16000 -f wav pipe:1 \
   | ./cpp/build/basefwx_cpp fwxaes-live-enc - -p "pw" --no-master --out - \
   | ./cpp/build/basefwx_cpp fwxaes-live-dec - -p "pw" --no-master --out - > restored.wav
-./cpp/build/basefwx_cpp jmge input.mp4 -p "pw" --no-archive --out out-small.mp4
+./cpp/build/basefwx_cpp jmge input.mp4 -p "pw" --out out-small.mp4
+./cpp/build/basefwx_cpp jmge input.mp4 -p "pw" --archive --out out-exact.mp4
 ```
 
-This prints the length-prefixed sections and attempts to decode metadata if the
-payload matches the AES file format.
+`info`, `identify`, and `probe` recognize:
+
+- BaseFWX length-prefixed containers
+- `FWX1` fwxAES headers
+- kFM PNG/WAV carriers, including legacy `kFAe` output
+
+If a file is not recognized as a BaseFWX container, the CLI falls back to a
+heuristic report. High-entropy files are reported as unidentified random-like
+data instead of being mislabeled as a corrupted BaseFWX container.
 
 ## Compatibility notes
 
@@ -71,9 +76,14 @@ payload matches the AES file format.
 - The b512 AEAD payload is fully encrypted, so metadata cannot be parsed without
   decryption.
 - kFM carriers are byte-reversible across Python/C++/Java for BaseFWX-made files.
+- New kFM carriers are block-coded into PNG/WAV media at near full carrier capacity; they are no longer stored as raw carrier bytes copied straight into pixel/sample buffers.
+- Legacy raw-byte kFM carriers still decode for backward compatibility.
+- New encrypt operations reject passwords shorter than 10 characters unless `BASEFWX_ALLOW_WEAK_PASSWORD=1` is set.
+- Default user KDF targets are hardened to `PBKDF2=600000` / `Argon2id=4 x 64 MiB`, and heavy mode advertises `PBKDF2=2000000` / `Argon2id=6 x 256 MiB`.
 - `kFMe` auto-detects source type:
   - audio input -> PNG carrier
   - non-audio input -> WAV carrier
+- `kFMe` only emits `.png` or `.wav` carrier files; explicit mismatched output extensions are rejected.
 - `kFMd` strictly decodes BaseFWX carriers and refuses non-carrier files.
 - `kFAe` / `kFAd` are kept as compatibility aliases but are deprecated.
 - The fwxaes raw format uses the FWX1 header and PBKDF2 + AES-256-GCM, with an
@@ -84,8 +94,8 @@ payload matches the AES file format.
   used in piping workflows (for example with `ffmpeg` audio/video streams).
 - jMG media transcode can use optional FFmpeg hardware acceleration:
   set `BASEFWX_HWACCEL=nvenc` for NVIDIA (auto-detected fallback to CPU when unavailable).
-- `jmge --no-archive` stores a key-only `JMG1` trailer (smaller output, but decode
-  may not be byte-identical to the source media).
+- `jmge` now defaults to a key-only `JMG1` trailer in the CLI (smaller output, concealment-first, decode may not be byte-identical).
+- Use `jmge --archive` when you explicitly want the encrypted original payload appended for exact restore.
 - `--no-log` suppresses telemetry/progress/warnings while preserving primary outputs/errors.
 - `--verbose` adds a hardware routing reason line.
 - jMG video is temporarily disabled by default unless `BASEFWX_ENABLE_JMG_VIDEO=1`.
@@ -108,10 +118,6 @@ Quick install hints:
 - Ubuntu/Debian: `sudo apt install libssl-dev libargon2-dev liboqs-dev zlib1g-dev liblzma-dev`
 - Arch: `sudo pacman -S openssl argon2 liboqs zlib xz`
 - macOS (brew): `brew install openssl@3 argon2 liboqs zlib xz`
-
-## Next steps
-
-- Expand CLI flags for argon2 tuning and streaming thresholds if needed.
 
 ## Library API quick refs
 

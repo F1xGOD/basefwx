@@ -83,9 +83,15 @@ Notes:
 - PQ private key lookup defaults to `~/master_pq.sk` (or `W:\master_pq.sk` on Windows).
 - Set `BASEFWX_PQ_STRICT=1` (or `BASEFWX_PQ_ONLY=1`) to disable EC fallback and require ML-KEM master wrapping only.
 - Set `BASEFWX_MASTER_PQ_ALG=ml-kem-1024` (or `BASEFWX_PQ_MAX=1`) to opt the C++ core into the larger ML-KEM parameter set; embedded baked keys remain available only for `ml-kem-768`.
+- C++ `info` / `identify` / `probe` recognize length-prefixed containers, `FWX1` headers, and kFM PNG/WAV carriers, including legacy `kFAe` output.
+- When a file is not recognized as BaseFWX, the C++ CLI reports a heuristic guess (`unknown`, random-like, or a simple format hint) instead of only saying "corrupted container".
 - `kFMe` auto-detects source type (audio -> PNG, non-audio -> WAV).
+- `kFMe` only writes `.png` or `.wav` carrier files; explicit mismatched output extensions are rejected.
 - `kFMd` strictly decodes BaseFWX carriers only.
+- C++ kFM carriers are block-coded into PNG/WAV media at near full carrier capacity instead of copying raw container bytes directly into pixels or samples; legacy raw carriers still decode.
 - `kFAe`/`kFAd` are deprecated compatibility aliases.
+- New encrypt operations reject passwords shorter than 10 characters unless `BASEFWX_ALLOW_WEAK_PASSWORD=1` is set.
+- Default user KDF targets are hardened to `PBKDF2=600000` / `Argon2id=4 x 64 MiB`, and heavy-mode payloads advertise `PBKDF2=2000000` / `Argon2id=6 x 256 MiB`.
 - Support policy is single-version: only the latest release is maintained; all older releases are immediately unsupported.
 - Python `n10` is optimized for large payloads, but C++/Java remain faster in heavy benchmark runs.
 - Optional kFM/kFA acceleration:
@@ -217,8 +223,6 @@ cpp/build/basefwx_cpp n10file-enc <in-file> <out-file>
 cpp/build/basefwx_cpp n10file-dec <in-file> <out-file>
 cpp/build/basefwx_cpp kFMe <in-file> [--out <path>] [--bw]
 cpp/build/basefwx_cpp kFMd <carrier-file> [--out <path>] [--bw]
-cpp/build/basefwx_cpp kFAe <in-file> [--out <path>] [--bw]   # deprecated alias
-cpp/build/basefwx_cpp kFAd <carrier-file> [--out <path>]     # deprecated alias
 
 cpp/build/basefwx_cpp b512-enc <text> -p <password>
 cpp/build/basefwx_cpp b512-dec <text> -p <password>
@@ -230,7 +234,7 @@ cpp/build/basefwx_cpp b512file-dec <file.fwx> -p <password>
 cpp/build/basefwx_cpp pb512file-enc <file> -p <password>
 cpp/build/basefwx_cpp pb512file-dec <file.fwx> -p <password>
 
-cpp/build/basefwx_cpp jmge <media> [-p <password>] [--master-pub <path>] [--out <path>] [--no-archive]
+cpp/build/basefwx_cpp jmge <media> [-p <password>] [--master-pub <path>] [--out <path>] [--archive]
 cpp/build/basefwx_cpp jmgd <media> [-p <password>] [--out <path>]
 ```
 
@@ -242,7 +246,8 @@ cpp/build/basefwx_cpp jmge input.mp4 --master-pub /secure/mlkem768.pub --out out
 
 Notes:
 
-- `jmge --no-archive` writes a key-only `JMG1` trailer (smaller output, decode may not be byte-identical).
+- C++ `jmge` now defaults to a key-only `JMG1` trailer (smaller output, concealment-first, decode may not be byte-identical).
+- Use `jmge --archive` when you explicitly want the encrypted original payload appended for exact restore.
 - `--no-log` suppresses telemetry/progress/warnings and keeps primary outputs/errors only.
 - `--verbose` adds detailed hardware routing reason lines.
 - `fwxaes-live-*` implements the packetized `LIVE` v1 stream format used by Python/Java.

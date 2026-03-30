@@ -2,7 +2,7 @@
 
 ## Supported Versions
 
-**Versioning note:** Current releases use `MAJOR.MINOR.PATCH` (e.g., `3.6.3`).
+**Versioning note:** Current releases use `MAJOR.MINOR.PATCH` (e.g., `3.6.4`).
 
 > [!CAUTION]
 > DO NOT USE ANY VERSION BELOW 2.6, you -> WILL <- get compromised!
@@ -17,7 +17,7 @@
 | **Latest release only** | 👑 Actively maintained. Receives all fixes: security, bugs, and compatibility. | ✅ |
 | **All older releases** | ❌ End-of-life immediately after a newer release ships. No support, no bug fixes, no security patches. | ❌ |
 
-### What's New in 3.6.3
+### What's New in 3.6.4
 
 * **AN7/DEAN7 Added:** New reversible stealth anonymization layer is now available in C++, Python, and Java.
 * **Release Metadata Unified:** C++, Python, and Java now read the same repository version and expose consistent build metadata.

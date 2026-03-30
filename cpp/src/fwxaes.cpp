@@ -84,8 +84,8 @@ std::uint32_t ClampToU32(std::size_t value) {
 basefwx::pb512::KdfOptions ResolveWrapKdfOptions(const Options& options,
                                                  const std::string& password) {
     basefwx::pb512::KdfOptions out = options.user_kdf;
-    if (out.pbkdf2_iterations == 200000
-        && options.pbkdf2_iters != 200000) {
+    if (out.pbkdf2_iterations == basefwx::constants::kUserKdfIterations
+        && options.pbkdf2_iters != basefwx::constants::kUserKdfIterations) {
         out.pbkdf2_iterations = options.pbkdf2_iters;
     }
     out.pbkdf2_iterations = HardenPbkdf2Iterations(password, ClampToU32(out.pbkdf2_iterations));
@@ -329,6 +329,7 @@ void WriteText(const std::string& path, const std::string& text) {
 
 Bytes EncryptRaw(const Bytes& plaintext, const std::string& password, const Options& options) {
     std::string resolved = basefwx::ResolvePassword(password);
+    basefwx::RequireStrongPasswordForEncryption(resolved, "fwxAES");
     Options effective = options;
     effective.pbkdf2_iters = ResolveTestIters(options.pbkdf2_iters);
     effective.pbkdf2_iters = HardenPbkdf2Iterations(resolved, effective.pbkdf2_iters);
@@ -539,6 +540,7 @@ std::uint64_t EncryptStream(std::istream& source,
                             const std::string& password,
                             const Options& options) {
     std::string resolved = basefwx::ResolvePassword(password);
+    basefwx::RequireStrongPasswordForEncryption(resolved, "fwxAES");
     Options effective = options;
     effective.pbkdf2_iters = ResolveTestIters(options.pbkdf2_iters);
     effective.pbkdf2_iters = HardenPbkdf2Iterations(resolved, effective.pbkdf2_iters);

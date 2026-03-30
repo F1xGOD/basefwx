@@ -27,9 +27,9 @@ Compare: <https://github.com/F1xGOD/basefwx/compare/v3.6.2...v3.6.3>
 - `v3.6.3` is a release-hardening and interoperability release: stealth anonymization, stricter packaging, and consistent metadata are the main user-visible changes.
 - Python and Java now follow the repository `VERSION` file directly, so version bumps no longer need separate per-runtime edits beyond the shared source.
 
-## [v3.6.2] - 2026-02-22
+## [v3.6.4] - 2026-03-21
 
-Compare: <https://github.com/F1xGOD/basefwx/compare/v3.6.1...v3.6.2>
+Compare: <https://github.com/F1xGOD/basefwx/compare/v3.6.3...v3.6.4>
 
 ### Added
 - New reversible carrier APIs in all runtimes:

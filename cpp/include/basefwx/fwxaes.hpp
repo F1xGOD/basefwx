@@ -15,7 +15,7 @@ namespace basefwx::fwxaes {
 using Bytes = std::vector<std::uint8_t>;
 
 struct Options {
-    std::uint32_t pbkdf2_iters = 200000;
+    std::uint32_t pbkdf2_iters = static_cast<std::uint32_t>(constants::kUserKdfIterations);
     std::uint8_t salt_len = 16;
     std::uint8_t iv_len = 12;
     bool use_master = false;

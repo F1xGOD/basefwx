@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <iosfwd>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "basefwx/constants.hpp"
@@ -23,9 +24,20 @@ struct InspectResult {
     std::string metadata_json;
 };
 
+struct KfmCarrierInspectResult {
+    std::uint64_t file_size = 0;
+    std::size_t payload_len = 0;
+    std::uint8_t mode = 0;
+    std::uint8_t flags = 0;
+    std::string carrier_kind;
+    std::string payload_ext;
+};
+
 std::vector<std::uint8_t> ReadFile(const std::string& path);
 InspectResult InspectBlob(const std::vector<std::uint8_t>& blob);
+std::optional<KfmCarrierInspectResult> InspectKfmCarrierFile(const std::string& path);
 std::string ResolvePassword(const std::string& input);
+void RequireStrongPasswordForEncryption(const std::string& password, std::string_view context = {});
 
 std::string B256Encode(const std::string& input);
 std::string B256Decode(const std::string& input);
@@ -42,9 +54,9 @@ std::string B1024Encode(const std::string& input);
 
 struct KdfOptions {
     std::string label = "auto";
-    std::size_t pbkdf2_iterations = 200000;
-    std::uint32_t argon2_time_cost = 3;
-    std::uint32_t argon2_memory_cost = 1u << 15;
+    std::size_t pbkdf2_iterations = constants::kUserKdfIterations;
+    std::uint32_t argon2_time_cost = constants::kArgon2TimeCost;
+    std::uint32_t argon2_memory_cost = constants::kArgon2MemoryCost;
     std::uint32_t argon2_parallelism = constants::DefaultArgon2Parallelism();
     bool allow_pbkdf2_fallback = true;
 };
@@ -75,7 +87,7 @@ std::string Jmge(const std::string& path,
                  const std::string& output = {},
                  bool keep_meta = false,
                  bool keep_input = false,
-                 bool archive_original = true,
+                 bool archive_original = false,
                  bool use_master = false);
 std::string Jmgd(const std::string& path,
                  const std::string& password,

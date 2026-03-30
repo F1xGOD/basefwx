@@ -8,7 +8,7 @@ std::string EncryptImageInv(const std::string& path,
                             const std::string& password,
                             const std::string& output = {},
                             bool include_trailer = true,
-                            bool archive_original = true,
+                            bool archive_original = false,
                             bool use_master = false);
 
 std::string DecryptImageInv(const std::string& path,
@@ -21,7 +21,7 @@ std::string EncryptMedia(const std::string& path,
                          const std::string& output = {},
                          bool keep_meta = false,
                          bool keep_input = false,
-                         bool archive_original = true,
+                         bool archive_original = false,
                          bool use_master = false);
 
 std::string DecryptMedia(const std::string& path,

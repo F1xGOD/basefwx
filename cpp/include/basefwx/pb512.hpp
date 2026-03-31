@@ -13,9 +13,9 @@ using Bytes = std::vector<std::uint8_t>;
 
 struct KdfOptions {
     std::string label = "auto";
-    std::size_t pbkdf2_iterations = 200000;
-    std::uint32_t argon2_time_cost = 3;
-    std::uint32_t argon2_memory_cost = 1u << 15;
+    std::size_t pbkdf2_iterations = constants::kUserKdfIterations;
+    std::uint32_t argon2_time_cost = constants::kArgon2TimeCost;
+    std::uint32_t argon2_memory_cost = constants::kArgon2MemoryCost;
     std::uint32_t argon2_parallelism = constants::DefaultArgon2Parallelism();
     bool allow_pbkdf2_fallback = true;
 };

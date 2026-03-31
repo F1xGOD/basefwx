@@ -1760,8 +1760,8 @@ cpp_jmg_roundtrip() {
     local input="$1"
     local enc="$2"
     local dec="$3"
-    log "STEP: $CPP_BIN jmge $input"
-    "$CPP_BIN" jmge "$input" -p "$PW" --out "$enc" || return $?
+    log "STEP: $CPP_BIN jmge $input --archive"
+    "$CPP_BIN" jmge "$input" -p "$PW" --archive --out "$enc" || return $?
     log "STEP: $CPP_BIN jmgd $enc"
     "$CPP_BIN" jmgd "$enc" -p "$PW" --out "$dec"
 }
@@ -1770,8 +1770,8 @@ cpp_jmg_roundtrip_no_archive() {
     local input="$1"
     local enc="$2"
     local dec="$3"
-    log "STEP: $CPP_BIN jmge $input --no-archive"
-    "$CPP_BIN" jmge "$input" -p "$PW" --no-archive --out "$enc" || return $?
+    log "STEP: $CPP_BIN jmge $input"
+    "$CPP_BIN" jmge "$input" -p "$PW" --out "$enc" || return $?
     log "STEP: $CPP_BIN jmgd $enc"
     "$CPP_BIN" jmgd "$enc" -p "$PW" --out "$dec"
 }

@@ -2,7 +2,9 @@
 
 #include <algorithm>
 #include <cmath>
+#include <filesystem>
 #include <fstream>
+#include <set>
 #include <sstream>
 #include <thread>
 
@@ -59,9 +61,42 @@ std::uint32_t ReadCpuMaxFrequency() {
 }
 
 std::uint32_t ReadMemoryFrequency() {
-    // Try reading from dmidecode (requires root, usually not available)
-    // For now, return 0 (unknown)
+    // Reading DIMM speed is not portable without privileged tooling such as dmidecode.
     return 0;
+}
+
+std::uint32_t ReadLinuxPhysicalCoreCount() {
+    namespace fs = std::filesystem;
+    const fs::path cpu_root("/sys/devices/system/cpu");
+    std::error_code ec;
+    if (!fs::exists(cpu_root, ec)) {
+        return 0;
+    }
+
+    std::set<std::pair<std::string, std::string>> unique_cores;
+    for (const auto& entry : fs::directory_iterator(cpu_root, ec)) {
+        if (ec || !entry.is_directory()) {
+            continue;
+        }
+        const std::string name = entry.path().filename().string();
+        if (name.size() <= 3 || name.rfind("cpu", 0) != 0) {
+            continue;
+        }
+        const std::string suffix = name.substr(3);
+        if (!std::all_of(suffix.begin(), suffix.end(), [](unsigned char ch) { return std::isdigit(ch) != 0; })) {
+            continue;
+        }
+
+        const fs::path topo = entry.path() / "topology";
+        std::ifstream package_file(topo / "physical_package_id");
+        std::ifstream core_file(topo / "core_id");
+        std::string package_id;
+        std::string core_id;
+        if (package_file >> package_id && core_file >> core_id) {
+            unique_cores.emplace(package_id, core_id);
+        }
+    }
+    return static_cast<std::uint32_t>(unique_cores.size());
 }
 #endif
 
@@ -125,10 +160,9 @@ CpuInfo DetectCpuInfo() {
     info.physical_cores = info.logical_cores;
     
 #if BASEFWX_LINUX
-    // Try to read physical core count from /sys
-    std::ifstream core_file("/sys/devices/system/cpu/cpu0/topology/core_siblings_list");
-    if (core_file.is_open()) {
-        // This is complex to parse accurately; use logical for now
+    std::uint32_t physical = ReadLinuxPhysicalCoreCount();
+    if (physical > 0) {
+        info.physical_cores = physical;
     }
 #endif
 

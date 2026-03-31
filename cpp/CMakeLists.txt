@@ -8,19 +8,6 @@ endif()
 
 project(basefwx_cpp VERSION ${BASEFWX_PROJECT_VERSION} LANGUAGES CXX)
 
-string(TIMESTAMP BASEFWX_BUILD_UTC "%Y-%m-%dT%H:%M:%SZ" UTC)
-set(BASEFWX_GIT_COMMIT "unknown")
-execute_process(
-    COMMAND git -C ${CMAKE_CURRENT_SOURCE_DIR}/.. rev-parse --short=12 HEAD
-    OUTPUT_VARIABLE BASEFWX_GIT_COMMIT
-    OUTPUT_STRIP_TRAILING_WHITESPACE
-    ERROR_QUIET
-    RESULT_VARIABLE BASEFWX_GIT_RESULT
-)
-if(NOT BASEFWX_GIT_RESULT EQUAL 0 OR BASEFWX_GIT_COMMIT STREQUAL "")
-    set(BASEFWX_GIT_COMMIT "unknown")
-endif()
-
 option(BASEFWX_BUILD_CLI "Build basefwx_cpp CLI" ON)
 option(BASEFWX_REQUIRE_ARGON2 "Require libargon2 for Argon2id support" ON)
 option(BASEFWX_REQUIRE_OQS "Require liboqs for ML-KEM-768 support" OFF)
@@ -154,6 +141,22 @@ inline constexpr const char kCliGpgPublicKey[] =
 string(CONFIGURE "${_basefwx_build_info_content}" _basefwx_build_info_content @ONLY)
 file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/generated")
 file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/generated/basefwx_build_info.hpp" "${_basefwx_build_info_content}")
+
+set(BASEFWX_CLI_BUILD_TYPE_VALUE "${CMAKE_BUILD_TYPE}")
+if(BASEFWX_CLI_BUILD_TYPE_VALUE STREQUAL "")
+    set(BASEFWX_CLI_BUILD_TYPE_VALUE "unknown")
+endif()
+
+set(BASEFWX_CLI_BUILD_STAMP_HEADER "${CMAKE_CURRENT_BINARY_DIR}/generated/basefwx_build_stamp.hpp")
+add_custom_target(basefwx_cli_build_stamp
+    COMMAND ${CMAKE_COMMAND}
+        "-DOUTPUT_FILE=${BASEFWX_CLI_BUILD_STAMP_HEADER}"
+        "-DSOURCE_ROOT=${CMAKE_CURRENT_SOURCE_DIR}/.."
+        "-DBUILD_TYPE=${BASEFWX_CLI_BUILD_TYPE_VALUE}"
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/WriteCliBuildStamp.cmake"
+    COMMENT "Refreshing BaseFWX CLI build metadata"
+    VERBATIM
+)
 
 # Harden static OpenSSL selection: some environments still resolve OpenSSL::Crypto
 # to libcrypto.so even with OPENSSL_USE_STATIC_LIBS=TRUE.
@@ -652,11 +655,7 @@ if(BASEFWX_BUILD_CLI)
     add_executable(basefwx_cpp
         src/main.cpp
     )
+    add_dependencies(basefwx_cpp basefwx_cli_build_stamp)
     target_link_libraries(basefwx_cpp PRIVATE basefwxcpp)
     target_include_directories(basefwx_cpp PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated")
-    target_compile_definitions(basefwx_cpp PRIVATE
-        BASEFWX_CLI_GIT_COMMIT="${BASEFWX_GIT_COMMIT}"
-        BASEFWX_CLI_BUILD_UTC="${BASEFWX_BUILD_UTC}"
-        BASEFWX_CLI_BUILD_TYPE="$<IF:$<BOOL:${CMAKE_BUILD_TYPE}>,${CMAKE_BUILD_TYPE},unknown>"
-    )
 endif()

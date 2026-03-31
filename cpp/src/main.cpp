@@ -1,5 +1,6 @@
 #include "basefwx/basefwx.hpp"
 #include "basefwx_build_info.hpp"
+#include "basefwx_build_stamp.hpp"
 #include "basefwx/cli_colors.hpp"
 #include "basefwx/constants.hpp"
 #include "basefwx/env.hpp"
@@ -12,6 +13,7 @@
 #include <array>
 #include <atomic>
 #include <cctype>
+#include <cmath>
 #include <cstdint>
 #include <cstdlib>
 #include <condition_variable>
@@ -36,6 +38,7 @@
 #include <vector>
 
 #ifdef _WIN32
+#include <conio.h>
 #include <fcntl.h>
 #include <io.h>
 #include <windows.h>
@@ -46,6 +49,7 @@
 #undef DecryptFile
 #endif
 #else
+#include <termios.h>
 #include <unistd.h>
 #if defined(__APPLE__)
 #include <mach-o/dyld.h>
@@ -313,6 +317,103 @@ bool IsStderrInteractive() {
 #endif
 }
 
+bool IsStdinInteractive() {
+#if defined(_WIN32)
+    return _isatty(_fileno(stdin)) != 0;
+#else
+    return isatty(fileno(stdin)) != 0;
+#endif
+}
+
+std::string ReadHiddenPassword(std::string_view prompt) {
+    std::cerr << prompt;
+    std::cerr.flush();
+#if defined(_WIN32)
+    std::string value;
+    while (true) {
+        int ch = _getch();
+        if (ch == '\r' || ch == '\n') {
+            std::cerr << "\n";
+            return value;
+        }
+        if (ch == 3) {
+            throw std::runtime_error("Interrupted");
+        }
+        if (ch == '\b' || ch == 127) {
+            if (!value.empty()) {
+                value.pop_back();
+            }
+            continue;
+        }
+        if (ch == 0 || ch == 224) {
+            (void)_getch();
+            continue;
+        }
+        value.push_back(static_cast<char>(ch));
+    }
+#else
+    termios original{};
+    if (tcgetattr(STDIN_FILENO, &original) != 0) {
+        throw std::runtime_error("Failed to access terminal for hidden password prompt");
+    }
+    termios hidden = original;
+    hidden.c_lflag &= static_cast<tcflag_t>(~ECHO);
+    if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &hidden) != 0) {
+        throw std::runtime_error("Failed to disable terminal echo for password prompt");
+    }
+    struct EchoRestore {
+        termios state{};
+        bool active = false;
+        ~EchoRestore() {
+            if (active) {
+                tcsetattr(STDIN_FILENO, TCSAFLUSH, &state);
+            }
+        }
+    } restore;
+    restore.state = original;
+    restore.active = true;
+    std::string value;
+    if (!std::getline(std::cin, value)) {
+        std::cerr << "\n";
+        throw std::runtime_error("Failed to read password from terminal");
+    }
+    std::cerr << "\n";
+    return value;
+#endif
+}
+
+void ResolveCliPassword(std::string& password, bool password_provided, bool requires_password, bool confirm_password) {
+    if (password_provided) {
+        if (requires_password && password.empty()) {
+            throw std::runtime_error("Password cannot be empty");
+        }
+        return;
+    }
+    if (!requires_password) {
+        return;
+    }
+    if (!IsStdinInteractive()) {
+        throw std::runtime_error("Password required; rerun in an interactive terminal or pass --password");
+    }
+    while (true) {
+        std::string first = ReadHiddenPassword("Password: ");
+        if (first.empty()) {
+            std::cerr << "Password cannot be empty.\n";
+            continue;
+        }
+        if (!confirm_password) {
+            password = std::move(first);
+            return;
+        }
+        std::string second = ReadHiddenPassword("Confirm password: ");
+        if (first == second) {
+            password = std::move(first);
+            return;
+        }
+        std::cerr << "Passwords did not match. Try again.\n";
+    }
+}
+
 std::string StyleText(const std::string& text, const char* color, bool plain) {
     if (plain) {
         return text;
@@ -553,6 +654,174 @@ std::string FormatSize(std::uint64_t bytes) {
 
 void PrintIdentifyField(const std::string& key, const std::string& value) {
     std::cout << basefwx::cli::Cyan(key) << ": " << value << "\n";
+}
+
+std::string FormatPercent(double ratio) {
+    std::ostringstream out;
+    out << std::fixed << std::setprecision(1) << (ratio * 100.0) << "%";
+    return out.str();
+}
+
+std::string FormatEntropy(double bits_per_byte) {
+    std::ostringstream out;
+    out << std::fixed << std::setprecision(2) << bits_per_byte << " bits/byte";
+    return out.str();
+}
+
+std::string DescribeKfmMode(std::uint8_t mode) {
+    if (mode == 1u) {
+        return "image->audio";
+    }
+    if (mode == 2u) {
+        return "audio->image";
+    }
+    return "unknown";
+}
+
+std::string DescribeKfmFlags(std::uint8_t flags) {
+    if (flags == 0u) {
+        return "none";
+    }
+    std::string out;
+    if ((flags & 0x01u) != 0u) {
+        out = "bw";
+    }
+    std::uint8_t remaining = static_cast<std::uint8_t>(flags & ~0x01u);
+    if (remaining != 0u) {
+        if (!out.empty()) {
+            out += ", ";
+        }
+        std::ostringstream hex;
+        hex << "0x" << std::hex << std::setw(2) << std::setfill('0')
+            << static_cast<unsigned int>(remaining);
+        out += hex.str();
+    }
+    return out;
+}
+
+struct UnknownFileAnalysis {
+    std::uint64_t file_size = 0;
+    std::size_t sample_size = 0;
+    double entropy_bits = 0.0;
+    double printable_ratio = 0.0;
+    double zero_ratio = 0.0;
+    bool high_entropy = false;
+    bool looks_random = false;
+    std::string format_hint;
+    std::string note;
+};
+
+std::vector<std::uint8_t> ReadSampleBytes(const std::filesystem::path& path, std::size_t max_bytes) {
+    std::ifstream input(path, std::ios::binary);
+    if (!input) {
+        throw std::runtime_error("Failed to open file: " + path.string());
+    }
+    std::vector<std::uint8_t> data(max_bytes);
+    input.read(reinterpret_cast<char*>(data.data()), static_cast<std::streamsize>(data.size()));
+    data.resize(static_cast<std::size_t>(input.gcount()));
+    return data;
+}
+
+std::string DetectFormatHint(const std::vector<std::uint8_t>& sample) {
+    if (sample.empty()) {
+        return "empty file";
+    }
+    if (sample.size() >= 8
+        && sample[0] == 0x89u && sample[1] == 0x50u && sample[2] == 0x4Eu && sample[3] == 0x47u
+        && sample[4] == 0x0Du && sample[5] == 0x0Au && sample[6] == 0x1Au && sample[7] == 0x0Au) {
+        return "PNG image";
+    }
+    if (sample.size() >= 12
+        && sample[0] == 'R' && sample[1] == 'I' && sample[2] == 'F' && sample[3] == 'F'
+        && sample[8] == 'W' && sample[9] == 'A' && sample[10] == 'V' && sample[11] == 'E') {
+        return "WAV audio";
+    }
+    if (sample.size() >= 3 && sample[0] == 0xFFu && sample[1] == 0xD8u && sample[2] == 0xFFu) {
+        return "JPEG image";
+    }
+    if (sample.size() >= 4 && sample[0] == 'P' && sample[1] == 'K'
+        && (sample[2] == 0x03u || sample[2] == 0x05u || sample[2] == 0x07u)
+        && (sample[3] == 0x04u || sample[3] == 0x06u || sample[3] == 0x08u)) {
+        return "ZIP archive";
+    }
+    if (sample.size() >= 2 && sample[0] == 0x1Fu && sample[1] == 0x8Bu) {
+        return "gzip stream";
+    }
+    if (sample.size() >= 5
+        && sample[0] == '%' && sample[1] == 'P' && sample[2] == 'D' && sample[3] == 'F' && sample[4] == '-') {
+        return "PDF document";
+    }
+    if (sample.size() >= 4 && sample[0] == 0x7Fu && sample[1] == 'E' && sample[2] == 'L' && sample[3] == 'F') {
+        return "ELF binary";
+    }
+    if (sample.size() >= 4 && sample[0] == 'O' && sample[1] == 'g' && sample[2] == 'g' && sample[3] == 'S') {
+        return "Ogg container";
+    }
+    if (sample.size() >= 3 && sample[0] == 'I' && sample[1] == 'D' && sample[2] == '3') {
+        return "MP3/ID3 audio";
+    }
+    return {};
+}
+
+std::optional<UnknownFileAnalysis> AnalyzeUnknownFile(const std::filesystem::path& path) {
+    constexpr std::size_t kSampleLimit = 256u << 10;
+    std::error_code ec;
+    if (!std::filesystem::exists(path, ec) || !std::filesystem::is_regular_file(path, ec)) {
+        return std::nullopt;
+    }
+
+    UnknownFileAnalysis analysis;
+    analysis.file_size = static_cast<std::uint64_t>(std::filesystem::file_size(path, ec));
+    if (ec) {
+        analysis.file_size = 0;
+    }
+
+    std::vector<std::uint8_t> sample = ReadSampleBytes(path, kSampleLimit);
+    analysis.sample_size = sample.size();
+    analysis.format_hint = DetectFormatHint(sample);
+    if (sample.empty()) {
+        analysis.note = "File is empty; no BaseFWX container markers were found.";
+        return analysis;
+    }
+
+    std::array<std::uint64_t, 256> counts{};
+    std::size_t printable = 0;
+    for (std::uint8_t byte : sample) {
+        ++counts[byte];
+        if ((byte >= 32u && byte <= 126u) || byte == '\n' || byte == '\r' || byte == '\t') {
+            ++printable;
+        }
+    }
+
+    double entropy = 0.0;
+    for (std::uint64_t count : counts) {
+        if (count == 0) {
+            continue;
+        }
+        double p = static_cast<double>(count) / static_cast<double>(sample.size());
+        entropy -= p * std::log2(p);
+    }
+    analysis.entropy_bits = entropy;
+    analysis.printable_ratio = static_cast<double>(printable) / static_cast<double>(sample.size());
+    analysis.zero_ratio = static_cast<double>(counts[0]) / static_cast<double>(sample.size());
+    analysis.high_entropy = entropy >= 7.50;
+    analysis.looks_random = analysis.format_hint.empty()
+        && entropy >= 7.85
+        && analysis.zero_ratio <= 0.02;
+
+    if (!analysis.format_hint.empty()) {
+        analysis.note = "File looks like " + analysis.format_hint
+            + ", but no BaseFWX length-prefixed header, FWX1 header, or kFM carrier marker was found.";
+    } else if (analysis.looks_random) {
+        analysis.note =
+            "Sample is high-entropy/random-like. It may be AN7 output, other encrypted data, or compressed data.";
+    } else if (analysis.high_entropy) {
+        analysis.note =
+            "Sample has high entropy but does not match a known BaseFWX container. It may be encrypted or compressed.";
+    } else {
+        analysis.note = "File does not match a known BaseFWX container and does not look fully random.";
+    }
+    return analysis;
 }
 
 struct FwxAesHeaderInfo {
@@ -931,6 +1200,37 @@ bool PrintIdentifyFwxAes(const std::string& file_path, const FwxAesHeaderInfo& h
     return true;
 }
 
+bool PrintIdentifyKfmCarrier(const std::string& file_path, const basefwx::KfmCarrierInspectResult& info) {
+    std::cout << basefwx::cli::BoldBlue("basefwx identify") << "\n";
+    PrintIdentifyField("file", file_path);
+    PrintIdentifyField("format", "basefwx kFM carrier");
+    PrintIdentifyField("integrity", basefwx::cli::BoldGreen("OK"));
+    PrintIdentifyField("carrier_kind", info.carrier_kind);
+    PrintIdentifyField("mode", DescribeKfmMode(info.mode) + " (" + std::to_string(static_cast<unsigned int>(info.mode)) + ")");
+    PrintIdentifyField("flags", DescribeKfmFlags(info.flags));
+    PrintIdentifyField("payload_ext", info.payload_ext.empty() ? ".bin" : info.payload_ext);
+    PrintIdentifyField("payload_size", FormatSize(static_cast<std::uint64_t>(info.payload_len)));
+    PrintIdentifyField("file_size", FormatSize(info.file_size));
+    return true;
+}
+
+bool PrintIdentifyUnknown(const std::string& file_path, const UnknownFileAnalysis& analysis) {
+    std::cout << basefwx::cli::BoldBlue("basefwx identify") << "\n";
+    PrintIdentifyField("file", file_path);
+    PrintIdentifyField("format", "unknown");
+    PrintIdentifyField("status", analysis.looks_random ? "unidentified high-entropy data" : "unidentified");
+    if (!analysis.format_hint.empty()) {
+        PrintIdentifyField("format_hint", analysis.format_hint);
+    }
+    PrintIdentifyField("entropy", FormatEntropy(analysis.entropy_bits));
+    PrintIdentifyField("printable", FormatPercent(analysis.printable_ratio));
+    PrintIdentifyField("zero_bytes", FormatPercent(analysis.zero_ratio));
+    PrintIdentifyField("sample_size", FormatSize(static_cast<std::uint64_t>(analysis.sample_size)));
+    PrintIdentifyField("file_size", FormatSize(analysis.file_size));
+    PrintIdentifyField("note", analysis.note);
+    return true;
+}
+
 void PrintFwxAesInfo(const FwxAesHeaderInfo& header) {
 
     std::string algo_name = "unknown";
@@ -964,6 +1264,17 @@ void PrintFwxAesInfo(const FwxAesHeaderInfo& header) {
     std::cout << "file_size: " << header.file_size << " bytes\n";
 }
 
+void PrintKfmCarrierInfo(const basefwx::KfmCarrierInspectResult& info) {
+    std::cout << "format: kFM carrier\n";
+    std::cout << "carrier_kind: " << info.carrier_kind << "\n";
+    std::cout << "mode: " << DescribeKfmMode(info.mode)
+              << " (" << static_cast<unsigned int>(info.mode) << ")\n";
+    std::cout << "flags: " << DescribeKfmFlags(info.flags) << "\n";
+    std::cout << "payload_ext: " << (info.payload_ext.empty() ? ".bin" : info.payload_ext) << "\n";
+    std::cout << "payload_len: " << info.payload_len << " bytes\n";
+    std::cout << "file_size: " << info.file_size << " bytes\n";
+}
+
 void PrintInspectInfo(const basefwx::InspectResult& info) {
     std::cout << "user_blob_len: " << info.user_blob_len << " bytes\n";
     std::cout << "master_blob_len: " << info.master_blob_len << " bytes\n";
@@ -980,6 +1291,20 @@ void PrintInspectInfo(const basefwx::InspectResult& info) {
     } else {
         std::cout << "metadata_json: <unavailable>\n";
     }
+}
+
+void PrintUnknownInfo(const UnknownFileAnalysis& analysis) {
+    std::cout << "format: unknown\n";
+    if (!analysis.format_hint.empty()) {
+        std::cout << "format_hint: " << analysis.format_hint << "\n";
+    }
+    std::cout << "entropy: " << FormatEntropy(analysis.entropy_bits) << "\n";
+    std::cout << "printable: " << FormatPercent(analysis.printable_ratio) << "\n";
+    std::cout << "zero_bytes: " << FormatPercent(analysis.zero_ratio) << "\n";
+    std::cout << "sample_size: " << analysis.sample_size << " bytes\n";
+    std::cout << "file_size: " << analysis.file_size << " bytes\n";
+    std::cout << "status: " << (analysis.looks_random ? "unidentified high-entropy data" : "unidentified") << "\n";
+    std::cout << "note: " << analysis.note << "\n";
 }
 
 int ReadEnvInt(const char* name, int default_value, int min_value) {
@@ -1453,41 +1778,39 @@ void PrintUsage() {
     std::cout << "  b1024-enc <text>\n";
     std::cout << "  hash512 <text>\n";
     std::cout << "  uhash513 <text>\n";
-    std::cout << "  b512-enc <text> [-p <password>] " << master_flags << " [--kdf <label>] [--pbkdf2-iters <n>] [--no-fallback]\n";
-    std::cout << "  b512-dec <text> [-p <password>] " << master_flags << " [--kdf <label>] [--pbkdf2-iters <n>] [--no-fallback]\n";
-    std::cout << "  pb512-enc <text> [-p <password>] " << master_flags << " [--kdf <label>] [--pbkdf2-iters <n>] [--no-fallback]\n";
-    std::cout << "  pb512-dec <text> [-p <password>] " << master_flags << " [--kdf <label>] [--pbkdf2-iters <n>] [--no-fallback]\n";
+    std::cout << "  b512-enc <text> [--password <password>] " << master_flags << " [--kdf <label>] [--pbkdf2-iters <n>] [--no-fallback]\n";
+    std::cout << "  b512-dec <text> [--password <password>] " << master_flags << " [--kdf <label>] [--pbkdf2-iters <n>] [--no-fallback]\n";
+    std::cout << "  pb512-enc <text> [--password <password>] " << master_flags << " [--kdf <label>] [--pbkdf2-iters <n>] [--no-fallback]\n";
+    std::cout << "  pb512-dec <text> [--password <password>] " << master_flags << " [--kdf <label>] [--pbkdf2-iters <n>] [--no-fallback]\n";
     std::cout << "\n";
     std::cout << "File commands:\n";
-    std::cout << "  b512file-enc <file> [-p <password>] " << master_flags << " [--strip-meta] [--no-aead] [--compress] [--keep-input] [--kdf <label>] [--pbkdf2-iters <n>] [--no-fallback]\n";
-    std::cout << "  b512file-dec <file.fwx> [-p <password>] " << master_flags << " [--strip-meta] [--kdf <label>] [--pbkdf2-iters <n>] [--no-fallback]\n";
-    std::cout << "  b512file-bytes-rt <in> <out> [-p <password>] " << master_flags << " [--strip-meta] [--no-aead] [--kdf <label>] [--pbkdf2-iters <n>] [--no-fallback]\n";
-    std::cout << "  pb512file-bytes-rt <in> <out> [-p <password>] " << master_flags << " [--strip-meta] [--kdf <label>] [--pbkdf2-iters <n>] [--no-fallback]\n";
-    std::cout << "  pb512file-enc <file> [-p <password>] " << master_flags << " [--strip-meta] [--no-obf] [--compress] [--keep-input] [--kdf <label>] [--pbkdf2-iters <n>] [--no-fallback]\n";
-    std::cout << "  pb512file-dec <file.fwx> [-p <password>] " << master_flags << " [--strip-meta] [--kdf <label>] [--pbkdf2-iters <n>] [--no-fallback]\n";
+    std::cout << "  b512file-enc <file> [--password <password>] " << master_flags << " [--strip-meta] [--no-aead] [--compress] [--keep-input] [--kdf <label>] [--pbkdf2-iters <n>] [--no-fallback]\n";
+    std::cout << "  b512file-dec <file.fwx> [--password <password>] " << master_flags << " [--strip-meta] [--kdf <label>] [--pbkdf2-iters <n>] [--no-fallback]\n";
+    std::cout << "  b512file-bytes-rt <in> <out> [--password <password>] " << master_flags << " [--strip-meta] [--no-aead] [--kdf <label>] [--pbkdf2-iters <n>] [--no-fallback]\n";
+    std::cout << "  pb512file-bytes-rt <in> <out> [--password <password>] " << master_flags << " [--strip-meta] [--kdf <label>] [--pbkdf2-iters <n>] [--no-fallback]\n";
+    std::cout << "  pb512file-enc <file> [--password <password>] " << master_flags << " [--strip-meta] [--no-obf] [--compress] [--keep-input] [--kdf <label>] [--pbkdf2-iters <n>] [--no-fallback]\n";
+    std::cout << "  pb512file-dec <file.fwx> [--password <password>] " << master_flags << " [--strip-meta] [--kdf <label>] [--pbkdf2-iters <n>] [--no-fallback]\n";
     std::cout << "\n";
     std::cout << "fwxAES commands:\n";
-    std::cout << "  fwxaes-enc <file> [-p <password>] " << master_flags << " [--out <path>] [--heavy] [--normalize] [--threshold <n>] [--cover-phrase <text>] [--compress] [--ignore-media] [--keep-meta] [--keep-input] [--no-archive] [--kdf <label>] [--pbkdf2-iters <n>] [--argon2-time <n>] [--argon2-mem <n>] [--argon2-par <n>] [--no-fallback] [--legacy-pbkdf2]\n";
-    std::cout << "  fwxaes-dec <file> [-p <password>] " << master_flags << " [--out <path>] [--heavy]\n";
-    std::cout << "  fwxaes-heavy-enc <file> [-p <password>] " << master_flags << " [--out <path>] [--compress] [--keep-input]\n";
-    std::cout << "  fwxaes-heavy-dec <file> [-p <password>] " << master_flags << " [--out <path>]\n";
-    std::cout << "  fwxaes-stream-enc <file> [-p <password>] " << master_flags << " [--out <path>] [--kdf <label>] [--pbkdf2-iters <n>] [--argon2-time <n>] [--argon2-mem <n>] [--argon2-par <n>] [--no-fallback] [--legacy-pbkdf2]\n";
-    std::cout << "  fwxaes-stream-dec <file> [-p <password>] " << master_flags << " [--out <path>]\n";
-    std::cout << "  fwxaes-live-enc <file|- > [-p <password>] " << master_flags << " [--out <path|- >]\n";
-    std::cout << "  fwxaes-live-dec <file|- > [-p <password>] " << master_flags << " [--out <path|- >]\n";
-    std::cout << "  an7 <file.fwx> -p <password> [--out <path>] [--keep-input] [--force-any]\n";
-    std::cout << "  dean7 <file> -p <password> [--out <path>] [--keep-input]\n";
+    std::cout << "  fwxaes-enc <file> [--password <password>] " << master_flags << " [--out <path>] [--heavy] [--normalize] [--threshold <n>] [--cover-phrase <text>] [--compress] [--ignore-media] [--keep-meta] [--keep-input] [--archive|--no-archive] [--kdf <label>] [--pbkdf2-iters <n>] [--argon2-time <n>] [--argon2-mem <n>] [--argon2-par <n>] [--no-fallback] [--legacy-pbkdf2]\n";
+    std::cout << "  fwxaes-dec <file> [--password <password>] " << master_flags << " [--out <path>] [--heavy]\n";
+    std::cout << "  fwxaes-heavy-enc <file> [--password <password>] " << master_flags << " [--out <path>] [--compress] [--keep-input]\n";
+    std::cout << "  fwxaes-heavy-dec <file> [--password <password>] " << master_flags << " [--out <path>]\n";
+    std::cout << "  fwxaes-stream-enc <file> [--password <password>] " << master_flags << " [--out <path>] [--kdf <label>] [--pbkdf2-iters <n>] [--argon2-time <n>] [--argon2-mem <n>] [--argon2-par <n>] [--no-fallback] [--legacy-pbkdf2]\n";
+    std::cout << "  fwxaes-stream-dec <file> [--password <password>] " << master_flags << " [--out <path>]\n";
+    std::cout << "  fwxaes-live-enc <file|- > [--password <password>] " << master_flags << " [--out <path|- >]\n";
+    std::cout << "  fwxaes-live-dec <file|- > [--password <password>] " << master_flags << " [--out <path|- >]\n";
+    std::cout << "  an7 <file.fwx> [--password <password>] [--out <path>] [--keep-input] [--force-any]\n";
+    std::cout << "  dean7 <file> [--password <password>] [--out <path>] [--keep-input]\n";
     std::cout << "\n";
     std::cout << "Media/carrier commands:\n";
-    std::cout << "  jmge <media> [-p <password>] " << master_flags << " [--out <path>] [--keep-meta] [--keep-input] [--no-archive]\n";
-    std::cout << "  jmgd <media> [-p <password>] " << master_flags << " [--out <path>]\n";
+    std::cout << "  jmge <media> [--password <password>] " << master_flags << " [--out <path>] [--keep-meta] [--keep-input] [--archive|--no-archive]\n";
+    std::cout << "  jmgd <media> [--password <password>] " << master_flags << " [--out <path>]\n";
     std::cout << "  kFMe <in-file> [--out <path>] [--bw]\n";
     std::cout << "  kFMd <in-file> [--out <path>] [--bw]\n";
-    std::cout << "  kFAe <in-file> [--out <path>] [--bw]    (deprecated alias)\n";
-    std::cout << "  kFAd <in-file> [--out <path>]           (deprecated alias)\n";
     std::cout << "\n";
     std::cout << "Benchmark commands:\n";
-    std::cout << "  bench-text <method> <text-file> [-p <password>] " << master_flags << "\n";
+    std::cout << "  bench-text <method> <text-file> [--password <password>] " << master_flags << "\n";
     std::cout << "  bench-hash <method> <text-file>\n";
     std::cout << "  bench-fwxaes <file> <password> " << master_flags << "\n";
     std::cout << "  bench-fwxaes-par <file> <password> " << master_flags << "\n";
@@ -1497,6 +1820,8 @@ void PrintUsage() {
     std::cout << "  bench-b512file <file> <password> " << master_flags << " [--no-aead]\n";
     std::cout << "  bench-pb512file <file> <password> " << master_flags << " [--no-aead]\n";
     std::cout << "  bench-jmg <media> <password> " << master_flags << "\n";
+    std::cout << "\n";
+    std::cout << "Passworded commands prompt on a TTY when --password is omitted.\n";
 }
 
 void PrintBashCompletion(const std::string& argv0) {
@@ -1511,7 +1836,7 @@ void PrintBashCompletion(const std::string& argv0) {
         << "  cur=\"${COMP_WORDS[COMP_CWORD]}\"\n"
         << "  cmd=\"${COMP_WORDS[1]}\"\n"
         << "  local commands=\"help version completion info identify probe b64-enc b64-dec n10-enc n10-dec n10file-enc n10file-dec "
-           "kFMe kFMd kFAe kFAd hash512 uhash513 a512-enc a512-dec bi512-enc b1024-enc b256-enc b256-dec "
+           "kFMe kFMd hash512 uhash513 a512-enc a512-dec bi512-enc b1024-enc b256-enc b256-dec "
            "b512-enc b512-dec pb512-enc pb512-dec b512file-enc b512file-dec b512file-bytes-rt pb512file-bytes-rt "
            "pb512file-enc pb512file-dec fwxaes-enc fwxaes-dec fwxaes-heavy-enc fwxaes-heavy-dec fwxaes-stream-enc fwxaes-stream-dec fwxaes-live-enc "
            "fwxaes-live-dec an7 dean7 jmge jmgd bench-text bench-hash bench-fwxaes bench-fwxaes-par bench-an7 bench-dean7 bench-live bench-b512file "
@@ -1532,7 +1857,7 @@ void PrintBashCompletion(const std::string& argv0) {
         << "      COMPREPLY=( $(compgen -W \"-p --password --strip-meta --no-aead --no-obf --compress --keep-input --kdf --pbkdf2-iters --no-fallback $master_opts\" -- \"$cur\") )\n"
         << "      ;;\n"
         << "    fwxaes-enc|fwxaes-dec|fwxaes-heavy-enc|fwxaes-heavy-dec|fwxaes-stream-enc|fwxaes-stream-dec|fwxaes-live-enc|fwxaes-live-dec)\n"
-        << "      COMPREPLY=( $(compgen -W \"-p --password --out -o --heavy --light --normalize --threshold --cover-phrase --compress --ignore-media --keep-meta --keep-input --no-archive --kdf --pbkdf2-iters --argon2-time --argon2-mem --argon2-par --no-fallback --legacy-pbkdf2 --no-wrap-kdf $master_opts\" -- \"$cur\") )\n"
+        << "      COMPREPLY=( $(compgen -W \"-p --password --out -o --heavy --light --normalize --threshold --cover-phrase --compress --ignore-media --keep-meta --keep-input --archive --no-archive --kdf --pbkdf2-iters --argon2-time --argon2-mem --argon2-par --no-fallback --legacy-pbkdf2 --no-wrap-kdf $master_opts\" -- \"$cur\") )\n"
         << "      ;;\n"
         << "    an7)\n"
         << "      COMPREPLY=( $(compgen -W \"-p --password --out -o --keep-input --force-any\" -- \"$cur\") )\n"
@@ -1541,9 +1866,9 @@ void PrintBashCompletion(const std::string& argv0) {
         << "      COMPREPLY=( $(compgen -W \"-p --password --out -o --keep-input\" -- \"$cur\") )\n"
         << "      ;;\n"
         << "    jmge|jmgd|bench-jmg)\n"
-        << "      COMPREPLY=( $(compgen -W \"-p --password --out -o --keep-meta --keep-input --no-archive $master_opts\" -- \"$cur\") )\n"
+        << "      COMPREPLY=( $(compgen -W \"-p --password --out -o --keep-meta --keep-input --archive --no-archive $master_opts\" -- \"$cur\") )\n"
         << "      ;;\n"
-        << "    kFMe|kFMd|kFAe|kFAd)\n"
+        << "    kFMe|kFMd)\n"
         << "      COMPREPLY=( $(compgen -W \"--out -o --bw\" -- \"$cur\") )\n"
         << "      ;;\n"
         << "    bench-text|bench-fwxaes|bench-fwxaes-par|bench-an7|bench-dean7|bench-live|bench-b512file|bench-pb512file)\n"
@@ -2094,6 +2419,7 @@ CommandHwPlan BuildHwPlan(const std::string& command) {
 struct ParsedOptions {
     std::string input;
     std::string password;
+    bool password_provided = false;
     bool use_master = false;
     basefwx::KdfOptions kdf;
 };
@@ -2102,6 +2428,7 @@ struct FwxAesArgs {
     std::string input;
     std::string output;
     std::string password;
+    bool password_provided = false;
     bool use_master = false;
     basefwx::pb512::KdfOptions kdf;
     bool force_legacy_pbkdf2 = false;
@@ -2113,23 +2440,25 @@ struct FwxAesArgs {
     bool ignore_media = false;
     bool keep_meta = false;
     bool keep_input = false;
-    bool archive_original = true;
+    bool archive_original = false;
 };
 
 struct ImageArgs {
     std::string input;
     std::string output;
     std::string password;
+    bool password_provided = false;
     bool use_master = false;
     bool keep_meta = false;
     bool keep_input = false;
-    bool archive_original = true;
+    bool archive_original = false;
 };
 
 struct An7Args {
     std::string input;
     std::string output;
     std::string password;
+    bool password_provided = false;
     bool keep_input = false;
     bool force_any = false;
 };
@@ -2137,6 +2466,7 @@ struct An7Args {
 struct FileArgs {
     std::string input;
     std::string password;
+    bool password_provided = false;
     bool use_master = false;
     bool strip_metadata = false;
     bool enable_aead = true;
@@ -2160,6 +2490,7 @@ ParsedOptions ParseCodecArgs(int argc, char** argv, int start_index) {
                 throw std::runtime_error("Missing password value");
             }
             opts.password = argv[idx + 1];
+            opts.password_provided = true;
             idx += 2;
         } else if (HandleMasterFlag(flag, argc, argv, &idx, &opts.use_master)) {
             idx += 1;
@@ -2199,6 +2530,7 @@ FileArgs ParseFileArgs(int argc, char** argv, int start_index) {
                 throw std::runtime_error("Missing password value");
             }
             opts.password = argv[idx + 1];
+            opts.password_provided = true;
             idx += 2;
         } else if (HandleMasterFlag(flag, argc, argv, &idx, &opts.use_master)) {
             idx += 1;
@@ -2253,6 +2585,7 @@ FwxAesArgs ParseFwxAesArgs(int argc, char** argv, int start_index) {
                 throw std::runtime_error("Missing password value");
             }
             opts.password = argv[idx + 1];
+            opts.password_provided = true;
             idx += 2;
         } else if (HandleMasterFlag(flag, argc, argv, &idx, &opts.use_master)) {
             idx += 1;
@@ -2331,6 +2664,9 @@ FwxAesArgs ParseFwxAesArgs(int argc, char** argv, int start_index) {
         } else if (flag == "--keep-input") {
             opts.keep_input = true;
             idx += 1;
+        } else if (flag == "--archive") {
+            opts.archive_original = true;
+            idx += 1;
         } else if (flag == "--no-archive") {
             opts.archive_original = false;
             idx += 1;
@@ -2355,6 +2691,7 @@ ImageArgs ParseImageArgs(int argc, char** argv, int start_index) {
                 throw std::runtime_error("Missing password value");
             }
             opts.password = argv[idx + 1];
+            opts.password_provided = true;
             idx += 2;
         } else if (HandleMasterFlag(flag, argc, argv, &idx, &opts.use_master)) {
             idx += 1;
@@ -2369,6 +2706,9 @@ ImageArgs ParseImageArgs(int argc, char** argv, int start_index) {
             idx += 1;
         } else if (flag == "--keep-input") {
             opts.keep_input = true;
+            idx += 1;
+        } else if (flag == "--archive") {
+            opts.archive_original = true;
             idx += 1;
         } else if (flag == "--no-archive") {
             opts.archive_original = false;
@@ -2394,6 +2734,7 @@ An7Args ParseAn7Args(int argc, char** argv, int start_index, bool allow_force_an
                 throw std::runtime_error("Missing password value");
             }
             opts.password = argv[idx + 1];
+            opts.password_provided = true;
             idx += 2;
         } else if (flag == "--out" || flag == "-o") {
             if (idx + 1 >= argc) {
@@ -2502,6 +2843,11 @@ int main(int argc, char** argv) {
                 PrintFwxAesInfo(*fwx);
                 return 0;
             }
+            auto kfm = basefwx::InspectKfmCarrierFile(input_path.string());
+            if (kfm.has_value()) {
+                PrintKfmCarrierInfo(*kfm);
+                return 0;
+            }
             std::string fallback_reason;
             auto full = TryReadFullInspectSafe(input_path, &fallback_reason);
             if (full.has_value()) {
@@ -2522,7 +2868,12 @@ int main(int argc, char** argv) {
                 PrintInspectInfo(lp->info);
                 return 0;
             }
-            throw std::runtime_error("Unsupported or corrupted BaseFWX container");
+            auto unknown = AnalyzeUnknownFile(input_path);
+            if (unknown.has_value()) {
+                PrintUnknownInfo(*unknown);
+                return 0;
+            }
+            throw std::runtime_error("Unsupported BaseFWX container or unreadable file");
         }
         if (command == "identify" || command == "probe") {
             if (argc < 3) {
@@ -2538,6 +2889,11 @@ int main(int argc, char** argv) {
             auto fwx = ParseFwxAesHeader(input_path);
             if (fwx.has_value()) {
                 PrintIdentifyFwxAes(input_path.string(), *fwx);
+                return 0;
+            }
+            auto kfm = basefwx::InspectKfmCarrierFile(input_path.string());
+            if (kfm.has_value()) {
+                PrintIdentifyKfmCarrier(input_path.string(), *kfm);
                 return 0;
             }
             std::string fallback_reason;
@@ -2563,16 +2919,23 @@ int main(int argc, char** argv) {
                 PrintIdentifyLengthPrefixed(input_path.string(), *lp);
                 return 0;
             }
-            throw std::runtime_error("Unsupported or corrupted BaseFWX container");
+            auto unknown = AnalyzeUnknownFile(input_path);
+            if (unknown.has_value()) {
+                PrintIdentifyUnknown(input_path.string(), *unknown);
+                return 0;
+            }
+            throw std::runtime_error("Unsupported BaseFWX container or unreadable file");
         }
         if (command == "an7" || command == "dean7") {
             An7Args parsed = ParseAn7Args(argc, argv, 2, command == "an7");
-            if (parsed.password.empty()) {
-                throw std::runtime_error("Password is required");
-            }
+            ResolveCliPassword(parsed.password, parsed.password_provided, true, command == "an7");
             basefwx::runtime::ResetStop();
             InstallStopHandlers();
             if (command == "an7") {
+                basefwx::RequireStrongPasswordForEncryption(
+                    basefwx::ResolvePassword(parsed.password),
+                    "an7"
+                );
                 basefwx::An7Options an7_opts;
                 an7_opts.keep_input = parsed.keep_input;
                 an7_opts.force_any = parsed.force_any;
@@ -2601,8 +2964,8 @@ int main(int argc, char** argv) {
             std::string method = ToLower(argv[2]);
             ParsedOptions opts = ParseCodecArgs(argc, argv, 3);
             std::string text = ReadTextFile(opts.input);
-            if ((method == "b512" || method == "pb512") && opts.password.empty()) {
-                throw std::runtime_error("Password required for b512/pb512 benchmark");
+            if (method == "b512" || method == "pb512") {
+                ResolveCliPassword(opts.password, opts.password_provided, !opts.use_master, true);
             }
             int warmup = BenchWarmup();
             int iters = BenchIters();
@@ -3306,6 +3669,12 @@ int main(int argc, char** argv) {
         }
         if (command == "b512-enc" || command == "b512-dec" || command == "pb512-enc" || command == "pb512-dec") {
             ParsedOptions opts = ParseCodecArgs(argc, argv, 2);
+            ResolveCliPassword(
+                opts.password,
+                opts.password_provided,
+                !opts.use_master,
+                command == "b512-enc" || command == "pb512-enc"
+            );
             if (command == "b512-enc") {
                 std::cout << basefwx::B512Encode(opts.input, opts.password, opts.use_master, opts.kdf) << "\n";
             } else if (command == "b512-dec") {
@@ -3337,6 +3706,7 @@ int main(int argc, char** argv) {
                             throw std::runtime_error("Missing password value");
                         }
                         opts.password = argv[idx + 1];
+                        opts.password_provided = true;
                         idx += 2;
                     } else if (HandleMasterFlag(flag, argc, argv, &idx, &opts.use_master)) {
                         idx += 1;
@@ -3376,6 +3746,16 @@ int main(int argc, char** argv) {
                 std::filesystem::path input_path(input);
                 auto data = basefwx::ReadFile(input_path.string());
                 std::string ext = input_path.extension().string();
+                ResolveCliPassword(
+                    opts.password,
+                    opts.password_provided,
+                    !opts.use_master,
+                    true
+                );
+                basefwx::RequireStrongPasswordForEncryption(
+                    basefwx::ResolvePassword(opts.password),
+                    command == "pb512file-bytes-rt" ? "fwxAES-heavy" : "b512file"
+                );
                 basefwx::filecodec::DecodedBytes decoded;
                 if (command == "b512file-bytes-rt") {
                     auto blob = basefwx::filecodec::B512EncodeBytes(data, ext, opts.password, file_opts, opts.kdf);
@@ -3402,11 +3782,19 @@ int main(int argc, char** argv) {
             file_opts.enable_obfuscation = opts.enable_obf;
             file_opts.compress = opts.compress;
             file_opts.keep_input = opts.keep_input;
+            ResolveCliPassword(
+                opts.password,
+                opts.password_provided,
+                !opts.use_master,
+                command == "b512file-enc" || command == "pb512file-enc"
+            );
             if (command == "b512file-enc") {
+                basefwx::RequireStrongPasswordForEncryption(basefwx::ResolvePassword(opts.password), "b512file");
                 std::cout << basefwx::filecodec::B512EncodeFile(opts.input, opts.password, file_opts, opts.kdf) << "\n";
             } else if (command == "b512file-dec") {
                 std::cout << basefwx::filecodec::B512DecodeFile(opts.input, opts.password, file_opts, opts.kdf) << "\n";
             } else if (command == "pb512file-enc") {
+                basefwx::RequireStrongPasswordForEncryption(basefwx::ResolvePassword(opts.password), "fwxAES-heavy");
                 std::cout << basefwx::filecodec::Pb512EncodeFile(opts.input, opts.password, file_opts, opts.kdf) << "\n";
             } else if (command == "pb512file-dec") {
                 std::cout << basefwx::filecodec::Pb512DecodeFile(opts.input, opts.password, file_opts, opts.kdf) << "\n";
@@ -3421,10 +3809,13 @@ int main(int argc, char** argv) {
             if (command == "fwxaes-heavy-enc" || command == "fwxaes-heavy-dec") {
                 opts.heavy = true;
             }
+            const bool is_encrypt_command =
+                command == "fwxaes-enc"
+                || command == "fwxaes-heavy-enc"
+                || command == "fwxaes-stream-enc"
+                || command == "fwxaes-live-enc";
             bool user_output = !opts.output.empty();
-            if (opts.password.empty() && !opts.use_master) {
-                throw std::runtime_error("Password required when master key usage is disabled");
-            }
+            ResolveCliPassword(opts.password, opts.password_provided, !opts.use_master, is_encrypt_command);
             if (opts.output.empty()) {
                 if (command == "fwxaes-enc" || command == "fwxaes-heavy-enc") {
                     if (opts.heavy) {
@@ -3521,6 +3912,7 @@ int main(int argc, char** argv) {
                 stream_opts.user_kdf = opts.kdf;
                 stream_opts.force_legacy_pbkdf2 = opts.force_legacy_pbkdf2;
                 if (command == "fwxaes-stream-enc") {
+                    basefwx::RequireStrongPasswordForEncryption(basefwx::ResolvePassword(opts.password), "fwxAES stream");
                     basefwx::fwxaes::EncryptStream(input, output, opts.password, stream_opts);
                 } else {
                     basefwx::fwxaes::DecryptStream(input, output, opts.password, opts.use_master);
@@ -3540,7 +3932,7 @@ int main(int argc, char** argv) {
                 if (opts.threshold != 8 * 1024 || opts.cover_phrase != "low taper fade") {
                     throw std::runtime_error("fwxAES heavy mode does not support normalize options");
                 }
-                if (opts.ignore_media || opts.keep_meta || !opts.archive_original) {
+                if (opts.ignore_media || opts.keep_meta || opts.archive_original) {
                     throw std::runtime_error("fwxAES heavy mode does not support media-only options");
                 }
                 basefwx::filecodec::FileOptions file_opts;
@@ -3571,6 +3963,10 @@ int main(int argc, char** argv) {
                     std::cout << final_output << "\n";
                 }
             } else if (command == "fwxaes-enc" || command == "fwxaes-heavy-enc") {
+                basefwx::RequireStrongPasswordForEncryption(
+                    basefwx::ResolvePassword(opts.password),
+                    opts.heavy ? "fwxAES-heavy" : "fwxAES"
+                );
                 if (!opts.ignore_media && LooksLikeMediaPath(std::filesystem::path(opts.input))) {
                     try {
                         std::string media_output = basefwx::Jmge(
@@ -3611,6 +4007,7 @@ int main(int argc, char** argv) {
         }
         if (command == "jmge" || command == "jmgd") {
             ImageArgs opts = ParseImageArgs(argc, argv, 2);
+            ResolveCliPassword(opts.password, opts.password_provided, !opts.use_master, command == "jmge");
             if (command == "jmge") {
                 std::cout << basefwx::Jmge(
                     opts.input,

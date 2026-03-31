@@ -12,23 +12,24 @@
 namespace basefwx::constants {
 
 #ifndef BASEFWX_VERSION_STRING
-#define BASEFWX_VERSION_STRING "3.6.3"
+#define BASEFWX_VERSION_STRING "3.6.4"
 #endif
 
 inline constexpr std::size_t kUserKdfSaltSize = 16;
-inline constexpr std::size_t kUserKdfIterations = 200000;
+inline constexpr std::size_t kUserKdfIterations = 600000;
 inline constexpr std::size_t kUserKdfIterationsFallback = 32768;
-inline constexpr std::uint32_t kArgon2TimeCost = 3;
-inline constexpr std::uint32_t kArgon2MemoryCost = 1u << 15;
+inline constexpr std::uint32_t kArgon2TimeCost = 4;
+inline constexpr std::uint32_t kArgon2MemoryCost = 1u << 16;
 inline constexpr std::uint32_t kArgon2Parallelism = 4;
+inline constexpr std::size_t kMinimumPasswordLength = 10;
 inline constexpr std::size_t kShortPasswordMin = 12;
-inline constexpr std::size_t kShortPbkdf2Iterations = 400000;
-inline constexpr std::uint32_t kShortArgon2TimeCost = 4;
-inline constexpr std::uint32_t kShortArgon2MemoryCost = 1u << 16;
+inline constexpr std::size_t kShortPbkdf2Iterations = 1000000;
+inline constexpr std::uint32_t kShortArgon2TimeCost = 5;
+inline constexpr std::uint32_t kShortArgon2MemoryCost = 1u << 17;
 
-inline constexpr std::uint32_t kHeavyPbkdf2Iterations = 1000000;
-inline constexpr std::uint32_t kHeavyArgon2TimeCost = 5;
-inline constexpr std::uint32_t kHeavyArgon2MemoryCost = 1u << 17;
+inline constexpr std::uint32_t kHeavyPbkdf2Iterations = 2000000;
+inline constexpr std::uint32_t kHeavyArgon2TimeCost = 6;
+inline constexpr std::uint32_t kHeavyArgon2MemoryCost = 1u << 18;
 inline constexpr std::uint32_t kHeavyArgon2Parallelism = 4;
 
 inline std::uint32_t HeavyPbkdf2Iterations() {

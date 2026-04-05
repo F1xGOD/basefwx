@@ -1717,7 +1717,7 @@ SignatureCheckResult VerifyEmbeddedDetachedSignature() {
 void PrintVersionInfo() {
     bool plain = CliPlain();
     const char* cyan = "\033[36m";
-    std::string banner = "basefwx_cpp " + std::string(basefwx::constants::kEngineVersion);
+    std::string banner = "basefwx " + std::string(basefwx::constants::kEngineVersion);
     const auto signature = VerifyEmbeddedDetachedSignature();
     std::cout << StyleText(banner, cyan, plain) << "\n";
     std::cout << "git: " << BASEFWX_CLI_GIT_COMMIT << "\n";
@@ -1751,9 +1751,9 @@ void PrintUsage() {
     const char* cyan = "\033[36m";
     const std::string master_flags =
         "[--use-master] [--master-pub <path>] [--master-autogen] [--allow-embedded-master] [--no-master]";
-    std::cout << StyleText(EmojiPrefix("✨", plain) + "basefwx_cpp help", cyan, plain) << "\n";
-    std::cout << "Usage: basefwx_cpp [global] <command> [args]\n";
-    std::cout << "Global: --verbose|-v --no-log --no-color --version|-V\n";
+    std::cout << StyleText(EmojiPrefix("✨", plain) + "basefwx help", cyan, plain) << "\n";
+    std::cout << "Usage: basefwx [global flags] <command> [args]\n";
+    std::cout << "Global flags: --verbose|-v --no-log --no-color --version|-V\n";
     std::cout << "\n";
     std::cout << "General commands:\n";
     std::cout << "  help\n";
@@ -1794,12 +1794,12 @@ void PrintUsage() {
     std::cout << "fwxAES commands:\n";
     std::cout << "  fwxaes-enc <file> [--password <password>] " << master_flags << " [--out <path>] [--heavy] [--normalize] [--threshold <n>] [--cover-phrase <text>] [--compress] [--ignore-media] [--keep-meta] [--keep-input] [--archive|--no-archive] [--kdf <label>] [--pbkdf2-iters <n>] [--argon2-time <n>] [--argon2-mem <n>] [--argon2-par <n>] [--no-fallback] [--legacy-pbkdf2]\n";
     std::cout << "  fwxaes-dec <file> [--password <password>] " << master_flags << " [--out <path>] [--heavy]\n";
-    std::cout << "  fwxaes-heavy-enc <file> [--password <password>] " << master_flags << " [--out <path>] [--compress] [--keep-input]\n";
-    std::cout << "  fwxaes-heavy-dec <file> [--password <password>] " << master_flags << " [--out <path>]\n";
+    std::cout << "  fwxaes-heavy-enc <file> [--password <password>] " << master_flags << " [--out <path>] [--compress] [--keep-input]  (alias of fwxaes-enc --heavy)\n";
+    std::cout << "  fwxaes-heavy-dec <file> [--password <password>] " << master_flags << " [--out <path>]                (alias of fwxaes-dec --heavy)\n";
     std::cout << "  fwxaes-stream-enc <file> [--password <password>] " << master_flags << " [--out <path>] [--kdf <label>] [--pbkdf2-iters <n>] [--argon2-time <n>] [--argon2-mem <n>] [--argon2-par <n>] [--no-fallback] [--legacy-pbkdf2]\n";
     std::cout << "  fwxaes-stream-dec <file> [--password <password>] " << master_flags << " [--out <path>]\n";
-    std::cout << "  fwxaes-live-enc <file|- > [--password <password>] " << master_flags << " [--out <path|- >]\n";
-    std::cout << "  fwxaes-live-dec <file|- > [--password <password>] " << master_flags << " [--out <path|- >]\n";
+    std::cout << "  fwxaes-live-enc <file|-> [--password <password>] " << master_flags << " [--out <path|->]\n";
+    std::cout << "  fwxaes-live-dec <file|-> [--password <password>] " << master_flags << " [--out <path|->]\n";
     std::cout << "  an7 <file.fwx> [--password <password>] [--out <path>] [--keep-input] [--force-any]\n";
     std::cout << "  dean7 <file> [--password <password>] [--out <path>] [--keep-input]\n";
     std::cout << "\n";
@@ -1827,7 +1827,7 @@ void PrintUsage() {
 void PrintBashCompletion(const std::string& argv0) {
     std::string bin = std::filesystem::path(argv0).filename().string();
     if (bin.empty()) {
-        bin = "basefwx_cpp";
+        bin = "basefwx";
     }
     std::cout
         << "# bash completion for " << bin << "\n"

@@ -8,7 +8,7 @@ endif()
 
 project(basefwx_cpp VERSION ${BASEFWX_PROJECT_VERSION} LANGUAGES CXX)
 
-option(BASEFWX_BUILD_CLI "Build basefwx_cpp CLI" ON)
+option(BASEFWX_BUILD_CLI "Build BaseFWX CLI" ON)
 option(BASEFWX_REQUIRE_ARGON2 "Require libargon2 for Argon2id support" ON)
 option(BASEFWX_REQUIRE_OQS "Require liboqs for ML-KEM-768 support" OFF)
 option(BASEFWX_OQS_STATIC "Prefer static liboqs when available" OFF)
@@ -656,6 +656,7 @@ if(BASEFWX_BUILD_CLI)
         src/main.cpp
     )
     add_dependencies(basefwx_cpp basefwx_cli_build_stamp)
+    set_target_properties(basefwx_cpp PROPERTIES OUTPUT_NAME "basefwx")
     target_link_libraries(basefwx_cpp PRIVATE basefwxcpp)
     target_include_directories(basefwx_cpp PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated")
 endif()

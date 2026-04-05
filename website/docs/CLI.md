@@ -208,40 +208,40 @@ cmake --build cpp/build
 Usage:
 
 ```
-cpp/build/basefwx_cpp [global flags] <command> ...
+cpp/build/basefwx [global flags] <command> ...
 global flags: --verbose|-v --no-log --no-color
 
-cpp/build/basefwx_cpp fwxaes-enc <file> -p <password> [--out <path>]
-cpp/build/basefwx_cpp fwxaes-dec <file> -p <password> [--out <path>]
-cpp/build/basefwx_cpp fwxaes-stream-enc <file> -p <password> [--out <path>]
-cpp/build/basefwx_cpp fwxaes-stream-dec <file> -p <password> [--out <path>]
-cpp/build/basefwx_cpp fwxaes-live-enc <file> -p <password> [--out <path>]
-cpp/build/basefwx_cpp fwxaes-live-dec <file> -p <password> [--out <path>]
-cpp/build/basefwx_cpp n10-enc <text>
-cpp/build/basefwx_cpp n10-dec <digits>
-cpp/build/basefwx_cpp n10file-enc <in-file> <out-file>
-cpp/build/basefwx_cpp n10file-dec <in-file> <out-file>
-cpp/build/basefwx_cpp kFMe <in-file> [--out <path>] [--bw]
-cpp/build/basefwx_cpp kFMd <carrier-file> [--out <path>] [--bw]
+cpp/build/basefwx fwxaes-enc <file> -p <password> [--out <path>]
+cpp/build/basefwx fwxaes-dec <file> -p <password> [--out <path>]
+cpp/build/basefwx fwxaes-stream-enc <file> -p <password> [--out <path>]
+cpp/build/basefwx fwxaes-stream-dec <file> -p <password> [--out <path>]
+cpp/build/basefwx fwxaes-live-enc <file> -p <password> [--out <path>]
+cpp/build/basefwx fwxaes-live-dec <file> -p <password> [--out <path>]
+cpp/build/basefwx n10-enc <text>
+cpp/build/basefwx n10-dec <digits>
+cpp/build/basefwx n10file-enc <in-file> <out-file>
+cpp/build/basefwx n10file-dec <in-file> <out-file>
+cpp/build/basefwx kFMe <in-file> [--out <path>] [--bw]
+cpp/build/basefwx kFMd <carrier-file> [--out <path>] [--bw]
 
-cpp/build/basefwx_cpp b512-enc <text> -p <password>
-cpp/build/basefwx_cpp b512-dec <text> -p <password>
-cpp/build/basefwx_cpp pb512-enc <text> -p <password>
-cpp/build/basefwx_cpp pb512-dec <text> -p <password>
+cpp/build/basefwx b512-enc <text> -p <password>
+cpp/build/basefwx b512-dec <text> -p <password>
+cpp/build/basefwx pb512-enc <text> -p <password>
+cpp/build/basefwx pb512-dec <text> -p <password>
 
-cpp/build/basefwx_cpp b512file-enc <file> -p <password>
-cpp/build/basefwx_cpp b512file-dec <file.fwx> -p <password>
-cpp/build/basefwx_cpp pb512file-enc <file> -p <password>
-cpp/build/basefwx_cpp pb512file-dec <file.fwx> -p <password>
+cpp/build/basefwx b512file-enc <file> -p <password>
+cpp/build/basefwx b512file-dec <file.fwx> -p <password>
+cpp/build/basefwx pb512file-enc <file> -p <password>
+cpp/build/basefwx pb512file-dec <file.fwx> -p <password>
 
-cpp/build/basefwx_cpp jmge <media> [-p <password>] [--master-pub <path>] [--out <path>] [--archive]
-cpp/build/basefwx_cpp jmgd <media> [-p <password>] [--out <path>]
+cpp/build/basefwx jmge <media> [-p <password>] [--master-pub <path>] [--out <path>] [--archive]
+cpp/build/basefwx jmgd <media> [-p <password>] [--out <path>]
 ```
 
 Master-only media encryption (C++):
 
 ```
-cpp/build/basefwx_cpp jmge input.mp4 --master-pub /secure/mlkem768.pub --out out.mp4
+cpp/build/basefwx jmge input.mp4 --master-pub /secure/mlkem768.pub --out out.mp4
 ```
 
 Notes:
@@ -259,8 +259,8 @@ Example live audio pipe (C++):
 
 ```bash
 ffmpeg -hide_banner -loglevel error -i input.m4a -vn -ac 1 -ar 16000 -f wav pipe:1 \
-  | cpp/build/basefwx_cpp fwxaes-live-enc - -p password --no-master --out - \
-  | cpp/build/basefwx_cpp fwxaes-live-dec - -p password --no-master --out - > restored.wav
+  | cpp/build/basefwx fwxaes-live-enc - -p password --no-master --out - \
+  | cpp/build/basefwx fwxaes-live-dec - -p password --no-master --out - > restored.wav
 ```
 
 ## C++ API

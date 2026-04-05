@@ -1,4 +1,4 @@
-# basefwx C++
+# BaseFWX C++
 
 This C++ implementation is wire-compatible with BaseFWX 3.6.4 and covers the
 current CLI/library surface used in release builds, including fwxAES, jMG, kFM,
@@ -21,40 +21,40 @@ cmake --build cpp/build
 ## CLI (current)
 
 ```bash
-./cpp/build/basefwx_cpp [global flags] <command> ...
+./cpp/build/basefwx [global flags] <command> ...
 # global flags: --verbose|-v --no-log --no-color
-./cpp/build/basefwx_cpp info <file.fwx>
-./cpp/build/basefwx_cpp b256-enc "hello"
-./cpp/build/basefwx_cpp b256-dec "<payload>"
-./cpp/build/basefwx_cpp n10-enc "hello"
-./cpp/build/basefwx_cpp n10-dec "<digits>"
-./cpp/build/basefwx_cpp n10file-enc secret.bin secret.n10
-./cpp/build/basefwx_cpp n10file-dec secret.n10 secret.bin
-./cpp/build/basefwx_cpp kFMe input.bin --out input.wav
-./cpp/build/basefwx_cpp kFMe input.mp3 --out input.png --bw
-./cpp/build/basefwx_cpp kFMd input.wav --out restored.bin
-./cpp/build/basefwx_cpp kFMd input.png --out restored.mp3
-./cpp/build/basefwx_cpp b512-enc "hello" -p "pw"
-./cpp/build/basefwx_cpp b512-dec "<payload>" -p "pw"
-./cpp/build/basefwx_cpp pb512-enc "hello" -p "pw"
-./cpp/build/basefwx_cpp pb512-dec "<payload>" -p "pw"
-./cpp/build/basefwx_cpp b512file-enc secret.bin -p "pw"
-./cpp/build/basefwx_cpp b512file-dec secret.bin.fwx -p "pw"
-./cpp/build/basefwx_cpp pb512file-enc secret.bin -p "pw"
-./cpp/build/basefwx_cpp pb512file-dec secret.bin.fwx -p "pw"
-./cpp/build/basefwx_cpp fwxaes-enc secret.bin -p "pw" --normalize
-./cpp/build/basefwx_cpp fwxaes-dec secret.bin.fwx -p "pw"
-./cpp/build/basefwx_cpp fwxaes-enc secret.bin -p "pw" --heavy
-./cpp/build/basefwx_cpp fwxaes-dec secret.bin.fwx -p "pw" --heavy
-./cpp/build/basefwx_cpp fwxaes-heavy-enc secret.bin -p "pw"
-./cpp/build/basefwx_cpp fwxaes-heavy-dec secret.bin.fwx -p "pw"
-./cpp/build/basefwx_cpp fwxaes-live-enc secret.bin -p "pw" --out secret.live.fwx
-./cpp/build/basefwx_cpp fwxaes-live-dec secret.live.fwx -p "pw" --out secret.bin
+./cpp/build/basefwx info <file.fwx>
+./cpp/build/basefwx b256-enc "hello"
+./cpp/build/basefwx b256-dec "<payload>"
+./cpp/build/basefwx n10-enc "hello"
+./cpp/build/basefwx n10-dec "<digits>"
+./cpp/build/basefwx n10file-enc secret.bin secret.n10
+./cpp/build/basefwx n10file-dec secret.n10 secret.bin
+./cpp/build/basefwx kFMe input.bin --out input.wav
+./cpp/build/basefwx kFMe input.mp3 --out input.png --bw
+./cpp/build/basefwx kFMd input.wav --out restored.bin
+./cpp/build/basefwx kFMd input.png --out restored.mp3
+./cpp/build/basefwx b512-enc "hello" -p "pw"
+./cpp/build/basefwx b512-dec "<payload>" -p "pw"
+./cpp/build/basefwx pb512-enc "hello" -p "pw"
+./cpp/build/basefwx pb512-dec "<payload>" -p "pw"
+./cpp/build/basefwx b512file-enc secret.bin -p "pw"
+./cpp/build/basefwx b512file-dec secret.bin.fwx -p "pw"
+./cpp/build/basefwx pb512file-enc secret.bin -p "pw"
+./cpp/build/basefwx pb512file-dec secret.bin.fwx -p "pw"
+./cpp/build/basefwx fwxaes-enc secret.bin -p "pw" --normalize
+./cpp/build/basefwx fwxaes-dec secret.bin.fwx -p "pw"
+./cpp/build/basefwx fwxaes-enc secret.bin -p "pw" --heavy
+./cpp/build/basefwx fwxaes-dec secret.bin.fwx -p "pw" --heavy
+./cpp/build/basefwx fwxaes-heavy-enc secret.bin -p "pw"
+./cpp/build/basefwx fwxaes-heavy-dec secret.bin.fwx -p "pw"
+./cpp/build/basefwx fwxaes-live-enc secret.bin -p "pw" --out secret.live.fwx
+./cpp/build/basefwx fwxaes-live-dec secret.live.fwx -p "pw" --out secret.bin
 ffmpeg -hide_banner -loglevel error -i input.m4a -vn -ac 1 -ar 16000 -f wav pipe:1 \
-  | ./cpp/build/basefwx_cpp fwxaes-live-enc - -p "pw" --no-master --out - \
-  | ./cpp/build/basefwx_cpp fwxaes-live-dec - -p "pw" --no-master --out - > restored.wav
-./cpp/build/basefwx_cpp jmge input.mp4 -p "pw" --out out-small.mp4
-./cpp/build/basefwx_cpp jmge input.mp4 -p "pw" --archive --out out-exact.mp4
+  | ./cpp/build/basefwx fwxaes-live-enc - -p "pw" --no-master --out - \
+  | ./cpp/build/basefwx fwxaes-live-dec - -p "pw" --no-master --out - > restored.wav
+./cpp/build/basefwx jmge input.mp4 -p "pw" --out out-small.mp4
+./cpp/build/basefwx jmge input.mp4 -p "pw" --archive --out out-exact.mp4
 ```
 
 `info`, `identify`, and `probe` recognize:

@@ -12,7 +12,7 @@
 namespace basefwx::constants {
 
 #ifndef BASEFWX_VERSION_STRING
-#define BASEFWX_VERSION_STRING "3.6.4"
+#error "BASEFWX_VERSION_STRING must be provided by the build system"
 #endif
 
 inline constexpr std::size_t kUserKdfSaltSize = 16;

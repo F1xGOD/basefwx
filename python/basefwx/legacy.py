@@ -1720,7 +1720,8 @@ class basefwx:
         env_path = basefwx.os.getenv("BASEFWX_MASTER_PQ_PUB")
         if env_path:
             return basefwx._resolve_master_pubkey_path(env_path)
-        if basefwx.os.getenv("ALLOW_BAKED_PUB") == "1":
+        allow_baked = basefwx.os.getenv("BASEFWX_MASTER_PQ_ALLOW_BAKED") or basefwx.os.getenv("ALLOW_BAKED_PUB")
+        if str(allow_baked).strip().lower() in {"1", "true", "yes", "on"}:
             return basefwx.zlib.decompress(basefwx.base64.b64decode(basefwx.MASTER_PQ_PUBLIC))
         return None
 
@@ -2189,7 +2190,10 @@ class basefwx:
         ec_pub = None
         if use_master and pubkey is None:
             try:
-                ec_pub = basefwx._load_master_ec_public(create_if_missing=True)
+                create_ec_if_missing = str(
+                    basefwx.os.getenv("BASEFWX_MASTER_EC_CREATE_IF_MISSING", "")
+                ).strip().lower() in {"1", "true", "yes", "on"}
+                ec_pub = basefwx._load_master_ec_public(create_if_missing=create_ec_if_missing)
             except Exception:
                 ec_pub = None
         use_master_effective = use_master and (pubkey is not None or ec_pub is not None)
@@ -12492,6 +12496,12 @@ def cli(argv=None) -> int:
         help="Disable metadata emission and zero timestamps"
     )
     cryptin.add_argument(
+        "--use-master",
+        dest="use_master",
+        action="store_true",
+        help="Enable master key wrapping/unwrapping (off by default)"
+    )
+    cryptin.add_argument(
         "--no-master",
         dest="use_master",
         action="store_false",
@@ -12503,7 +12513,7 @@ def cli(argv=None) -> int:
         action="store_false",
         help="Disable pre-AEAD obfuscation layers"
     )
-    cryptin.set_defaults(use_master=True, obfuscate=True, archive_original=False)
+    cryptin.set_defaults(use_master=False, obfuscate=True, archive_original=False)
     cryptin.add_argument(
         "--use-master-pub",
         dest="master_pub_path",

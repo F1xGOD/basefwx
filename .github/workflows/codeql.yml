@@ -16,7 +16,6 @@ jobs:
     runs-on: ${{ (matrix.language == 'swift' && 'macos-latest') || 'ubuntu-latest' }}
     env:
       LIBOQS_VERSION: "0.11.0"
-      LIBOQS_PREFIX: ${{ github.workspace }}/.cache/liboqs/0.11.0/${{ runner.os }}-${{ runner.arch }}
     permissions:
       security-events: write
       packages: read
@@ -48,11 +47,15 @@ jobs:
         if: matrix.language == 'c-cpp'
         run: |
           set -euo pipefail
-          mkdir -p "${LIBOQS_PREFIX}"
+          liboqs_prefix="${GITHUB_WORKSPACE}/.cache/liboqs/${LIBOQS_VERSION}/${RUNNER_OS}-${RUNNER_ARCH}"
+          liboqs_cache_key="liboqs-${LIBOQS_VERSION}-${RUNNER_OS}-${RUNNER_ARCH}"
+          mkdir -p "${liboqs_prefix}"
           {
-            echo "PKG_CONFIG_PATH=${LIBOQS_PREFIX}/lib/pkgconfig:${LIBOQS_PREFIX}/lib64/pkgconfig${PKG_CONFIG_PATH:+:${PKG_CONFIG_PATH}}"
-            echo "CMAKE_PREFIX_PATH=${LIBOQS_PREFIX}${CMAKE_PREFIX_PATH:+:${CMAKE_PREFIX_PATH}}"
-            echo "LD_LIBRARY_PATH=${LIBOQS_PREFIX}/lib:${LIBOQS_PREFIX}/lib64${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
+            echo "LIBOQS_PREFIX=${liboqs_prefix}"
+            echo "LIBOQS_CACHE_KEY=${liboqs_cache_key}"
+            echo "PKG_CONFIG_PATH=${liboqs_prefix}/lib/pkgconfig:${liboqs_prefix}/lib64/pkgconfig${PKG_CONFIG_PATH:+:${PKG_CONFIG_PATH}}"
+            echo "CMAKE_PREFIX_PATH=${liboqs_prefix}${CMAKE_PREFIX_PATH:+:${CMAKE_PREFIX_PATH}}"
+            echo "LD_LIBRARY_PATH=${liboqs_prefix}/lib:${liboqs_prefix}/lib64${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
           } >> "${GITHUB_ENV}"
 
       - name: Cache liboqs
@@ -61,7 +64,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ env.LIBOQS_PREFIX }}
-          key: liboqs-${{ env.LIBOQS_VERSION }}-${{ runner.os }}-${{ runner.arch }}
+          key: ${{ env.LIBOQS_CACHE_KEY }}
 
       - name: Install C++ deps
         if: matrix.language == 'c-cpp'

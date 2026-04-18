@@ -61,16 +61,20 @@ public final class PQ {
             return decodeKeyBytes(raw);
         }
 
-        String allowBaked = System.getenv("ALLOW_BAKED_PUB");
-        if (allowBaked != null && (allowBaked.equals("1") || allowBaked.equalsIgnoreCase("true"))) {
+        String allowBaked = System.getenv(Constants.MASTER_PQ_ALLOW_BAKED_ENV);
+        if (allowBaked == null || allowBaked.isEmpty()) {
+            allowBaked = System.getenv("ALLOW_BAKED_PUB");
+        }
+        if (allowBaked != null && (allowBaked.equals("1") || allowBaked.equalsIgnoreCase("true")
+                || allowBaked.equalsIgnoreCase("yes") || allowBaked.equalsIgnoreCase("on"))) {
             // The baked key is stored as base64-encoded, zlib-compressed bytes
             // decodeKeyBytes() will handle the base64 decode and zlib decompression
             byte[] baked = Constants.MASTER_PQ_PUBLIC_B64.getBytes(StandardCharsets.UTF_8);
             return decodeKeyBytes(baked);
         }
 
-        throw new IllegalStateException("Master PQ public key not available. Set " + 
-            Constants.MASTER_PQ_PUBLIC_ENV + " or ALLOW_BAKED_PUB=1");
+        throw new IllegalStateException("Master PQ public key not available. Set " +
+            Constants.MASTER_PQ_PUBLIC_ENV + " or " + Constants.MASTER_PQ_ALLOW_BAKED_ENV + "=1");
     }
 
     /**

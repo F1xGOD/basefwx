@@ -30,6 +30,18 @@ import javax.crypto.KeyAgreement;
 public final class EcKeys {
     private EcKeys() {}
 
+    public static boolean masterEcAutoCreateEnabled() {
+        String raw = System.getenv(Constants.MASTER_EC_CREATE_IF_MISSING_ENV);
+        if (raw == null) {
+            return false;
+        }
+        String normalized = raw.trim().toLowerCase();
+        return "1".equals(normalized)
+            || "true".equals(normalized)
+            || "yes".equals(normalized)
+            || "on".equals(normalized);
+    }
+
     public static PublicKey loadMasterPublic(boolean createIfMissing) {
         File envPath = resolveEnvPath(Constants.MASTER_EC_PUBLIC_ENV);
         File defaultPath = defaultPublicPath();

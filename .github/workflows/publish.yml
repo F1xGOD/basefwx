@@ -17,6 +17,9 @@ on:
 jobs:
   light-tests:
     runs-on: ubuntu-latest
+    env:
+      LIBOQS_VERSION: "0.11.0"
+      LIBOQS_PREFIX: ${{ github.workspace }}/.cache/liboqs/0.11.0/${{ runner.os }}-${{ runner.arch }}
     permissions:
       contents: read
     steps:
@@ -26,12 +29,22 @@ jobs:
       - name: Validate version metadata
         run: python3 scripts/check_version_sync.py
 
+      - name: Prepare liboqs cache prefix
+        run: |
+          set -euo pipefail
+          mkdir -p "${LIBOQS_PREFIX}"
+          {
+            echo "PKG_CONFIG_PATH=${LIBOQS_PREFIX}/lib/pkgconfig:${LIBOQS_PREFIX}/lib64/pkgconfig${PKG_CONFIG_PATH:+:${PKG_CONFIG_PATH}}"
+            echo "CMAKE_PREFIX_PATH=${LIBOQS_PREFIX}${CMAKE_PREFIX_PATH:+:${CMAKE_PREFIX_PATH}}"
+            echo "LD_LIBRARY_PATH=${LIBOQS_PREFIX}/lib:${LIBOQS_PREFIX}/lib64${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
+          } >> "${GITHUB_ENV}"
+
       - name: Cache liboqs
         id: cache-liboqs
         uses: actions/cache@v4
         with:
-          path: /usr/local
-          key: liboqs-0.11.0-${{ runner.os }}-${{ runner.arch }}
+          path: ${{ env.LIBOQS_PREFIX }}
+          key: liboqs-${{ env.LIBOQS_VERSION }}-${{ runner.os }}-${{ runner.arch }}
 
       - name: Install system deps
         run: |
@@ -41,7 +54,7 @@ jobs:
       - name: Install liboqs
         run: |
           chmod +x .github/scripts/install-liboqs.sh
-          .github/scripts/install-liboqs.sh
+          INSTALL_PREFIX="${LIBOQS_PREFIX}" .github/scripts/install-liboqs.sh
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -159,6 +172,9 @@ jobs:
     runs-on: ${{ matrix.runner }}
     container:
       image: ${{ matrix.container_image }}
+    env:
+      LIBOQS_VERSION: "0.11.0"
+      LIBOQS_PREFIX: ${{ github.workspace }}/.cache/liboqs/0.11.0-static/${{ matrix.cache_tag }}-${{ runner.arch }}
     defaults:
       run:
         shell: bash
@@ -184,12 +200,22 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Prepare liboqs cache prefix
+        run: |
+          set -euo pipefail
+          mkdir -p "${LIBOQS_PREFIX}"
+          {
+            echo "PKG_CONFIG_PATH=${LIBOQS_PREFIX}/lib/pkgconfig:${LIBOQS_PREFIX}/lib64/pkgconfig${PKG_CONFIG_PATH:+:${PKG_CONFIG_PATH}}"
+            echo "CMAKE_PREFIX_PATH=${LIBOQS_PREFIX}${CMAKE_PREFIX_PATH:+:${CMAKE_PREFIX_PATH}}"
+            echo "LD_LIBRARY_PATH=${LIBOQS_PREFIX}/lib:${LIBOQS_PREFIX}/lib64${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
+          } >> "${GITHUB_ENV}"
+
       - name: Cache liboqs
         id: cache-liboqs
         uses: actions/cache@v4
         with:
-          path: /usr/local
-          key: liboqs-0.11.0-static-${{ matrix.cache_tag }}-${{ runner.arch }}
+          path: ${{ env.LIBOQS_PREFIX }}
+          key: liboqs-${{ env.LIBOQS_VERSION }}-static-${{ matrix.cache_tag }}-${{ runner.arch }}
 
       - name: Install system deps
         run: |
@@ -252,12 +278,12 @@ jobs:
           chmod +x .github/scripts/install-liboqs.sh
           export LIBOQS_USE_APT=0
           export LIBOQS_BUILD_SHARED=OFF
-          .github/scripts/install-liboqs.sh
+          INSTALL_PREFIX="${LIBOQS_PREFIX}" .github/scripts/install-liboqs.sh
 
       - name: Verify static liboqs
         run: |
-          test -f /usr/local/include/oqs/oqs.h
-          test -f /usr/local/lib/liboqs.a
+          test -f "${LIBOQS_PREFIX}/include/oqs/oqs.h"
+          test -f "${LIBOQS_PREFIX}/lib/liboqs.a"
 
       - name: Prepare embedded signing metadata
         env:
@@ -289,7 +315,7 @@ jobs:
             "${libdir}/libz.a" \
             "${libdir}/libargon2.a" \
             "${libdir}/liblzma.a" \
-            "/usr/local/lib/liboqs.a"; do
+            "${LIBOQS_PREFIX}/lib/liboqs.a"; do
             if [ ! -f "$dep" ]; then
               echo "Missing static dependency: $dep" >&2
               exit 1
@@ -341,8 +367,8 @@ jobs:
             -DOPENSSL_SSL_LIBRARY="${openssl_ssl_lib}" \
             $( [[ -n "$openssl_root" ]] && echo "-DOPENSSL_ROOT_DIR=$openssl_root" ) \
             $( [[ -n "$openssl_include" ]] && echo "-DOPENSSL_INCLUDE_DIR=$openssl_include" ) \
-            -DOQS_INCLUDE_DIR=/usr/local/include \
-            -DOQS_LIBRARY=/usr/local/lib/liboqs.a \
+            -DOQS_INCLUDE_DIR="${LIBOQS_PREFIX}/include" \
+            -DOQS_LIBRARY="${LIBOQS_PREFIX}/lib/liboqs.a" \
             -DZLIB_LIBRARY="${libdir}/libz.a" \
             -DZLIB_INCLUDE_DIR=/usr/include \
             -DARGON2_LIBRARY="${libdir}/libargon2.a" \

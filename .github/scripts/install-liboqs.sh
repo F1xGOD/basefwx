@@ -32,6 +32,13 @@ echo "install prefix: ${INSTALL_PREFIX}"
 echo "use apt: ${LIBOQS_USE_APT}"
 echo "build shared libs: ${LIBOQS_BUILD_SHARED}"
 
+use_system_prefix=0
+case "${INSTALL_PREFIX}" in
+    /usr|/usr/local)
+        use_system_prefix=1
+        ;;
+esac
+
 have_header=0
 if [[ -f "${INSTALL_PREFIX}/include/oqs/oqs.h" ]]; then
     have_header=1
@@ -68,15 +75,15 @@ if [[ "$have_header" == "1" ]]; then
     fi
 fi
 
-# Try installing from apt first only for shared-linking mode.
-if [[ "${LIBOQS_USE_APT}" == "1" && "${LIBOQS_BUILD_SHARED}" == "ON" ]]; then
+# Try installing from apt first only for shared-linking mode and system prefixes.
+if [[ "${LIBOQS_USE_APT}" == "1" && "${LIBOQS_BUILD_SHARED}" == "ON" && "${use_system_prefix}" == "1" ]]; then
     echo "Attempting to install liboqs-dev from apt..."
     if run_as_root apt-get install -y liboqs-dev 2>/dev/null; then
         echo "✓ Successfully installed liboqs-dev from apt"
         exit 0
     fi
 else
-    echo "Skipping apt install (requested source build mode)."
+    echo "Skipping apt install (non-system prefix or requested source build mode)."
 fi
 
 echo "liboqs-dev not available in apt, building from source..."

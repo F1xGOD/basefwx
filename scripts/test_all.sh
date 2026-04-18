@@ -45,8 +45,8 @@ TEXT_ORIG="$TMP_DIR/text_orig.txt"
 PY_HELPER="$TMP_DIR/py_helper.py"
 GEN_HELPER="$TMP_DIR/gen_files.py"
 
-PW="pw12345"
-BAD_PW="wrongpw"
+PW="basefwx-bench-pass-2026"
+BAD_PW="basefwx-bench-wrong-2026"
 
 ENABLE_HUGE="${ENABLE_HUGE:-0}"
 BIG_FILE_BYTES="${BIG_FILE_BYTES:-37748736}"

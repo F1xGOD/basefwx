@@ -1270,7 +1270,7 @@ public final class BaseFwx {
         boolean useMasterEffective = false;
         if (useMaster) {
             try {
-                java.security.PublicKey pub = EcKeys.loadMasterPublic(true);
+                java.security.PublicKey pub = EcKeys.loadMasterPublic(EcKeys.masterEcAutoCreateEnabled());
                 useMasterEffective = pub != null;
             } catch (RuntimeException exc) {
                 useMasterEffective = false;
@@ -1537,7 +1537,7 @@ public final class BaseFwx {
 
         if (useMaster) {
             try {
-                java.security.PublicKey pub = EcKeys.loadMasterPublic(true);
+                java.security.PublicKey pub = EcKeys.loadMasterPublic(EcKeys.masterEcAutoCreateEnabled());
                 if (pub != null) {
                     EcKeys.EcKemResult kem = EcKeys.kemEncrypt(pub);
                     masterBlob = kem.masterBlob;
@@ -2051,7 +2051,7 @@ public final class BaseFwx {
         byte[] ephemeralKey = null;
         if (useMaster) {
             try {
-                java.security.PublicKey pub = EcKeys.loadMasterPublic(true);
+                java.security.PublicKey pub = EcKeys.loadMasterPublic(EcKeys.masterEcAutoCreateEnabled());
                 if (pub != null) {
                     EcKeys.EcKemResult kem = EcKeys.kemEncrypt(pub);
                     masterBlob = kem.masterBlob;

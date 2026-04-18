@@ -7,7 +7,7 @@ def b64encode(string: str):
     return basefwx.b64encode(string)
 
 
-def b512encode(string: str, code: str = "", use_master: bool = True):
+def b512encode(string: str, code: str = "", use_master: bool = False):
     return basefwx.b512encode(string, code, use_master=use_master)
 
 
@@ -31,7 +31,7 @@ def bi512encode(string: str):
     return basefwx.bi512encode(string)
 
 
-def pb512encode(string: str, code: str = "", use_master: bool = True):
+def pb512encode(string: str, code: str = "", use_master: bool = False):
     return basefwx.pb512encode(string, code, use_master=use_master)
 
 
@@ -67,11 +67,11 @@ def a512decode(string: str):
     return basefwx.a512decode(string)
 
 
-def b512decode(string: str, code: str = "", use_master: bool = True):
+def b512decode(string: str, code: str = "", use_master: bool = False):
     return basefwx.b512decode(string, code, use_master=use_master)
 
 
-def pb512decode(string: str, code: str = "", use_master: bool = True):
+def pb512decode(string: str, code: str = "", use_master: bool = False):
     return basefwx.pb512decode(string, code, use_master=use_master)
 
 

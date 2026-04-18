@@ -7,7 +7,7 @@ def b512encodefile(
     file: str,
     code: str,
     strip_metadata: bool = False,
-    use_master: bool = True,
+    use_master: bool = False,
 ):
     return basefwx.b512file_encode(
         file,
@@ -21,7 +21,7 @@ def b512decodefile(
     file: str,
     code: str = "",
     strip_metadata: bool = False,
-    use_master: bool = True,
+    use_master: bool = False,
 ):
     return basefwx.b512file_decode(
         file,
@@ -35,7 +35,7 @@ def b512handlefile(
     file: str,
     code: str = "",
     strip_metadata: bool = False,
-    use_master: bool = True,
+    use_master: bool = False,
     silent: bool = False,
 ):
     return basefwx.b512file(
@@ -52,7 +52,7 @@ def fwxAES(
     code: str = "",
     light: bool = True,
     strip_metadata: bool = False,
-    use_master: bool = True,
+    use_master: bool = False,
     silent: bool = False,
     *,
     output: str | None = None,
@@ -122,11 +122,11 @@ def dean7_file(
     )
 
 
-def fwxAES_encrypt_raw(plaintext: bytes, password: str | bytes, use_master: bool = True):
+def fwxAES_encrypt_raw(plaintext: bytes, password: str | bytes, use_master: bool = False):
     return basefwx.fwxAES_encrypt_raw(plaintext, password, use_master=use_master)
 
 
-def fwxAES_decrypt_raw(blob: bytes, password: str | bytes, use_master: bool = True):
+def fwxAES_decrypt_raw(blob: bytes, password: str | bytes, use_master: bool = False):
     return basefwx.fwxAES_decrypt_raw(blob, password, use_master=use_master)
 
 
@@ -134,7 +134,7 @@ def fwxAES_encrypt_stream(
     source,
     dest,
     password: str | bytes,
-    use_master: bool = True,
+    use_master: bool = False,
     chunk_size: int | None = None,
 ):
     return basefwx.fwxAES_encrypt_stream(
@@ -150,7 +150,7 @@ def fwxAES_decrypt_stream(
     source,
     dest,
     password: str | bytes,
-    use_master: bool = True,
+    use_master: bool = False,
     chunk_size: int | None = None,
 ):
     return basefwx.fwxAES_decrypt_stream(
@@ -169,7 +169,7 @@ LiveDecryptor = basefwx.LiveDecryptor
 def fwxAES_live_encrypt_chunks(
     chunks,
     password: str | bytes,
-    use_master: bool = True,
+    use_master: bool = False,
 ):
     return basefwx.fwxAES_live_encrypt_chunks(
         chunks,
@@ -181,7 +181,7 @@ def fwxAES_live_encrypt_chunks(
 def fwxAES_live_decrypt_chunks(
     chunks,
     password: str | bytes,
-    use_master: bool = True,
+    use_master: bool = False,
 ):
     return basefwx.fwxAES_live_decrypt_chunks(
         chunks,
@@ -194,7 +194,7 @@ def fwxAES_live_encrypt_stream(
     source,
     dest,
     password: str | bytes,
-    use_master: bool = True,
+    use_master: bool = False,
     chunk_size: int | None = None,
 ):
     return basefwx.fwxAES_live_encrypt_stream(
@@ -210,7 +210,7 @@ def fwxAES_live_decrypt_stream(
     source,
     dest,
     password: str | bytes,
-    use_master: bool = True,
+    use_master: bool = False,
     chunk_size: int | None = None,
 ):
     return basefwx.fwxAES_live_decrypt_stream(
@@ -226,7 +226,7 @@ def fwxAES_live_encrypt_ffmpeg(
     source_cmd: "list[str]",
     encrypted_dest,
     password: str | bytes,
-    use_master: bool = True,
+    use_master: bool = False,
     chunk_size: int | None = None,
 ):
     return basefwx.fwxAES_live_encrypt_ffmpeg(
@@ -242,7 +242,7 @@ def fwxAES_live_decrypt_ffmpeg(
     encrypted_source,
     sink_cmd: "list[str]",
     password: str | bytes,
-    use_master: bool = True,
+    use_master: bool = False,
     chunk_size: int | None = None,
 ):
     return basefwx.fwxAES_live_decrypt_ffmpeg(
@@ -267,7 +267,7 @@ def b512file_encode_bytes(
     ext: str,
     code: str,
     strip_metadata: bool = False,
-    use_master: bool = True,
+    use_master: bool = False,
     enable_aead: bool | None = None,
 ):
     return basefwx.b512file_encode_bytes(
@@ -284,7 +284,7 @@ def b512file_decode_bytes(
     blob: bytes,
     code: str,
     strip_metadata: bool = False,
-    use_master: bool = True,
+    use_master: bool = False,
 ):
     return basefwx.b512file_decode_bytes(
         blob,
@@ -299,7 +299,7 @@ def pb512file_encode_bytes(
     ext: str,
     code: str,
     strip_metadata: bool = False,
-    use_master: bool = True,
+    use_master: bool = False,
 ):
     return basefwx.pb512file_encode_bytes(
         data,
@@ -314,7 +314,7 @@ def pb512file_decode_bytes(
     blob: bytes,
     code: str,
     strip_metadata: bool = False,
-    use_master: bool = True,
+    use_master: bool = False,
 ):
     return basefwx.pb512file_decode_bytes(
         blob,

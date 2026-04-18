@@ -682,10 +682,12 @@ public final class BaseFwxCli {
             printVersionInfo();
             return;
         }
-        boolean useMaster = true;
+        boolean useMaster = false;
         int argc = args.length;
         for (String arg : args) {
-            if ("--no-master".equalsIgnoreCase(arg)) {
+            if ("--use-master".equalsIgnoreCase(arg)) {
+                useMaster = true;
+            } else if ("--no-master".equalsIgnoreCase(arg)) {
                 useMaster = false;
             }
         }
@@ -1521,14 +1523,14 @@ public final class BaseFwxCli {
         System.out.println("BaseFWX Java CLI");
         System.out.println("  [global] --verbose|-v --no-log --version|-V");
         System.out.println("  version");
-        System.out.println("  fwxaes-enc <in> <out> <password> [--no-master]");
-        System.out.println("  fwxaes-dec <in> <out> <password> [--no-master]");
+        System.out.println("  fwxaes-enc <in> <out> <password> [--use-master|--no-master]");
+        System.out.println("  fwxaes-dec <in> <out> <password> [--use-master|--no-master]");
         System.out.println("  an7 <in.fwx> -p <password> [--out <path>] [--keep-input] [--force-any]");
         System.out.println("  dean7 <in> -p <password> [--out <path>] [--keep-input]");
-        System.out.println("  fwxaes-stream-enc <in> <out> <password> [--no-master]");
-        System.out.println("  fwxaes-stream-dec <in> <out> <password> [--no-master]");
-        System.out.println("  fwxaes-live-enc <in> <out> <password> [--no-master]");
-        System.out.println("  fwxaes-live-dec <in> <out> <password> [--no-master]");
+        System.out.println("  fwxaes-stream-enc <in> <out> <password> [--use-master|--no-master]");
+        System.out.println("  fwxaes-stream-dec <in> <out> <password> [--use-master|--no-master]");
+        System.out.println("  fwxaes-live-enc <in> <out> <password> [--use-master|--no-master]");
+        System.out.println("  fwxaes-live-dec <in> <out> <password> [--use-master|--no-master]");
         System.out.println("  b64-enc <text>");
         System.out.println("  b64-dec <text>");
         System.out.println("  n10-enc <text>");
@@ -1545,30 +1547,30 @@ public final class BaseFwxCli {
         System.out.println("  a512-dec <text>");
         System.out.println("  bi512-enc <text>");
         System.out.println("  b1024-enc <text>");
-        System.out.println("  b512-enc <text> <password> [--no-master]");
-        System.out.println("  b512-dec <text> <password> [--no-master]");
-        System.out.println("  pb512-enc <text> <password> [--no-master]");
-        System.out.println("  pb512-dec <text> <password> [--no-master]");
-        System.out.println("  b512file-enc <in> <out> <password> [--no-master]");
-        System.out.println("  b512file-bytes-rt <in> <out> <password> [--no-master]");
-        System.out.println("  b512file-dec <in> <out> <password> [--no-master]");
-        System.out.println("  pb512file-enc <in> <out> <password> [--no-master]");
-        System.out.println("  pb512file-bytes-rt <in> <out> <password> [--no-master]");
-        System.out.println("  pb512file-dec <in> <out> <password> [--no-master]");
-        System.out.println("  jmge <in> <out> <password> [--keep-meta] [--keep-input] [--no-archive] [--no-master]");
-        System.out.println("  jmgd <in> <out> <password> [--no-master]");
+        System.out.println("  b512-enc <text> <password> [--use-master|--no-master]");
+        System.out.println("  b512-dec <text> <password> [--use-master|--no-master]");
+        System.out.println("  pb512-enc <text> <password> [--use-master|--no-master]");
+        System.out.println("  pb512-dec <text> <password> [--use-master|--no-master]");
+        System.out.println("  b512file-enc <in> <out> <password> [--use-master|--no-master]");
+        System.out.println("  b512file-bytes-rt <in> <out> <password> [--use-master|--no-master]");
+        System.out.println("  b512file-dec <in> <out> <password> [--use-master|--no-master]");
+        System.out.println("  pb512file-enc <in> <out> <password> [--use-master|--no-master]");
+        System.out.println("  pb512file-bytes-rt <in> <out> <password> [--use-master|--no-master]");
+        System.out.println("  pb512file-dec <in> <out> <password> [--use-master|--no-master]");
+        System.out.println("  jmge <in> <out> <password> [--keep-meta] [--keep-input] [--no-archive] [--use-master|--no-master]");
+        System.out.println("  jmgd <in> <out> <password> [--use-master|--no-master]");
         System.out.println("  b256-enc <text>");
         System.out.println("  b256-dec <text>");
-        System.out.println("  bench-text <method> <text-file> <password> [--no-master]");
+        System.out.println("  bench-text <method> <text-file> <password> [--use-master|--no-master]");
         System.out.println("  bench-hash <method> <text-file>");
-        System.out.println("  bench-fwxaes <file> <password> [--no-master]");
-        System.out.println("  bench-fwxaes-par <file> <password> [--no-master]");
-        System.out.println("  bench-an7 <file> <password> [--no-master]");
-        System.out.println("  bench-dean7 <file> <password> [--no-master]");
-        System.out.println("  bench-live <file> <password> [--no-master]");
-        System.out.println("  bench-b512file <file> <password> [--no-master]");
-        System.out.println("  bench-pb512file <file> <password> [--no-master]");
-        System.out.println("  bench-jmg <media> <password> [--no-master]");
+        System.out.println("  bench-fwxaes <file> <password> [--use-master|--no-master]");
+        System.out.println("  bench-fwxaes-par <file> <password> [--use-master|--no-master]");
+        System.out.println("  bench-an7 <file> <password> [--use-master|--no-master]");
+        System.out.println("  bench-dean7 <file> <password> [--use-master|--no-master]");
+        System.out.println("  bench-live <file> <password> [--use-master|--no-master]");
+        System.out.println("  bench-b512file <file> <password> [--use-master|--no-master]");
+        System.out.println("  bench-pb512file <file> <password> [--use-master|--no-master]");
+        System.out.println("  bench-jmg <media> <password> [--use-master|--no-master]");
     }
 
     private static KfmArgs parseKfmArgs(String[] args, int startIndex) {
@@ -1576,7 +1578,7 @@ public final class BaseFwxCli {
         java.util.List<String> positional = new java.util.ArrayList<>();
         for (int i = startIndex; i < args.length; i++) {
             String arg = args[i];
-            if ("--no-master".equalsIgnoreCase(arg)) {
+            if ("--no-master".equalsIgnoreCase(arg) || "--use-master".equalsIgnoreCase(arg)) {
                 continue;
             }
             if ("--bw".equalsIgnoreCase(arg)) {
@@ -1622,7 +1624,7 @@ public final class BaseFwxCli {
                 parsed.archiveOriginal = false;
                 continue;
             }
-            if ("--no-master".equalsIgnoreCase(arg)) {
+            if ("--no-master".equalsIgnoreCase(arg) || "--use-master".equalsIgnoreCase(arg)) {
                 continue;
             }
             if ("-p".equalsIgnoreCase(arg) || "--password".equalsIgnoreCase(arg)) {
@@ -1708,7 +1710,7 @@ public final class BaseFwxCli {
                 parsed.output = new File(args[++i]);
                 continue;
             }
-            if ("--no-master".equalsIgnoreCase(arg)) {
+            if ("--no-master".equalsIgnoreCase(arg) || "--use-master".equalsIgnoreCase(arg)) {
                 continue;
             }
             positional.add(arg);

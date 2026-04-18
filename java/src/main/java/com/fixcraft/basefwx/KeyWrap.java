@@ -22,7 +22,7 @@ public final class KeyWrap {
         EcKeys.EcKemResult kem = null;
         if (useMaster) {
             try {
-                java.security.PublicKey pub = EcKeys.loadMasterPublic(true);
+                java.security.PublicKey pub = EcKeys.loadMasterPublic(EcKeys.masterEcAutoCreateEnabled());
                 if (pub != null) {
                     kem = EcKeys.kemEncrypt(pub);
                     useMasterEffective = true;

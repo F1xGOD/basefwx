@@ -4,25 +4,14 @@ import java.util.Locale;
 import java.util.concurrent.Callable;
 
 /**
- * Selects the active {@link CryptoBackend}.
+ * Picks the active {@link CryptoBackend}. Default is pure Java; opt into
+ * native with {@code -Dbasefwx.useJNI=true} or {@code BASEFWX_NATIVE=1}.
+ * {@code BASEFWX_NATIVE=0} / {@code -Dbasefwx.useJNI=false} forces pure Java.
  *
- * <p>The default is the pure-Java implementation, which has no native
- * dependencies and runs unmodified on Android and any other JVM that exposes
- * {@code javax.crypto}. To opt into the native backend, set either the system
- * property {@code basefwx.useJNI=true} or the environment variable
- * {@code BASEFWX_NATIVE=1}. {@code BASEFWX_NATIVE=0} or {@code -Dbasefwx.useJNI=false}
- * is a kill switch that forces pure-Java even when the native library is
- * present.
- *
- * <p>If the native backend is requested but its shared library cannot be
- * loaded, the loader emits a single warning line and falls back to pure Java.
- * Callers never see an exception just because a native lib is missing.
- *
- * <p>Per-call overrides are available via {@link #call(CryptoBackend, Callable)}
- * and {@link #run(CryptoBackend, Runnable)}; these install a thread-local
- * backend for the duration of the body so that a {@code FwxAESPureJava}
- * instance can route its AEAD through the Java backend even on a JVM where
- * the global default is the native backend (and vice versa).
+ * <p>{@link #call(CryptoBackend, Callable)} pins a backend on the current
+ * thread for the duration of the body so {@code FwxAESPureJava} and
+ * {@code FwxAESJNI} can each route through their own backend regardless of
+ * the JVM-wide default.
  */
 public final class CryptoBackends {
     private static final CryptoBackend JAVA = new JavaCryptoBackend();
@@ -31,75 +20,48 @@ public final class CryptoBackends {
 
     private CryptoBackends() {}
 
-    /**
-     * Returns the active backend. If a thread-local override is set, returns
-     * that; otherwise returns the native backend if loaded, otherwise the
-     * pure-Java backend.
-     */
     public static CryptoBackend get() {
         CryptoBackend override = OVERRIDE.get();
         if (override != null) return override;
         return NATIVE_BACKEND != null ? NATIVE_BACKEND : JAVA;
     }
 
-    /** The pure-Java backend (always available). */
     public static CryptoBackend java() {
         return JAVA;
     }
 
-    /**
-     * The native backend if its shared library loaded, or {@code null}.
-     */
     public static CryptoBackend nativeOrNull() {
         return NATIVE_BACKEND;
     }
 
-    /** {@code true} if the active backend is the native one. */
     public static boolean usingNative() {
         return get().isNative();
     }
 
-    /**
-     * Runs {@code body} with {@code backend} pinned as the thread-local
-     * override. The override is removed when the body returns or throws,
-     * even if a nested call also installs an override.
-     */
     public static <T> T call(CryptoBackend backend, Callable<T> body) throws Exception {
         CryptoBackend prior = OVERRIDE.get();
         OVERRIDE.set(backend);
         try {
             return body.call();
         } finally {
-            if (prior != null) {
-                OVERRIDE.set(prior);
-            } else {
-                OVERRIDE.remove();
-            }
+            if (prior != null) OVERRIDE.set(prior);
+            else OVERRIDE.remove();
         }
     }
 
-    /** Void variant of {@link #call(CryptoBackend, Callable)}. */
     public static void run(CryptoBackend backend, Runnable body) {
         CryptoBackend prior = OVERRIDE.get();
         OVERRIDE.set(backend);
         try {
             body.run();
         } finally {
-            if (prior != null) {
-                OVERRIDE.set(prior);
-            } else {
-                OVERRIDE.remove();
-            }
+            if (prior != null) OVERRIDE.set(prior);
+            else OVERRIDE.remove();
         }
     }
 
     private static CryptoBackend createNativeIfRequested() {
-        if (isKillSwitchSet()) {
-            return null;
-        }
-        if (!isNativeRequested()) {
-            return null;
-        }
+        if (isKillSwitchSet() || !isNativeRequested()) return null;
         CryptoBackend backend = NativeCryptoBackend.tryCreate();
         if (backend == null) {
             RuntimeLog.warn(
@@ -110,10 +72,8 @@ public final class CryptoBackends {
     }
 
     private static boolean isNativeRequested() {
-        if (truthy(System.getProperty("basefwx.useJNI"))) {
-            return true;
-        }
-        return truthy(System.getenv("BASEFWX_NATIVE"));
+        return truthy(System.getProperty("basefwx.useJNI"))
+            || truthy(System.getenv("BASEFWX_NATIVE"));
     }
 
     private static boolean isKillSwitchSet() {

@@ -2,6 +2,98 @@
 
 This module provides a Java implementation of the core BaseFWX codecs so it can run on any JVM (desktop, server, or Android runtime).
 
+## Pure Java vs JNI
+
+The fwxAES family (`fwxAES`, `fwxAES-light`, `fwxAES-live`) is exposed through a single interface, [`FwxAES`](src/main/java/com/fixcraft/basefwx/FwxAES.java), with two concrete implementations:
+
+| Class | Backend | When to use |
+| --- | --- | --- |
+| [`FwxAESPureJava`](src/main/java/com/fixcraft/basefwx/FwxAESPureJava.java) | `javax.crypto.Cipher` (JCA) | Default. No native dependency. Works on any JVM, including Android. Pick this for libraries and apps that prefer a clean classpath. |
+| [`FwxAESJNI`](src/main/java/com/fixcraft/basefwx/FwxAESJNI.java) | `basefwxcrypto` shared library via JNI | Opt-in. Slightly faster on desktop / server when the JCA path isn't well-tuned (older Android, ARM without AES extensions, JREs with software AES). On x86 with AES-NI the JCA is already very fast, so the gap is small. |
+
+Both implementations are routed through the same wire-format code in `BaseFwx`, so blobs they produce are byte-identical and interchangeable, and a blob produced by one is decryptable by the other and by the Python and C++ implementations.
+
+### Picking a backend
+
+```java
+// Default: pure Java (FwxAESPureJava)
+FwxAES aes = FwxAES.create();
+byte[] blob = aes.encryptRaw(plaintext, "password");
+byte[] back = aes.decryptRaw(blob, "password");
+
+// Opt into JNI. Falls back to pure Java with a single warning line if the
+// shared library cannot be loaded.
+FwxAES fast = FwxAES.create(true);
+boolean usingNative = fast.isNative();
+
+// Builder
+FwxAES configured = FwxAES.builder()
+    .enableJNI(true)
+    .useMaster(false)
+    .build();
+
+// Direct construction is supported when you want to be explicit
+FwxAES pinnedPure = new FwxAESPureJava();
+FwxAES pinnedJni  = new FwxAESJNI(); // throws if the native lib can't be loaded
+```
+
+The opt-in is also wired to `-Dbasefwx.useJNI=true` and `BASEFWX_NATIVE=1` (kill switches: `-Dbasefwx.useJNI=false` and `BASEFWX_NATIVE=0`). Per-instance routing is done through a thread-local override on `CryptoBackends`, so a `FwxAESPureJava` instance always uses the pure-Java AEAD even if the JVM was started with `BASEFWX_NATIVE=1` (and vice versa).
+
+### Building the native library
+
+The C++ source for the JNI lib lives at [`cpp/src/jni/basefwx_jni.cpp`](../cpp/src/jni/basefwx_jni.cpp). Build it with:
+
+```bash
+cmake -S basefwx/cpp -B build/jni \
+    -DBASEFWX_BUILD_CLI=OFF \
+    -DBASEFWX_BUILD_JNI=ON \
+    -DBASEFWX_REQUIRE_ARGON2=OFF \
+    -DBASEFWX_REQUIRE_OQS=OFF
+cmake --build build/jni --target basefwxcrypto -j
+```
+
+The result is `libbasefwxcrypto.so` (Linux), `libbasefwxcrypto.dylib` (macOS), or `basefwxcrypto.dll` (Windows). Set `JAVA_HOME` if `jni.h` isn't on the default include path.
+
+### Loading the native library
+
+[`NativeLibraryLoader`](src/main/java/com/fixcraft/basefwx/NativeLibraryLoader.java) looks in this order:
+
+1. `/native/<os>/<arch>/<filename>` inside the running JAR (extracted to a temp file and `System.load`-ed). Convention: `native/linux/x86_64/libbasefwxcrypto.so`, `native/macos/aarch64/libbasefwxcrypto.dylib`, `native/windows/x86_64/basefwxcrypto.dll`, etc.
+2. `System.loadLibrary("basefwxcrypto")`, which uses the JVM's `java.library.path`.
+
+So either bundle the lib into the JAR under `/native/...` or run with `-Djava.library.path=<dir-containing-the-lib>`.
+
+### Benchmark
+
+A standalone microbenchmark for both backends is shipped as `FwxAESBenchmark`:
+
+```bash
+# default: 4 MiB payload, 5 iterations, pure-Java only
+java -cp basefwx-java.jar com.fixcraft.basefwx.FwxAESBenchmark
+
+# include JNI path
+java -Dbasefwx.useJNI=true \
+     -Djava.library.path=/path/to/dir \
+     -cp basefwx-java.jar com.fixcraft.basefwx.FwxAESBenchmark 16777216 5
+```
+
+Sample run on x86_64 (Linux, JDK 25, OpenSSL 3.5, OpenJDK JCA with AES-NI):
+
+```
+=== 4 MiB / 5 iters ===
+  pure-java   encrypt 57.87 ms (69.1 MiB/s)   decrypt 7.44 ms (537.6 MiB/s)
+  jni         encrypt 60.29 ms (66.3 MiB/s)   decrypt 7.52 ms (532.1 MiB/s)
+  speedup (encrypt): jni is 0.96x pure-java
+
+=== 16 MiB / 3 iters ===
+  pure-java   encrypt 66.96 ms (238.9 MiB/s)   decrypt 9.35 ms (1711.6 MiB/s)
+  jni         encrypt 61.64 ms (259.6 MiB/s)   decrypt 7.42 ms (2156.3 MiB/s)
+  speedup (encrypt): jni is 1.09x pure-java
+```
+
+On platforms without AES-NI or with weaker JCA implementations the gap is wider; on Android it's been measured at 2-4x in earlier prototypes. On a modern x86 desktop the two backends are within a few percent of each other and the pure-Java path is preferable for the smaller deployment surface.
+
+
 ## Scope (v1)
 - fwxAES raw encrypt/decrypt (PBKDF2 mode + EC master-key wrap)
 - fwxAES streaming encrypt/decrypt (InputStream/OutputStream)

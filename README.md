@@ -10,14 +10,13 @@
 [![License](https://img.shields.io/github/license/F1xGOD/basefwx?style=flat)](https://github.com/F1xGOD/basefwx/blob/main/LICENCE)
 [![Discord](https://img.shields.io/discord/1130897522051788821?color=7289da&label=Discord&logo=discord&logoColor=ffffff)](https://discord.gg/6d3QxXnzbV)
 
-BASEFWX is a hybrid post-quantum + AEAD encryption toolkit for files and media, with cross-compatible Python, C++, and Java implementations.
+BaseFWX is a hybrid post-quantum + AEAD encryption toolkit for files and media. It ships in three implementations (Python, C++, Java) that share the same on-disk and on-wire formats, so a file you encrypt in one binds out the other two without conversion.
 
 Repository policy:
 
-- `main` is the release branch.
-- `DEV` is the integration branch.
-- This stays a monorepo; language-specific long-lived branches are intentionally not used.
-- Shared format/security changes must keep Python, C++, and Java compatibility in one repository.
+- `main` is the release branch; `DEV` is the integration branch.
+- It stays a monorepo. There are no language-specific long-lived branches.
+- Shared format and security changes have to keep Python / C++ / Java parity in one PR.
 
 - Website: https://basefwx.fixcraft.jp
 - Documentation: https://basefwx.fixcraft.jp/docs/CLI
@@ -26,17 +25,16 @@ Repository policy:
 - Bug reports: https://github.com/F1xGOD/basefwx/issues
 - Report a security vulnerability: https://basefwx.fixcraft.jp/docs/SECURITY_MODEL
 
-It provides:
+What's in the box:
 
-- ML-KEM-768 master key wrapping (optional) and AES-GCM payload protection
-- Password-based encryption with Argon2id or PBKDF2
-- fwxAES file encryption with optional normalize wrapper
-- Packetized live fwxAES stream API for transport-agnostic real-time pipelines
-- b512/pb512 reversible encodings and file modes
-- kFM carrier codecs (auto media/audio encode + strict carrier decode)
-- jMG media cipher for images/audio with metadata control (`archive_original` toggle). Video path is temporarily disabled by default in Python/C++/Java unless `BASEFWX_ENABLE_JMG_VIDEO=1`.
-- C++ library and CLI with Python/C++/Java format parity
-- Java (JVM) library and CLI for cross-compatible fwxAES/b512/pb512/b256/jMG/kFM
+- AES-256-GCM payloads with optional ML-KEM-768 master-key wrapping
+- Password-based encryption via Argon2id (recommended) or PBKDF2
+- fwxAES file format with an optional normalize wrapper that hides bytes in zero-width Unicode markers
+- A packetized live-stream API so fwxAES works inside ffmpeg/SIP/transport pipes
+- b512 / pb512 reversible encodings and file modes
+- kFM media-carrier codecs: embed bytes in PNG or WAV files, strict decode on the way back
+- jMG media cipher for images and audio. Video is temporarily disabled by default; set `BASEFWX_ENABLE_JMG_VIDEO=1` to opt in.
+- C++ and Java libraries + CLIs that read and write the same formats as the Python module
 
 Quick Start
 -----------

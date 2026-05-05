@@ -500,6 +500,28 @@ section {
   min-width: 520px;
 }
 
+.bench-history-select {
+  padding: 6px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--panel-3);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  min-width: 180px;
+  cursor: pointer;
+}
+
+.bench-history-select:focus {
+  outline: 1px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.bench-history-select:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
 .bench-table th,
 .bench-table td {
   padding: 12px 14px;

@@ -117,6 +117,56 @@ jobs:
           print("Live benchmark coverage OK")
           PY
 
+      - name: Build basefwxcrypto JNI shared library
+        run: |
+          set -euo pipefail
+          cmake -S cpp -B build/jni \
+            -DBASEFWX_BUILD_CLI=OFF \
+            -DBASEFWX_BUILD_JNI=ON \
+            -DBASEFWX_REQUIRE_ARGON2=OFF \
+            -DBASEFWX_REQUIRE_OQS=OFF \
+            -DBASEFWX_REQUIRE_LZMA=OFF
+          cmake --build build/jni --target basefwxcrypto -j
+
+      - name: Build Java jar
+        run: |
+          set -euo pipefail
+          cd java
+          gradle --no-daemon build
+
+      - name: Run Java dual-backend benchmark
+        env:
+          JAR: java/build/libs/basefwx-java.jar
+          JNI_LIB_DIR: build/jni
+        run: |
+          set -euo pipefail
+          mkdir -p results
+
+          # Two payload sizes give us a small/large profile without exploding runtime.
+          for size in 1048576 16777216; do
+            label_size="$(numfmt --to=iec --suffix=B "${size}")"
+
+            pure_out="$(java -Dbasefwx.useJNI=false -cp "${JAR}" \
+              com.fixcraft.basefwx.FwxAESBenchmark "${size}" 5)"
+            jni_out="$(java -Dbasefwx.useJNI=true \
+              -Djava.library.path="${JNI_LIB_DIR}" \
+              -cp "${JAR}" \
+              com.fixcraft.basefwx.FwxAESBenchmark "${size}" 5)"
+            echo "--- ${label_size} pure-java ---"
+            echo "${pure_out}"
+            echo "--- ${label_size} jni ---"
+            echo "${jni_out}"
+
+            python3 .github/scripts/bench_java_backends.py \
+              --size "${size}" \
+              --pure-output <(printf '%s' "${pure_out}") \
+              --jni-output  <(printf '%s' "${jni_out}") \
+              --append results/java-backends-${BASEFWX_RELEASE_TAG}.json
+          done
+
+          cp -f results/java-backends-${BASEFWX_RELEASE_TAG}.json \
+                results/java-backends-latest.json
+
       - name: Publish benchmark results to DEV
         run: |
           set -euo pipefail
@@ -124,10 +174,19 @@ jobs:
           git checkout -B DEV origin/DEV
           mkdir -p website/results
           cp -f results/benchmarks-*.json website/results/
-          cp -f results/benchmarks-*.txt website/results/
+          cp -f results/benchmarks-*.txt  website/results/
+          cp -f results/java-backends-*.json website/results/ 2>/dev/null || true
+
+          # Maintain a small index of every benchmark snapshot the website knows
+          # about, so the benchmark page can offer a history dropdown without
+          # the user having to guess release tags.
+          python3 .github/scripts/bench_history_index.py \
+            --results-dir website/results \
+            --output      website/results/index.json
+
           git config user.name "github-actions"
           git config user.email "github-actions@github.com"
-          git add website/results/benchmarks-*.json website/results/benchmarks-*.txt
+          git add website/results/
           if git diff --cached --quiet; then
             echo "No benchmark updates to publish."
             exit 0

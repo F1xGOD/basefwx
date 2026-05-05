@@ -9,6 +9,7 @@ endif()
 project(basefwx_cpp VERSION ${BASEFWX_PROJECT_VERSION} LANGUAGES CXX)
 
 option(BASEFWX_BUILD_CLI "Build BaseFWX CLI" ON)
+option(BASEFWX_BUILD_JNI "Build the basefwxcrypto JNI shared library for the Java bindings" OFF)
 option(BASEFWX_REQUIRE_ARGON2 "Require libargon2 for Argon2id support" ON)
 option(BASEFWX_REQUIRE_OQS "Require liboqs for ML-KEM-768 support" OFF)
 option(BASEFWX_OQS_STATIC "Prefer static liboqs when available" OFF)
@@ -659,4 +660,58 @@ if(BASEFWX_BUILD_CLI)
     set_target_properties(basefwx_cpp PROPERTIES OUTPUT_NAME "basefwx")
     target_link_libraries(basefwx_cpp PRIVATE basefwxcpp)
     target_include_directories(basefwx_cpp PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated")
+endif()
+
+# Optional JNI shared library that backs the Java FwxAESJNI implementation.
+# Builds a "basefwxcrypto" library exposing the AEAD primitives that
+# com.fixcraft.basefwx.NativeCryptoBackend declares. The Java side either
+# loads it from java.library.path or extracts it from /native/<os>/<arch>/
+# inside the JAR via NativeLibraryLoader.
+if(BASEFWX_BUILD_JNI)
+    # Resolve JNI headers without pulling in AWT (FindJNI insists on AWT and
+    # many headless JDKs ship without it). We only need jni.h and jni_md.h.
+    set(_jni_include_dirs "")
+    if(DEFINED ENV{JAVA_HOME} AND NOT "$ENV{JAVA_HOME}" STREQUAL "")
+        set(_jh "$ENV{JAVA_HOME}")
+        if(EXISTS "${_jh}/include/jni.h")
+            list(APPEND _jni_include_dirs "${_jh}/include")
+            if(CMAKE_SYSTEM_NAME STREQUAL "Linux"   AND EXISTS "${_jh}/include/linux")
+                list(APPEND _jni_include_dirs "${_jh}/include/linux")
+            elseif(CMAKE_SYSTEM_NAME STREQUAL "Darwin"  AND EXISTS "${_jh}/include/darwin")
+                list(APPEND _jni_include_dirs "${_jh}/include/darwin")
+            elseif(CMAKE_SYSTEM_NAME STREQUAL "Windows" AND EXISTS "${_jh}/include/win32")
+                list(APPEND _jni_include_dirs "${_jh}/include/win32")
+            elseif(CMAKE_SYSTEM_NAME STREQUAL "FreeBSD" AND EXISTS "${_jh}/include/freebsd")
+                list(APPEND _jni_include_dirs "${_jh}/include/freebsd")
+            endif()
+        endif()
+    endif()
+    if(_jni_include_dirs STREQUAL "")
+        find_path(JNI_H_PATH NAMES jni.h
+            PATHS /usr/lib/jvm/default-java/include
+                  /usr/lib/jvm/default/include
+                  /usr/lib/jvm/java/include)
+        if(JNI_H_PATH)
+            list(APPEND _jni_include_dirs "${JNI_H_PATH}")
+        else()
+            message(FATAL_ERROR
+                "BASEFWX_BUILD_JNI is ON but jni.h was not found. "
+                "Set JAVA_HOME to a JDK install or pass -DJNI_H_PATH=...")
+        endif()
+    endif()
+
+    add_library(basefwxcrypto SHARED src/jni/basefwx_jni.cpp)
+    target_link_libraries(basefwxcrypto PRIVATE OpenSSL::Crypto)
+    target_include_directories(basefwxcrypto PRIVATE ${_jni_include_dirs})
+    set_target_properties(basefwxcrypto PROPERTIES
+        OUTPUT_NAME "basefwxcrypto"
+        POSITION_INDEPENDENT_CODE ON
+        # Hide all symbols by default; only Java_* entries are exported.
+        CXX_VISIBILITY_PRESET hidden
+        VISIBILITY_INLINES_HIDDEN ON
+    )
+    if(APPLE)
+        set_target_properties(basefwxcrypto PROPERTIES SUFFIX ".dylib")
+    endif()
+    message(STATUS "basefwxcrypto JNI lib will be built (jni include: ${_jni_include_dirs})")
 endif()

@@ -1,12 +1,6 @@
-// JNI implementation of com.fixcraft.basefwx.NativeCryptoBackend.
-//
-// Builds into a shared library named "basefwxcrypto" that the Java side loads
-// either via java.library.path or via NativeLibraryLoader extracting the lib
-// from the JAR's /native/<os>/<arch>/ resource path.
-//
-// This only implements the AEAD primitives the Java backend asks for; the
-// rest of fwxAES (KDFs, framing, key wrapping) lives in the Java layer and
-// shells out to BaseFwx.java exactly as it does for the pure-Java backend.
+// JNI bindings for com.fixcraft.basefwx.NativeCryptoBackend. Builds the
+// `basefwxcrypto` shared library; only AEAD primitives live here, everything
+// else is in the Java layer.
 
 #include <jni.h>
 

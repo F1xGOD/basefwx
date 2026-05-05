@@ -45,6 +45,12 @@
             <a id="bench-results-text" href="https://raw.githubusercontent.com/F1xGOD/basefwx/refs/heads/DEV/website/results/benchmarks-latest.txt" target="_blank" rel="noopener">Download results.txt</a>
             <a id="bench-results-json" href="https://raw.githubusercontent.com/F1xGOD/basefwx/refs/heads/DEV/website/results/benchmarks-latest.json" target="_blank" rel="noopener">Raw JSON</a>
           </div>
+          <div class="link-row" style="margin-top:12px;">
+            <label for="bench-history" class="meta">History:</label>
+            <select id="bench-history" class="bench-history-select" aria-label="Browse historical benchmark snapshots">
+              <option value="">Loading snapshots…</option>
+            </select>
+          </div>
         </div>
         <div class="hero-panel">
           <div>
@@ -87,6 +93,26 @@
         <div class="section-title">Detailed Results</div>
         <p class="section-lead">Expand each benchmark to see per-runtime breakdowns.</p>
         <div id="bench-details"></div>
+      </section>
+
+      <section id="java-backends">
+        <div class="section-title">Java backends: pure Java vs JNI</div>
+        <p class="section-lead">Side-by-side fwxAES throughput for the two Java backends. Shown only when the snapshot has a <code>java-backends-&lt;tag&gt;.json</code> sidecar.</p>
+        <div id="java-backends-status" class="status-pill warn">No Java-backend data in this snapshot.</div>
+        <div class="table-scroll" style="margin-top:12px;">
+          <table class="bench-table" id="java-backends-table" hidden>
+            <thead>
+              <tr>
+                <th>Payload</th>
+                <th>Backend</th>
+                <th>Encrypt</th>
+                <th>Decrypt</th>
+                <th>Speedup vs pure-Java</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
       </section>
 
       <footer>

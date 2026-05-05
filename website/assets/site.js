@@ -576,7 +576,107 @@ const loadVirusTotal = async () => {
   }
 };
 
-const loadBenchmarks = async () => {
+const renderJavaBackendsPanel = (data) => {
+  const status = document.getElementById("java-backends-status");
+  const table = document.getElementById("java-backends-table");
+  if (!status || !table) return;
+  const tbody = table.querySelector("tbody");
+  if (!data || !Array.isArray(data.samples) || data.samples.length === 0) {
+    status.textContent = "No Java-backend data in this snapshot.";
+    status.className = "status-pill warn";
+    table.hidden = true;
+    if (tbody) tbody.innerHTML = "";
+    return;
+  }
+  const rows = [];
+  for (const sample of data.samples) {
+    const size = sample.size_human || `${sample.size_bytes} B`;
+    const pure = sample.pure_java || {};
+    const jni = sample.jni || {};
+    const jniAvail = jni && jni.available !== false && typeof jni.encrypt_ms === "number";
+    rows.push(
+      `<tr>` +
+      `<td rowspan="2"><strong>${escapeHtml(size)}</strong></td>` +
+      `<td>pure-java</td>` +
+      `<td>${pure.encrypt_ms ? pure.encrypt_ms.toFixed(2) + " ms (" + pure.encrypt_mibs.toFixed(0) + " MiB/s)" : "—"}</td>` +
+      `<td>${pure.decrypt_ms ? pure.decrypt_ms.toFixed(2) + " ms (" + pure.decrypt_mibs.toFixed(0) + " MiB/s)" : "—"}</td>` +
+      `<td class="delta-base">baseline</td>` +
+      `</tr>`
+    );
+    if (jniAvail) {
+      const ratio = (pure.encrypt_ms && jni.encrypt_ms) ? (pure.encrypt_ms / jni.encrypt_ms) : null;
+      const ratioCls = ratio ? (ratio >= 1.05 ? "delta-fast" : ratio <= 0.95 ? "delta-slow" : "delta-same") : "delta-na";
+      const ratioTxt = ratio ? `${ratio.toFixed(2)}× pure-java` : "—";
+      rows.push(
+        `<tr>` +
+        `<td>jni</td>` +
+        `<td>${jni.encrypt_ms.toFixed(2)} ms (${jni.encrypt_mibs.toFixed(0)} MiB/s)</td>` +
+        `<td>${jni.decrypt_ms.toFixed(2)} ms (${jni.decrypt_mibs.toFixed(0)} MiB/s)</td>` +
+        `<td class="${ratioCls}">${ratioTxt}</td>` +
+        `</tr>`
+      );
+    } else {
+      rows.push(
+        `<tr><td>jni</td><td colspan="3" class="mono">native library not loaded for this run</td></tr>`
+      );
+    }
+  }
+  if (tbody) tbody.innerHTML = rows.join("");
+  table.hidden = false;
+  status.textContent = `${data.samples.length} payload size(s)`;
+  status.className = "status-pill ok";
+};
+
+const escapeHtml = (s) =>
+  String(s).replace(/[&<>"']/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]));
+
+let benchHistorySnapshots = [];
+let benchHistoryLatestTag = "";
+
+const populateBenchHistory = async () => {
+  const select = document.getElementById("bench-history");
+  if (!select) return;
+  try {
+    const base = getResultsBases(latestReleaseTag).primary;
+    const res = await fetch(`${base}/index.json`);
+    if (!res.ok) throw new Error("no history index");
+    const idx = await res.json();
+    benchHistorySnapshots = Array.isArray(idx.snapshots) ? idx.snapshots : [];
+    benchHistoryLatestTag = idx.latest || "";
+    const opts = [`<option value="">latest</option>`];
+    for (const snap of benchHistorySnapshots) {
+      opts.push(`<option value="${escapeHtml(snap.tag)}">${escapeHtml(snap.tag)}</option>`);
+    }
+    select.innerHTML = opts.join("");
+    select.disabled = benchHistorySnapshots.length === 0;
+    select.addEventListener("change", () => loadBenchmarks(select.value || ""));
+  } catch (err) {
+    select.innerHTML = `<option value="">latest</option>`;
+    select.disabled = true;
+  }
+};
+
+const loadJavaBackendsForTag = async (tag) => {
+  const base = getResultsBases(latestReleaseTag).primary;
+  const local = getResultsLocalBase();
+  const filenames = tag
+    ? [`java-backends-${tag}.json`]
+    : [`java-backends-latest.json`];
+  for (const fn of filenames) {
+    for (const url of [`${base}/${fn}`, `${local}${fn}`]) {
+      try {
+        const res = await fetch(url);
+        if (res.ok) {
+          renderJavaBackendsPanel(await res.json());
+          return;
+        }
+      } catch (_) { /* try next */ }
+    }
+  }
+  renderJavaBackendsPanel(null);
+};
+
+const loadBenchmarks = async (explicitTag = "") => {
   const status = document.getElementById("bench-status");
   const tableBody = document.querySelector("#bench-overall-table tbody");
   const detailsContainer = document.getElementById("bench-details");
@@ -586,13 +686,19 @@ const loadBenchmarks = async () => {
   try {
     const resultsBases = getResultsBases(latestReleaseTag);
     const localBase = getResultsLocalBase();
-    const candidates = [
-      `${resultsBases.primary}/benchmarks-latest.json`,
-      latestReleaseTag ? `${resultsBases.primary}/benchmarks-${latestReleaseTag}.json` : "",
-      `${resultsBases.fallback}/benchmarks-latest.json`,
-      latestReleaseTag ? `${resultsBases.fallback}/benchmarks-${latestReleaseTag}.json` : "",
-      `${localBase}benchmarks-latest.json`
-    ].filter(Boolean);
+    const candidates = explicitTag
+      ? [
+          `${resultsBases.primary}/benchmarks-${explicitTag}.json`,
+          `${resultsBases.fallback}/benchmarks-${explicitTag}.json`,
+          `${localBase}benchmarks-${explicitTag}.json`
+        ]
+      : [
+          `${resultsBases.primary}/benchmarks-latest.json`,
+          latestReleaseTag ? `${resultsBases.primary}/benchmarks-${latestReleaseTag}.json` : "",
+          `${resultsBases.fallback}/benchmarks-latest.json`,
+          latestReleaseTag ? `${resultsBases.fallback}/benchmarks-${latestReleaseTag}.json` : "",
+          `${localBase}benchmarks-latest.json`
+        ].filter(Boolean);
 
     let resultsUrl = "";
     let response = null;
@@ -615,7 +721,7 @@ const loadBenchmarks = async () => {
     const generatedAt = data.generated_at
       ? new Date(data.generated_at).toLocaleString()
       : "Unknown";
-    setText("bench-release", data.release_tag || "Latest benchmark");
+    setText("bench-release", data.release_tag || (explicitTag ? explicitTag : "Latest benchmark"));
     setText("bench-date", generatedAt);
     setText(
       "bench-meta",
@@ -631,11 +737,14 @@ const loadBenchmarks = async () => {
     status.className = "status-pill ok";
     renderBenchTable(tableBody, overall, epsilon);
     renderBenchDetails(detailsContainer, tests, epsilon);
+
+    await loadJavaBackendsForTag(explicitTag || data.release_tag || "");
   } catch (err) {
     status.textContent = "Benchmark results not available yet.";
     status.className = "status-pill warn";
     tableBody.innerHTML = "<tr><td colspan=\"3\" class=\"mono\">No results found.</td></tr>";
     detailsContainer.innerHTML = "<div class=\"card\">No detailed benchmark data available.</div>";
+    renderJavaBackendsPanel(null);
   }
 };
 
@@ -652,6 +761,7 @@ document.addEventListener("DOMContentLoaded", () => {
       await loadVirusTotal();
     }
     if (document.getElementById("bench-overall-table")) {
+      await populateBenchHistory();
       await loadBenchmarks();
     }
   };

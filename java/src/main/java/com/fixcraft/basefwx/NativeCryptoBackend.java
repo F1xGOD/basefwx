@@ -27,21 +27,9 @@ public final class NativeCryptoBackend implements CryptoBackend {
     }
 
     private static boolean loadNative() {
-        String raw = System.getenv("BASEFWX_NATIVE");
-        if (raw != null && !raw.trim().isEmpty()) {
-            String v = raw.trim().toLowerCase();
-            if (v.equals("0") || v.equals("false") || v.equals("no") || v.equals("off")) {
-                return false;
-            }
-        }
         String lib = System.getenv("BASEFWX_NATIVE_LIB");
         String name = (lib == null || lib.trim().isEmpty()) ? "basefwxcrypto" : lib.trim();
-        try {
-            System.loadLibrary(name);
-            return true;
-        } catch (UnsatisfiedLinkError exc) {
-            return false;
-        }
+        return NativeLibraryLoader.load(name);
     }
 
     private static ByteBuffer toDirect(byte[] data) {

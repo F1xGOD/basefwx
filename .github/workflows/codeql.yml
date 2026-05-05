@@ -42,6 +42,7 @@ jobs:
         with:
           languages: ${{ matrix.language }}
           build-mode: ${{ matrix.build-mode }}
+          config-file: ./.github/codeql/codeql-config.yml
 
       - name: Prepare liboqs cache prefix
         if: matrix.language == 'c-cpp'

@@ -1,0 +1,22 @@
+name: "BaseFWX CodeQL config"
+
+# Run the full security-extended query pack on top of the default
+# code-scanning suite so taint-tracking, crypto-misuse, and other security
+# queries are exercised. The path filters below only narrow what gets
+# scanned; they do not turn any query off.
+queries:
+  - uses: security-and-quality
+  - uses: security-extended
+
+# Vendored / generated trees that we don't own. Excluding these only stops
+# CodeQL from scanning files inside them. Everything else (cpp/src, cpp/include,
+# java/src, python/, scripts/, .github/scripts/) keeps full coverage.
+paths-ignore:
+  - "cpp/third_party/**"
+  - "cpp/build/**"
+  - "java/build/**"
+  - "java/.gradle/**"
+  - "build/**"
+  - "dist/**"
+  - "**/*.min.js"
+  - ".cache/**"

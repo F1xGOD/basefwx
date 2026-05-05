@@ -1,26 +1,9 @@
 #!/usr/bin/env python3
-"""Parse FwxAESBenchmark stdout for pure-Java + JNI runs and append to a JSON sidecar.
+"""Append pure-Java + JNI FwxAESBenchmark numbers into a side-car JSON.
 
-The sidecar is independent of the main `benchmarks-<tag>.json` produced by
-`scripts/test_all.sh --fbench`, so older results stay readable without
-schema changes. The website reads it (when present) and renders an extra
-'Java backends' panel; older snapshots that don't have a sidecar simply
-hide the panel.
-
-Schema:
-
-  {
-    "schema": 1,
-    "release_tag": "<tag>",
-    "samples": [
-      {
-        "size_bytes": 1048576,
-        "size_human": "1.0 MiB",
-        "pure_java": {"encrypt_ms": ..., "decrypt_ms": ..., "encrypt_mibs": ..., "decrypt_mibs": ...},
-        "jni":       {"encrypt_ms": ..., "decrypt_ms": ..., "encrypt_mibs": ..., "decrypt_mibs": ..., "available": true}
-      }
-    ]
-  }
+Independent of the main benchmarks-<tag>.json so older snapshots keep working;
+the website renders an extra panel when this side-car is present and stays
+silent otherwise.
 """
 from __future__ import annotations
 

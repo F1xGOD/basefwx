@@ -62,3 +62,12 @@ java/gradlew.bat
 
 # CodeQL
 _codeql_detected_source_root
+
+# Local test/runtime secrets
+.secrets/
+*.key
+*.pem
+*.p12
+*.pfx
+*.kdbx
+*.keystore

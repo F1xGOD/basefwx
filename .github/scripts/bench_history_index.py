@@ -1,27 +1,6 @@
 #!/usr/bin/env python3
-"""Build website/results/index.json so the benchmark page can offer a
-historical-results dropdown.
-
-The index lists every `benchmarks-<tag>.json` snapshot under the results
-directory (skipping `benchmarks-latest.json`) and notes which ones have a
-matching `java-backends-<tag>.json` sidecar.
-
-Schema (intentionally tiny so older website builds don't fight new files):
-
-  {
-    "schema": 1,
-    "latest": "<release_tag of benchmarks-latest.json>",
-    "snapshots": [
-      {
-        "tag": "<release tag>",
-        "results": "benchmarks-<tag>.json",
-        "txt": "benchmarks-<tag>.txt",
-        "java_backends": "java-backends-<tag>.json"   (optional)
-      },
-      ...
-    ]
-  }
-"""
+"""Emit website/results/index.json listing every benchmark snapshot the site
+should expose, so the benchmark page can offer a history dropdown."""
 from __future__ import annotations
 
 import argparse

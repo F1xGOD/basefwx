@@ -5,17 +5,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 
-/**
- * Pure-Java {@link FwxAES} implementation.
- *
- * <p>All AEAD work is routed through {@link JavaCryptoBackend}, which uses
- * {@code javax.crypto.Cipher}. No native dependencies. Safe on Android and
- * any JVM that exposes the standard JCA providers.
- *
- * <p>Wire format and behaviour are identical to {@link FwxAESJNI}; the two
- * differ only in which backend executes AES-GCM. A blob produced by either
- * implementation can be decrypted by either.
- */
+/** {@link FwxAES} backed by {@link JavaCryptoBackend} (the JCA). */
 public final class FwxAESPureJava implements FwxAES {
 
     private static final CryptoBackend BACKEND = CryptoBackends.java();

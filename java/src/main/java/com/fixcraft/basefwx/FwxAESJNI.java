@@ -6,30 +6,16 @@ import java.io.InputStream;
 import java.io.OutputStream;
 
 /**
- * JNI {@link FwxAES} implementation. AEAD operations are routed through the
- * bundled {@code basefwxcrypto} shared library via {@link NativeCryptoBackend}.
- *
- * <p>Construct via {@link FwxAES#create(boolean)} or
- * {@link FwxAES#builder()}. Direct construction is supported for callers that
- * have already obtained a native backend reference; if {@link
- * CryptoBackends#nativeOrNull()} is {@code null}, the constructor throws.
- *
- * <p>Wire format and behaviour are identical to {@link FwxAESPureJava}; the
- * two differ only in which backend executes AES-GCM. A blob produced by either
- * implementation can be decrypted by either.
+ * {@link FwxAES} backed by the {@code basefwxcrypto} shared library via JNI.
+ * The default no-arg constructor throws when the native library is unavailable;
+ * use {@link FwxAES#create(boolean)} for the variant that falls back to
+ * {@link FwxAESPureJava} silently.
  */
 public final class FwxAESJNI implements FwxAES {
 
     private final boolean useMaster;
     private final CryptoBackend backend;
 
-    /**
-     * Builds a JNI instance using the currently-loaded native backend.
-     *
-     * @throws IllegalStateException if the native backend is not available;
-     *         use {@link FwxAES#create(boolean)} for the version that falls
-     *         back to {@link FwxAESPureJava} silently.
-     */
     public FwxAESJNI() {
         this(true, requireNative());
     }

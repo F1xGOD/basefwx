@@ -3,23 +3,8 @@ package com.fixcraft.basefwx;
 import java.security.SecureRandom;
 
 /**
- * Small standalone microbenchmark for fwxAES with the two backends.
- *
- * <p>This is not a JMH harness; it's intended to give an order-of-magnitude
- * read on the cost of pure-Java AEAD vs the native backend on a given machine.
- *
- * <p>Run with:
- *
- * <pre>{@code
- * # default JAR layout
- * java -cp basefwx-java.jar com.fixcraft.basefwx.FwxAESBenchmark
- *
- * # specify size and iterations
- * java -cp basefwx-java.jar com.fixcraft.basefwx.FwxAESBenchmark 16777216 5
- * }</pre>
- *
- * <p>The first positional argument is the payload size in bytes (default 4 MiB),
- * the second is the iteration count (default 5).
+ * Standalone fwxAES microbenchmark for the pure-Java and JNI backends.
+ * Args: {@code <payload_bytes> <iterations>} (defaults: 4 MiB, 5).
  */
 public final class FwxAESBenchmark {
 
@@ -38,7 +23,6 @@ public final class FwxAESBenchmark {
         System.out.println("  iterations: " + iters);
         System.out.println();
 
-        // Warm-up the JIT before timing.
         FwxAES warmup = FwxAES.create(false);
         for (int i = 0; i < 2; i++) {
             warmup.decryptRaw(warmup.encryptRaw(payload, password), password);
@@ -67,7 +51,6 @@ public final class FwxAESBenchmark {
                                 String password, int iters) {
         FwxAES aes = FwxAES.create(preferNative);
         if (preferNative && !aes.isNative()) {
-            // Caller asked for native, fallback happened. Still benchmark, just label it.
             label = label + "(fallback)";
         }
         long encTotal = 0;

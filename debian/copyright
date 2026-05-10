@@ -1,0 +1,66 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: basefwx
+Upstream-Contact: FixCraft <https://fixcraft.org/>
+Source: https://fixcraft.org/basefwx
+
+Files: *
+Copyright: 2020-2026 FixCraft Inc.
+License: GPL-3.0+
+
+Files: cpp/third_party/stb_image.h cpp/third_party/stb_image_write.h
+Copyright: 2017 Sean Barrett
+License: MIT-or-public-domain
+ stb_image and stb_image_write are dual-licensed under the MIT license
+ and the public domain. See the headers themselves for the full text.
+
+Files: local-vendor-liboqs
+Copyright: 2016-2024 Open Quantum Safe project contributors
+License: MIT
+Comment:
+ Local non-archive builds may statically link liboqs from the YUME
+ ../vendor/linux-x86_64 staging directory to enable ML-KEM-768 before a
+ Debian liboqs package is available. Debian archive builds should replace
+ this with a normal liboqs-dev Build-Depends and dynamic/shared-library
+ dependency.
+
+Files: debian/*
+Copyright: 2026 FixCraft Maintainers <debian@fixcraft.jp>
+License: GPL-3.0+
+
+License: GPL-3.0+
+ This program is free software: you can redistribute it and/or modify
+ it under the terms of the GNU General Public License as published by
+ the Free Software Foundation, either version 3 of the License, or
+ (at your option) any later version.
+ .
+ This program is distributed in the hope that it will be useful,
+ but WITHOUT ANY WARRANTY; without even the implied warranty of
+ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ GNU General Public License for more details.
+ .
+ On Debian systems, the full text of the GNU General Public License
+ version 3 can be found in the file `/usr/share/common-licenses/GPL-3'.
+
+License: MIT
+ Permission is hereby granted, free of charge, to any person obtaining
+ a copy of this software and associated documentation files (the
+ "Software"), to deal in the Software without restriction, including
+ without limitation the rights to use, copy, modify, merge, publish,
+ distribute, sublicense, and/or sell copies of the Software, and to
+ permit persons to whom the Software is furnished to do so, subject to
+ the following conditions:
+ .
+ The above copyright notice and this permission notice shall be
+ included in all copies or substantial portions of the Software.
+ .
+ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+ EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+ MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+ IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+ CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+ TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+License: MIT-or-public-domain
+ Dual-licensed: MIT (as above) or released into the public domain.
+ You may choose either license at your option.

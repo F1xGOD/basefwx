@@ -16,6 +16,8 @@ option(BASEFWX_OQS_STATIC "Prefer static liboqs when available" OFF)
 option(BASEFWX_REQUIRE_LZMA "Require liblzma for xz support" OFF)
 option(BASEFWX_NATIVE_OPT "Enable -march/-mtune native optimizations" ON)
 option(BASEFWX_USE_VENDOR_DEPS "Prefer vendored liboqs/argon2 when available" ON)
+set(BASEFWX_USE_VENDOR_OQS "${BASEFWX_USE_VENDOR_DEPS}" CACHE BOOL "Prefer vendored liboqs when available")
+set(BASEFWX_USE_VENDOR_ARGON2 "${BASEFWX_USE_VENDOR_DEPS}" CACHE BOOL "Prefer vendored libargon2 when available")
 option(BASEFWX_FORCE_CROSS "Treat build as cross for dependency path hygiene" OFF)
 option(BASEFWX_WIN_IPO "Enable IPO/LTCG on Windows Release builds" OFF)
 set(BASEFWX_VENDOR_DIR "" CACHE PATH "Path to vendored dependencies root")
@@ -251,7 +253,7 @@ if(BASEFWX_USE_VENDOR_DEPS)
     if(EXISTS "${_basefwx_vendor_root}")
         set(_basefwx_vendor_inc "${_basefwx_vendor_root}/include")
         set(_basefwx_vendor_lib "${_basefwx_vendor_root}/lib")
-        if(EXISTS "${_basefwx_vendor_inc}/oqs/oqs.h")
+        if(BASEFWX_USE_VENDOR_OQS AND EXISTS "${_basefwx_vendor_inc}/oqs/oqs.h")
             if(EXISTS "${_basefwx_vendor_lib}/liboqs.a")
                 set(OQS_FOUND TRUE)
                 set(OQS_INCLUDE_DIR "${_basefwx_vendor_inc}")
@@ -269,7 +271,7 @@ if(BASEFWX_USE_VENDOR_DEPS)
                 set(BASEFWX_HAS_OQS 1)
             endif()
         endif()
-        if(EXISTS "${_basefwx_vendor_inc}/argon2.h")
+        if(BASEFWX_USE_VENDOR_ARGON2 AND EXISTS "${_basefwx_vendor_inc}/argon2.h")
             if(EXISTS "${_basefwx_vendor_lib}/libargon2.a")
                 set(ARGON2_FOUND TRUE)
                 set(ARGON2_INCLUDE_DIR "${_basefwx_vendor_inc}")
@@ -603,9 +605,23 @@ add_library(basefwxcpp
     src/system_info.cpp
 )
 
+option(BASEFWX_INSTALL "Generate install rules for basefwxcpp (system packaging)" OFF)
+
+# When producing an installable library we must not propagate vendor-local
+# paths (argon2/oqs/lzma) through the public/INSTALL_INTERFACE; downstream
+# consumers may not have those paths.  In the bundled build keep them PUBLIC
+# so static-archive consumers pick up their transitive deps automatically.
+if(BASEFWX_INSTALL)
+    set(_basefwx_dep_vis PRIVATE)
+else()
+    set(_basefwx_dep_vis PUBLIC)
+endif()
+
 target_include_directories(basefwxcpp
     PUBLIC
-        ${CMAKE_CURRENT_SOURCE_DIR}/include
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+        $<INSTALL_INTERFACE:include>
+    PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/third_party
 )
 target_link_libraries(basefwxcpp PUBLIC OpenSSL::Crypto ZLIB::ZLIB)
@@ -616,24 +632,24 @@ if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND CMAKE_CXX_COMPILER_VERSION VERSION_L
 endif()
 
 if(ARGON2_FOUND)
-    target_include_directories(basefwxcpp PUBLIC ${ARGON2_INCLUDE_DIRS})
+    target_include_directories(basefwxcpp ${_basefwx_dep_vis} ${ARGON2_INCLUDE_DIRS})
     if(ARGON2_LIBRARY_DIRS)
-        target_link_directories(basefwxcpp PUBLIC ${ARGON2_LIBRARY_DIRS})
+        target_link_directories(basefwxcpp ${_basefwx_dep_vis} ${ARGON2_LIBRARY_DIRS})
     endif()
-    target_link_libraries(basefwxcpp PUBLIC ${ARGON2_LIBRARIES})
+    target_link_libraries(basefwxcpp ${_basefwx_dep_vis} ${ARGON2_LIBRARIES})
 endif()
 
 if(OQS_FOUND)
-    target_include_directories(basefwxcpp PUBLIC ${OQS_INCLUDE_DIRS})
+    target_include_directories(basefwxcpp ${_basefwx_dep_vis} ${OQS_INCLUDE_DIRS})
     if(OQS_LIBRARY_DIRS)
-        target_link_directories(basefwxcpp PUBLIC ${OQS_LIBRARY_DIRS})
+        target_link_directories(basefwxcpp ${_basefwx_dep_vis} ${OQS_LIBRARY_DIRS})
     endif()
-    target_link_libraries(basefwxcpp PUBLIC ${OQS_LIBRARIES})
+    target_link_libraries(basefwxcpp ${_basefwx_dep_vis} ${OQS_LIBRARIES})
 endif()
 
 if(LZMA_FOUND)
-    target_include_directories(basefwxcpp PUBLIC ${LZMA_INCLUDE_DIRS})
-    target_link_libraries(basefwxcpp PUBLIC ${LZMA_LIBRARIES})
+    target_include_directories(basefwxcpp ${_basefwx_dep_vis} ${LZMA_INCLUDE_DIRS})
+    target_link_libraries(basefwxcpp ${_basefwx_dep_vis} ${LZMA_LIBRARIES})
 endif()
 
 if(CMAKE_CROSSCOMPILING OR BASEFWX_FORCE_CROSS OR CMAKE_SYSTEM_NAME STREQUAL "Windows" OR CMAKE_SYSTEM_NAME STREQUAL "Darwin")
@@ -714,4 +730,92 @@ if(BASEFWX_BUILD_JNI)
         set_target_properties(basefwxcrypto PROPERTIES SUFFIX ".dylib")
     endif()
     message(STATUS "basefwxcrypto JNI lib will be built (jni include: ${_jni_include_dirs})")
+endif()
+
+# ============================================================================
+# Install / export rules (Debian and other system packaging).
+# Activate with -DBASEFWX_INSTALL=ON -DBUILD_SHARED_LIBS=ON.
+# ============================================================================
+
+set_target_properties(basefwxcpp PROPERTIES POSITION_INDEPENDENT_CODE ON)
+
+if(BUILD_SHARED_LIBS)
+    set_target_properties(basefwxcpp PROPERTIES
+        OUTPUT_NAME basefwx
+        VERSION ${BASEFWX_PROJECT_VERSION}
+        SOVERSION 3
+    )
+endif()
+
+if(BASEFWX_INSTALL)
+    include(GNUInstallDirs)
+    include(CMakePackageConfigHelpers)
+
+    install(TARGETS basefwxcpp
+        EXPORT basefwxTargets
+        RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+        LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+        ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+        INCLUDES DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
+    )
+
+    if(BASEFWX_BUILD_CLI)
+        install(TARGETS basefwx_cpp
+            RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+        )
+    endif()
+
+    install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/include/basefwx
+        DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
+        FILES_MATCHING PATTERN "*.hpp" PATTERN "*.h"
+    )
+
+    install(EXPORT basefwxTargets
+        FILE basefwxTargets.cmake
+        NAMESPACE basefwx::
+        DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/basefwx
+    )
+
+    set(_basefwx_config_in "${CMAKE_CURRENT_BINARY_DIR}/basefwxConfig.cmake.in")
+    file(WRITE "${_basefwx_config_in}"
+"@PACKAGE_INIT@\n"
+"include(CMakeFindDependencyMacro)\n"
+"find_dependency(OpenSSL)\n"
+"find_dependency(ZLIB)\n"
+"include(\"\${CMAKE_CURRENT_LIST_DIR}/basefwxTargets.cmake\")\n"
+)
+
+    configure_package_config_file("${_basefwx_config_in}"
+        "${CMAKE_CURRENT_BINARY_DIR}/basefwxConfig.cmake"
+        INSTALL_DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/basefwx
+    )
+    write_basic_package_version_file(
+        "${CMAKE_CURRENT_BINARY_DIR}/basefwxConfigVersion.cmake"
+        VERSION ${BASEFWX_PROJECT_VERSION}
+        COMPATIBILITY SameMajorVersion
+    )
+    install(FILES
+        "${CMAKE_CURRENT_BINARY_DIR}/basefwxConfig.cmake"
+        "${CMAKE_CURRENT_BINARY_DIR}/basefwxConfigVersion.cmake"
+        DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/basefwx
+    )
+
+    # pkg-config file for non-CMake consumers.
+    set(_basefwx_pc "${CMAKE_CURRENT_BINARY_DIR}/basefwx.pc")
+    file(WRITE "${_basefwx_pc}"
+"prefix=${CMAKE_INSTALL_PREFIX}\n"
+"exec_prefix=\${prefix}\n"
+"libdir=${CMAKE_INSTALL_FULL_LIBDIR}\n"
+"includedir=${CMAKE_INSTALL_FULL_INCLUDEDIR}\n"
+"\n"
+"Name: basefwx\n"
+"Description: BaseFWX C++ cryptographic codec library\n"
+"Version: ${BASEFWX_PROJECT_VERSION}\n"
+"Requires: openssl zlib\n"
+"Libs: -L\${libdir} -lbasefwx\n"
+"Cflags: -I\${includedir}\n"
+)
+    install(FILES "${_basefwx_pc}"
+        DESTINATION ${CMAKE_INSTALL_LIBDIR}/pkgconfig
+    )
 endif()

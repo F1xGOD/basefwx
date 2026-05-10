@@ -127,6 +127,9 @@ Documentation
 -------------
 
 - [Docs home (HTML)](https://basefwx.fixcraft.jp)
+- [BaseFWX explained](docs/EXPLAINED.md)
+- [BaseFWX CLI manual page](docs/man/basefwx.1)
+- [BaseFWX library overview manual page](docs/man/basefwx.7)
 - [CLI and usage](https://basefwx.fixcraft.jp/docs/CLI)
 - [Security model](https://basefwx.fixcraft.jp/docs/SECURITY_MODEL)
 - [Testing and benchmarks](https://basefwx.fixcraft.jp/docs/TESTING)

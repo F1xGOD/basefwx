@@ -1,0 +1,154 @@
+.TH BASEFWX 1 "May 2026" "BaseFWX 3.6.4" "User Commands"
+.SH NAME
+basefwx \- command-line cryptographic codec tool
+.SH SYNOPSIS
+.nf
+basefwx [global flags] <command> [args]
+
+basefwx fwxaes-enc <file> [--password <password>] [--out <path>]
+basefwx fwxaes-dec <file> [--password <password>] [--out <path>]
+basefwx fwxaes-live-enc <file|-> [--password <password>] [--out <path|->]
+basefwx fwxaes-live-dec <file|-> [--password <password>] [--out <path|->]
+basefwx identify <file>
+basefwx completion bash
+.fi
+.SH DESCRIPTION
+basefwx is the command-line frontend for the BaseFWX cryptographic codec
+library. It can encrypt files, decode BaseFWX containers, inspect container
+metadata, run reversible text and binary encodings, process packetized live
+streams, and handle selected BaseFWX media carrier formats.
+.PP
+The CLI is packaged separately from the shared library. Installing the
+basefwx package pulls in libbasefwx3 automatically; applications that only
+need the library can depend on libbasefwx3 or libbasefwx-dev without
+installing the CLI.
+.SH GLOBAL FLAGS
+.TP
+.B --verbose, -v
+Show additional routing and build information where a command supports it.
+.TP
+.B --no-log
+Suppress non-essential log output.
+.TP
+.B --no-color
+Disable styled terminal output.
+.TP
+.B --version, -V
+Print version and feature information.
+.SH GENERAL COMMANDS
+.TP
+.B help
+Print command usage.
+.TP
+.B version
+Print build version and enabled feature flags.
+.TP
+.B completion bash
+Print a bash completion script.
+.TP
+.B info \fIfile.fwx\fR
+Print BaseFWX container information.
+.TP
+.B identify \fIfile\fR
+Print a formatted container summary.
+.TP
+.B probe \fIfile\fR
+Alias for identify.
+.SH FILE ENCRYPTION
+.TP
+.B fwxaes-enc \fIfile\fR [--password \fIpassword\fR] [--out \fIpath\fR]
+Encrypt a file with the fwxAES container path.
+.TP
+.B fwxaes-dec \fIfile\fR [--password \fIpassword\fR] [--out \fIpath\fR]
+Decrypt a fwxAES container after authentication succeeds.
+.TP
+.B fwxaes-heavy-enc, fwxaes-heavy-dec
+Aliases for the heavy fwxAES mode.
+.TP
+.B fwxaes-stream-enc, fwxaes-stream-dec
+Stream-oriented fwxAES file modes.
+.TP
+.B fwxaes-live-enc, fwxaes-live-dec
+Packetized live stream encryption and decryption. Use "-" for stdin or
+stdout where supported.
+.TP
+.B b512file-enc, b512file-dec, pb512file-enc, pb512file-dec
+Password-backed file codec modes.
+.SH TEXT AND BINARY CODECS
+.TP
+.B b64-enc, b64-dec
+Base64 text encode/decode helpers.
+.TP
+.B n10-enc, n10-dec, n10file-enc, n10file-dec
+BaseFWX n10 text and file encoders.
+.TP
+.B b256-enc, b256-dec, a512-enc, a512-dec, bi512-enc, b1024-enc
+Reversible BaseFWX text encoders.
+.TP
+.B hash512, uhash513
+Hash helper commands.
+.TP
+.B b512-enc, b512-dec, pb512-enc, pb512-dec
+Password-backed text codec modes.
+.SH MEDIA AND CARRIER COMMANDS
+.TP
+.B jmge \fImedia\fR [--password \fIpassword\fR] [--out \fIpath\fR]
+Encode media through the jMG media cipher path.
+.TP
+.B jmgd \fImedia\fR [--password \fIpassword\fR] [--out \fIpath\fR]
+Decode jMG media output.
+.TP
+.B kFMe \fIinput\fR [--out \fIpath\fR] [--bw]
+Encode into a strict BaseFWX carrier format.
+.TP
+.B kFMd \fIinput\fR [--out \fIpath\fR] [--bw]
+Decode a strict BaseFWX carrier. Plain media that is not a BaseFWX carrier
+should be rejected.
+.SH KEY OPTIONS
+.TP
+.B --password \fIpassword\fR
+Provide a password on the command line. Passworded commands prompt on a TTY
+when this option is omitted.
+.TP
+.B --use-master, --no-master
+Enable or disable master-key wrapping where a command supports it.
+.TP
+.B --master-pub \fIpath\fR
+Use a master public key file where supported.
+.TP
+.B --master-autogen
+Generate master-key material where supported.
+.TP
+.B --allow-embedded-master
+Allow embedded master-key metadata where supported.
+.TP
+.B --kdf \fIlabel\fR, --pbkdf2-iters \fIn\fR
+Select key-derivation behavior where a command supports it.
+.SH DATA FLOW
+.nf
++--------------------------------+
+|  INPUT                         |
+|  file, stream, text, media     |
++--------------------------------+
+        |
+        v
++--------------------------------+
+|  BASEFWX CLI                   |
+|  selected command + options    |
++--------------------------------+
+        |
+        | ===>
+        v
++--------------------------------+
+|  BASEFWX OUTPUT                |
+|  container, stream, carrier    |
++--------------------------------+
+.fi
+.SH EXIT STATUS
+The command exits with status 0 on success and non-zero on invalid usage,
+decode failure, authentication failure, I/O failure, or missing build support
+for a requested feature.
+.SH SEE ALSO
+.BR basefwx (7),
+.BR yume (1),
+.BR yumed (8)

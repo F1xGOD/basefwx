@@ -1,0 +1,67 @@
+Source: basefwx
+Section: libs
+Priority: optional
+Maintainer: FixCraft Maintainers <debian@fixcraft.jp>
+Build-Depends:
+ debhelper-compat (= 13),
+ cmake (>= 3.16),
+ g++,
+ pkgconf,
+ libssl-dev,
+ zlib1g-dev,
+ liblzma-dev,
+ libargon2-dev
+Standards-Version: 4.7.4.1
+Rules-Requires-Root: no
+Homepage: https://fixcraft.org/basefwx
+
+Package: basefwx
+Section: utils
+Architecture: any
+Depends:
+ libbasefwx3 (= ${binary:Version}),
+ ${shlibs:Depends},
+ ${misc:Depends}
+Description: BaseFWX command-line cryptographic codec tool
+ BaseFWX is a cryptographic codec toolkit for files, byte streams, and
+ selected media carrier formats.
+ .
+ This package contains the BaseFWX command-line tool. The shared runtime
+ library is kept in libbasefwx3 so applications can link against the same
+ packaged implementation instead of bundling a private copy.
+
+Package: libbasefwx3
+Section: libs
+Architecture: any
+Multi-Arch: same
+Pre-Depends: ${misc:Pre-Depends}
+Depends:
+ ${shlibs:Depends},
+ ${misc:Depends}
+Description: BaseFWX C++ cryptographic codec library (runtime)
+ BaseFWX is a C++ library implementing the FixCraft cryptographic codec
+ format, including AES-based encryption, Argon2id key derivation, and
+ ML-KEM-768 post-quantum key encapsulation.
+ .
+ This package contains the shared library required to run programs
+ linked against libbasefwx. ML-KEM-768 support is enabled by the build;
+ local builds may statically include liboqs until a Debian liboqs package
+ is available. Debian archive builds should use a packaged liboqs
+ dependency instead.
+
+Package: libbasefwx-dev
+Section: libdevel
+Architecture: any
+Multi-Arch: same
+Depends:
+ libbasefwx3 (= ${binary:Version}),
+ libssl-dev,
+ zlib1g-dev,
+ ${misc:Depends}
+Description: BaseFWX C++ cryptographic codec library (development files)
+ BaseFWX is a C++ library implementing the FixCraft cryptographic codec
+ format, including AES-based encryption, Argon2id key derivation, and
+ ML-KEM-768 post-quantum key encapsulation.
+ .
+ This package contains the headers, the CMake package config, and the
+ pkg-config file needed to build software against libbasefwx.

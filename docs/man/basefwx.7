@@ -1,0 +1,233 @@
+.TH BASEFWX 7 "May 2026" "BaseFWX 3.6.4" "BaseFWX Manual"
+.SH NAME
+basefwx \- C++ cryptographic codec library and container family
+.SH SYNOPSIS
+.nf
+#include <basefwx/basefwx.hpp>
+
+pkg-config --cflags --libs basefwx
+
+find_package(basefwx CONFIG REQUIRED)
+target_link_libraries(app PRIVATE basefwx::basefwxcpp)
+.fi
+.SH DESCRIPTION
+BaseFWX is a cryptographic codec toolkit. It protects files, byte streams,
+and selected media carrier formats. It is not a network transport by itself
+and it does not provide anonymity by itself.
+.PP
+Applications such as YUME use BaseFWX as an inner cryptographic and encoding
+layer. The C++ library provides authenticated encryption, password hardening,
+post-quantum key encapsulation when built with liboqs support, live stream
+framing, and media carrier helpers.
+.PP
+The Debian packaging in this source tree ships the C++ CLI, shared library,
+and development files as separate binary packages from one source package.
+It does not install the Python or Java modules.
+.SH BASIC FLOW
+.nf
++--------------------------------+
+|  CALLER                        |
+|  CLI / library / YUME          |
++--------------------------------+
+        |
+        | password, bytes, options
+        v
++--------------------------------+
+|  BASEFWX CORE                  |
+|  KDF, keys, AEAD, metadata     |
++--------------------------------+
+        |
+        | encrypted container
+        v
++--------------------------------+
+|  OUTPUT FORMAT                 |
+|  file, packet, media carrier   |
++--------------------------------+
+        |
+        | stored or transported
+        v
++--------------------------------+
+|  DECODER                       |
+|  verifies before release       |
++--------------------------------+
+.fi
+.PP
+The caller supplies plaintext bytes and a password or key context. BaseFWX
+derives or unwraps encryption keys, encrypts and authenticates the payload,
+and writes a format another BaseFWX implementation can parse.
+.PP
+On decode, BaseFWX reads authenticated metadata, derives or unwraps the same
+keys, verifies integrity, and releases plaintext only after verification
+passes.
+.SH CODEC FAMILIES
+.TP
+.B fwxAES
+AES-GCM file encryption with metadata and optional wrappers.
+.TP
+.B pb512 / b512
+Password-backed heavy encodings and file modes.
+.TP
+.B livecipher
+Packetized stream encryption for pipes and transport use.
+.TP
+.B keywrap / pq
+Password and master-key wrapping helpers, including ML-KEM-768 when liboqs
+support is enabled.
+.TP
+.B kFM / jMG
+Strict media carrier encode/decode and media cipher flows.
+.TP
+.B n10 / b256 / b512
+Reversible text and binary encodings.
+.SH FILE CONTAINERS
+.nf
++--------------------------------+
+|  PLAINTEXT FILE                |
+|  bytes from disk or stdin      |
++--------------------------------+
+        |
+        v
++--------------------------------+
+|  KDF AND KEY SETUP             |
+|  Argon2id or PBKDF2            |
++--------------------------------+
+        |
+        v
++--------------------------------+
+|  AEAD ENCRYPTION               |
+|  AES-256-GCM + metadata        |
++--------------------------------+
+        |
+        | ===>
+        v
++--------------------------------+
+|  BASEFWX CONTAINER             |
+|  FWX1 / heavy / encoded form   |
++--------------------------------+
+.fi
+.PP
+At a high level, encrypted file containers carry authenticated metadata and
+encrypted payload bytes:
+.nf
++----------------------------------------------------------------------+
+|  BASEFWX ENCRYPTED CONTAINER                                         |
+|                                                                      |
+|  magic/version | KDF parameters | wrap data | metadata | ciphertext  |
+|                                                                      |
+|  metadata is authenticated; payload releases after verification      |
++----------------------------------------------------------------------+
+.fi
+.PP
+Exact byte layout depends on the selected codec family. Use the public API
+to read and write containers instead of hand-parsing container fields.
+.SH LIVE STREAMS
+.nf
++--------------------------------+
+|  PRODUCER                      |
+|  file, ffmpeg, app bytes       |
++--------------------------------+
+        |
+        v
++--------------------------------+
+|  LIVE ENCRYPTOR                |
+|  start, update, finalize       |
++--------------------------------+
+        |
+        | ===>
+        v
++--------------------------------+
+|  LIVE PACKETS                  |
+|  ordered AES-GCM frames        |
++--------------------------------+
+        |
+        v
++--------------------------------+
+|  LIVE DECRYPTOR                |
+|  verifies packet sequence      |
++--------------------------------+
+.fi
+.PP
+Live mode emits packetized frames, keeping memory bounded for pipes,
+sockets, and transport integrations. Receivers must process frames in order
+and finalize before treating the stream as complete.
+.SH YUME INTEGRATION
+.nf
++--------------------------------+
+|  YUME STREAM                   |
+|  logical app connection        |
++--------------------------------+
+        |
+        v
++--------------------------------+
+|  BASEFWX INNER CRYPTO          |
+|  AES / Argon2id / ML-KEM       |
++--------------------------------+
+        |
+        | ===>
+        v
++--------------------------------+
+|  YUME CARRIER                  |
+|  TLS 1.3 + YUME frames         |
++--------------------------------+
+        |
+        v
++--------------------------------+
+|  YUMED SERVER                  |
+|  unwraps inner stream data     |
++--------------------------------+
+.fi
+.PP
+For packaged YUME builds, the yume binary links against libbasefwx.so.3
+through the libbasefwx-dev build package and the libbasefwx3 runtime package.
+.SH PACKAGE LAYOUT
+.nf
++--------------------------------+
+|  basefwx                       |
+|  command-line frontend         |
++--------------------------------+
+        |
+        v
++--------------------------------+
+|  libbasefwx3                   |
+|  runtime shared library        |
++--------------------------------+
+        ^
+        |
++--------------------------------+
+|  libbasefwx-dev                |
+|  headers and build metadata    |
++--------------------------------+
+        ^
+        |
++--------------------------------+
+|  yume                          |
+|  links to libbasefwx.so.3      |
++--------------------------------+
+.fi
+.PP
+Local development builds may use a prepared vendor liboqs staging directory
+to keep ML-KEM-768 available. Debian archive builds should use a normal
+packaged liboqs-dev dependency instead of embedding liboqs into BaseFWX.
+.SH FAILURE MODEL
+BaseFWX should fail closed. A wrong password, changed ciphertext, missing
+PQ support for PQ-required containers, non-carrier media input, or truncated
+live stream should fail instead of releasing unauthenticated plaintext.
+.SH FILES
+.TP
+.I /usr/include/basefwx/
+C++ public headers.
+.TP
+.I /usr/lib/<multiarch>/libbasefwx.so.3
+BaseFWX runtime shared library.
+.TP
+.I /usr/lib/<multiarch>/cmake/basefwx/
+CMake package files.
+.TP
+.I /usr/lib/<multiarch>/pkgconfig/basefwx.pc
+pkg-config metadata.
+.TP
+.I /usr/share/doc/libbasefwx3/EXPLAINED.md.gz
+Extended overview with reusable diagrams.
+.SH SEE ALSO
+.BR yume (1),
+.BR yumed (8)

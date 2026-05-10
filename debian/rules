@@ -1,0 +1,28 @@
+#!/usr/bin/make -f
+
+export DEB_BUILD_MAINT_OPTIONS = hardening=+all
+
+BASEFWX_DEBIAN_VENDOR_DIR ?= $(CURDIR)/../vendor/linux-x86_64
+BASEFWX_DEBIAN_USE_VENDOR_DEPS ?= ON
+BASEFWX_DEBIAN_OQS_STATIC ?= ON
+
+%:
+	dh $@ --buildsystem=cmake
+
+override_dh_auto_configure:
+	dh_auto_configure --sourcedirectory=cpp -- \
+		-DBUILD_SHARED_LIBS=ON \
+		-DBASEFWX_INSTALL=ON \
+		-DBASEFWX_BUILD_CLI=ON \
+		-DBASEFWX_NATIVE_OPT=OFF \
+		-DBASEFWX_REQUIRE_ARGON2=ON \
+		-DBASEFWX_REQUIRE_OQS=ON \
+		-DBASEFWX_REQUIRE_LZMA=ON \
+		-DBASEFWX_OQS_STATIC=$(BASEFWX_DEBIAN_OQS_STATIC) \
+		-DBASEFWX_USE_VENDOR_DEPS=$(BASEFWX_DEBIAN_USE_VENDOR_DEPS) \
+		-DBASEFWX_USE_VENDOR_OQS=$(BASEFWX_DEBIAN_USE_VENDOR_DEPS) \
+		-DBASEFWX_USE_VENDOR_ARGON2=OFF \
+		-DBASEFWX_VENDOR_DIR=$(BASEFWX_DEBIAN_VENDOR_DIR)
+
+override_dh_auto_test:
+	# Library has no test suite wired into CMake; skip.

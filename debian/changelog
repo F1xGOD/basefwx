@@ -1,0 +1,11 @@
+basefwx (3.6.4-1) unstable; urgency=medium
+
+  * Initial Debian packaging of the BaseFWX C++ codec library and CLI.
+  * basefwx ships the command-line frontend; libbasefwx3 ships the runtime
+    shared library; libbasefwx-dev ships headers, CMake config, and the
+    pkg-config file.
+  * Local builds can use the YUME vendor/linux-x86_64 liboqs staging area
+    for ML-KEM-768. A Debian main upload must build against a separately
+    packaged liboqs development package instead.
+
+ -- FixCraft Maintainers <debian@fixcraft.jp>  Sat, 09 May 2026 22:00:00 -0700

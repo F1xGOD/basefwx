@@ -15,7 +15,12 @@ import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+import java.nio.file.attribute.FileAttribute;
+import java.nio.file.attribute.PosixFilePermission;
+import java.nio.file.attribute.PosixFilePermissions;
+import java.util.EnumSet;
 import java.security.GeneralSecurityException;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -350,6 +355,24 @@ public final class BaseFwx {
         return plain;
     }
 
+    /**
+     * Creates a temp file restricted to the current user (owner read/write only on POSIX).
+     * Falls back to {@link File#createTempFile} on platforms without POSIX (e.g. Windows
+     * default NTFS) where the user-profile temp dir already excludes other local users.
+     */
+    private static File createPrivateTempFile(String prefix, String suffix) throws IOException {
+        try {
+            FileAttribute<?> attr = PosixFilePermissions.asFileAttribute(
+                EnumSet.of(PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_WRITE));
+            Path tempPath = Files.createTempFile(prefix, suffix, attr);
+            return tempPath.toFile();
+        } catch (UnsupportedOperationException e) {
+            // Non-POSIX filesystem (typically Windows). The per-user temp dir already
+            // restricts access, so a plain createTempFile is acceptable here.
+            return File.createTempFile(prefix, suffix);
+        }
+    }
+
     public static long fwxAesEncryptStream(InputStream input,
                                            OutputStream output,
                                            String password,
@@ -359,7 +382,7 @@ public final class BaseFwx {
             patchCtLen((FileOutputStream) output, ctLen);
             return ctLen;
         }
-        File temp = File.createTempFile("basefwx-fwxaes-", ".tmp");
+        File temp = createPrivateTempFile("basefwx-fwxaes-", ".tmp");
         long ctLen;
         try (FileOutputStream tempOut = new FileOutputStream(temp)) {
             ctLen = fwxAesEncryptStreamInternal(input, tempOut, password, useMaster);
@@ -1426,7 +1449,7 @@ public final class BaseFwx {
 
             CryptoBackend backend = CryptoBackends.get();
             try (CryptoBackend.AeadDecryptor dec = backend.newGcmDecryptor(aeadKey, nonce, metadataBytes)) {
-                tempPlain = File.createTempFile("basefwx-stream", ".plain");
+                tempPlain = createPrivateTempFile("basefwx-stream", ".plain");
                 try (FileOutputStream fout = new FileOutputStream(tempPlain);
                      BufferedOutputStream plainOut = new BufferedOutputStream(fout, Constants.STREAM_CHUNK_SIZE)) {
                     byte[] buffer = new byte[Constants.STREAM_CHUNK_SIZE];
@@ -1741,7 +1764,7 @@ public final class BaseFwx {
 
             CryptoBackend backend = CryptoBackends.get();
             try (CryptoBackend.AeadDecryptor dec = backend.newGcmDecryptor(ephemeralKey, nonce, metadataBytes)) {
-                tempPlain = File.createTempFile("basefwx-stream", ".plain");
+                tempPlain = createPrivateTempFile("basefwx-stream", ".plain");
                 try (FileOutputStream fout = new FileOutputStream(tempPlain);
                      BufferedOutputStream plainOut = new BufferedOutputStream(fout, Constants.STREAM_CHUNK_SIZE)) {
                     byte[] buffer = new byte[Constants.STREAM_CHUNK_SIZE];
@@ -4709,7 +4732,7 @@ public final class BaseFwx {
             raw = Arrays.copyOf(raw, raw.length + 1);
         }
         byte[] pcm = new byte[raw.length];
-        for (int i = 0; i < raw.length; i += 2) {
+        for (int i = 0; i + 2 <= raw.length; i += 2) {
             int value = (raw[i] & 0xFF) | ((raw[i + 1] & 0xFF) << 8);
             short sample = (short) (value - 32768);
             pcm[i] = (byte) (sample & 0xFF);
@@ -4784,7 +4807,7 @@ public final class BaseFwx {
             normalized = Arrays.copyOf(normalized, normalized.length + 1);
         }
         byte[] out = new byte[normalized.length];
-        for (int i = 0; i < normalized.length; i += 2) {
+        for (int i = 0; i + 2 <= normalized.length; i += 2) {
             short sample = (short) ((normalized[i] & 0xFF) | ((normalized[i + 1] & 0xFF) << 8));
             int value = (sample + 32768) & 0xFFFF;
             out[i] = (byte) (value & 0xFF);
@@ -4800,7 +4823,7 @@ public final class BaseFwx {
         }
         File tempRaw;
         try {
-            tempRaw = File.createTempFile("basefwx_kfm_", ".raw");
+            tempRaw = createPrivateTempFile("basefwx_kfm_", ".raw");
         } catch (IOException exc) {
             throw new IllegalStateException("Unable to create temporary ffmpeg output file", exc);
         }

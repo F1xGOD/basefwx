@@ -2309,7 +2309,7 @@ public final class MediaCipher {
         if (("jpg".equals(format) || "jpeg".equals(format)) && channels == 4) {
             channels = 3;
             byte[] trimmed = new byte[width * height * 3];
-            for (int i = 0, j = 0; i < pixels.length; i += 4) {
+            for (int i = 0, j = 0; i + 4 <= pixels.length; i += 4) {
                 trimmed[j++] = pixels[i];
                 trimmed[j++] = pixels[i + 1];
                 trimmed[j++] = pixels[i + 2];

@@ -1117,7 +1117,7 @@ class BaseFWXUnitTests(unittest.TestCase):
         offset += 4 + len_user
         len_master = int.from_bytes(blob[offset:offset + 4], 'big')
         offset += 4 + len_master
-        len_payload = int.from_bytes(blob[offset:offset + 4], 'big')
+        # 4-byte payload length lives here; skip past it to reach the metadata length field.
         offset += 4
         metadata_len = int.from_bytes(blob[offset:offset + 4], 'big')
         offset += 4

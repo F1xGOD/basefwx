@@ -10,13 +10,24 @@ public final class FwxAESBenchmark {
 
     private FwxAESBenchmark() {}
 
+    private static final SecureRandom SHARED_RANDOM = new SecureRandom();
+
     public static void main(String[] args) {
-        int size = args.length >= 1 ? Integer.parseInt(args[0]) : 4 * 1024 * 1024;
-        int iters = args.length >= 2 ? Integer.parseInt(args[1]) : 5;
+        int size;
+        int iters;
+        try {
+            size = args.length >= 1 ? Integer.parseInt(args[0]) : 4 * 1024 * 1024;
+            iters = args.length >= 2 ? Integer.parseInt(args[1]) : 5;
+        } catch (NumberFormatException e) {
+            System.err.println("FwxAESBenchmark: invalid integer arg: " + e.getMessage());
+            System.err.println("usage: FwxAESBenchmark <payload_bytes> <iterations>");
+            System.exit(2);
+            return;
+        }
         String password = "benchmark-password";
 
         byte[] payload = new byte[size];
-        new SecureRandom().nextBytes(payload);
+        SHARED_RANDOM.nextBytes(payload);
 
         System.out.println("basefwx FwxAESBenchmark");
         System.out.println("  payload: " + bytesHuman(size));

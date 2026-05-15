@@ -244,11 +244,6 @@ std::string MoveOutputPath(const std::string& current_path, const std::string& r
     return dst.string();
 }
 
-bool IsTruthy(std::string value) {
-    value = ToLower(std::move(value));
-    return value == "1" || value == "true" || value == "yes" || value == "on";
-}
-
 void SetCliEnvVar(const char* key, const char* value) {
 #if defined(_WIN32)
     _putenv_s(key, value);

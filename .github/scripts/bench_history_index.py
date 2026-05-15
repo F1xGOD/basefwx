@@ -19,6 +19,8 @@ def read_release_tag(path: Path) -> str | None:
         if isinstance(tag, str) and tag:
             return tag
     except (json.JSONDecodeError, OSError):
+        # Missing or malformed entries are treated as "no tag" so the indexer
+        # keeps building from the surviving files.
         pass
     return None
 

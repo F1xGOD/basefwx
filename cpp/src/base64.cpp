@@ -16,16 +16,14 @@ namespace {
 constexpr char kEncTable[] =
     "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
-std::array<std::uint8_t, 256> BuildDecodeTable() {
+const std::array<std::uint8_t, 256> kDecTable = [] {
     std::array<std::uint8_t, 256> table{};
     table.fill(0xFF);
     for (std::size_t i = 0; i < 64; ++i) {
         table[static_cast<std::uint8_t>(kEncTable[i])] = static_cast<std::uint8_t>(i);
     }
     return table;
-}
-
-const std::array<std::uint8_t, 256> kDecTable = BuildDecodeTable();
+}();
 
 inline bool IsSpace(unsigned char c) {
     return c == ' ' || c == '\n' || c == '\r' || c == '\t' || c == '\v' || c == '\f';
@@ -96,9 +94,6 @@ bool ValidateBase64NoWhitespace(std::string_view input, std::size_t& pad_count) 
         if (input.size() >= 2 && input[input.size() - 2] == '=') {
             pad_count += 1;
         }
-    }
-    if (pad_count > 2) {
-        return false;
     }
     std::size_t limit = input.size() - pad_count;
     for (std::size_t i = 0; i < limit; ++i) {

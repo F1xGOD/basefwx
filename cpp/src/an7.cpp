@@ -268,41 +268,6 @@ std::uint32_t ReadU32LeRaw(const std::uint8_t* ptr) {
         | (static_cast<std::uint32_t>(ptr[3]) << 24);
 }
 
-std::string HexEncode(const std::uint8_t* data, std::size_t len) {
-    static constexpr char kHex[] = "0123456789abcdef";
-    std::string out;
-    out.reserve(len * 2);
-    for (std::size_t i = 0; i < len; ++i) {
-        const std::uint8_t byte = data[i];
-        out.push_back(kHex[(byte >> 4) & 0x0F]);
-        out.push_back(kHex[byte & 0x0F]);
-    }
-    return out;
-}
-
-Bytes HexDecode(const std::string& hex) {
-    if (hex.size() % 2 != 0) {
-        throw std::runtime_error("Invalid AN7 trailer hash encoding");
-    }
-    auto nibble = [](char ch) -> std::uint8_t {
-        if (ch >= '0' && ch <= '9') {
-            return static_cast<std::uint8_t>(ch - '0');
-        }
-        if (ch >= 'a' && ch <= 'f') {
-            return static_cast<std::uint8_t>(10 + (ch - 'a'));
-        }
-        if (ch >= 'A' && ch <= 'F') {
-            return static_cast<std::uint8_t>(10 + (ch - 'A'));
-        }
-        throw std::runtime_error("Invalid AN7 trailer hash encoding");
-    };
-    Bytes out(hex.size() / 2);
-    for (std::size_t i = 0; i < out.size(); ++i) {
-        out[i] = static_cast<std::uint8_t>((nibble(hex[i * 2]) << 4) | nibble(hex[i * 2 + 1]));
-    }
-    return out;
-}
-
 std::string UtcTimestamp() {
     auto now = std::chrono::system_clock::now();
     std::time_t tt = std::chrono::system_clock::to_time_t(now);

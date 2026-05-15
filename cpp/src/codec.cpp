@@ -38,7 +38,7 @@ constexpr CodeEntry kCodeMap[] = {
 
 constexpr char kBase32HexAlphabet[] = "0123456789ABCDEFGHIJKLMNOPQRSTUV";
 
-std::array<int, 256> BuildBase32DecodeTable() {
+const std::array<int, 256> kBase32DecodeTable = [] {
     std::array<int, 256> table{};
     table.fill(-1);
     for (int i = 0; i < 32; ++i) {
@@ -46,21 +46,16 @@ std::array<int, 256> BuildBase32DecodeTable() {
         table[static_cast<unsigned char>(std::tolower(kBase32HexAlphabet[i]))] = i;
     }
     return table;
-}
+}();
 
-const std::array<int, 256> kBase32DecodeTable = BuildBase32DecodeTable();
-
-// Build a lookup table for fast character-to-token mapping
-std::array<const char*, 256> BuildCodeLookupTable() {
+const std::array<const char*, 256> kCodeLookupTable = [] {
     std::array<const char*, 256> table{};
     table.fill(nullptr);
     for (const auto& entry : kCodeMap) {
         table[static_cast<unsigned char>(entry.ch)] = entry.token;
     }
     return table;
-}
-
-const std::array<const char*, 256> kCodeLookupTable = BuildCodeLookupTable();
+}();
 
 // Trie node for efficient token decoding (matches Java implementation)
 struct TrieNode {

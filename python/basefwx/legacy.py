@@ -41,7 +41,6 @@ class basefwx:
     import array
     import concurrent.futures
     import enum
-    import inspect
     import threading
     import sys
     import secrets
@@ -1622,14 +1621,11 @@ class basefwx:
                 if parts:
                     roots.add(parts[0])
             # The pre-validation loop above already rejects "../" / absolute / outside-target
-            # members. Pass filter='data' as a second line of defence: it's stricter than our
-            # check (also blocks chr/blk devices, FIFOs, symlinks escaping the target) and is
-            # the future-proof way to call extractall — Python 3.12+ warns without it and
-            # 3.14+ will require it.
-            extract_kwargs = {}
-            if "filter" in basefwx.inspect.signature(tar.extractall).parameters:
-                extract_kwargs["filter"] = "data"
-            tar.extractall(target_dir, **extract_kwargs)
+            # members. filter='data' is the second line of defence: stricter than our check
+            # (also blocks chr/blk devices, FIFOs, symlinks escaping the target). Available
+            # in all supported Python releases — backported to 3.8.17 / 3.9.17 / 3.10.12 /
+            # 3.11.4 (June 2023) and required from 3.14 onward.
+            tar.extractall(target_dir, filter="data")
         try:
             archive_path.unlink()
         except FileNotFoundError:
@@ -12898,7 +12894,10 @@ def cli(argv=None) -> int:
                     keep_input=args.keep_input
                 )
             else:
+                # parser.error() calls SystemExit; the return is for static-analysis
+                # readability so 'result' is never reached uninitialised.
                 parser.error(f"Unsupported method '{args.method}'")
+                return 2
 
             if isinstance(result, dict):
                 failures = 0

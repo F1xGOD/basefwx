@@ -41,6 +41,7 @@ class basefwx:
     import array
     import concurrent.futures
     import enum
+    import inspect
     import threading
     import sys
     import secrets
@@ -1620,7 +1621,15 @@ class basefwx:
                 parts = basefwx.pathlib.PurePosixPath(member.name).parts
                 if parts:
                     roots.add(parts[0])
-            tar.extractall(target_dir)
+            # The pre-validation loop above already rejects "../" / absolute / outside-target
+            # members. Pass filter='data' as a second line of defence: it's stricter than our
+            # check (also blocks chr/blk devices, FIFOs, symlinks escaping the target) and is
+            # the future-proof way to call extractall — Python 3.12+ warns without it and
+            # 3.14+ will require it.
+            extract_kwargs = {}
+            if "filter" in basefwx.inspect.signature(tar.extractall).parameters:
+                extract_kwargs["filter"] = "data"
+            tar.extractall(target_dir, **extract_kwargs)
         try:
             archive_path.unlink()
         except FileNotFoundError:
@@ -6604,7 +6613,7 @@ class basefwx:
             use_master: bool = True
     ) -> "basefwx.typing.Tuple[basefwx.pathlib.Path, int]":
         basefwx._ensure_existing_file(path)
-        basefwx.os.chmod(path, 0o777)
+        basefwx.os.chmod(path, 0o600)
         input_size = path.stat().st_size
         size_hint: "basefwx.typing.Optional[basefwx.typing.Tuple[int, int]]" = None
         if reporter:
@@ -6754,7 +6763,7 @@ class basefwx:
         if not basefwx.ENABLE_B512_AEAD:
             raise RuntimeError("Streaming b512 decode requires AEAD mode")
         basefwx._ensure_existing_file(path)
-        basefwx.os.chmod(path, 0o777)
+        basefwx.os.chmod(path, 0o600)
         input_size = input_size if input_size is not None else path.stat().st_size
         meta = meta_preview or {}
         metadata_blob = metadata_blob_preview or ""
@@ -10798,7 +10807,7 @@ class basefwx:
             use_master: bool = True
     ) -> "basefwx.typing.Tuple[basefwx.pathlib.Path, int]":
         basefwx._ensure_existing_file(path)
-        basefwx.os.chmod(path, 0o777)
+        basefwx.os.chmod(path, 0o600)
         input_size = path.stat().st_size
         size_hint: "basefwx.typing.Optional[basefwx.typing.Tuple[int, int]]" = None
         if reporter:
@@ -10885,7 +10894,7 @@ class basefwx:
         if not password:
             raise ValueError("Password required for AES heavy streaming mode")
         basefwx._ensure_existing_file(path)
-        basefwx.os.chmod(path, 0o777)
+        basefwx.os.chmod(path, 0o600)
         input_size = input_size if input_size is not None else path.stat().st_size
         meta = meta_preview or {}
         metadata_blob = metadata_blob_preview or ""
@@ -11265,7 +11274,7 @@ class basefwx:
             use_master: bool = True
     ) -> "basefwx.typing.Tuple[basefwx.pathlib.Path, int]":
         basefwx._ensure_existing_file(path)
-        basefwx.os.chmod(path, 0o777)
+        basefwx.os.chmod(path, 0o600)
         input_size = path.stat().st_size
         size_hint: "basefwx.typing.Optional[basefwx.typing.Tuple[int, int]]" = None
         if reporter:

@@ -532,10 +532,6 @@ void AppendBalancedTrailer(const std::filesystem::path& path,
     }
 }
 
-void AppendTrailer(const std::filesystem::path& path, const Bytes& blob) {
-    AppendBalancedTrailer(path, basefwx::constants::kImageCipherTrailerMagic, blob);
-}
-
 void AppendTrailerStream(const std::filesystem::path& output_path,
                          const std::filesystem::path& original_path,
                          const std::string& password,
@@ -928,10 +924,6 @@ bool ExtractTrailerWithMagic(const Bytes& data,
         return true;
     }
     return false;
-}
-
-bool ExtractTrailer(const Bytes& data, Bytes& payload, Bytes& trailer) {
-    return ExtractTrailerWithMagic(data, basefwx::constants::kImageCipherTrailerMagic, payload, trailer);
 }
 
 struct TrailerInfo {

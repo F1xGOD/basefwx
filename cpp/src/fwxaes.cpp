@@ -279,32 +279,6 @@ std::vector<std::string> SplitWords(const std::string& phrase) {
     return words;
 }
 
-std::string ReadText(const std::string& path) {
-    std::ifstream input(path, std::ios::binary);
-    if (!input) {
-        throw std::runtime_error("Failed to open file: " + path);
-    }
-    // Use efficient seek-based reading instead of slow iterators
-    input.seekg(0, std::ios::end);
-    std::streamoff size = input.tellg();
-    if (size < 0) {
-        throw std::runtime_error("Failed to read file size: " + path);
-    }
-    // Check for size overflow
-    if (static_cast<std::uint64_t>(size) > std::numeric_limits<std::size_t>::max()) {
-        throw std::runtime_error("File too large: " + path);
-    }
-    input.seekg(0, std::ios::beg);
-    std::string data(static_cast<std::size_t>(size), '\0');
-    if (!data.empty()) {
-        input.read(&data[0], static_cast<std::streamsize>(data.size()));
-        if (input.bad() || input.gcount() != static_cast<std::streamsize>(data.size())) {
-            throw std::runtime_error("Failed to read file: " + path);
-        }
-    }
-    return data;
-}
-
 void WriteBinary(const std::string& path, const std::vector<std::uint8_t>& data) {
     std::ofstream output(path, std::ios::binary);
     if (!output) {
@@ -1021,8 +995,7 @@ void EncryptFile(const std::string& path_in,
         WriteBinary(path_out, blob);
     }
     if (!keep_input) {
-        std::error_code ec;
-        std::filesystem::path output_path(path_out);
+        ec.clear();
         if (std::filesystem::equivalent(input_path, output_path, ec)) {
             return;
         }

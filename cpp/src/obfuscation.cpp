@@ -527,20 +527,6 @@ basefwx::crypto::detail::UniqueCipherCtx CreateAesCtrContext(const Bytes& key, c
     return ctx;
 }
 
-Bytes ApplyAesCtr(EVP_CIPHER_CTX* ctx, const Bytes& input) {
-    Bytes output(input.size());
-    if (input.empty()) {
-        return output;
-    }
-    int out_len = 0;
-    if (EVP_EncryptUpdate(ctx, output.data(), &out_len, input.data(),
-                          static_cast<int>(input.size())) != 1) {
-        throw std::runtime_error("AES-CTR update failed");
-    }
-    output.resize(static_cast<std::size_t>(out_len));
-    return output;
-}
-
 inline void ApplyAesCtrInPlace(EVP_CIPHER_CTX* ctx, Bytes& buffer) {
     if (buffer.empty()) {
         return;

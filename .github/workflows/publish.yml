@@ -389,7 +389,11 @@ jobs:
 
       - name: Verify static crypto/PQ linkage
         run: |
-          deps="$(readelf -d cpp/build/basefwx_cpp)"
+          # CMake renames the basefwx_cpp executable target to `basefwx`
+          # via OUTPUT_NAME so the user-facing CLI doesn't expose the
+          # internal `_cpp` suffix used to avoid clashing with the
+          # basefwxcpp library target.
+          deps="$(readelf -d cpp/build/basefwx)"
           printf '%s\n' "$deps"
           if printf '%s\n' "$deps" | grep -Eq 'liboqs\.so|libcrypto\.so|libssl\.so|libargon2\.so'; then
             echo "Binary still links against dynamic OQS/OpenSSL/Argon2" >&2
@@ -399,7 +403,7 @@ jobs:
       - name: Strip
         run: |
           mkdir -p dist
-          cp cpp/build/basefwx_cpp "dist/${{ matrix.output }}"
+          cp cpp/build/basefwx "dist/${{ matrix.output }}"
           strip "dist/${{ matrix.output }}"
 
       - name: Upload artifact
@@ -583,9 +587,14 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force dist | Out-Null
-          $bin = "cpp/build/Release/basefwx_cpp.exe"
+          # CMake renames the basefwx_cpp target to `basefwx` via
+          # OUTPUT_NAME; we still probe the legacy name as a fallback
+          # in case anyone builds against an older CMakeLists.
+          $bin = "cpp/build/Release/basefwx.exe"
+          if (!(Test-Path $bin)) { $bin = "cpp/build/basefwx.exe" }
+          if (!(Test-Path $bin)) { $bin = "cpp/build/Release/basefwx_cpp.exe" }
           if (!(Test-Path $bin)) { $bin = "cpp/build/basefwx_cpp.exe" }
-          if (!(Test-Path $bin)) { throw "basefwx_cpp.exe not found" }
+          if (!(Test-Path $bin)) { throw "basefwx.exe not found" }
           $stage = Join-Path $PWD "dist/bundle-${{ matrix.arch }}"
           New-Item -ItemType Directory -Force $stage | Out-Null
           Copy-Item $bin (Join-Path $stage "${{ matrix.bundle_exe }}") -Force
@@ -771,7 +780,7 @@ jobs:
 
       - name: Verify output architecture
         run: |
-          archs="$(lipo -archs cpp/build/basefwx_cpp)"
+          archs="$(lipo -archs cpp/build/basefwx)"
           echo "Built binary architectures: ${archs}"
           if ! echo "$archs" | grep -qw "${{ matrix.target_arch }}"; then
             echo "Unexpected output arch; expected ${{ matrix.target_arch }}"
@@ -780,7 +789,7 @@ jobs:
 
       - name: Verify no dynamic third-party crypto deps (macOS)
         run: |
-          deps="$(otool -L cpp/build/basefwx_cpp)"
+          deps="$(otool -L cpp/build/basefwx)"
           echo "$deps"
           if echo "$deps" | grep -Eq '(liboqs|libargon2|libcrypto|libssl)\.dylib'; then
             echo "Binary still links dynamic third-party crypto libs" >&2
@@ -790,7 +799,7 @@ jobs:
       - name: Strip
         run: |
           mkdir -p dist
-          cp cpp/build/basefwx_cpp "dist/${{ matrix.output }}"
+          cp cpp/build/basefwx "dist/${{ matrix.output }}"
           strip -x "dist/${{ matrix.output }}"
 
       - name: Upload artifact

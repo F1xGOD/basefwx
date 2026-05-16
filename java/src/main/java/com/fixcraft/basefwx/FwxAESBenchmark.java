@@ -29,9 +29,22 @@ public final class FwxAESBenchmark {
         byte[] payload = new byte[size];
         SHARED_RANDOM.nextBytes(payload);
 
+        // -Dbasefwx.useJNI=true  -> JNI only (skip pure-java)
+        // -Dbasefwx.useJNI=false -> pure-java only (skip JNI)
+        // unset                  -> both, so the speedup line still works for
+        //                           interactive runs. CI sets the property
+        //                           explicitly per backend so each json sample
+        //                           reflects the requested backend's numbers.
+        String backendProp = System.getProperty("basefwx.useJNI");
+        boolean runPureJava = backendProp == null || backendProp.equalsIgnoreCase("false");
+        boolean runJni = backendProp == null || backendProp.equalsIgnoreCase("true");
+
         System.out.println("basefwx FwxAESBenchmark");
         System.out.println("  payload: " + bytesHuman(size));
         System.out.println("  iterations: " + iters);
+        if (backendProp != null) {
+            System.out.println("  backend: " + (runJni ? "jni" : "pure-java"));
+        }
         System.out.println();
 
         FwxAES warmup = FwxAES.create(false);
@@ -39,20 +52,28 @@ public final class FwxAESBenchmark {
             warmup.decryptRaw(warmup.encryptRaw(payload, password), password);
         }
 
-        Result java = bench("pure-java", false, payload, password, iters);
+        Result java = null;
+        if (runPureJava) {
+            java = bench("pure-java", false, payload, password, iters);
+        }
         Result jni = null;
-        if (NativeCryptoBackend.tryCreate() != null
-            || CryptoBackends.usingNative()) {
-            jni = bench("jni", true, payload, password, iters);
-        } else {
-            System.out.println("jni: skipped (basefwxcrypto shared library not available)");
+        if (runJni) {
+            if (NativeCryptoBackend.tryCreate() != null || CryptoBackends.usingNative()) {
+                jni = bench("jni", true, payload, password, iters);
+            } else {
+                System.out.println("jni: skipped (basefwxcrypto shared library not available)");
+            }
         }
 
         System.out.println();
         System.out.println("results");
-        printResult(java);
+        if (java != null) {
+            printResult(java);
+        }
         if (jni != null) {
             printResult(jni);
+        }
+        if (java != null && jni != null) {
             double ratio = java.encryptMs / jni.encryptMs;
             System.out.printf("  speedup (encrypt): jni is %.2fx pure-java%n", ratio);
         }

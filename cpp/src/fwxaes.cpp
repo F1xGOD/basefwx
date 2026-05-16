@@ -8,21 +8,16 @@
 #include "basefwx/format.hpp"
 #include "basefwx/keywrap.hpp"
 
-#include <algorithm>
 #include <array>
-#include <atomic>
 #include <chrono>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <limits>
 #include <memory>
-#include <mutex>
 #include <optional>
 #include <sstream>
 #include <stdexcept>
-#include <string>
-#include <thread>
 #include <vector>
 
 #include <openssl/evp.h>
@@ -34,7 +29,6 @@ namespace {
 const std::uint8_t kMagic[4] = {'F', 'W', 'X', '1'};
 const std::uint8_t kAlgo = 0x01;
 const std::uint8_t kAlgoStreamV2 = 0x02;
-const std::uint8_t kAlgoChunkedV3 = 0x03;
 const std::uint8_t kKdfPbkdf2 = 0x01;
 const std::uint8_t kKdfWrap = 0x02;
 const std::uint8_t kAadBytes[] = {'f', 'w', 'x', 'A', 'E', 'S'};
@@ -42,24 +36,6 @@ const Bytes kAadVec(kAadBytes, kAadBytes + sizeof(kAadBytes));
 const std::uint8_t kPackMagic[] = {'F', 'W', 'X', 'P', 'K', '1'};
 constexpr std::size_t kPackHeaderLen = sizeof(kPackMagic) + 1 + 8;
 constexpr std::size_t kMaxKeyHeaderLen = 4 * 1024 * 1024;
-
-// algo_v3 (chunked-parallel) parameters.
-// Threshold: below this, the single-thread v1 path is faster — thread spawn
-// cost dominates on small inputs.
-constexpr std::size_t kChunkedThresholdBytes = 8 * 1024 * 1024;
-// Plaintext per chunk. 1 MiB strikes a balance: small enough that an 8 MiB
-// file gets 8 parallel chunks on a typical multi-core host; large enough that
-// the per-chunk GCM setup / EVP_CIPHER_CTX_new() cost is amortized.
-constexpr std::size_t kChunkPlaintextBytes = 1 * 1024 * 1024;
-// Cap thread count. AES-GCM with hardware AES is memory-bandwidth bound past
-// 8 threads on most desktop/laptop CPUs; more threads add overhead without
-// throughput gain.
-constexpr unsigned int kMaxChunkThreads = 8;
-// algo_v3 requires a 96-bit base IV (12 bytes). The per-chunk nonce uses the
-// last 4 bytes as a chunk-index counter, leaving 8 random prefix bytes —
-// 2^64 collision space across distinct encryptions with the same key, which
-// is never a real risk here (the key is re-derived per encryption).
-constexpr std::uint8_t kChunkedV3IvLen = 12;
 
 std::uint32_t ResolveTestIters(std::uint32_t fallback) {
     std::string raw = basefwx::env::Get("BASEFWX_FWXAES_PBKDF2_ITERS");
@@ -303,265 +279,6 @@ std::vector<std::string> SplitWords(const std::string& phrase) {
     return words;
 }
 
-// algo_v3 chunked-parallel helpers.
-
-// Derive a unique 96-bit AES-GCM nonce for chunk_index by replacing the last
-// 4 bytes of the 12-byte base IV with a big-endian chunk counter. Keeps the
-// 8 random prefix bytes intact so distinct encryptions don't collide.
-Bytes DeriveChunkNonce(const Bytes& base_iv, std::uint32_t chunk_index) {
-    if (base_iv.size() != kChunkedV3IvLen) {
-        throw std::runtime_error("fwxAES chunked: base IV must be 12 bytes");
-    }
-    Bytes nonce(kChunkedV3IvLen);
-    std::memcpy(nonce.data(), base_iv.data(), 8);
-    WriteU32Be(nonce.data() + 8, chunk_index);
-    return nonce;
-}
-
-// Pick how many worker threads to use for `chunk_count` chunks. Caps at the
-// constants above plus the hardware concurrency hint. Returns 1 if chunking
-// wouldn't help.
-unsigned int ResolveChunkThreadCount(std::uint32_t chunk_count) {
-    if (chunk_count <= 1) {
-        return 1;
-    }
-    unsigned int hw = std::thread::hardware_concurrency();
-    if (hw == 0) {
-        hw = 2;
-    }
-    unsigned int threads = std::min<unsigned int>(hw, kMaxChunkThreads);
-    return std::min<unsigned int>(threads, chunk_count);
-}
-
-// Per-chunk output layout: each chunk except possibly the last writes
-// `kChunkPlaintextBytes` plaintext bytes plus a 16-byte tag, packed back to
-// back. The last chunk's plaintext may be shorter.
-std::size_t ChunkOutputOffset(std::uint32_t chunk_index) {
-    return static_cast<std::size_t>(chunk_index)
-           * (kChunkPlaintextBytes + basefwx::constants::kAeadTagLen);
-}
-
-std::size_t ChunkPlaintextLen(std::uint32_t chunk_index,
-                              std::uint32_t chunk_count,
-                              std::size_t total_plaintext_len) {
-    if (chunk_index + 1 < chunk_count) {
-        return kChunkPlaintextBytes;
-    }
-    return total_plaintext_len - static_cast<std::size_t>(chunk_count - 1) * kChunkPlaintextBytes;
-}
-
-// Parallel GCM encrypt of `total_plaintext_len` bytes split into `chunk_count`
-// chunks. `out` must have capacity `total_plaintext_len + chunk_count*tag`.
-// On any chunk error, sets `error_msg` (first writer wins) and other workers
-// observe the atomic flag and exit early.
-void ParallelEncryptChunks(const Bytes& key,
-                           const Bytes& base_iv,
-                           const std::uint8_t* plaintext,
-                           std::size_t total_plaintext_len,
-                           std::uint32_t chunk_count,
-                           std::uint8_t* out,
-                           std::size_t out_capacity) {
-    std::atomic<bool> failed{false};
-    std::string error_msg;
-    std::mutex error_mu;
-    auto worker = [&](std::uint32_t start, std::uint32_t end) {
-        for (std::uint32_t i = start; i < end; ++i) {
-            if (failed.load(std::memory_order_acquire)) return;
-            try {
-                Bytes nonce = DeriveChunkNonce(base_iv, i);
-                std::size_t pt_off = static_cast<std::size_t>(i) * kChunkPlaintextBytes;
-                std::size_t pt_len = ChunkPlaintextLen(i, chunk_count, total_plaintext_len);
-                std::size_t ct_off = ChunkOutputOffset(i);
-                std::size_t chunk_out_cap = pt_len + basefwx::constants::kAeadTagLen;
-                if (ct_off + chunk_out_cap > out_capacity) {
-                    throw std::runtime_error("fwxAES chunk output OOB");
-                }
-                std::size_t written = basefwx::crypto::AesGcmEncryptWithIvInto(
-                    key, nonce,
-                    plaintext + pt_off, pt_len,
-                    kAadVec,
-                    out + ct_off, chunk_out_cap);
-                if (written != chunk_out_cap) {
-                    throw std::runtime_error("fwxAES chunk size mismatch");
-                }
-            } catch (const std::exception& e) {
-                if (!failed.exchange(true)) {
-                    std::lock_guard<std::mutex> lock(error_mu);
-                    error_msg = e.what();
-                }
-                return;
-            }
-        }
-    };
-
-    unsigned int thread_count = ResolveChunkThreadCount(chunk_count);
-    if (thread_count <= 1) {
-        worker(0, chunk_count);
-    } else {
-        std::vector<std::thread> threads;
-        threads.reserve(thread_count - 1);
-        std::uint32_t base = chunk_count / thread_count;
-        std::uint32_t extra = chunk_count % thread_count;
-        std::uint32_t cursor = 0;
-        for (unsigned int t = 0; t < thread_count - 1; ++t) {
-            std::uint32_t span = base + (t < extra ? 1U : 0U);
-            std::uint32_t next = cursor + span;
-            threads.emplace_back(worker, cursor, next);
-            cursor = next;
-        }
-        worker(cursor, chunk_count);
-        for (auto& th : threads) {
-            th.join();
-        }
-    }
-
-    if (failed.load(std::memory_order_acquire)) {
-        std::lock_guard<std::mutex> lock(error_mu);
-        throw std::runtime_error("fwxAES chunked encrypt failed: " + error_msg);
-    }
-}
-
-// Mirror of ParallelEncryptChunks. The ciphertext layout is fully determined
-// by chunk_count + total_plaintext_len, so the decrypt side recomputes offsets
-// the same way.
-void ParallelDecryptChunks(const Bytes& key,
-                           const Bytes& base_iv,
-                           const std::uint8_t* ciphertext,
-                           std::size_t ciphertext_len,
-                           std::uint32_t chunk_count,
-                           std::size_t total_plaintext_len,
-                           std::uint8_t* out,
-                           std::size_t out_capacity) {
-    std::atomic<bool> failed{false};
-    std::string error_msg;
-    std::mutex error_mu;
-    auto worker = [&](std::uint32_t start, std::uint32_t end) {
-        for (std::uint32_t i = start; i < end; ++i) {
-            if (failed.load(std::memory_order_acquire)) return;
-            try {
-                Bytes nonce = DeriveChunkNonce(base_iv, i);
-                std::size_t pt_off = static_cast<std::size_t>(i) * kChunkPlaintextBytes;
-                std::size_t pt_len = ChunkPlaintextLen(i, chunk_count, total_plaintext_len);
-                std::size_t ct_off = ChunkOutputOffset(i);
-                std::size_t chunk_ct_len = pt_len + basefwx::constants::kAeadTagLen;
-                if (ct_off + chunk_ct_len > ciphertext_len) {
-                    throw std::runtime_error("fwxAES chunk truncated");
-                }
-                if (pt_off + pt_len > out_capacity) {
-                    throw std::runtime_error("fwxAES chunk plaintext OOB");
-                }
-                std::size_t written = basefwx::crypto::AesGcmDecryptWithIvInto(
-                    key, nonce,
-                    ciphertext + ct_off, chunk_ct_len,
-                    kAadVec,
-                    out + pt_off, pt_len);
-                if (written != pt_len) {
-                    throw std::runtime_error("fwxAES chunk decrypt length mismatch");
-                }
-            } catch (const std::exception& e) {
-                if (!failed.exchange(true)) {
-                    std::lock_guard<std::mutex> lock(error_mu);
-                    error_msg = e.what();
-                }
-                return;
-            }
-        }
-    };
-
-    unsigned int thread_count = ResolveChunkThreadCount(chunk_count);
-    if (thread_count <= 1) {
-        worker(0, chunk_count);
-    } else {
-        std::vector<std::thread> threads;
-        threads.reserve(thread_count - 1);
-        std::uint32_t base = chunk_count / thread_count;
-        std::uint32_t extra = chunk_count % thread_count;
-        std::uint32_t cursor = 0;
-        for (unsigned int t = 0; t < thread_count - 1; ++t) {
-            std::uint32_t span = base + (t < extra ? 1U : 0U);
-            std::uint32_t next = cursor + span;
-            threads.emplace_back(worker, cursor, next);
-            cursor = next;
-        }
-        worker(cursor, chunk_count);
-        for (auto& th : threads) {
-            th.join();
-        }
-    }
-
-    if (failed.load(std::memory_order_acquire)) {
-        std::lock_guard<std::mutex> lock(error_mu);
-        throw std::runtime_error("fwxAES chunked decrypt failed: " + error_msg);
-    }
-}
-
-bool ShouldUseChunkedV3(std::size_t plaintext_len) {
-    if (plaintext_len < kChunkedThresholdBytes) {
-        return false;
-    }
-    // Refuse if hardware concurrency hint suggests the host won't benefit.
-    return std::thread::hardware_concurrency() >= 2;
-}
-
-std::uint32_t ChunkCountFor(std::size_t plaintext_len) {
-    return static_cast<std::uint32_t>(
-        (plaintext_len + kChunkPlaintextBytes - 1) / kChunkPlaintextBytes);
-}
-
-// Build an algo_v3 blob. `aux_field` is the bytes between the 16-byte header
-// and the base IV — that's the PBKDF2 salt for kdf=Pbkdf2 or the key header
-// for kdf=Wrap. `aux_field_u32` is whatever goes in header bytes [8..12)
-// (iterations for PBKDF2, key-header length for Wrap), matching the v1 layout
-// so existing parsers can tell the two modes apart by the kdf byte.
-Bytes EmitChunkedV3(const Bytes& key,
-                    std::uint8_t kdf_byte,
-                    std::uint8_t aux_salt_len,
-                    std::uint32_t aux_field_u32,
-                    const Bytes& aux_field,
-                    const Bytes& plaintext) {
-    if (plaintext.size() > std::numeric_limits<std::uint32_t>::max()) {
-        throw std::runtime_error("fwxAES chunked: plaintext > 4 GiB unsupported");
-    }
-    Bytes base_iv = basefwx::crypto::RandomBytes(kChunkedV3IvLen);
-    std::uint32_t chunk_count = ChunkCountFor(plaintext.size());
-
-    std::size_t ciphertext_total = plaintext.size()
-                                    + static_cast<std::size_t>(chunk_count)
-                                          * basefwx::constants::kAeadTagLen;
-    std::size_t blob_size = 16
-                            + aux_field.size()
-                            + kChunkedV3IvLen
-                            + 8  // u32 chunk_count + u32 chunk_size_bytes
-                            + ciphertext_total;
-    Bytes blob(blob_size);
-    std::uint8_t* out = blob.data();
-    std::memcpy(out, kMagic, 4);
-    out[4] = kAlgoChunkedV3;
-    out[5] = kdf_byte;
-    out[6] = aux_salt_len;
-    out[7] = kChunkedV3IvLen;
-    WriteU32Be(out + 8, aux_field_u32);
-    WriteU32Be(out + 12, static_cast<std::uint32_t>(plaintext.size()));
-
-    std::size_t offset = 16;
-    if (!aux_field.empty()) {
-        std::memcpy(out + offset, aux_field.data(), aux_field.size());
-        offset += aux_field.size();
-    }
-    std::memcpy(out + offset, base_iv.data(), base_iv.size());
-    offset += base_iv.size();
-    WriteU32Be(out + offset, chunk_count);
-    offset += 4;
-    WriteU32Be(out + offset, static_cast<std::uint32_t>(kChunkPlaintextBytes));
-    offset += 4;
-
-    ParallelEncryptChunks(key, base_iv,
-                          plaintext.data(), plaintext.size(),
-                          chunk_count,
-                          out + offset, blob.size() - offset);
-    return blob;
-}
-
 void WriteBinary(const std::string& path, const std::vector<std::uint8_t>& data) {
     std::ofstream output(path, std::ios::binary);
     if (!output) {
@@ -616,17 +333,12 @@ Bytes EncryptRaw(const Bytes& plaintext, const std::string& password, const Opti
     }
 
     Bytes iv = basefwx::crypto::RandomBytes(effective.iv_len);
-    const bool chunked = ShouldUseChunkedV3(plaintext.size());
     Bytes key;
     if (use_wrap) {
         key = basefwx::crypto::HkdfSha256(mask_key.mask_key, basefwx::constants::kFwxAesKeyInfo, 32);
     } else {
         Bytes salt = basefwx::crypto::RandomBytes(effective.salt_len);
         key = basefwx::crypto::Pbkdf2HmacSha256(resolved, salt, effective.pbkdf2_iters, 32);
-        if (chunked) {
-            return EmitChunkedV3(key, kKdfPbkdf2, effective.salt_len,
-                                 effective.pbkdf2_iters, salt, plaintext);
-        }
         std::size_t ct_len = plaintext.size() + basefwx::constants::kAeadTagLen;
         if (ct_len > std::numeric_limits<std::uint32_t>::max()) {
             throw std::runtime_error("fwxAES ciphertext too large");
@@ -662,11 +374,6 @@ Bytes EncryptRaw(const Bytes& plaintext, const std::string& password, const Opti
 
     if (key_header.size() > std::numeric_limits<std::uint32_t>::max()) {
         throw std::runtime_error("fwxAES key header too large");
-    }
-    if (chunked) {
-        return EmitChunkedV3(key, kKdfWrap, 0,
-                             static_cast<std::uint32_t>(key_header.size()),
-                             key_header, plaintext);
     }
     std::size_t ct_len = plaintext.size() + basefwx::constants::kAeadTagLen;
     if (ct_len > std::numeric_limits<std::uint32_t>::max()) {
@@ -723,84 +430,6 @@ Bytes DecryptRaw(const Bytes& blob, const std::string& password, bool use_master
         DecryptStream(input, output, resolved, use_master);
         std::string plain = output.str();
         return Bytes(plain.begin(), plain.end());
-    }
-    if (algo == kAlgoChunkedV3) {
-        if (kdf != kKdfPbkdf2 && kdf != kKdfWrap) {
-            throw std::runtime_error("fwxAES unsupported kdf for chunked algo");
-        }
-        if (iv_len != kChunkedV3IvLen) {
-            throw std::runtime_error("fwxAES chunked algo expects 12-byte IV");
-        }
-        std::uint32_t aux_u32 = GetU32Be(&blob[8]);
-        std::uint32_t plaintext_len_u32 = GetU32Be(&blob[12]);
-        std::size_t total_plaintext_len = plaintext_len_u32;
-
-        std::size_t aux_field_len = (kdf == kKdfPbkdf2)
-            ? static_cast<std::size_t>(salt_len)
-            : static_cast<std::size_t>(aux_u32);
-        if (kdf == kKdfWrap && aux_field_len > kMaxKeyHeaderLen) {
-            throw std::runtime_error("fwxAES key header too large");
-        }
-        std::size_t fixed_overhead = header_len + aux_field_len + kChunkedV3IvLen + 8;
-        if (blob.size() < fixed_overhead) {
-            throw std::runtime_error("fwxAES chunked blob truncated");
-        }
-
-        std::size_t cursor = header_len;
-        Bytes aux_field(blob.begin() + static_cast<std::ptrdiff_t>(cursor),
-                        blob.begin() + static_cast<std::ptrdiff_t>(cursor + aux_field_len));
-        cursor += aux_field_len;
-        Bytes base_iv(blob.begin() + static_cast<std::ptrdiff_t>(cursor),
-                      blob.begin() + static_cast<std::ptrdiff_t>(cursor + kChunkedV3IvLen));
-        cursor += kChunkedV3IvLen;
-        std::uint32_t chunk_count = GetU32Be(&blob[cursor]);
-        cursor += 4;
-        std::uint32_t chunk_size = GetU32Be(&blob[cursor]);
-        cursor += 4;
-
-        if (chunk_count == 0 && total_plaintext_len > 0) {
-            throw std::runtime_error("fwxAES chunked: invalid chunk_count");
-        }
-        if (chunk_size != kChunkPlaintextBytes) {
-            throw std::runtime_error("fwxAES chunked: unsupported chunk_size");
-        }
-        std::uint32_t expected_count = ChunkCountFor(total_plaintext_len);
-        if (chunk_count != expected_count) {
-            throw std::runtime_error("fwxAES chunked: chunk_count mismatch");
-        }
-        std::size_t expected_ct_total = total_plaintext_len
-            + static_cast<std::size_t>(chunk_count) * basefwx::constants::kAeadTagLen;
-        if (blob.size() < cursor + expected_ct_total) {
-            throw std::runtime_error("fwxAES chunked blob truncated");
-        }
-
-        Bytes key;
-        if (kdf == kKdfWrap) {
-            auto parts = basefwx::format::UnpackLengthPrefixed(aux_field, 2);
-            basefwx::pb512::KdfOptions kdf_opts = ResolveWrapKdfOptionsForDecode();
-            Bytes mask_key = basefwx::keywrap::RecoverMaskKey(
-                parts[0],
-                parts[1],
-                resolved,
-                use_master,
-                basefwx::constants::kFwxAesMaskInfo,
-                std::string_view(reinterpret_cast<const char*>(kAadBytes), sizeof(kAadBytes)),
-                kdf_opts
-            );
-            key = basefwx::crypto::HkdfSha256(mask_key, basefwx::constants::kFwxAesKeyInfo, 32);
-        } else {
-            if (resolved.empty()) {
-                throw std::runtime_error("fwxAES password required for PBKDF2 payload");
-            }
-            key = basefwx::crypto::Pbkdf2HmacSha256(resolved, aux_field, aux_u32, 32);
-        }
-
-        Bytes plaintext(total_plaintext_len);
-        ParallelDecryptChunks(key, base_iv,
-                              blob.data() + cursor, expected_ct_total,
-                              chunk_count, total_plaintext_len,
-                              plaintext.data(), plaintext.size());
-        return plaintext;
     }
     if (algo != kAlgo || (kdf != kKdfPbkdf2 && kdf != kKdfWrap)) {
         throw std::runtime_error("fwxAES unsupported algo/kdf");
@@ -1321,13 +950,7 @@ void EncryptFile(const std::string& path_in,
     std::filesystem::path output_path(path_out);
     std::error_code ec;
 
-    // Files that fit in RAM and are large enough to benefit from
-    // chunked-parallel encryption go through EncryptRaw (in-memory) — the
-    // algo_v3 branch picks up files >= kChunkedThresholdBytes and splits
-    // them across hardware_concurrency() workers. The streaming path stays
-    // for very-large files (>= kInMemoryUpperBound) and for normalize /
-    // pack flows that need the staged-buffer pipeline.
-    constexpr std::uint64_t kInMemoryUpperBound = 512ULL * 1024ULL * 1024ULL;
+    // Fast path for large files: stream encryption avoids full in-memory buffering.
     if (!normalize.enabled
         && !pack.compress
         && std::filesystem::is_regular_file(input_path, ec)) {
@@ -1335,20 +958,6 @@ void EncryptFile(const std::string& path_in,
         if (std::filesystem::exists(output_path, ec)
             && std::filesystem::equivalent(input_path, output_path, ec)) {
             throw std::runtime_error("Input and output paths must differ for stream encryption");
-        }
-        std::uint64_t size = std::filesystem::file_size(input_path, ec);
-        if (!ec && size >= kChunkedThresholdBytes && size <= kInMemoryUpperBound) {
-            Bytes plaintext = basefwx::ReadFile(path_in);
-            Bytes blob = EncryptRaw(plaintext, password, options);
-            WriteBinary(path_out, blob);
-            if (!keep_input) {
-                ec.clear();
-                if (!std::filesystem::equivalent(input_path, output_path, ec)) {
-                    ec.clear();
-                    std::filesystem::remove(input_path, ec);
-                }
-            }
-            return;
         }
         std::ifstream input(path_in, std::ios::binary);
         if (!input) {

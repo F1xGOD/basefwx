@@ -2244,35 +2244,52 @@ class basefwx:
     ) -> bytes:
         master_present = len(master_blob) > 0
         user_present = len(user_blob) > 0
-        if master_present:
-            if not use_master:
-                raise ValueError("Master key required to decode this payload")
-            if master_blob.startswith(basefwx.MASTER_EC_MAGIC):
-                shared = basefwx._ec_kem_dec(master_blob)
+
+        def _user_path() -> bytes:
+            if not user_present:
+                raise ValueError("Ciphertext missing key transport data")
+            if not password:
+                raise ValueError("Password required to decode this payload")
+            if len(user_blob) < 1:
+                raise ValueError("Corrupted user key blob: missing KDF metadata")
+            kdf_len = user_blob[0]
+            header_len = 1 + kdf_len + basefwx.USER_KDF_SALT_SIZE
+            if len(user_blob) < header_len:
+                raise ValueError("Corrupted user key blob: truncated data")
+            kdf_label = user_blob[1:1 + kdf_len].decode('utf-8') if kdf_len else (basefwx.USER_KDF or "argon2id")
+            salt = user_blob[1 + kdf_len:header_len]
+            wrapped = user_blob[header_len:]
+            user_derived_key, _ = basefwx._derive_user_key(
+                password,
+                salt=salt,
+                iterations=basefwx.USER_KDF_ITERATIONS,
+                kdf=kdf_label
+            )
+            return basefwx._aead_decrypt(user_derived_key, wrapped, aad)
+
+        if master_present and use_master:
+            # Prefer the master-key path when the caller opted into it AND the
+            # local private key is available. If the private key is missing
+            # (typical for non-custodian / open-source deployments) but a
+            # user_blob is present along with a password, fall back to that
+            # path so password-only decrypt still works on a master-wrapped
+            # blob. Re-raise the master error when no fallback is possible.
+            try:
+                if master_blob.startswith(basefwx.MASTER_EC_MAGIC):
+                    shared = basefwx._ec_kem_dec(master_blob)
+                    return basefwx._hkdf_sha256(shared, info=mask_info)
+                private_key = basefwx._load_master_pq_private()
+                shared = basefwx.ml_kem_768.decrypt(private_key, master_blob)
                 return basefwx._hkdf_sha256(shared, info=mask_info)
-            private_key = basefwx._load_master_pq_private()
-            shared = basefwx.ml_kem_768.decrypt(private_key, master_blob)
-            return basefwx._hkdf_sha256(shared, info=mask_info)
-        if not user_present:
-            raise ValueError("Ciphertext missing key transport data")
-        if not password:
-            raise ValueError("Password required to decode this payload")
-        if len(user_blob) < 1:
-            raise ValueError("Corrupted user key blob: missing KDF metadata")
-        kdf_len = user_blob[0]
-        header_len = 1 + kdf_len + basefwx.USER_KDF_SALT_SIZE
-        if len(user_blob) < header_len:
-            raise ValueError("Corrupted user key blob: truncated data")
-        kdf_label = user_blob[1:1 + kdf_len].decode('utf-8') if kdf_len else (basefwx.USER_KDF or "argon2id")
-        salt = user_blob[1 + kdf_len:header_len]
-        wrapped = user_blob[header_len:]
-        user_derived_key, _ = basefwx._derive_user_key(
-            password,
-            salt=salt,
-            iterations=basefwx.USER_KDF_ITERATIONS,
-            kdf=kdf_label
-        )
-        return basefwx._aead_decrypt(user_derived_key, wrapped, aad)
+            except FileNotFoundError:
+                if user_present and password:
+                    return _user_path()
+                raise
+        if master_present and not use_master:
+            if user_present and password:
+                return _user_path()
+            raise ValueError("Master key required to decode this payload")
+        return _user_path()
 
     @staticmethod
     def _jmg_security_profile_id(
@@ -6295,7 +6312,12 @@ class basefwx:
         if reporter:
             reporter.update(file_index, 0.12, "stream-setup", display_path, size_hint=estimated_hint)
 
-        temp_dir = basefwx.tempfile.TemporaryDirectory(prefix="basefwx-b512-stream-")
+        # Place the temp dir next to the output so the final os.replace stays
+        # within one filesystem (avoids Errno 18 / EXDEV when $TMPDIR points to
+        # a tmpfs and the output lives on a different mount).
+        temp_dir = basefwx.tempfile.TemporaryDirectory(
+            prefix="basefwx-b512-stream-", dir=str(output_path.parent)
+        )
         cleanup_paths: "basefwx.typing.List[str]" = []
         processed_plain = 0
 
@@ -6502,7 +6524,12 @@ class basefwx:
         ).encryptor()
         if aad:
             encryptor.authenticate_additional_data(aad)
-        temp_dir = basefwx.tempfile.TemporaryDirectory(prefix="basefwx-stream-")
+        # Place the temp dir next to the output so the final os.replace stays
+        # within one filesystem (avoids Errno 18 / EXDEV when $TMPDIR points to
+        # a tmpfs and the output lives on a different mount).
+        temp_dir = basefwx.tempfile.TemporaryDirectory(
+            prefix="basefwx-stream-", dir=str(output_path.parent)
+        )
         cleanup_paths: "basefwx.typing.List[str]" = []
         processed_plain = 0
         total_plain = plaintext_len
@@ -6766,7 +6793,12 @@ class basefwx:
         use_master_effective = use_master and not strip_metadata
         if meta.get("ENC-MASTER") == "no":
             use_master_effective = False
-        temp_dir = basefwx.tempfile.TemporaryDirectory(prefix="basefwx-b512-dec-")
+        # Place the temp dir next to the input (decoded target lives in the
+        # same area) so the final os.replace stays within one filesystem and
+        # we don't hit Errno 18 / EXDEV when $TMPDIR is on a different mount.
+        temp_dir = basefwx.tempfile.TemporaryDirectory(
+            prefix="basefwx-b512-dec-", dir=str(path.parent)
+        )
         cleanup_paths: "basefwx.typing.List[str]" = []
         plaintext_path: "basefwx.typing.Optional[str]" = None
         decoded_path: "basefwx.typing.Optional[str]" = None
@@ -10899,7 +10931,13 @@ class basefwx:
             use_master_effective = False
         basefwx._warn_on_metadata(meta, "AES-HEAVY")
 
-        temp_dir = basefwx.tempfile.TemporaryDirectory(prefix="basefwx-stream-dec-")
+        # Place the temp dir next to the input (the eventual decoded target
+        # ends up in the same area) so the final os.replace stays within one
+        # filesystem and we don't hit Errno 18 / EXDEV when $TMPDIR is on a
+        # different mount (e.g. tmpfs).
+        temp_dir = basefwx.tempfile.TemporaryDirectory(
+            prefix="basefwx-stream-dec-", dir=str(path.parent)
+        )
         cleanup_paths: "basefwx.typing.List[str]" = []
         plaintext_path: "basefwx.typing.Optional[str]" = None
         decoded_path: "basefwx.typing.Optional[str]" = None
@@ -10971,13 +11009,7 @@ class basefwx:
                     raise ValueError("Ciphertext payload truncated")
                 handle.seek(cipher_body_start)
 
-                if len(master_blob) > 0:
-                    if not use_master_effective:
-                        raise ValueError("Master key required to decrypt this payload")
-                    private_key = basefwx._load_master_pq_private()
-                    kem_shared = basefwx.ml_kem_768.decrypt(private_key, master_blob)
-                    ephemeral_key = basefwx._kem_derive_key(kem_shared)
-                elif len(user_blob) > 0:
+                def _unwrap_with_user() -> bytes:
                     if not password:
                         raise ValueError("User password required to decrypt this payload")
                     min_len = basefwx.USER_KDF_SALT_SIZE + 13
@@ -10994,7 +11026,31 @@ class basefwx:
                         argon2_memory_cost=argon2_mem_hint,
                         argon2_parallelism=argon2_par_hint
                     )
-                    ephemeral_key = basefwx._aead_decrypt(user_derived_key, wrapped_ephemeral, aad)
+                    return basefwx._aead_decrypt(user_derived_key, wrapped_ephemeral, aad)
+
+                ephemeral_key = None
+                if len(master_blob) > 0 and use_master_effective:
+                    # Prefer the master-key path when the user opted into it
+                    # AND the local private key is available. If the private
+                    # key is missing (typical for non-custodian deployments),
+                    # fall back to the user_blob/password path so password-only
+                    # decryption still works on a master-wrapped blob.
+                    try:
+                        private_key = basefwx._load_master_pq_private()
+                        kem_shared = basefwx.ml_kem_768.decrypt(private_key, master_blob)
+                        ephemeral_key = basefwx._kem_derive_key(kem_shared)
+                    except FileNotFoundError:
+                        if len(user_blob) > 0 and password:
+                            ephemeral_key = _unwrap_with_user()
+                        else:
+                            raise
+                elif len(master_blob) > 0 and not use_master_effective:
+                    if len(user_blob) > 0 and password:
+                        ephemeral_key = _unwrap_with_user()
+                    else:
+                        raise ValueError("Master key required to decrypt this payload")
+                elif len(user_blob) > 0:
+                    ephemeral_key = _unwrap_with_user()
                 else:
                     raise ValueError("Ciphertext missing key transport data")
 

@@ -17,7 +17,7 @@ public final class Constants {
     public static final int FWXAES_PBKDF2_ITERS = resolveFwxAesIters();
 
     public static final int SHORT_PASSWORD_MIN = 12;
-    public static final int SHORT_PBKDF2_ITERS = 400000;
+    public static final int SHORT_PBKDF2_ITERS = 1000000;
 
     public static final byte[] FWXAES_AAD = "fwxAES".getBytes(StandardCharsets.US_ASCII);
     public static final byte[] FWXAES_MASK_INFO = "basefwx.fwxaes.mask.v1".getBytes(StandardCharsets.US_ASCII);
@@ -100,7 +100,7 @@ public final class Constants {
     public static final int HEAVY_PBKDF2_ITERATIONS = resolveHeavyPbkdf2Iterations();
 
     private static int resolveFwxAesIters() {
-        int fallback = 200000;
+        int fallback = 600000;
         Integer env = envInt("BASEFWX_FWXAES_PBKDF2_ITERS");
         if (env != null) {
             return env;
@@ -112,7 +112,7 @@ public final class Constants {
     }
 
     private static int resolveUserKdfIterations() {
-        int fallback = 200000;
+        int fallback = 600000;
         Integer env = envInt("BASEFWX_USER_KDF_ITERS");
         if (env != null) {
             return env;
@@ -124,7 +124,7 @@ public final class Constants {
     }
 
     private static int resolveHeavyPbkdf2Iterations() {
-        int fallback = 1000000;
+        int fallback = 2000000;
         if (HEAVY_PBKDF2_ENV != null) {
             return HEAVY_PBKDF2_ENV;
         }

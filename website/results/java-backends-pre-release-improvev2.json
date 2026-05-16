@@ -1,0 +1,41 @@
+{
+  "schema": 1,
+  "release_tag": "pre-release-improvev2",
+  "generated_at": null,
+  "samples": [
+    {
+      "size_bytes": 1048576,
+      "size_human": "1.0 MiB",
+      "pure_java": {
+        "encrypt_ms": 139.91,
+        "decrypt_ms": 77.38,
+        "encrypt_mibs": 7.1,
+        "decrypt_mibs": 12.9
+      },
+      "jni": {
+        "encrypt_ms": 142.7,
+        "decrypt_ms": 78.53,
+        "encrypt_mibs": 7.0,
+        "decrypt_mibs": 12.7,
+        "available": true
+      }
+    },
+    {
+      "size_bytes": 16777216,
+      "size_human": "16.0 MiB",
+      "pure_java": {
+        "encrypt_ms": 340.75,
+        "decrypt_ms": 277.36,
+        "encrypt_mibs": 47.0,
+        "decrypt_mibs": 57.7
+      },
+      "jni": {
+        "encrypt_ms": 343.32,
+        "decrypt_ms": 279.03,
+        "encrypt_mibs": 46.6,
+        "decrypt_mibs": 57.3,
+        "available": true
+      }
+    }
+  ]
+}

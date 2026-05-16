@@ -19,60 +19,37 @@
 
 ### What's New in 3.6.4
 
-* **KDF Hardening (cross-language):** Default PBKDF2 and Argon2id cost
-  parameters were raised in all three runtimes (C++, Java, Python) so a
-  single password guess is roughly **2–3× more expensive** for an
-  attacker than under 3.6.3. See the [KDF Hardening](#kdf-hardening-364)
-  table below for exact numbers and the attacker-cost ratios.
-* **AN7/DEAN7 Added:** New reversible stealth anonymization layer is now available in C++, Python, and Java.
-* **Release Metadata Unified:** C++, Python, and Java now read the same repository version and expose consistent build metadata.
-* **Full Crypto Support Enforced:** Release and CI workflows now fail instead of silently downgrading when Argon2/OQS/LZMA support is missing.
-* **CLI Improvements:** C++ CLI now has stricter master-key opt-in, richer version/build reporting, and better release metadata visibility.
-* **Release Hygiene Tightened:** Canonical asset naming, manifest generation, version-sync checks, and redundant workflow work were cleaned up.
-* **Java Build Fixes:** Java CLI/version packaging regressions were fixed so release and CI builds stay green.
-* **Java AES-GCM via JNI:** When `-Dbasefwx.useJNI=true` (or
-  `BASEFWX_NATIVE=1`) is set and the `basefwxcrypto` shared library is
-  available, fwxAES encrypt/decrypt now dispatches the AEAD step
-  through a zero-copy one-shot OpenSSL path instead of JCA. This is a
-  pure-performance change (no security impact) and yields roughly
-  **+10 %** throughput on 16 MiB fwxAES encrypt in our local
-  measurements.
+For the full write-up — KDF cost table, security-normalized
+performance comparison vs 3.6.3, JNI win, AN7/DEAN7, PQ stance —
+read [**RELEASE-NOTES-3.6.4.md**](RELEASE-NOTES-3.6.4.md). The short
+version:
 
-#### KDF Hardening (3.6.4)
+* **KDF hardening (cross-language).** PBKDF2 and Argon2id default
+  costs raised in all three runtimes. A single password guess is
+  **2–3× more expensive** for an attacker than under 3.6.3
+  (~+1.4 bits of brute-force resistance on top of an already strong
+  baseline). Per-blob backwards-compatible: old blobs still decrypt
+  at their original cost; only newly produced blobs use the new
+  defaults.
+* **Faster at the same security level.** Once 3.6.3 results are
+  rescaled to the 3.6.4 KDF cost, the overall bench suite is
+  **−55 % to −60 %** faster across C++, Java, and Python. KDF-heavy
+  paths (`fwxAES`, `b512`/`pb512`, `*file`, `kFMe`/`kFAe`,
+  `an7`/`dean7`) are **−60 % to −80 %** faster. Non-KDF micros are
+  flat within ±2 %.
+* **Zero-copy AES-GCM via JNI** (opt-in). `Crypto.aesGcm*WithIvInto`
+  now dispatches through `nativeAesGcm{Encrypt,Decrypt}OneShot` when
+  the native backend is active. About **+10 %** throughput on 16 MiB
+  fwxAES encrypt locally.
+* **AN7/DEAN7** stealth-anonymization layer available in cpp, python,
+  and java.
+* **Release & build hygiene.** Unified version source across
+  languages, CI rejects partial-crypto builds, master-key opt-in
+  tightened in the C++ CLI, several Java packaging regressions fixed.
 
-The brute-force resistance of a password-based KDF is measured by the
-total work an attacker must perform per guess. For PBKDF2 that's the
-iteration count; for Argon2id it is `time_cost × memory_cost`.
-3.6.4 raises every default tier:
-
-| Parameter                  | 3.6.3            | 3.6.4            | Attacker cost ratio |
-| -------------------------- | ---------------- | ---------------- | :-----------------: |
-| `USER_KDF_ITERATIONS`      | 200 000          | **600 000**      | **3.00×** (+200 %)  |
-| `FWXAES_PBKDF2_ITERS`      | 200 000          | **600 000**      | **3.00×** (+200 %)  |
-| `SHORT_PBKDF2_ITERATIONS`  | 400 000          | **1 000 000**    | 2.50× (+150 %)      |
-| `HEAVY_PBKDF2_ITERATIONS`  | 1 000 000        | **2 000 000**    | 2.00× (+100 %)      |
-| Argon2id default `t / m`   | 3 / 2¹⁵ (32 MiB) | **4 / 2¹⁶** (64 MiB) | **2.67×** (+167 %) |
-| `SHORT_ARGON2  t / m`      | 4 / 2¹⁶          | **5 / 2¹⁷** (128 MiB) | 2.50× (+150 %) |
-| `HEAVY_ARGON2  t / m`      | 5 / 2¹⁷          | **6 / 2¹⁸** (256 MiB) | 2.40× (+140 %) |
-
-In log₂ terms that is roughly **+1.4 bits of additional brute-force
-resistance** on the default fwxAES path (above an already strong
-baseline); offline GPU/ASIC password cracking against a 3.6.4 blob
-costs 3× as much per guess as against a 3.6.3 blob, and roughly the
-same factor against the wrap KDF used by master-key flows.
-
-**Backwards compatibility:** The selected iteration count (PBKDF2) and
-Argon2 parameters are encoded inline in every fwxAES / b512 / pb512
-blob. Existing 3.6.3-era blobs continue to decrypt at their original
-(lower) cost; only newly produced blobs use the hardened defaults.
-Re-encrypting sensitive archives under 3.6.4 is recommended but not
-required.
-
-**Configuration:** the defaults can be overridden per-process via
-`BASEFWX_USER_KDF_ITERS`, `BASEFWX_FWXAES_PBKDF2_ITERS`, and
-`BASEFWX_HEAVY_PBKDF2_ITERS`. The `BASEFWX_TEST_KDF_ITERS` knob, used
-by the test/bench harness, still bypasses the short-password and
-hardening logic so light-mode benchmarks remain comparable.
+The remainder of this document is the **security policy** that applies
+across all releases: support window, default crypto stance, optional
+ML-KEM-768 master-key wrap, and how to report vulnerabilities.
 
 #### Default encryption (no master key, no manual configuration)
 
@@ -84,7 +61,9 @@ actually get is:
    128-bit equivalent against a quantum adversary; symmetric AEAD with
    a 32-byte key is fine).
 2. **Argon2id (where available) or PBKDF2-HMAC-SHA256** for the
-   password step, at the hardened 3.6.4 cost listed above.
+   password step, at the hardened 3.6.4 cost
+   (see [RELEASE-NOTES-3.6.4 → KDF hardening](RELEASE-NOTES-3.6.4.md#1-kdf-hardening-cross-language)
+   for the exact parameter table).
 3. **HKDF-SHA256** for all subkey derivation; SHA-256 is also PQ-safe
    for this use.
 4. **HMAC-SHA256 + AES-256-GCM tags** for authenticity.

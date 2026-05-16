@@ -8,14 +8,18 @@
 > DO NOT USE ANY VERSION BELOW 2.6, you -> WILL <- get compromised!
 
 > [!NOTE]
-> BaseFWX follows a **single-version support policy**:
-> only the **latest published version** is maintained.
-> When a newer version is released, all older versions immediately become unsupported.
+> BaseFWX follows a **roll-forward, single-version** model. Each
+> published release is **frozen** — there are no patch builds against
+> a release after it ships. The way to get "maintenance" is to install
+> the **next release**, which is itself the fix. This is **not** like a
+> Windows-style model where 3.6.4 keeps receiving updates while 3.6.5
+> is in development; once 3.6.4 is out, the only place fixes land is
+> 3.6.5 (or 3.7.0, etc.).
 
 |  Version  | Status / Notes                                                                                                                    | Supported |
 | :-------: | --------------------------------------------------------------------------------------------------------------------------------- | :-------: |
-| **Latest release only** | 👑 Actively maintained. Receives all fixes: security, bugs, and compatibility. | ✅ |
-| **All older releases** | ❌ End-of-life immediately after a newer release ships. No support, no bug fixes, no security patches. | ❌ |
+| **Latest release** | 👑 Currently recommended. **Frozen at publish time** — the version you can run today. Any future fix arrives as a *new* release, not as an in-place patch. | ✅ |
+| **All older releases** | ❌ Superseded the moment a newer release ships. They are not patched, not backported to, and not republished. The *new* release is the maintenance. | ❌ |
 
 ### What's New in 3.6.4
 
@@ -144,13 +148,19 @@ replacement.
 
 ### Maintenance policy
 
-* **Only the latest release is supported.**
-* A new release immediately replaces the previous one for all support/maintenance.
-* Older versions receive **no** maintenance:
-  * no security patches
-  * no bug fixes
-  * no compatibility fixes
-* This project is a cryptography tool; there is no multi-version/LTS support track.
+* **A released version is final.** Once 3.6.4 (or any version) is
+  published, that artifact is **frozen**. We do not ship 3.6.4.1,
+  3.6.4-hotfix, or a re-built 3.6.4 with the same version string.
+* **"Maintenance" means: install the next release.** When a security
+  issue, bug, or compatibility problem is found in 3.6.4, the fix
+  lands in 3.6.5 (or 3.7.0, etc.) — *that* is the maintenance event.
+  There is no parallel patch track.
+* **Older releases are not back-ported to or re-published.** No
+  security patches, no bug fixes, no compatibility fixes are issued
+  against a release after it has been superseded.
+* **No LTS / no multi-version support track.** This is a cryptography
+  tool. Always upgrade to the current latest release rather than
+  pinning to an older one and waiting for a patch.
 
 ### Migration guidance
 
@@ -183,8 +193,8 @@ Please **report privately**. Do **not** open a public issue for security bugs.
 
 * **Acknowledgement:** within **48 hours**.
 * **Triage & severity rating:** within **5 business days**.
-* **Remediation targets:** Critical/High ≤ **14 days**, Medium ≤ **30 days**, Low/Info in the next planned release.
-* We follow **coordinated disclosure**: publish details after a fix/mitigation is available and users have a reasonable update window. Researcher credit is opt‑in (anonymous supported).
+* **Remediation targets — delivered as a *new release*, never as a patch to the affected version:** Critical/High ≤ **14 days**, Medium ≤ **30 days**, Low/Info in the next planned release. The fix ships as 3.6.5 / 3.7.0 / etc.; the vulnerable release stays frozen.
+* We follow **coordinated disclosure**: publish details after a fix/mitigation is available **in a new release** and users have a reasonable update window. Researcher credit is opt‑in (anonymous supported).
 
 ### Scope
 

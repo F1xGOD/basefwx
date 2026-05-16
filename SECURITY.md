@@ -74,11 +74,51 @@ required.
 by the test/bench harness, still bypasses the short-password and
 hardening logic so light-mode benchmarks remain comparable.
 
-#### Post-Quantum (ML-KEM-768)
+#### Default encryption (no master key, no manual configuration)
 
-3.6.4 keeps the Kyber/ML-KEM-768 hybrid wrap that was introduced in
-the 3.6 line. **All three runtimes ship post-quantum support out of
-the box** — they just use different backing libraries:
+When you run a `basefwx` encrypt with **no special flags**, what you
+actually get is:
+
+1. **AES-256-GCM** for the data step — already considered
+   post-quantum-safe (Grover halves the effective key strength, so
+   128-bit equivalent against a quantum adversary; symmetric AEAD with
+   a 32-byte key is fine).
+2. **Argon2id (where available) or PBKDF2-HMAC-SHA256** for the
+   password step, at the hardened 3.6.4 cost listed above.
+3. **HKDF-SHA256** for all subkey derivation; SHA-256 is also PQ-safe
+   for this use.
+4. **HMAC-SHA256 + AES-256-GCM tags** for authenticity.
+
+| Runtime | Default password KDF (no env override)                        |
+| ------- | ------------------------------------------------------------- |
+| C++     | **Argon2id** if libargon2 was linked at build time (the release builds require it), else PBKDF2-HMAC-SHA256. |
+| Python  | **Argon2id** if `argon2-cffi` is importable **and** the host has ≥ 128 MiB free RAM; otherwise PBKDF2-HMAC-SHA256. |
+| Java    | **PBKDF2-HMAC-SHA256** (the Java KeyWrap path intentionally rejects Argon2 — see `KeyWrap.java`). |
+
+`BASEFWX_USER_KDF` overrides the default per process (`argon2id` /
+`pbkdf2` / `auto`). When Argon2 is available, blobs interop across
+runtimes — the KDF label is encoded in the wrap header so a Python
+blob with Argon2 will be decoded by C++/Python and rejected with a
+clear error by Java.
+
+**This password-only default is already post-quantum-resistant.** AES-256
+under Grover is ≈ 128-bit-equivalent, the KDF salt is per-blob, and
+the hardened iteration counts make offline brute force expensive even
+under a quantum speedup of the inner hash. ML-KEM-768 is **not**
+mixed in here, because in a password-only setting it would not add
+security — every PQ private key would itself have to be unwrapped
+from the password, so cracking the password breaks every layer.
+
+#### Optional: ML-KEM-768 master-key wrap (off by default)
+
+When (and only when) the caller explicitly opts in
+(`useMaster=true` in any API call, `--with-master` on the C++ CLI,
+or the Java builder method), basefwx adds an ML-KEM-768 wrap on top
+of the password wrap. The mask key is encapsulated to a master
+public key, and the user blob still holds the password-encrypted
+copy — either path can decrypt independently. **All three runtimes
+ship post-quantum support out of the box** — they just use different
+backing libraries:
 
 | Runtime | ML-KEM-768 implementation         | Build requirement                                                                                  |
 | ------- | --------------------------------- | -------------------------------------------------------------------------------------------------- |
@@ -86,24 +126,35 @@ the box** — they just use different backing libraries:
 | Java    | **BouncyCastle PQC** (Kyber-768)  | Bundled in the published JAR; no extra system package required.                                    |
 | Python  | **`pqcrypto.kem.ml_kem_768`**     | Pulled in by the `basefwx` Python wheel.                                                           |
 
-The PQ KEM is invoked whenever a master public key is available
-(`BASEFWX_MASTER_PQ_PUB`, or the baked-in key with
-`BASEFWX_MASTER_PQ_ALLOW_BAKED=1`) and the caller has opted into the
-master-key path (`useMaster=true` / `--with-master`). The KDF output
-is then HKDF-mixed with the ML-KEM shared secret so an attacker would
-need to break **both** the password KDF and ML-KEM-768 to recover the
-plaintext.
+Sources for the master public key, in priority order:
 
-Strict-PQ-only mode (`BASEFWX_PQ_STRICT=1` or `BASEFWX_PQ_ONLY=1`)
-disables the EC fallback entirely; master-key operations then fail
-cleanly if no PQ public key is configured rather than silently
-falling back to classical ECDH.
+1. **Caller-provided** via `BASEFWX_MASTER_PQ_PUB=<path-or-base64>` —
+   this is the recommended path for self-hosted / open-source
+   deployments. You generate your own ML-KEM-768 keypair, keep the
+   private key offline, and configure the public half via env or your
+   own key-management tooling.
+2. **Baked-in fallback** — only used if
+   `BASEFWX_MASTER_PQ_ALLOW_BAKED=1` is set explicitly. This points
+   to a key whose private half is held by the original maintainers
+   (recovery escrow). Off by default precisely so a self-hosted
+   deployment never silently encrypts to a third-party key.
+3. **None** — without either of the above, `useMaster=true` falls
+   back to the password-only path (above) or, if
+   `BASEFWX_PQ_STRICT=1` / `BASEFWX_PQ_ONLY=1` is set, fails cleanly
+   instead of falling back.
+
+Decryption with master-key blobs always succeeds with the password
+alone; the master private key only matters for password-loss
+recovery. There is no scenario where enabling `useMaster` makes the
+password path weaker — it adds an *additional* path, never a
+replacement.
 
 > [!NOTE]
 > `liboqs` is a **C++-only** build dependency. Java and Python do
 > **not** need liboqs installed on the host. Releases of the C++ CLI
 > and library that lack PQ support are rejected by CI; PQ is not an
-> optional feature in published builds.
+> optional feature in published builds — it is simply not engaged
+> until a master public key is configured.
 
 ### Compatibility policy
 

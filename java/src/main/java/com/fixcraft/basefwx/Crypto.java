@@ -339,6 +339,21 @@ public final class Crypto {
                                               byte[] out,
                                               int outOff,
                                               byte[] aad) {
+        // If the caller pinned the native backend, do the whole encrypt in one
+        // JNI call with zero-copy heap-array access. This is dramatically
+        // cheaper than the legacy update()/doFinal() bridge which allocated
+        // and copied a fresh DirectByteBuffer per chunk.
+        if (CryptoBackends.get().isNative() && NativeCryptoBackend.isAvailable()) {
+            int n = NativeCryptoBackend.aesGcmEncryptOneShot(key, iv, aad,
+                                                             plaintext, plainOff, plainLen,
+                                                             out, outOff);
+            if (n >= 0) {
+                return n;
+            }
+            // Fall through to JCA on native failure rather than throwing —
+            // surfacing as a bad-output-length error elsewhere would mask the
+            // real cause.
+        }
         try {
             Cipher cipher = AES_GCM_ENC.get();
             GCMParameterSpec spec = new GCMParameterSpec(Constants.AEAD_TAG_LEN * 8, iv);
@@ -429,6 +444,17 @@ public final class Crypto {
                                               byte[] out,
                                               int outOff,
                                               byte[] aad) {
+        if (CryptoBackends.get().isNative() && NativeCryptoBackend.isAvailable()) {
+            int n = NativeCryptoBackend.aesGcmDecryptOneShot(key, iv, aad,
+                                                             ciphertext, ctOff, ctLen,
+                                                             out, outOff);
+            if (n >= 0) {
+                return n;
+            }
+            // Negative = auth or arg failure. Throw the standard JCA-shaped
+            // error so callers can keep their existing handling.
+            throw new IllegalArgumentException("Bad password or corrupted payload");
+        }
         try {
             Cipher cipher = AES_GCM_DEC.get();
             GCMParameterSpec spec = new GCMParameterSpec(Constants.AEAD_TAG_LEN * 8, iv);

@@ -312,18 +312,18 @@ class basefwx:
     STREAM_INFO_IV = b'basefwx.stream.obf.iv.v1'
     STREAM_INFO_PERM = b'basefwx.stream.obf.perm.v1'
     HKDF_MAX_LEN = 255 * 32
-    HEAVY_PBKDF2_ITERATIONS = 1_000_000
-    HEAVY_ARGON2_TIME_COST = 5
-    HEAVY_ARGON2_MEMORY_COST = 2 ** 17
+    HEAVY_PBKDF2_ITERATIONS = 2_000_000
+    HEAVY_ARGON2_TIME_COST = 6
+    HEAVY_ARGON2_MEMORY_COST = 2 ** 18
     HEAVY_ARGON2_PARALLELISM = max(1, os.cpu_count() or 1)
     OFB_FAST_MIN = 64 * 1024
     PERM_FAST_MIN = 4 * 1024
     USER_KDF_SALT_SIZE = 16
-    USER_KDF_ITERATIONS = 200_000
+    USER_KDF_ITERATIONS = 600_000
     SHORT_PASSWORD_MIN = 12
-    SHORT_PBKDF2_ITERATIONS = 400_000
-    SHORT_ARGON2_TIME_COST = 4
-    SHORT_ARGON2_MEMORY_COST = 2 ** 16
+    SHORT_PBKDF2_ITERATIONS = 1_000_000
+    SHORT_ARGON2_TIME_COST = 5
+    SHORT_ARGON2_MEMORY_COST = 2 ** 17
     SHORT_ARGON2_PARALLELISM = max(1, os.cpu_count() or 1)
     if _Argon2Type is None:
         class _FallbackArgon2Type(enum.Enum):
@@ -407,7 +407,7 @@ class basefwx:
     FWXAES_KDF_WRAP = 0x02
     FWXAES_SALT_LEN = 16
     FWXAES_IV_LEN = 12
-    FWXAES_PBKDF2_ITERS = 200_000
+    FWXAES_PBKDF2_ITERS = 600_000
     _FWXAES_PBKDF2_ITERS_ENV = _env_int("BASEFWX_FWXAES_PBKDF2_ITERS")
     if _FWXAES_PBKDF2_ITERS_ENV is not None:
         FWXAES_PBKDF2_ITERS = _FWXAES_PBKDF2_ITERS_ENV
@@ -2691,8 +2691,8 @@ class basefwx:
         salt: "basefwx.typing.Optional[bytes]" = None,
         *,
         length: int = 32,
-        time_cost: int = 3,
-        memory_cost: int = 2 ** 15,
+        time_cost: int = 4,
+        memory_cost: int = 2 ** 16,
         parallelism: int | None = None
     ) -> "basefwx.typing.Tuple[bytes, bytes]":
         if salt is None:
@@ -2768,8 +2768,8 @@ class basefwx:
         if salt is None:
             salt = basefwx.os.urandom(basefwx.USER_KDF_SALT_SIZE)
         iterations = iterations or basefwx.USER_KDF_ITERATIONS
-        argon2_time_cost = argon2_time_cost or 3
-        argon2_memory_cost = argon2_memory_cost or (2 ** 15)
+        argon2_time_cost = argon2_time_cost or 4
+        argon2_memory_cost = argon2_memory_cost or (2 ** 16)
         argon2_parallelism = argon2_parallelism or basefwx._CPU_COUNT
         iterations, argon2_time_cost, argon2_memory_cost, argon2_parallelism = basefwx._harden_kdf_params(
             password,

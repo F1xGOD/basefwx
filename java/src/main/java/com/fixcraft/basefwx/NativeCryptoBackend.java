@@ -163,4 +163,56 @@ public final class NativeCryptoBackend implements CryptoBackend {
     private static native int nativeGcmFinalDecrypt(long ctx, ByteBuffer tag, int tagLen);
 
     private static native void nativeGcmFree(long ctx);
+
+    /**
+     * Zero-copy one-shot AES-GCM encrypt. Returns bytes written into {@code out}
+     * (which equals {@code inLen + AEAD_TAG_LEN}) on success, or -1 on failure.
+     * Implemented on the native side with {@code GetPrimitiveArrayCritical} so
+     * heap byte[] arrays are accessed without a copy. Only available when
+     * {@link #AVAILABLE} is true.
+     */
+    static int aesGcmEncryptOneShot(byte[] key, byte[] iv, byte[] aad,
+                                    byte[] in, int inOff, int inLen,
+                                    byte[] out, int outOff) {
+        if (!AVAILABLE) return -1;
+        int aadLen = aad == null ? 0 : aad.length;
+        return nativeAesGcmEncryptOneShot(
+            key, key.length,
+            iv,  iv.length,
+            aad, aadLen,
+            in,  inOff, inLen,
+            out, outOff, out.length - outOff);
+    }
+
+    /** Companion to {@link #aesGcmEncryptOneShot}: returns plaintext length on success. */
+    static int aesGcmDecryptOneShot(byte[] key, byte[] iv, byte[] aad,
+                                    byte[] in, int inOff, int inLen,
+                                    byte[] out, int outOff) {
+        if (!AVAILABLE) return -1;
+        int aadLen = aad == null ? 0 : aad.length;
+        return nativeAesGcmDecryptOneShot(
+            key, key.length,
+            iv,  iv.length,
+            aad, aadLen,
+            in,  inOff, inLen,
+            out, outOff, out.length - outOff);
+    }
+
+    static boolean isAvailable() {
+        return AVAILABLE;
+    }
+
+    private static native int nativeAesGcmEncryptOneShot(
+        byte[] key, int keyLen,
+        byte[] iv,  int ivLen,
+        byte[] aad, int aadLen,
+        byte[] in,  int inOff, int inLen,
+        byte[] out, int outOff, int outCap);
+
+    private static native int nativeAesGcmDecryptOneShot(
+        byte[] key, int keyLen,
+        byte[] iv,  int ivLen,
+        byte[] aad, int aadLen,
+        byte[] in,  int inOff, int inLen,
+        byte[] out, int outOff, int outCap);
 }

@@ -77,8 +77,11 @@ jobs:
         run: |
           if [[ -z "${BASEFWX_RELEASE_TAG}" ]]; then
             BASEFWX_RELEASE_TAG="manual-$(date -u +%Y%m%d-%H%M%S)"
-            echo "BASEFWX_RELEASE_TAG=$BASEFWX_RELEASE_TAG" >> "$GITHUB_ENV"
           fi
+          # Always export to GITHUB_ENV so subsequent steps see the same tag;
+          # the previous version only exported on the empty-tag branch, which
+          # left later steps with an unset var when inputs.tag was provided.
+          echo "BASEFWX_RELEASE_TAG=$BASEFWX_RELEASE_TAG" >> "$GITHUB_ENV"
           chmod +x scripts/test_all.sh
           ./scripts/test_all.sh --fbench
 
@@ -140,6 +143,9 @@ jobs:
           JNI_LIB_DIR: build/jni
         run: |
           set -euo pipefail
+          # Fall back if an earlier step didn't propagate the tag — guards
+          # against `set -u` aborts on workflow_dispatch with an explicit tag.
+          : "${BASEFWX_RELEASE_TAG:=manual-$(date -u +%Y%m%d-%H%M%S)}"
           mkdir -p results
 
           # Two payload sizes give us a small/large profile without exploding runtime.

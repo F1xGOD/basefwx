@@ -20,13 +20,19 @@ dependencies = [
     "cryptography>=41.0.0",
     "numpy>=1.24.0",
     "pillow>=10.0.0",
-    "pqcrypto>=0.3.4"
+    "pqcrypto>=0.3.4",
+    # Argon2id is the default user-KDF (see Constants.USER_KDF_DEFAULT
+    # in basefwx/legacy.py). Forcing argon2-cffi as a hard dependency
+    # matches that default; otherwise `pip install basefwx` silently
+    # downgrades password-based encryption to PBKDF2. The `[argon2]`
+    # extra below is kept as a no-op for backward compatibility with
+    # scripts that still write `pip install basefwx[argon2]`.
+    "argon2-cffi>=23.1.0"
 ]
 
 [project.optional-dependencies]
-argon2 = [
-    "argon2-cffi>=23.1.0"
-]
+argon2 = []
+
 
 [project.urls]
 Homepage = "https://github.com/F1xGOD/basefwx"

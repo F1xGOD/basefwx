@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "latest": "pre-release-improvev2",
+  "latest": "test-pre-fix-slow",
   "snapshots": [
     {
       "tag": "v3.6.3",
@@ -16,6 +16,12 @@
       "tag": "v3.6.1",
       "results": "benchmarks-v3.6.1.json",
       "txt": "benchmarks-v3.6.1.txt"
+    },
+    {
+      "tag": "test-pre-fix-slow",
+      "results": "benchmarks-test-pre-fix-slow.json",
+      "txt": "benchmarks-test-pre-fix-slow.txt",
+      "java_backends": "java-backends-test-pre-fix-slow.json"
     },
     {
       "tag": "pre-release-improvev2",

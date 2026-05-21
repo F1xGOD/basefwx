@@ -629,6 +629,20 @@ section {
   color: var(--muted);
 }
 
+/* Java-backends speedup cell shows two per-direction deltas
+ * (encrypt + decrypt) stacked. Keep each on its own line, tight
+ * leading, and let the delta-fast/slow/same color inherit from
+ * the wrapping <td>. */
+.java-backend-delta-line {
+  display: block;
+  font-size: 12px;
+  line-height: 1.35;
+  white-space: nowrap;
+}
+.java-backend-delta-line + .java-backend-delta-line {
+  margin-top: 2px;
+}
+
 .vt-table th,
 .vt-table td {
   padding: 14px 16px;

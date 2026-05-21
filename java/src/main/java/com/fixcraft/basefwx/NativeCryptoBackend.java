@@ -208,6 +208,63 @@ public final class NativeCryptoBackend implements CryptoBackend {
         return AVAILABLE;
     }
 
+    // ----- Argon2id KDF native bridge (3.7.0) ------------------------
+    //
+    // BouncyCastle's pure-Java Argon2BytesGenerator is correct but ~5-10×
+    // slower than libargon2 at the same params (4 lanes / 64 MiB / 4 iters).
+    // When the JNI lib was built with libargon2 linked in, this path
+    // returns Argon2id output in C-speed; otherwise the Java side falls
+    // back to BouncyCastle.
+
+    private static final boolean ARGON2_AVAILABLE = computeArgon2Available();
+
+    private static boolean computeArgon2Available() {
+        if (!AVAILABLE) return false;
+        try {
+            return nativeArgon2idAvailable();
+        } catch (Throwable ignored) {
+            return false;
+        }
+    }
+
+    static boolean isArgon2idAvailable() {
+        return ARGON2_AVAILABLE;
+    }
+
+    /**
+     * Run Argon2id via libargon2 (when the JNI lib was built with it).
+     * Returns the raw hash bytes, or {@code null} when the native lib
+     * isn't loaded or the parameters are rejected — caller falls back
+     * to BouncyCastle's pure-Java implementation.
+     *
+     * Param semantics match {@code basefwx::crypto::Argon2idHashRaw}:
+     *   timeCost     — number of Argon2 passes (>=1)
+     *   memoryKiB    — memory cost in KiB (>=8)
+     *   parallelism  — lane count (>=1, typically 1-4)
+     */
+    static byte[] argon2idHashRaw(byte[] password, byte[] salt,
+                                  int timeCost, int memoryKiB, int parallelism,
+                                  int outLen) {
+        if (!ARGON2_AVAILABLE) return null;
+        if (password == null || salt == null || salt.length == 0
+            || timeCost <= 0 || memoryKiB <= 0 || parallelism <= 0 || outLen <= 0) {
+            return null;
+        }
+        byte[] out = new byte[outLen];
+        int rc = nativeArgon2idHashRaw(password, salt, timeCost, memoryKiB, parallelism, out);
+        return rc == 0 ? out : null;
+    }
+
+    private static native boolean nativeArgon2idAvailable();
+
+    private static native int nativeArgon2idHashRaw(
+        byte[] password,
+        byte[] salt,
+        int timeCost,
+        int memoryKiB,
+        int parallelism,
+        byte[] out);
+
     private static native int nativeAesGcmEncryptOneShot(
         byte[] key, int keyLen,
         byte[] iv,  int ivLen,

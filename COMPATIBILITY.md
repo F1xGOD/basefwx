@@ -8,7 +8,19 @@
 | :-- | :--: | :--: | :--: | :--: | :-- |
 | C++ | ✅ | ✅ | ✅ | ✅ | Reference release runtime for performance and full native feature set |
 | Python | ✅ with `basefwx[argon2]` | ✅ via `pqcrypto` | ✅ | ✅ | Feature-complete scripting/runtime path |
-| Java | ❌ | ❌ | ❌ | ✅ | Cross-compatible for supported formats, but not a full native crypto feature match |
+| Java | ✅ since 3.6.5 (BouncyCastle `Argon2BytesGenerator`) | ❌ | ❌ | ✅ | Argon2id user-KDF wrap now supported. Argon2 parallelism is set to `Runtime.availableProcessors()` to match the C++ side's `DefaultArgon2Parallelism()` — see "Argon2 parallelism portability" below before exchanging blobs across machines with different CPU counts. |
+
+### Argon2 parallelism portability
+
+The Argon2id parallelism parameter is not stored in the wrap header.
+Both C++ and Java pick a default at runtime based on the encrypting
+host's CPU count (`std::thread::hardware_concurrency()` and
+`Runtime.getRuntime().availableProcessors()` respectively, with a
+fallback of 4). Two same-CPU-count peers round-trip without ceremony.
+Cross-CPU-count peers must override `KdfOptions.argon2Parallelism`
+(Java) / `KdfOptions::argon2_parallelism` (C++) to a shared constant
+before encrypt and decrypt; pinning to `4` is a safe default if you
+want portable Argon2 blobs.
 
 Release policy:
 

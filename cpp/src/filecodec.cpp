@@ -1,3 +1,9 @@
+/*
+ * BaseFWX - Cryptography Engine
+ * Copyright (C) 2020-2026  FixCraft Inc.
+ * Licensed under the GNU General Public License v3.0.
+ */
+
 #include "basefwx/filecodec.hpp"
 
 #include "basefwx/archive.hpp"
@@ -43,7 +49,7 @@ basefwx::pb512::KdfOptions HardenKdfOptionsForPassword(const std::string& passwo
     if (password.empty()) {
         return kdf;
     }
-    if (!basefwx::env::Get("BASEFWX_TEST_KDF_ITERS").empty()) {
+    if (!basefwx::env::TestKdfIters().empty()) {
         return kdf;
     }
     if (password.size() >= basefwx::constants::kShortPasswordMin) {

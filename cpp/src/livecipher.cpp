@@ -1,3 +1,9 @@
+/*
+ * BaseFWX - Cryptography Engine
+ * Copyright (C) 2020-2026  FixCraft Inc.
+ * Licensed under the GNU General Public License v3.0.
+ */
+
 #include "basefwx/livecipher.hpp"
 
 #include "basefwx/basefwx.hpp"
@@ -28,7 +34,7 @@ const Bytes kAadVec(kAadBytes, kAadBytes + sizeof(kAadBytes));
 std::uint32_t ResolveFwxAesIterations(std::uint32_t fallback) {
     std::string raw = basefwx::env::Get("BASEFWX_FWXAES_PBKDF2_ITERS");
     if (raw.empty()) {
-        raw = basefwx::env::Get("BASEFWX_TEST_KDF_ITERS");
+        raw = basefwx::env::TestKdfIters();
     }
     if (raw.empty()) {
         return fallback;
@@ -51,7 +57,7 @@ std::uint32_t HardenFwxAesIterations(const std::string& password, std::uint32_t 
     if (password.empty()) {
         return iters;
     }
-    if (!basefwx::env::Get("BASEFWX_TEST_KDF_ITERS").empty()) {
+    if (!basefwx::env::TestKdfIters().empty()) {
         return iters;
     }
     if (password.size() < basefwx::constants::kShortPasswordMin
@@ -272,6 +278,13 @@ Bytes LiveEncryptor::Update(const std::uint8_t* data, std::size_t len) {
         body.resize(4 + written);
     }
     Bytes frame = PackFrame(basefwx::constants::kLiveFrameTypeData, sequence_, body);
+    if (sequence_ == std::numeric_limits<std::uint64_t>::max()) {
+        // Refuse to wrap the counter — nonce reuse under the same key
+        // would break AES-GCM confidentiality. 2^64 frames is more than
+        // any reasonable session would ever produce; rotate the key
+        // upstream instead.
+        throw std::runtime_error("LiveEncryptor sequence counter exhausted; rotate the key");
+    }
     sequence_ += 1;
     return frame;
 }
@@ -287,6 +300,9 @@ Bytes LiveEncryptor::Finalize() {
     Bytes aad = LiveAad(basefwx::constants::kLiveFrameTypeFin, sequence_, 0);
     Bytes fin_blob = basefwx::crypto::AesGcmEncryptWithIv(key_, nonce, {}, aad);
     Bytes frame = PackFrame(basefwx::constants::kLiveFrameTypeFin, sequence_, fin_blob);
+    if (sequence_ == std::numeric_limits<std::uint64_t>::max()) {
+        throw std::runtime_error("LiveEncryptor sequence counter exhausted at finalize");
+    }
     sequence_ += 1;
     finalized_ = true;
     return frame;

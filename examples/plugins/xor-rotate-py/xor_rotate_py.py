@@ -26,6 +26,7 @@ class XorRotatePy(BasefwxPlugin):
     KEY_LEN = 32
 
     def __init__(self, config: bytes = b""):
+        super().__init__(config=config)
         if config is None or len(config) != self.KEY_LEN:
             raise PluginErrorBadInput(
                 f"xor-rotate-py requires exactly {self.KEY_LEN} bytes "

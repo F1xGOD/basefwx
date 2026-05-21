@@ -106,7 +106,7 @@ On platforms without AES-NI or with weaker JCA implementations the gap is wider;
 - b64 encode/decode
 - hash512 / uhash513
 - a512 encode/decode
-- bi512 / b1024 encode
+- bi512 encode
 - Minimal CLI entrypoint
 - b512file + pb512file bytes + file helpers (in-memory)
 
@@ -180,7 +180,6 @@ java -jar build/libs/basefwx-java.jar a512-enc <text>
 java -jar build/libs/basefwx-java.jar a512-dec <text>
 
 java -jar build/libs/basefwx-java.jar bi512-enc <text>
-java -jar build/libs/basefwx-java.jar b1024-enc <text>
 
 java -jar build/libs/basefwx-java.jar b256-enc <text>
 java -jar build/libs/basefwx-java.jar b256-dec <text>

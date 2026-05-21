@@ -346,7 +346,7 @@ export FFMPEG_AVAILABLE NVIDIA_HWACCEL_AVAILABLE COOLDOWN_SECONDS
 
 TEXT_NOPASS_METHODS=("b64" "b256" "a512" "n10")
 TEXT_PASS_METHODS=("b512" "pb512")
-HASH_METHODS=("hash512" "uhash513" "bi512" "b1024")
+HASH_METHODS=("hash512" "uhash513" "bi512")  # b1024 retired in 3.6.5
 
 declare -A TIMES
 FAILURES=()
@@ -1276,9 +1276,8 @@ cpp_text_hash() {
     local cmd="$method"
     if [[ "$method" == "bi512" ]]; then
         cmd="bi512-enc"
-    elif [[ "$method" == "b1024" ]]; then
-        cmd="b1024-enc"
     fi
+    # b1024 retired in 3.6.5
     log "STEP: $CPP_BIN $cmd"
     "$CPP_BIN" "$cmd" "$text" >"$out_path" || return $?
     strip_newline "$out_path"
@@ -1440,9 +1439,8 @@ java_text_hash() {
     local cmd="$method"
     if [[ "$method" == "bi512" ]]; then
         cmd="bi512-enc"
-    elif [[ "$method" == "b1024" ]]; then
-        cmd="b1024-enc"
     fi
+    # b1024 retired in 3.6.5
     log "STEP: $JAVA_BIN -jar $JAVA_JAR $cmd"
     "$JAVA_BIN" -jar "$JAVA_JAR" "$cmd" "$text" >"$out_path" || return $?
     strip_newline "$out_path"
@@ -2729,8 +2727,7 @@ def text_hash(method: str, text: str) -> str:
         return basefwx.uhash513(text)
     if method == "bi512":
         return basefwx.bi512encode(text)
-    if method == "b1024":
-        return basefwx.b1024encode(text)
+    # b1024 retired in 3.6.5
     raise ValueError(f"Unsupported hash method {method}")
 
 def _fwxaes_call(path: str, pw: str, output: str) -> None:
@@ -4870,7 +4867,7 @@ bench_text_for_method() {
     local method="$1"
     local limit="$BENCH_TEXT_BYTES"
     case "$method" in
-        a512|bi512|b1024)
+        a512|bi512)
             limit="$BENCH_TEXT_SLOW_BYTES"
             ;;
     esac
@@ -4896,7 +4893,7 @@ bench_text_for_method() {
 bench_iters_for_method() {
     local method="$1"
     case "$method" in
-        a512|bi512|b1024)
+        a512|bi512)
             printf "%s\n" "$BENCH_ITERS_SLOW"
             ;;
         *)
@@ -4909,7 +4906,7 @@ bench_workers_for_method() {
     local method="$1"
     local lang="${2:-}"
     case "$method" in
-        a512|bi512|b1024)
+        a512|bi512)
             case "$lang" in
                 py)
                     printf "%s\n" "$BENCH_WORKERS_PY_SLOW"
@@ -5135,7 +5132,7 @@ case "$BENCH_FWXAES_MODE" in
 esac
 
 BENCH_TEXT_METHODS=("b256" "b512" "pb512" "b64" "a512" "n10")
-BENCH_HASH_METHODS=("hash512" "uhash513" "bi512" "b1024")
+BENCH_HASH_METHODS=("hash512" "uhash513" "bi512")  # b1024 retired in 3.6.5
 
 BENCH_LANGS=()
 if [[ "$RUN_PY_TESTS" == "1" ]]; then
@@ -5690,7 +5687,6 @@ BENCH_METHODS=(
     "hash512|hash512_py_correct|hash512_pypy_correct|hash512_cpp_correct|hash512_java_correct"
     "uhash513|uhash513_py_correct|uhash513_pypy_correct|uhash513_cpp_correct|uhash513_java_correct"
     "bi512|bi512_py_correct|bi512_pypy_correct|bi512_cpp_correct|bi512_java_correct"
-    "b1024|b1024_py_correct|b1024_pypy_correct|b1024_cpp_correct|b1024_java_correct"
     "b512file|b512file_py_total|b512file_pypy_total|b512file_cpp_total|b512file_java_total"
     "pb512file|pb512file_py_total|pb512file_pypy_total|pb512file_cpp_total|pb512file_java_total"
     "an7|an7_py_total|an7_pypy_total|an7_cpp_total|an7_java_total"
@@ -5943,7 +5939,7 @@ compare_speed_block "n10" "n10_py_correct" "n10_pypy_correct" "n10_cpp_correct" 
 compare_speed_block "hash512" "hash512_py_correct" "hash512_pypy_correct" "hash512_cpp_correct" "hash512_java_correct"
 compare_speed_block "uhash513" "uhash513_py_correct" "uhash513_pypy_correct" "uhash513_cpp_correct" "uhash513_java_correct"
 compare_speed_block "bi512" "bi512_py_correct" "bi512_pypy_correct" "bi512_cpp_correct" "bi512_java_correct"
-compare_speed_block "b1024" "b1024_py_correct" "b1024_pypy_correct" "b1024_cpp_correct" "b1024_java_correct"
+# b1024 retired in 3.6.5 — was Bi512Encode(A512Encode(...)). compare_speed_block dropped.
 if [[ "$RUN_PY_TESTS" == "1" && -z "${TIMES[b512file_py_total]-}" ]]; then
     TIMES["b512file_py_total"]=${B512FILE_PY_TOTAL:-0}
     TIMES["pb512file_py_total"]=${PB512FILE_PY_TOTAL:-0}
@@ -5964,6 +5960,30 @@ compare_speed_block "b512file" "b512file_py_total" "b512file_pypy_total" "b512fi
 compare_speed_block "pb512file" "pb512file_py_total" "pb512file_pypy_total" "pb512file_cpp_total" "pb512file_java_total"
 compare_speed_block "kFMe" "kfme_py_total" "kfme_pypy_total" "kfme_cpp_total" "kfme_java_total"
 compare_speed_block "kFAe" "kfae_py_total" "kfae_pypy_total" "kfae_cpp_total" "kfae_java_total"
+
+# --- 3.7.0 plugin smoke -------------------------------------------------
+# Verifies the blackbox plugin ABI end-to-end (build + dlopen + ServiceLoader
+# + cross-runtime parity) WITHOUT re-running every existing crypto test
+# with-and-without a plugin attached — that would double the suite runtime
+# for little extra coverage. The plugin contract is independent of which
+# AEAD pipeline it wraps; once it round-trips here, it round-trips in
+# any encryption pipeline that loads it. Hash-only methods (hash512,
+# uhash513, bi512) intentionally have no plugin integration path.
+SMOKE_LABEL="plugin smoke (3.7.0)"
+if [[ -x "$ROOT/scripts/plugin-smoke.sh" ]]; then
+    announce_step "$SMOKE_LABEL"
+    smoke_start_ns=$(date +%s%N)
+    if "$ROOT/scripts/plugin-smoke.sh" >>"$LOG" 2>&1; then
+        smoke_end_ns=$(date +%s%N)
+        TIMES["plugin_smoke_total"]=$((smoke_end_ns - smoke_start_ns))
+        log "TIME[plugin_smoke_total]: ${TIMES[plugin_smoke_total]}ns rc=0"
+    else
+        smoke_end_ns=$(date +%s%N)
+        TIMES["plugin_smoke_total"]=$((smoke_end_ns - smoke_start_ns))
+        log "TIME[plugin_smoke_total]: ${TIMES[plugin_smoke_total]}ns rc=1"
+        FAILURES+=("plugin_smoke (see scripts/plugin-smoke.sh output in diagnose.log)")
+    fi
+fi
 
 overall_summary
 write_bench_results

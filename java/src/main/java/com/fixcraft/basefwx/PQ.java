@@ -1,3 +1,9 @@
+/*
+ * BaseFWX - Cryptography Engine
+ * Copyright (C) 2020-2026  FixCraft Inc.
+ * Licensed under the GNU General Public License v3.0.
+ */
+
 package com.fixcraft.basefwx;
 
 import org.bouncycastle.crypto.SecretWithEncapsulation;
@@ -48,7 +54,16 @@ public final class PQ {
     }
 
     /**
-     * Load master PQ public key from environment variable or use baked key.
+     * Load the master ML-KEM-768 public key from configuration.
+     *
+     * <p>3.6.5: the upstream baked key has been removed; sourced in order:
+     * <ol>
+     *   <li>Runtime path via {@code BASEFWX_MASTER_PQ_PUB=<file>} (env).</li>
+     *   <li>Build-time literal via {@code -Dbasefwx.master.pq.public.b64=<base64>}
+     *       JVM system property — empty by default.</li>
+     * </ol>
+     * The previous {@code BASEFWX_MASTER_PQ_ALLOW_BAKED} / {@code ALLOW_BAKED_PUB}
+     * env-var gate is no longer consulted; the decision is now build-time.
      */
     public static byte[] loadMasterPublicKey() throws Exception {
         String envPath = System.getenv(Constants.MASTER_PQ_PUBLIC_ENV);
@@ -61,20 +76,14 @@ public final class PQ {
             return decodeKeyBytes(raw);
         }
 
-        String allowBaked = System.getenv(Constants.MASTER_PQ_ALLOW_BAKED_ENV);
-        if (allowBaked == null || allowBaked.isEmpty()) {
-            allowBaked = System.getenv("ALLOW_BAKED_PUB");
-        }
-        if (allowBaked != null && (allowBaked.equals("1") || allowBaked.equalsIgnoreCase("true")
-                || allowBaked.equalsIgnoreCase("yes") || allowBaked.equalsIgnoreCase("on"))) {
-            // The baked key is stored as base64-encoded, zlib-compressed bytes
-            // decodeKeyBytes() will handle the base64 decode and zlib decompression
-            byte[] baked = Constants.MASTER_PQ_PUBLIC_B64.getBytes(StandardCharsets.UTF_8);
-            return decodeKeyBytes(baked);
+        String baked = Constants.MASTER_PQ_PUBLIC_B64;
+        if (baked != null && !baked.isEmpty()) {
+            return decodeKeyBytes(baked.getBytes(StandardCharsets.UTF_8));
         }
 
-        throw new IllegalStateException("Master PQ public key not available. Set " +
-            Constants.MASTER_PQ_PUBLIC_ENV + " or " + Constants.MASTER_PQ_ALLOW_BAKED_ENV + "=1");
+        throw new IllegalStateException("Master PQ public key not available. Set "
+                + Constants.MASTER_PQ_PUBLIC_ENV + " or build with "
+                + "-Dbasefwx.master.pq.public.b64=<base64-key>.");
     }
 
     /**

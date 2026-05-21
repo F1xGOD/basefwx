@@ -1,3 +1,9 @@
+/*
+ * BaseFWX - Cryptography Engine
+ * Copyright (C) 2020-2026  FixCraft Inc.
+ * Licensed under the GNU General Public License v3.0.
+ */
+
 #include "basefwx/keywrap.hpp"
 
 #include "basefwx/basefwx.hpp"
@@ -50,7 +56,11 @@ std::string DefaultKdfLabel() {
 }
 
 bool SkipShortHardening() {
-    return !basefwx::env::Get("BASEFWX_TEST_KDF_ITERS").empty();
+#if defined(BASEFWX_TESTING) && BASEFWX_TESTING
+    return !basefwx::env::TestKdfIters().empty();
+#else
+    return false;
+#endif
 }
 
 basefwx::pb512::KdfOptions HardenKdfOptions(const std::string& password,
@@ -151,10 +161,14 @@ MaskKeyResult PrepareMaskKey(const std::string& password,
     if (use_master) {
         pq_pub = basefwx::pq::LoadMasterPublicKey();
         if (!pq_pub.has_value() && !pq_only) {
-            const bool allow_ec_autogen =
-                basefwx::env::IsEnabled("BASEFWX_MASTER_EC_CREATE_IF_MISSING", false);
+            // 3.6.5: the BASEFWX_MASTER_EC_CREATE_IF_MISSING env-driven
+            // auto-generation is removed. Silently minting a fresh EC
+            // master keypair when the configured one is absent produced
+            // ciphertext that looked recoverable on the encrypt host and
+            // hard-failed everywhere else. Callers needing an EC master
+            // must provision the key explicitly out-of-band.
             try {
-                ec_pub = basefwx::ec::LoadMasterPublicKey(allow_ec_autogen);
+                ec_pub = basefwx::ec::LoadMasterPublicKey(/*allow_autogen=*/false);
             } catch (const std::exception&) {
                 ec_pub = std::nullopt;
             }
@@ -264,24 +278,17 @@ Bytes RecoverMaskKey(const Bytes& user_blob,
     Bytes wrapped(user_blob.begin() + header_len, user_blob.end());
     Bytes aad_bytes = ToBytes(aad);
 
-    try {
-        basefwx::pb512::KdfOptions kdf_opts = HardenKdfOptions(resolved, kdf);
-        Bytes user_key = DeriveUserKeyWithLabel(resolved, salt, label, kdf_opts);
-        Bytes out = basefwx::crypto::AeadDecrypt(user_key, wrapped, aad_bytes);
-        basefwx::crypto::SecureClear(user_key);
-        return out;
-    } catch (const std::exception&) {
-        if (label != "pbkdf2" || !kdf.allow_pbkdf2_fallback) {
-            throw;
-        }
-    }
-
-    basefwx::pb512::KdfOptions fallback = kdf;
-    fallback.pbkdf2_iterations = basefwx::constants::kUserKdfIterationsFallback;
-    Bytes user_key = DeriveUserKeyWithLabel(resolved, salt, label, fallback);
-    Bytes out = basefwx::crypto::AeadDecrypt(user_key, wrapped, aad_bytes);
-    basefwx::crypto::SecureClear(user_key);
-    return out;
+    // 3.6.5: auth failure is terminal. The pre-3.6.3 PBKDF2-32k second-chance
+    // path was removed — it silently downgraded the KDF cost 20x on any
+    // exception (not just AEAD tag mismatch), which could mask non-auth
+    // errors and produce a successful decrypt under a much weaker derivation.
+    // Blobs from 2.x / pre-3.x are out of the supported window
+    // (see SECURITY.md "≤ 2.7: Treat as incompatible").
+    basefwx::pb512::KdfOptions kdf_opts = HardenKdfOptions(resolved, kdf);
+    Bytes user_key = DeriveUserKeyWithLabel(resolved, salt, label, kdf_opts);
+    basefwx::crypto::SecretGuard user_key_guard;
+    user_key_guard.Add(user_key);
+    return basefwx::crypto::AeadDecrypt(user_key, wrapped, aad_bytes);
 }
 
 }  // namespace basefwx::keywrap

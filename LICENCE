@@ -670,3 +670,145 @@ may consider it more useful to permit linking proprietary applications with
 the library.  If this is what you want to do, use the GNU Lesser General
 Public License instead of this License.  But first, please read
 <https://www.gnu.org/licenses/why-not-lgpl.html>.
+
+
+----------------------------------------------------------------------
+                        BaseFWX Additional Terms
+
+                  ADDITIONAL PERMISSIONS GRANTED UNDER
+                          GPL-3.0 SECTION 7
+
+Copyright (C) 2020-2026 FixCraft Inc. <https://fixcraft.org/>
+
+The following additional permissions, restrictions, and notice
+requirements apply to BaseFWX as a whole and modify the terms of
+the GNU General Public License version 3 above per its Section 7.
+By copying, modifying, distributing, or otherwise using BaseFWX you
+agree to these additional terms in addition to GPL-3.0.
+
+1. PLUGIN EXCEPTION
+--------------------
+
+   As a special exception to the terms of GPL-3.0, FixCraft Inc.
+   grants permission to develop, distribute, and license under any
+   terms a software artifact ("Plugin") that links to BaseFWX
+   exclusively through the public plugin ABI / SPI declared in:
+
+     - cpp/include/basefwx/plugin.h
+     - cpp/include/basefwx/plugin.hpp
+     - the Java package com.fixcraft.basefwx.plugin
+     - the Python module basefwx.plugin
+
+   provided that ALL of the following are true:
+
+   (a) The Plugin is shipped as a separate dynamically-loaded
+       artifact: a shared library (.so / .dll / .dylib) or a Java
+       archive (.jar) loaded via the documented entry points
+       (basefwx_plugin_entry, java.util.ServiceLoader,
+       basefwx.plugin.register / register_native).
+
+   (b) The Plugin does not statically link any object files,
+       static archives, or compiled units of BaseFWX itself.
+
+   (c) The Plugin does not include, copy, or otherwise embed any
+       BaseFWX source code other than the public ABI/SPI header
+       and interface files listed above.
+
+   A Plugin satisfying (a)-(c) is not considered a derivative work
+   of BaseFWX for the purposes of GPL-3.0 and may be licensed under
+   any terms the Plugin author chooses, including proprietary or
+   closed-source terms.
+
+2. ATTRIBUTION REQUIREMENT
+---------------------------
+
+   Any product, library, service, or other work that incorporates
+   BaseFWX, in source or binary form, whether as the BaseFWX
+   library itself, as a derived work, or via the Plugin Exception
+   in clause 1 above, must include the following attribution in
+   user-visible form:
+
+       Powered by BaseFWX — https://github.com/F1xGOD/basefwx
+
+   "User-visible" means the attribution must appear on the same
+   screen, page, dialog, document, or surface as other third-party
+   software credits or open-source attributions used by the
+   product. The attribution must be rendered in a font, weight,
+   and size equal to or larger than the smallest such credit on
+   that surface. The attribution must include the project URL.
+
+   Attribution that is hidden behind multiple menu steps,
+   abbreviated to less than "Powered by BaseFWX", rendered in a
+   font smaller than other credits, or omitted from the surface
+   on which other third-party credits appear, does NOT satisfy
+   this requirement.
+
+   This attribution requirement is in addition to the existing
+   GPL-3.0 obligation to preserve copyright and license notices
+   in source distributions.
+
+3. NO CLOSED-SOURCE FORKS
+--------------------------
+
+   The Plugin Exception in clause 1 does NOT permit redistribution
+   of modified BaseFWX itself under terms incompatible with
+   GPL-3.0. Modifications to BaseFWX source code remain subject
+   to GPL-3.0 copyleft. The Plugin Exception applies only to
+   Plugins as defined in clause 1.
+
+4. COMMERCIAL LICENSE AVAILABLE
+--------------------------------
+
+   FixCraft Inc. offers BaseFWX under separate, individually
+   negotiated commercial license terms for users who require:
+
+     - Use of BaseFWX without the Attribution requirement in
+       clause 2.
+     - Linking, embedding, or distribution arrangements not
+       covered by GPL-3.0 or the Plugin Exception.
+     - Customized warranty, indemnification, or support terms.
+
+   Commercial license inquiries: admin@fixcraft.jp
+
+   Commercial licenses are written agreements signed bilaterally
+   between FixCraft Inc. and the licensee. The GPL-3.0 +
+   Additional Terms above remain available to all other users at
+   no cost.
+
+5. PLUGIN-TEMPLATE EXCEPTION
+-----------------------------
+
+   The example plugin source files distributed in the directory
+   `examples/plugins/` are released under GPL-3.0 plus this
+   additional permission:
+
+   You may use any source file from `examples/plugins/` as a
+   starting template for your own Plugin (as defined in clause 1).
+   The derived Plugin is not required to be licensed under
+   GPL-3.0 by virtue of having been derived from these template
+   files, provided it satisfies all conditions of the Plugin
+   Exception in clause 1 (separate dynamically-loaded artifact,
+   no other BaseFWX source embedded, no static linking).
+
+   In effect: copy, modify, and ship the examples/plugins/ files
+   under any license, as long as the result is still a Plugin per
+   clause 1. The Attribution Requirement in clause 2 continues to
+   apply to the end product that loads BaseFWX, regardless of the
+   Plugin's own license.
+
+   Files outside `examples/plugins/` do NOT receive this
+   template permission. Modifying or copying any other BaseFWX
+   source file remains subject to GPL-3.0 copyleft.
+
+6. INTERPRETATION
+------------------
+
+   If any provision of these Additional Terms is held
+   unenforceable, the remaining provisions remain in full force.
+   These Additional Terms are governed by the law of the
+   jurisdiction in which FixCraft Inc. is registered, except
+   where superseded by the GPL-3.0 itself.
+
+----------------------------------------------------------------------
+                            End of Terms
+----------------------------------------------------------------------

@@ -371,8 +371,11 @@ class _NativePluginProxy(BasefwxPlugin):
     """Python-side proxy for a native plugin instance."""
 
     def __init__(self, shim: NativePluginShim, ctx: ctypes.c_void_p):
-        # Don't go through BasefwxPlugin.__init__ — we've already
-        # initialized via the native vtable.
+        # The native vtable's init() already consumed the config, so we
+        # pass empty bytes to super().__init__() (the default impl is a
+        # no-op anyway). Calling super keeps the MRO contract and
+        # satisfies static analyzers that flag missing __init__ chains.
+        super().__init__(config=b"")
         self._shim = shim
         self._ctx = ctx
         self._closed = False

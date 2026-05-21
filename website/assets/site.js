@@ -588,36 +588,76 @@ const renderJavaBackendsPanel = (data) => {
     if (tbody) tbody.innerHTML = "";
     return;
   }
+  // deltaInfo() takes nanoseconds and returns the same "⚡ Faster (+X%)" /
+  // "🐌 Slower (−X%)" rendering used by the main bench table. Convert the
+  // pure_java vs jni ms values to ns so we can reuse it and the JNI panel
+  // matches the rest of the page (no more bespoke "1.61× pure-java"
+  // multiplier strings and no more rowspan-breaks-card-layout).
+  const MS_TO_NS = 1_000_000;
+  const TIMER_EPSILON_NS = 200_000;  // matches the main table's threshold
+  const fmtTime = (ms, mibs) => {
+    if (typeof ms !== "number" || !Number.isFinite(ms)) return "—";
+    const mibsTxt = (typeof mibs === "number") ? ` (${mibs.toFixed(0)} MiB/s)` : "";
+    return `${ms.toFixed(2)} ms${mibsTxt}`;
+  };
   const rows = [];
   for (const sample of data.samples) {
     const size = sample.size_human || `${sample.size_bytes} B`;
     const pure = sample.pure_java || {};
     const jni = sample.jni || {};
     const jniAvail = jni && jni.available !== false && typeof jni.encrypt_ms === "number";
+
+    // pure-java row: its own card, "baseline" in the delta column.
     rows.push(
       `<tr>` +
-      `<td rowspan="2"><strong>${escapeHtml(size)}</strong></td>` +
+      `<td><strong>${escapeHtml(size)}</strong></td>` +
       `<td>pure-java</td>` +
-      `<td>${pure.encrypt_ms ? pure.encrypt_ms.toFixed(2) + " ms (" + pure.encrypt_mibs.toFixed(0) + " MiB/s)" : "—"}</td>` +
-      `<td>${pure.decrypt_ms ? pure.decrypt_ms.toFixed(2) + " ms (" + pure.decrypt_mibs.toFixed(0) + " MiB/s)" : "—"}</td>` +
-      `<td class="delta-base">baseline</td>` +
+      `<td>${fmtTime(pure.encrypt_ms, pure.encrypt_mibs)}</td>` +
+      `<td>${fmtTime(pure.decrypt_ms, pure.decrypt_mibs)}</td>` +
+      `<td class="delta-base">Baseline</td>` +
       `</tr>`
     );
+
+    // jni row: own card. Speedup column shows encrypt + decrypt deltas
+    // computed by the shared deltaInfo() so the format and emoji set
+    // match the main bench table.
     if (jniAvail) {
-      const ratio = (pure.encrypt_ms && jni.encrypt_ms) ? (pure.encrypt_ms / jni.encrypt_ms) : null;
-      const ratioCls = ratio ? (ratio >= 1.05 ? "delta-fast" : ratio <= 0.95 ? "delta-slow" : "delta-same") : "delta-na";
-      const ratioTxt = ratio ? `${ratio.toFixed(2)}× pure-java` : "—";
+      const encDelta = deltaInfo(
+        pure.encrypt_ms * MS_TO_NS,
+        jni.encrypt_ms * MS_TO_NS,
+        TIMER_EPSILON_NS
+      );
+      const decDelta = (typeof pure.decrypt_ms === "number" && typeof jni.decrypt_ms === "number")
+        ? deltaInfo(pure.decrypt_ms * MS_TO_NS, jni.decrypt_ms * MS_TO_NS, TIMER_EPSILON_NS)
+        : { label: "—", className: "delta-na" };
+      // Pick the cell color from whichever direction is bigger in magnitude,
+      // so a "mixed" outcome doesn't silently look like an unambiguous win.
+      const rowCls = (encDelta.className === "delta-fast" && decDelta.className === "delta-fast")
+        ? "delta-fast"
+        : (encDelta.className === "delta-slow" && decDelta.className === "delta-slow")
+          ? "delta-slow"
+          : (encDelta.className === decDelta.className)
+            ? encDelta.className
+            : "delta-same";
       rows.push(
         `<tr>` +
+        `<td><strong>${escapeHtml(size)}</strong></td>` +
         `<td>jni</td>` +
-        `<td>${jni.encrypt_ms.toFixed(2)} ms (${jni.encrypt_mibs.toFixed(0)} MiB/s)</td>` +
-        `<td>${jni.decrypt_ms.toFixed(2)} ms (${jni.decrypt_mibs.toFixed(0)} MiB/s)</td>` +
-        `<td class="${ratioCls}">${ratioTxt}</td>` +
+        `<td>${fmtTime(jni.encrypt_ms, jni.encrypt_mibs)}</td>` +
+        `<td>${fmtTime(jni.decrypt_ms, jni.decrypt_mibs)}</td>` +
+        `<td class="${rowCls}">` +
+          `<div class="java-backend-delta-line">enc ${encDelta.label}</div>` +
+          `<div class="java-backend-delta-line">dec ${decDelta.label}</div>` +
+        `</td>` +
         `</tr>`
       );
     } else {
       rows.push(
-        `<tr><td>jni</td><td colspan="3" class="mono">native library not loaded for this run</td></tr>`
+        `<tr>` +
+        `<td><strong>${escapeHtml(size)}</strong></td>` +
+        `<td>jni</td>` +
+        `<td colspan="3" class="mono delta-na">native library not loaded for this run</td>` +
+        `</tr>`
       );
     }
   }

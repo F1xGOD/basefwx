@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "latest": "pre-release-v3.7",
+  "latest": "test-new-3.7",
   "snapshots": [
     {
       "tag": "v3.6.4",
@@ -27,6 +27,12 @@
       "results": "benchmarks-test-pre-fix-slow.json",
       "txt": "benchmarks-test-pre-fix-slow.txt",
       "java_backends": "java-backends-test-pre-fix-slow.json"
+    },
+    {
+      "tag": "test-new-3.7",
+      "results": "benchmarks-test-new-3.7.json",
+      "txt": "benchmarks-test-new-3.7.txt",
+      "java_backends": "java-backends-test-new-3.7.json"
     },
     {
       "tag": "pre-release-v3.7",

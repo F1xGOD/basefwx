@@ -1,3 +1,9 @@
+/*
+ * BaseFWX - Cryptography Engine
+ * Copyright (C) 2020-2026  FixCraft Inc.
+ * Licensed under the GNU General Public License v3.0.
+ */
+
 #pragma once
 
 #include <cstdint>
@@ -47,10 +53,27 @@ std::string N10Encode(const std::string& input);
 std::string N10Decode(const std::string& input);
 std::string Hash512(const std::string& input);
 std::string Uhash513(const std::string& input);
+// Deprecated since 3.7.0. `Bi512Encode` is "SHA-256 with a custom prefilter"
+// — the prefilter adds no security beyond SHA-256 itself. Use `Hash512`
+// (SHA-512) or `Uhash513` for new code. The function stays so existing
+// blobs / call sites continue to work; expect removal in a future
+// major bump.
+[[deprecated("Use Hash512 or Uhash513 — Bi512Encode is SHA-256 with no added security")]]
 std::string Bi512Encode(const std::string& input);
+
+// Deprecated since 3.7.0. `A512Encode` / `A512Decode` are a reversible
+// obfuscation codec with no security goal (no key, no AEAD). Slower than
+// base64 for the same output. Use `B256Encode`/`B256Decode` or plain
+// base64 for new reversible-encoding needs.
+[[deprecated("Use B256Encode / base64 — A512 has no security goal and is slower")]]
 std::string A512Encode(const std::string& input);
+[[deprecated("Use B256Decode / base64 — A512 has no security goal and is slower")]]
 std::string A512Decode(const std::string& input);
-std::string B1024Encode(const std::string& input);
+// B1024Encode removed in 3.6.5 — it was a one-line alias for
+// Bi512Encode(A512Encode(input)) that added no security or functionality
+// and was a significant chunk of the cross-runtime test-suite runtime.
+// Callers that want the same byte-for-byte output should chain the two
+// primitives directly.
 
 struct KdfOptions {
     std::string label = "auto";

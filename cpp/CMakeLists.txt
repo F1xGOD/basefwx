@@ -668,6 +668,27 @@ target_compile_definitions(basefwxcpp PUBLIC
     BASEFWX_HAS_LZMA=${BASEFWX_HAS_LZMA}
 )
 
+# Optional master ML-KEM-768 public key baked into the binary at build time.
+# Pass via `-DBASEFWX_MASTER_PQ_PUB_B64=<base64-blob>` if your fleet wants
+# recovery escrow without each node holding the key file. Empty by default —
+# release builds ship with no baked key and rely on the runtime
+# BASEFWX_MASTER_PQ_PUB=<path> env var.
+set(BASEFWX_MASTER_PQ_PUB_B64 "" CACHE STRING
+    "Base64-encoded ML-KEM-768 master public key to bake into the binary (empty = no baked key)")
+if(BASEFWX_MASTER_PQ_PUB_B64)
+    target_compile_definitions(basefwxcpp PUBLIC
+        BASEFWX_MASTER_PQ_PUB_B64="${BASEFWX_MASTER_PQ_PUB_B64}")
+    message(STATUS "BaseFWX: baking master PQ public key into binary (${CMAKE_BINARY_DIR})")
+endif()
+
+# Compile-time test override flag. When set, allows BASEFWX_TEST_KDF_ITERS
+# and similar test env vars to weaken KDFs. NEVER set in release builds.
+option(BASEFWX_TESTING "Enable test-only env overrides (BASEFWX_TEST_KDF_ITERS etc.)" OFF)
+if(BASEFWX_TESTING)
+    target_compile_definitions(basefwxcpp PUBLIC BASEFWX_TESTING=1)
+    message(WARNING "BaseFWX: BASEFWX_TESTING is ON — do not use this build in production")
+endif()
+
 if(BASEFWX_BUILD_CLI)
     add_executable(basefwx_cpp
         src/main.cpp

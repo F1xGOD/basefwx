@@ -1,3 +1,9 @@
+/*
+ * BaseFWX - Cryptography Engine
+ * Copyright (C) 2020-2026  FixCraft Inc.
+ * Licensed under the GNU General Public License v3.0.
+ */
+
 #include "basefwx/fwxaes.hpp"
 
 #include "basefwx/archive.hpp"
@@ -35,12 +41,22 @@ const std::uint8_t kAadBytes[] = {'f', 'w', 'x', 'A', 'E', 'S'};
 const Bytes kAadVec(kAadBytes, kAadBytes + sizeof(kAadBytes));
 const std::uint8_t kPackMagic[] = {'F', 'W', 'X', 'P', 'K', '1'};
 constexpr std::size_t kPackHeaderLen = sizeof(kPackMagic) + 1 + 8;
-constexpr std::size_t kMaxKeyHeaderLen = 4 * 1024 * 1024;
+
+// Wrap-mode header carries two length-prefixed blobs (user wrap + master wrap).
+// Real wrap headers are ~200-500 bytes; cap at 64 KiB so a kdf-byte flip
+// can't reinterpret a PBKDF2 iteration count (typically 600k+) as a
+// valid wrap-header length.
+constexpr std::size_t kMaxKeyHeaderLen = 64 * 1024;
+
+// Reject PBKDF2 iteration counts below the floor — both a sanity check
+// against ancient blobs and a hard barrier against a kdf-byte flip
+// reinterpreting a small wrap-header length as a weak PBKDF2 cost.
+constexpr std::uint32_t kMinPbkdf2Iters = 10000;
 
 std::uint32_t ResolveTestIters(std::uint32_t fallback) {
     std::string raw = basefwx::env::Get("BASEFWX_FWXAES_PBKDF2_ITERS");
     if (raw.empty()) {
-        raw = basefwx::env::Get("BASEFWX_TEST_KDF_ITERS");
+        raw = basefwx::env::TestKdfIters();
     }
     if (raw.empty()) {
         return fallback;
@@ -63,7 +79,7 @@ std::uint32_t HardenPbkdf2Iterations(const std::string& password, std::uint32_t 
     if (password.empty()) {
         return iters;
     }
-    if (!basefwx::env::Get("BASEFWX_TEST_KDF_ITERS").empty()) {
+    if (!basefwx::env::TestKdfIters().empty()) {
         return iters;
     }
     if (password.size() < basefwx::constants::kShortPasswordMin) {
@@ -334,6 +350,14 @@ Bytes EncryptRaw(const Bytes& plaintext, const std::string& password, const Opti
 
     Bytes iv = basefwx::crypto::RandomBytes(effective.iv_len);
     Bytes key;
+    // Declare the guard AFTER all the secrets it tracks — automatic-storage
+    // objects are destroyed in reverse construction order, so the guard
+    // (last constructed) runs SecureClear first, while the secrets are
+    // still alive. Reversing this order is a use-after-free.
+    basefwx::crypto::SecretGuard guard;
+    guard.Add(resolved);
+    guard.Add(mask_key.mask_key);
+    guard.Add(key);
     if (use_wrap) {
         key = basefwx::crypto::HkdfSha256(mask_key.mask_key, basefwx::constants::kFwxAesKeyInfo, 32);
     } else {
@@ -412,6 +436,9 @@ Bytes EncryptRaw(const Bytes& plaintext, const std::string& password, const Opti
 
 Bytes DecryptRaw(const Bytes& blob, const std::string& password, bool use_master) {
     std::string resolved = basefwx::ResolvePassword(password);
+    // SecretGuard for `resolved` is declared at the bottom of each branch
+    // (after any branch-local secrets it needs to outlive) — see EncryptRaw
+    // for the rationale on construction-order vs destruction-order.
     const std::size_t header_len = 16;
     if (blob.size() < header_len) {
         throw std::runtime_error("fwxAES blob too short");
@@ -472,6 +499,10 @@ Bytes DecryptRaw(const Bytes& blob, const std::string& password, bool use_master
         );
         Bytes key = basefwx::crypto::HkdfSha256(mask_key, basefwx::constants::kFwxAesKeyInfo, 32);
         Bytes plaintext(ct_len - basefwx::constants::kAeadTagLen);
+        basefwx::crypto::SecretGuard guard;
+        guard.Add(resolved);
+        guard.Add(mask_key);
+        guard.Add(key);
         std::size_t written = basefwx::crypto::AesGcmDecryptWithIvInto(
             key,
             iv,
@@ -483,6 +514,9 @@ Bytes DecryptRaw(const Bytes& blob, const std::string& password, bool use_master
         );
         plaintext.resize(written);
         return plaintext;
+    }
+    if (iters < kMinPbkdf2Iters) {
+        throw std::runtime_error("fwxAES PBKDF2 iteration count below minimum");
     }
     if (blob.size() < offset + salt_len + iv_len + ct_len) {
         throw std::runtime_error("fwxAES blob truncated");
@@ -496,6 +530,9 @@ Bytes DecryptRaw(const Bytes& blob, const std::string& password, bool use_master
     offset += iv_len;
     Bytes key = basefwx::crypto::Pbkdf2HmacSha256(resolved, salt, iters, 32);
     Bytes plaintext(ct_len - basefwx::constants::kAeadTagLen);
+    basefwx::crypto::SecretGuard guard;
+    guard.Add(resolved);
+    guard.Add(key);
     std::size_t written = basefwx::crypto::AesGcmDecryptWithIvInto(
         key,
         iv,
@@ -514,6 +551,11 @@ std::uint64_t EncryptStream(std::istream& source,
                             const std::string& password,
                             const Options& options) {
     std::string resolved = basefwx::ResolvePassword(password);
+    // Outer guard wipes `resolved` on function return. Inner secrets
+    // (mask_key, key) live in narrower scopes — they each get their own
+    // guard at the point of binding (see below) to avoid use-after-free.
+    basefwx::crypto::SecretGuard resolved_guard;
+    resolved_guard.Add(resolved);
     basefwx::RequireStrongPasswordForEncryption(resolved, "fwxAES");
     Options effective = options;
     effective.pbkdf2_iters = ResolveTestIters(options.pbkdf2_iters);
@@ -554,6 +596,11 @@ std::uint64_t EncryptStream(std::istream& source,
 
         Bytes iv = basefwx::crypto::RandomBytes(effective.iv_len);
         Bytes key;
+        // Declare guard AFTER the secrets so its dtor runs first (reverse
+        // construction order) — see EncryptRaw / DecryptRaw for rationale.
+        basefwx::crypto::SecretGuard secrets;
+        secrets.Add(mask_key.mask_key);
+        secrets.Add(key);
         if (use_wrap) {
             key = basefwx::crypto::HkdfSha256(mask_key.mask_key, basefwx::constants::kFwxAesKeyInfo, 32);
         } else {
@@ -774,7 +821,14 @@ std::uint64_t DecryptStream(std::istream& source,
             ResolveWrapKdfOptionsForDecode()
         );
         key = basefwx::crypto::HkdfSha256(mask_key, basefwx::constants::kFwxAesKeyInfo, 32);
+        // Inner guard for the branch-local mask_key. Declared AFTER
+        // mask_key so its dtor runs first (reverse construction order).
+        basefwx::crypto::SecretGuard mask_guard;
+        mask_guard.Add(mask_key);
     } else {
+        if (iters < kMinPbkdf2Iters) {
+            throw std::runtime_error("fwxAES PBKDF2 iteration count below minimum");
+        }
         Bytes salt(salt_len);
         ReadExact(source, salt.data(), salt.size(), "fwxAES blob truncated");
         iv.resize(iv_len);
@@ -784,6 +838,12 @@ std::uint64_t DecryptStream(std::istream& source,
         }
         key = basefwx::crypto::Pbkdf2HmacSha256(resolved, salt, iters, 32);
     }
+    // Function-scope guard for resolved + key. Declared after the
+    // branch-local secrets have already been wiped (mask_key in the
+    // wrap branch). Wipes resolved + key when DecryptStream returns.
+    basefwx::crypto::SecretGuard guard;
+    guard.Add(resolved);
+    guard.Add(key);
 
     std::uint64_t ct_len = ct_len32;
     if (algo == kAlgoStreamV2) {

@@ -1,3 +1,7 @@
+# BaseFWX - Cryptography Engine
+# Copyright (C) 2020-2026  FixCraft Inc.
+# Licensed under the GNU General Public License v3.0.
+
 """Public Python API for BaseFWX."""
 
 from .api_files import (
@@ -30,7 +34,6 @@ from .api_media import jMGd, jMGe, kFAd, kFAe, kFMd, kFMe
 from .api_strings import (
     a512decode,
     a512encode,
-    b1024encode,
     b256decode,
     b256encode,
     b512decode,
@@ -48,6 +51,25 @@ from .api_strings import (
     uhash513,
 )
 from .main import basefwx, cli, main
+from .plugin import (
+    API_VERSION as PLUGIN_API_VERSION,
+    BasefwxPlugin,
+    BasefwxPluginError,
+    NativePluginShim,
+    PLUGIN_ID_LEN,
+    PluginErrorBadInput,
+    PluginErrorBadState,
+    PluginErrorGeneric,
+    PluginErrorNotSupported,
+    PluginErrorOutputTooSmall,
+    Position as PluginPosition,
+    all_plugins,
+    discover as discover_plugins,
+    factory_for as plugin_factory_for,
+    load_native_plugin,
+    register as register_plugin,
+    register_native as register_native_plugin,
+)
 from .version import __version__
 
 __all__ = [
@@ -55,7 +77,6 @@ __all__ = [
     "a512decode",
     "a512encode",
     "an7_file",
-    "b1024encode",
     "b256decode",
     "b256encode",
     "b512decode",
@@ -103,4 +124,22 @@ __all__ = [
     "pb512file_decode_bytes",
     "pb512file_encode_bytes",
     "uhash513",
+    # plugin SPI (3.7.0)
+    "BasefwxPlugin",
+    "BasefwxPluginError",
+    "NativePluginShim",
+    "PLUGIN_API_VERSION",
+    "PLUGIN_ID_LEN",
+    "PluginErrorBadInput",
+    "PluginErrorBadState",
+    "PluginErrorGeneric",
+    "PluginErrorNotSupported",
+    "PluginErrorOutputTooSmall",
+    "PluginPosition",
+    "all_plugins",
+    "discover_plugins",
+    "load_native_plugin",
+    "plugin_factory_for",
+    "register_native_plugin",
+    "register_plugin",
 ]

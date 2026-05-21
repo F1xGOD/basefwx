@@ -202,9 +202,17 @@ cpp_build_xor() {
 }
 
 java_build_xor() {
-    [[ -f java/build/libs/basefwx-java.jar ]] || (cd java && gradle --no-daemon -q --offline jar >/dev/null 2>&1)
-    (cd examples/plugins/xor-rotate-java && rm -rf build && gradle --no-daemon -q --offline jar >/dev/null 2>&1) \
-        && ls examples/plugins/xor-rotate-java/build/libs/basefwx-xor-rotate-java-*.jar >/dev/null 2>&1
+    # Don't pass --offline: on a fresh CI runner the gradle cache hasn't
+    # been populated yet (the workflow's explicit `gradle build` step
+    # runs AFTER the bench), so --offline fails to resolve BouncyCastle.
+    # Local re-runs are fast either way; gradle reuses ~/.gradle/caches.
+    if [[ ! -f java/build/libs/basefwx-java.jar ]]; then
+        (cd java && gradle --no-daemon -q jar >/dev/null 2>&1) \
+            || { echo "basefwx-java.jar build failed (gradle missing or network blocked?)"; return 1; }
+    fi
+    (cd examples/plugins/xor-rotate-java && rm -rf build && gradle --no-daemon -q jar >/dev/null 2>&1) \
+        || { echo "xor-rotate-java jar build failed"; return 1; }
+    ls examples/plugins/xor-rotate-java/build/libs/basefwx-xor-rotate-java-*.jar >/dev/null 2>&1
 }
 
 cpp_load_passthrough() {

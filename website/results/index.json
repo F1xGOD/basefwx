@@ -1,7 +1,12 @@
 {
   "schema": 1,
-  "latest": "test-pre-fix-slow",
+  "latest": "pre-release-v3.7",
   "snapshots": [
+    {
+      "tag": "v3.6.4",
+      "results": "benchmarks-v3.6.4.json",
+      "txt": "benchmarks-v3.6.4.txt"
+    },
     {
       "tag": "v3.6.3",
       "results": "benchmarks-v3.6.3.json",
@@ -22,6 +27,12 @@
       "results": "benchmarks-test-pre-fix-slow.json",
       "txt": "benchmarks-test-pre-fix-slow.txt",
       "java_backends": "java-backends-test-pre-fix-slow.json"
+    },
+    {
+      "tag": "pre-release-v3.7",
+      "results": "benchmarks-pre-release-v3.7.json",
+      "txt": "benchmarks-pre-release-v3.7.txt",
+      "java_backends": "java-backends-pre-release-v3.7.json"
     },
     {
       "tag": "pre-release-improvev2",

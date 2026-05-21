@@ -139,10 +139,14 @@ jobs:
       - name: Build basefwxcrypto JNI shared library
         run: |
           set -euo pipefail
+          # 3.7.0: REQUIRE_ARGON2=ON so the JNI shared library links
+          # against libargon2, enabling the Argon2id bridge in
+          # NativeCryptoBackend. Without this, Java falls back to
+          # BouncyCastle's pure-Java Argon2 which is ~5-10× slower.
           cmake -S cpp -B build/jni \
             -DBASEFWX_BUILD_CLI=OFF \
             -DBASEFWX_BUILD_JNI=ON \
-            -DBASEFWX_REQUIRE_ARGON2=OFF \
+            -DBASEFWX_REQUIRE_ARGON2=ON \
             -DBASEFWX_REQUIRE_OQS=OFF \
             -DBASEFWX_REQUIRE_LZMA=OFF
           cmake --build build/jni --target basefwxcrypto -j

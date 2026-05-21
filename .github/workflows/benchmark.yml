@@ -80,6 +80,24 @@ jobs:
           distribution: "temurin"
           java-version: "17"
 
+      - name: Build basefwxcrypto JNI shared library
+        run: |
+          set -euo pipefail
+          # 3.7.0: built BEFORE the main bench so test_all.sh can activate
+          # the JNI backend for Java fwxAES / kFMe / kFAe via
+          # -Dbasefwx.useJNI=true. Without this, the static
+          # BaseFwx.fwxAesEncryptRawBytes path stays on pure Java and
+          # fwxAES-light comes in ~25× slower than the JNI equivalent.
+          # REQUIRE_ARGON2=ON so the shared library links against
+          # libargon2, enabling the Argon2id bridge in NativeCryptoBackend.
+          cmake -S cpp -B build/jni \
+            -DBASEFWX_BUILD_CLI=OFF \
+            -DBASEFWX_BUILD_JNI=ON \
+            -DBASEFWX_REQUIRE_ARGON2=ON \
+            -DBASEFWX_REQUIRE_OQS=OFF \
+            -DBASEFWX_REQUIRE_LZMA=OFF
+          cmake --build build/jni --target basefwxcrypto -j
+
       - name: Run full benchmark suite
         env:
           BASEFWX_OBFUSCATE: "1"
@@ -135,21 +153,6 @@ jobs:
               raise SystemExit(f"Missing benchmark labels: {', '.join(missing)}")
           print("Live benchmark coverage OK")
           PY
-
-      - name: Build basefwxcrypto JNI shared library
-        run: |
-          set -euo pipefail
-          # 3.7.0: REQUIRE_ARGON2=ON so the JNI shared library links
-          # against libargon2, enabling the Argon2id bridge in
-          # NativeCryptoBackend. Without this, Java falls back to
-          # BouncyCastle's pure-Java Argon2 which is ~5-10× slower.
-          cmake -S cpp -B build/jni \
-            -DBASEFWX_BUILD_CLI=OFF \
-            -DBASEFWX_BUILD_JNI=ON \
-            -DBASEFWX_REQUIRE_ARGON2=ON \
-            -DBASEFWX_REQUIRE_OQS=OFF \
-            -DBASEFWX_REQUIRE_LZMA=OFF
-          cmake --build build/jni --target basefwxcrypto -j
 
       - name: Build Java jar
         run: |

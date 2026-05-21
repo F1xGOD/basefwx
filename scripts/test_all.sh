@@ -5180,6 +5180,34 @@ JAVA_BENCH_FLAGS="${JAVA_BENCH_FLAGS:-$JAVA_BENCH_FLAGS_DEFAULT}"
 # bench's intent is honored. Without this Java ignores the test-only env
 # and runs at full 600k iters, producing the +1451% "regression" we saw.
 JAVA_BENCH_FLAGS="$JAVA_BENCH_FLAGS -Dbasefwx.testing=true"
+
+# 3.7.0: if the JNI shared library is present, light the bench up with the
+# native backend. Without -Dbasefwx.useJNI=true the static BaseFwx.fwxAes*
+# helpers stay on the pure-Java path even when the .so was built earlier in
+# the workflow (CryptoBackends only loads the lib when the sysprop or
+# BASEFWX_NATIVE env var is set). On a 220 MiB fwxAES-light run that
+# difference is ~25× (2.3 s pure-Java → ~90 ms JNI) — far larger than any
+# of the per-test deltas we usually chase.
+JAVA_JNI_LIB_DIR_CANDIDATES=(
+    "${BASEFWX_JNI_LIB_DIR:-}"
+    "$ROOT/build/jni"
+    "$ROOT/cpp/build/jni"
+)
+JAVA_JNI_LIB_DIR=""
+for cand in "${JAVA_JNI_LIB_DIR_CANDIDATES[@]}"; do
+    [[ -z "$cand" ]] && continue
+    if [[ -f "$cand/libbasefwxcrypto.so" || -f "$cand/libbasefwxcrypto.dylib" || -f "$cand/basefwxcrypto.dll" ]]; then
+        JAVA_JNI_LIB_DIR="$cand"
+        break
+    fi
+done
+if [[ -n "$JAVA_JNI_LIB_DIR" ]]; then
+    JAVA_BENCH_FLAGS="$JAVA_BENCH_FLAGS -Dbasefwx.useJNI=true -Djava.library.path=$JAVA_JNI_LIB_DIR"
+    log "Java bench: JNI backend enabled (lib dir: $JAVA_JNI_LIB_DIR)"
+else
+    log "Java bench: JNI backend NOT found — main bench will run pure-Java (slow path)"
+fi
+
 read -r -a JAVA_BENCH_FLAGS_ARR <<<"$JAVA_BENCH_FLAGS"
 
 BENCH_FWXAES_MODE="${BENCH_FWXAES_MODE:-par}"

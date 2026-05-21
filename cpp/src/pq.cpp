@@ -192,6 +192,12 @@ std::optional<Bytes> LoadMasterPublicKey() {
         if (!std::filesystem::exists(candidate)) {
             throw std::runtime_error("Master PQ public key not found at " + candidate.string());
         }
+        // lgtm[cpp/path-injection] - BASEFWX_MASTER_PQ_PUB is the documented
+        // way for an operator to point at their own master key file on
+        // their own machine; the env var is part of the public API contract
+        // (see SECURITY.md). The "uncontrolled data" here is the operator's
+        // own configuration. ReadFileBytes additionally caps the size at
+        // 4 MiB to bound damage from a misconfigured symlink target.
         return DecodeKeyBytes(ReadFileBytes(candidate));
     }
 

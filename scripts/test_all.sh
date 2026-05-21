@@ -360,6 +360,15 @@ PROGRESS_INTERVAL="${PROGRESS_INTERVAL:-15}"
 if [[ ! "$PROGRESS_INTERVAL" =~ ^[0-9]+$ ]]; then
     PROGRESS_INTERVAL=15
 fi
+# 3.7.0: hard ceiling on any single timed step. If a step exceeds this, the
+# heartbeat loop kills it and the suite continues with the step marked
+# (timeout=Ns) in FAILURES. Prevents a single hung step from silently eating
+# the entire workflow's 6h GitHub Actions default and getting force-killed
+# without a useful log. Default 1200s = 20 min; override per-environment.
+STEP_TIMEOUT_SECS="${STEP_TIMEOUT_SECS:-1200}"
+if [[ ! "$STEP_TIMEOUT_SECS" =~ ^[0-9]+$ ]]; then
+    STEP_TIMEOUT_SECS=1200
+fi
 if [[ -z "${SHOW_RUNTIME_USAGE+x}" ]]; then
     if [[ -n "${CI:-}" ]]; then
         SHOW_RUNTIME_USAGE=0
@@ -642,23 +651,45 @@ run_with_heartbeat() {
     "$@" >>"$LOG" 2>&1 &
     local pid=$!
     local next_tick=$((start_s + PROGRESS_INTERVAL))
+    local timed_out=0
     while kill -0 "$pid" 2>/dev/null; do
         sleep 1
         local now=$SECONDS
+        local elapsed=$((now - start_s))
+        # Hard timeout per step. Without this, a hung step inside a long
+        # bench run silently eats the workflow's 6h job budget and the
+        # whole run gets force-killed without a useful tail in the log.
+        if (( STEP_TIMEOUT_SECS > 0 && elapsed >= STEP_TIMEOUT_SECS )); then
+            printf "  %s %s%s%s TIMEOUT after %ds (limit=%ds) — killing\n" \
+                "$EMOJI_PROGRESS" "$RED" "$label" "$RESET" "$elapsed" "$STEP_TIMEOUT_SECS"
+            kill -TERM "$pid" 2>/dev/null
+            sleep 2
+            kill -KILL "$pid" 2>/dev/null
+            timed_out=1
+            break
+        fi
         if (( now >= next_tick )); then
             if kill -0 "$pid" 2>/dev/null; then
                 local usage_line
                 usage_line="$(usage_snapshot)"
                 if [[ -n "$usage_line" ]]; then
-                    printf "  %s %s%s%s (%ds elapsed) | %s\n" "$EMOJI_PROGRESS" "$YELLOW" "$label" "$RESET" "$((now - start_s))" "$usage_line"
+                    printf "  %s %s%s%s (%ds elapsed) | %s\n" "$EMOJI_PROGRESS" "$YELLOW" "$label" "$RESET" "$elapsed" "$usage_line"
                 else
-                    printf "  %s %s%s%s (%ds elapsed)\n" "$EMOJI_PROGRESS" "$YELLOW" "$label" "$RESET" "$((now - start_s))"
+                    printf "  %s %s%s%s (%ds elapsed)\n" "$EMOJI_PROGRESS" "$YELLOW" "$label" "$RESET" "$elapsed"
                 fi
             fi
             next_tick=$((next_tick + PROGRESS_INTERVAL))
         fi
     done
-    wait "$pid"
+    wait "$pid" 2>/dev/null
+    local rc=$?
+    if (( timed_out == 1 )); then
+        # Synthesize a recognizable exit code so callers + FAILURES list
+        # show the timeout cleanly instead of an opaque rc=137 / 143.
+        FAILURES+=("$label (timed out after ${STEP_TIMEOUT_SECS}s)")
+        return 124
+    fi
+    return $rc
 }
 
 run_with_heartbeat_capture() {
@@ -674,23 +705,40 @@ run_with_heartbeat_capture() {
     "$@" >"$output_file" 2>>"$LOG" &
     local pid=$!
     local next_tick=$((start_s + PROGRESS_INTERVAL))
+    local timed_out=0
     while kill -0 "$pid" 2>/dev/null; do
         sleep 1
         local now=$SECONDS
+        local elapsed=$((now - start_s))
+        if (( STEP_TIMEOUT_SECS > 0 && elapsed >= STEP_TIMEOUT_SECS )); then
+            printf "  %s %s%s%s TIMEOUT after %ds (limit=%ds) — killing\n" \
+                "$EMOJI_PROGRESS" "$RED" "$label" "$RESET" "$elapsed" "$STEP_TIMEOUT_SECS"
+            kill -TERM "$pid" 2>/dev/null
+            sleep 2
+            kill -KILL "$pid" 2>/dev/null
+            timed_out=1
+            break
+        fi
         if (( now >= next_tick )); then
             if kill -0 "$pid" 2>/dev/null; then
                 local usage_line
                 usage_line="$(usage_snapshot)"
                 if [[ -n "$usage_line" ]]; then
-                    printf "  %s %s%s%s (%ds elapsed) | %s\n" "$EMOJI_PROGRESS" "$YELLOW" "$label" "$RESET" "$((now - start_s))" "$usage_line"
+                    printf "  %s %s%s%s (%ds elapsed) | %s\n" "$EMOJI_PROGRESS" "$YELLOW" "$label" "$RESET" "$elapsed" "$usage_line"
                 else
-                    printf "  %s %s%s%s (%ds elapsed)\n" "$EMOJI_PROGRESS" "$YELLOW" "$label" "$RESET" "$((now - start_s))"
+                    printf "  %s %s%s%s (%ds elapsed)\n" "$EMOJI_PROGRESS" "$YELLOW" "$label" "$RESET" "$elapsed"
                 fi
             fi
             next_tick=$((next_tick + PROGRESS_INTERVAL))
         fi
     done
-    wait "$pid"
+    wait "$pid" 2>/dev/null
+    local rc=$?
+    if (( timed_out == 1 )); then
+        FAILURES+=("$label (timed out after ${STEP_TIMEOUT_SECS}s)")
+        return 124
+    fi
+    return $rc
 }
 
 cooldown() {

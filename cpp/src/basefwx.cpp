@@ -1548,6 +1548,13 @@ std::string ResolvePassword(const std::string& input) {
         if (!std::filesystem::exists(path, ec) || !std::filesystem::is_regular_file(path, ec)) {
             throw std::runtime_error("Password file not found: " + path);
         }
+        // lgtm[cpp/path-injection] - The `file://` scheme is the documented
+        // way for a caller to point at a password file on their own machine
+        // (see LICENSING.md / SECURITY.md). The "uncontrolled data" is the
+        // caller's own argument, not an attacker-controlled value crossing
+        // a trust boundary. is_regular_file() blocks the obvious
+        // /dev/random etc. cases; the password itself is then hashed by
+        // Argon2id/PBKDF2 before any cryptographic use.
         auto data = ReadFile(path);
         return std::string(reinterpret_cast<const char*>(data.data()), data.size());
     }

@@ -50,6 +50,10 @@ std::size_t AesGcmDecryptWithIvInto(const Bytes& key,
                                     std::uint8_t* out,
                                     std::size_t out_len);
 Bytes AesCtrTransform(const Bytes& key, const Bytes& iv, const Bytes& data);
+// In-place CTR transform that avoids the std::vector zero-fill in the
+// out-of-place form (which was ~0.5 GB/s of pure memset on the an7 hot
+// loop). `data` is mutated to ciphertext / plaintext.
+void AesCtrTransformInPlace(const Bytes& key, const Bytes& iv, Bytes& data);
 Bytes Sha3_512(const Bytes& data);
 void SecureClear(std::uint8_t* data, std::size_t length);
 void SecureClear(Bytes& bytes);

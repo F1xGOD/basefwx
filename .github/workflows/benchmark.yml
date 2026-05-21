@@ -14,8 +14,24 @@ permissions:
 jobs:
   benchmark:
     runs-on: ubuntu-latest
+    # Hard ceiling well under the 6h GitHub Actions default. If we hit
+    # this, the job fails fast with a visible "exceeded the maximum
+    # execution time" line instead of silently disappearing partway
+    # through the bench. The inner per-step timeout inside
+    # scripts/test_all.sh (STEP_TIMEOUT_SECS, default 20 min) gives
+    # a tighter bound on any single hung step.
+    timeout-minutes: 240
     env:
       LIBOQS_VERSION: "0.11.0"
+      # Surface heartbeat lines every 30s so a slow step is visible
+      # in the workflow log before the timeout kicks in. The local
+      # interactive default stays 15s.
+      PROGRESS_INTERVAL: "30"
+      # Per-step timeout — any single bench step that takes longer
+      # than this gets killed and the suite continues. The whole
+      # workflow can still complete; the offending step shows up
+      # in FAILURES with "timed out after Ns".
+      STEP_TIMEOUT_SECS: "1200"
     steps:
       - name: Checkout
         uses: actions/checkout@v4

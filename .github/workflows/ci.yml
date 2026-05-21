@@ -12,8 +12,15 @@ permissions:
 jobs:
   tests:
     runs-on: ubuntu-latest
+    # CI tests are "fast suite" only; a 90-min cap is generous but
+    # short enough that any silent hang gets surfaced quickly.
+    timeout-minutes: 90
     env:
       LIBOQS_VERSION: "0.11.0"
+      # Heartbeat every 20s — the fast suite is mostly correctness
+      # tests under 30s each, so this just surfaces slow ones visibly.
+      PROGRESS_INTERVAL: "20"
+      STEP_TIMEOUT_SECS: "600"
     steps:
       - name: Checkout
         uses: actions/checkout@v4

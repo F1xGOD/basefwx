@@ -281,12 +281,14 @@ class BaseFWXUnitTests(unittest.TestCase):
         right = os.urandom(4096)
         expected = bytes(a ^ b for a, b in zip(left, right))
         with patch.object(basefwx, "cp", None), \
+                patch.object(basefwx, "_cp_load_attempted", True), \
                 patch.dict(os.environ, {"BASEFWX_KFM_ACCEL": "auto", "BASEFWX_KFM_ACCEL_MIN_BYTES": "1"}, clear=False):
             got = basefwx._kfm_xor(left, right)
         self.assertEqual(got, expected)
 
     def test_kfm_cuda_mode_requires_cupy(self):
         with patch.object(basefwx, "cp", None), \
+                patch.object(basefwx, "_cp_load_attempted", True), \
                 patch.dict(os.environ, {"BASEFWX_KFM_ACCEL": "cuda"}, clear=False):
             with self.assertRaisesRegex(RuntimeError, "kFM CUDA mode requested"):
                 basefwx._kfm_should_use_cuda(4096)
@@ -534,7 +536,8 @@ class BaseFWXUnitTests(unittest.TestCase):
             basefwx.MediaCipher._HWACCEL_READY = False
             basefwx.MediaCipher._HWACCEL_CACHE = None
             with patch.object(basefwx.MediaCipher, "_select_hwaccel", return_value="nvenc"), \
-                    patch.object(basefwx, "cp", None):
+                    patch.object(basefwx, "cp", None), \
+                    patch.object(basefwx, "_cp_load_attempted", True):
                 plan = basefwx.MediaCipher._build_hw_execution_plan(
                     "jMGe",
                     stream_type="video",

@@ -203,15 +203,27 @@ cpp_build_xor() {
 
 java_build_xor() {
     # Don't pass --offline: on a fresh CI runner the gradle cache hasn't
-    # been populated yet (the workflow's explicit `gradle build` step
-    # runs AFTER the bench), so --offline fails to resolve BouncyCastle.
-    # Local re-runs are fast either way; gradle reuses ~/.gradle/caches.
+    # been populated yet, so --offline fails to resolve BouncyCastle.
+    # Capture gradle's stderr to a tmp file so a real failure surfaces
+    # its actual diagnostic in the smoke output instead of a silent rc=1.
+    local err_file
+    err_file=$(mktemp /tmp/basefwx-plugin-smoke-gradle.XXXXXX.log)
+    trap "rm -f '$err_file'" RETURN
+
     if [[ ! -f java/build/libs/basefwx-java.jar ]]; then
-        (cd java && gradle --no-daemon -q jar >/dev/null 2>&1) \
-            || { echo "basefwx-java.jar build failed (gradle missing or network blocked?)"; return 1; }
+        if ! (cd java && gradle --no-daemon -q jar) >"$err_file" 2>&1; then
+            # Echo gradle's last ~10 lines so the run_step capture
+            # contains the real error, not just "build failed".
+            echo "basefwx-java.jar build failed; gradle tail:"
+            tail -n 12 "$err_file" | sed 's/^/    /'
+            return 1
+        fi
     fi
-    (cd examples/plugins/xor-rotate-java && rm -rf build && gradle --no-daemon -q jar >/dev/null 2>&1) \
-        || { echo "xor-rotate-java jar build failed"; return 1; }
+    if ! (cd examples/plugins/xor-rotate-java && rm -rf build && gradle --no-daemon -q jar) >"$err_file" 2>&1; then
+        echo "xor-rotate-java jar build failed; gradle tail:"
+        tail -n 20 "$err_file" | sed 's/^/    /'
+        return 1
+    fi
     ls examples/plugins/xor-rotate-java/build/libs/basefwx-xor-rotate-java-*.jar >/dev/null 2>&1
 }
 

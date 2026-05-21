@@ -982,11 +982,20 @@ copy_input() {
 ensure_cpp() {
     local build_dir="$ROOT/cpp/build"
     log "C++ binary missing or stale; attempting build"
+    # BASEFWX_TESTING=ON: only present when this binary is being built for
+    # bench / test use. Enables the BASEFWX_TEST_KDF_ITERS env var so the
+    # fwxAES-light bench can drive a 32k-iter PBKDF2 to compare against
+    # Python's 32k-iter run. Production binaries never set this option.
+    local cpp_extra_args=()
+    if [[ "$TEST_MODE" == "bench" || "$BENCH_ONLY" == "1" || "$FBENCH" == "1" || -n "${BASEFWX_TESTING:-}" ]]; then
+        cpp_extra_args+=(-DBASEFWX_TESTING=ON)
+    fi
     time_cmd_no_fail "cpp_configure" cmake -S "$ROOT/cpp" -B "$build_dir" \
         -DCMAKE_BUILD_TYPE=Release \
         -DBASEFWX_REQUIRE_ARGON2="$CPP_REQUIRE_ARGON2" \
         -DBASEFWX_REQUIRE_OQS="$CPP_REQUIRE_OQS" \
-        -DBASEFWX_REQUIRE_LZMA="$CPP_REQUIRE_LZMA"
+        -DBASEFWX_REQUIRE_LZMA="$CPP_REQUIRE_LZMA" \
+        "${cpp_extra_args[@]}"
     if [[ ! -d "$build_dir" ]]; then
         log "CMake configure failed; build dir missing"
     fi
@@ -5164,6 +5173,13 @@ fi
 
 JAVA_BENCH_FLAGS_DEFAULT="-server -XX:+UseG1GC -XX:+TieredCompilation -XX:CompileThreshold=1000 -XX:+UseStringDeduplication -XX:MaxGCPauseMillis=200 -XX:InitialRAMPercentage=20 -XX:MaxRAMPercentage=75 -XX:+UseAES -XX:+UnlockDiagnosticVMOptions -XX:+UseAESIntrinsics -XX:+UseAESCTRIntrinsics -XX:+UseGHASHIntrinsics"
 JAVA_BENCH_FLAGS="${JAVA_BENCH_FLAGS:-$JAVA_BENCH_FLAGS_DEFAULT}"
+# 3.7.0: the Java fwxAES-light bench passes BASEFWX_TEST_KDF_ITERS so its
+# wall-clock matches Python's 32k-iter PBKDF2 setup. Constants.java gates
+# that env-var read behind the `basefwx.testing` sysprop so a stray env
+# can't weaken KDF cost in production builds. Pass the sysprop here so the
+# bench's intent is honored. Without this Java ignores the test-only env
+# and runs at full 600k iters, producing the +1451% "regression" we saw.
+JAVA_BENCH_FLAGS="$JAVA_BENCH_FLAGS -Dbasefwx.testing=true"
 read -r -a JAVA_BENCH_FLAGS_ARR <<<"$JAVA_BENCH_FLAGS"
 
 BENCH_FWXAES_MODE="${BENCH_FWXAES_MODE:-par}"

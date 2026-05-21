@@ -5463,13 +5463,19 @@ for idx in "${!BENCH_LANGS[@]}"; do
                 BASEFWX_BENCH_ITERS="$BENCH_ITERS_FILE" \
                 BASEFWX_BENCH_WORKERS="$BENCH_FILE_WORKERS" \
                 "$CPP_BIN" bench-pb512file "$BENCH_BYTES_FILE" "$PW" --no-master
+            # an7/dean7: pin to a single worker so the comparison against
+            # Python (which already defaults to BASEFWX_BENCH_AN7_WORKERS=1)
+            # measures per-operation latency, not multi-process throughput.
+            # The prior config let C++ run 3 parallel workers vs Python's
+            # 1, which made C++ look ~40% slower per row when it was
+            # actually 1.7× faster per single an7 call.
             time_cmd_bench "an7_cpp_total" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_FILE" \
                 BASEFWX_BENCH_ITERS="$BENCH_ITERS_FILE" \
-                BASEFWX_BENCH_WORKERS="$BENCH_FILE_WORKERS" \
+                BASEFWX_BENCH_WORKERS=1 \
                 "$CPP_BIN" bench-an7 "$BENCH_BYTES_FILE" "$PW" --no-master
             time_cmd_bench "dean7_cpp_total" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_FILE" \
                 BASEFWX_BENCH_ITERS="$BENCH_ITERS_FILE" \
-                BASEFWX_BENCH_WORKERS="$BENCH_FILE_WORKERS" \
+                BASEFWX_BENCH_WORKERS=1 \
                 "$CPP_BIN" bench-dean7 "$BENCH_BYTES_FILE" "$PW" --no-master
             for jmg_file in "${JMG_CASES[@]}"; do
                 time_cmd_bench "jmg_cpp_${jmg_file%.*}" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_FILE" \
@@ -5540,13 +5546,15 @@ for idx in "${!BENCH_LANGS[@]}"; do
                 BASEFWX_BENCH_ITERS="$BENCH_ITERS_FILE" \
                 BASEFWX_BENCH_WORKERS="$BENCH_FILE_WORKERS" \
                 "$JAVA_BIN" "${JAVA_BENCH_FLAGS_ARR[@]}" -jar "$JAVA_JAR" bench-pb512file "$BENCH_BYTES_FILE" "$PW" --no-master
+            # an7/dean7: serial (1 worker) to match the Python pin — see
+            # rationale at the C++ block above.
             time_cmd_bench "an7_java_total" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_FILE_JAVA" \
                 BASEFWX_BENCH_ITERS="$BENCH_ITERS_FILE" \
-                BASEFWX_BENCH_WORKERS="$BENCH_FILE_WORKERS" \
+                BASEFWX_BENCH_WORKERS=1 \
                 "$JAVA_BIN" "${JAVA_BENCH_FLAGS_ARR[@]}" -jar "$JAVA_JAR" bench-an7 "$BENCH_BYTES_FILE" "$PW" --no-master
             time_cmd_bench "dean7_java_total" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_FILE_JAVA" \
                 BASEFWX_BENCH_ITERS="$BENCH_ITERS_FILE" \
-                BASEFWX_BENCH_WORKERS="$BENCH_FILE_WORKERS" \
+                BASEFWX_BENCH_WORKERS=1 \
                 "$JAVA_BIN" "${JAVA_BENCH_FLAGS_ARR[@]}" -jar "$JAVA_JAR" bench-dean7 "$BENCH_BYTES_FILE" "$PW" --no-master
             for jmg_file in "${JMG_CASES[@]}"; do
                 time_cmd_bench "jmg_java_${jmg_file%.*}" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_FILE_JAVA" \

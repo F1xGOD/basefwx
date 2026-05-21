@@ -524,13 +524,13 @@ Bytes AesCtrTransform(const Bytes& key, const Bytes& iv, const Bytes& data) {
     if (iv.size() != 16) {
         throw std::runtime_error("AES-CTR expects 16-byte IV");
     }
-    
+
     using detail::UniqueCipherCtx;
     UniqueCipherCtx ctx(EVP_CIPHER_CTX_new());
     if (!ctx) {
         throw std::runtime_error("AES-CTR context allocation failed");
     }
-    
+
     Bytes out(data.size());
     int out_len = 0;
     int total_len = 0;
@@ -548,6 +548,39 @@ Bytes AesCtrTransform(const Bytes& key, const Bytes& iv, const Bytes& data) {
 
     out.resize(static_cast<std::size_t>(total_len));
     return out;
+}
+
+void AesCtrTransformInPlace(const Bytes& key, const Bytes& iv, Bytes& data) {
+    if (key.size() != 32) {
+        throw std::runtime_error("AES-CTR expects 32-byte key");
+    }
+    if (iv.size() != 16) {
+        throw std::runtime_error("AES-CTR expects 16-byte IV");
+    }
+    if (data.empty()) {
+        return;
+    }
+
+    using detail::UniqueCipherCtx;
+    UniqueCipherCtx ctx(EVP_CIPHER_CTX_new());
+    if (!ctx) {
+        throw std::runtime_error("AES-CTR context allocation failed");
+    }
+
+    Ensure(EVP_EncryptInit_ex(ctx.get(), EVP_aes_256_ctr(), nullptr, key.data(), iv.data()) == 1,
+           "AES-CTR init failed");
+    int out_len = 0;
+    // EVP_EncryptUpdate supports in-place when out == in for stream
+    // ciphers like CTR (no expansion). This skips the std::vector
+    // zero-fill that the out-of-place form pays per chunk.
+    Ensure(EVP_EncryptUpdate(ctx.get(), data.data(), &out_len, data.data(), static_cast<int>(data.size())) == 1,
+           "AES-CTR update failed");
+    int final_len = 0;
+    Ensure(EVP_EncryptFinal_ex(ctx.get(), data.data() + out_len, &final_len) == 1,
+           "AES-CTR final failed");
+    if (static_cast<std::size_t>(out_len + final_len) != data.size()) {
+        throw std::runtime_error("AES-CTR in-place length mismatch");
+    }
 }
 
 Bytes Sha3_512(const Bytes& data) {

@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "latest": "test-new-3.7",
+  "latest": "improve-testing",
   "snapshots": [
     {
       "tag": "v3.6.4",
@@ -120,6 +120,12 @@
       "tag": "manual-20260104-050425",
       "results": "benchmarks-manual-20260104-050425.json",
       "txt": "benchmarks-manual-20260104-050425.txt"
+    },
+    {
+      "tag": "improve-testing",
+      "results": "benchmarks-improve-testing.json",
+      "txt": "benchmarks-improve-testing.txt",
+      "java_backends": "java-backends-improve-testing.json"
     },
     {
       "tag": "PRE_RELEASE-3.6.0",

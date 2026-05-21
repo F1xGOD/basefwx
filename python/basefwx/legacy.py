@@ -1,3 +1,7 @@
+# BaseFWX - Cryptography Engine
+# Copyright (C) 2020-2026  FixCraft Inc.
+# Licensed under the GNU General Public License v3.0.
+
 # BASEFWX ENCRYPTION ENGINE ->
 
 import os as _os_module
@@ -12129,15 +12133,11 @@ class basefwx:
 
         return maindc(string)
 
-    # UNDCODABLE IRREVERSIBLE CODELESS ENCODE - SECURITY: ❙❙❙❙
-    @staticmethod
-    def b1024encode(string: str):
-        if not string:
-            raise ValueError("b1024encode expects non-empty input")
-        # Optimized path: since bi512encode only produces a hash, we can stream
-        # the computation to avoid building huge intermediate strings
-        a512_result = basefwx.a512encode(string)
-        return basefwx.bi512encode(a512_result)
+    # b1024encode retired in 3.6.5 — was bi512encode(a512encode(string)).
+    # Caller code that needs the same byte-for-byte output should compose
+    # the two primitives directly. Removed for parity with the C++ and
+    # Java runtimes and to trim a large chunk of cross-runtime test time
+    # the alias contributed without adding any new behavior.
 
     # CODELESS ENCODE - SECURITY: ❙
     @staticmethod
@@ -12180,7 +12180,6 @@ class basefwx:
 # FWX512R - b512encode/b512decode V2.0 ★
 # FWX512I - bi512encode V3.4 ★
 # FWX512C - a512encode/a512decode V2.0 ❗❗❗ (NOT RECCOMENDED)
-# FWX1024I - b1024encode V4.0 ★ (BEST)
 # FWX256R - b256encode/b256decode V1.3 ❗❗❗ (NOT RECCOMENDED)
 
 # HOW TO USE: basefwx.ENCRYPTION-TYPE("text","password")

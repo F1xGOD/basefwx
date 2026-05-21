@@ -1,3 +1,9 @@
+/*
+ * BaseFWX - Cryptography Engine
+ * Copyright (C) 2020-2026  FixCraft Inc.
+ * Licensed under the GNU General Public License v3.0.
+ */
+
 #include "basefwx/basefwx.hpp"
 
 #include "basefwx/codec.hpp"
@@ -1516,16 +1522,33 @@ std::string ResolvePassword(const std::string& input) {
     if (input.empty()) {
         return input;
     }
-    std::filesystem::path candidate(input);
-    if (input.rfind("~/", 0) == 0 || input.rfind("~\\", 0) == 0) {
-        std::string home = basefwx::env::HomeDir();
-        if (!home.empty()) {
-            candidate = std::filesystem::path(home) / input.substr(2);
-        }
+    // 3.6.5: bare passwords are ALWAYS literal. Filesystem read is opt-in
+    // via an explicit `file://` URI scheme. The old auto-detect behavior
+    // (read input as a file if it happened to name an existing path)
+    // could silently turn a user's password into a totally different
+    // secret depending on filesystem state, and let an attacker who
+    // controlled a file at a guessable path downgrade unrelated wraps
+    // to a known key. `password://literal` is also recognized for
+    // callers that want to force the literal-string interpretation even
+    // when the string happens to contain `://`.
+    constexpr std::string_view kFileScheme = "file://";
+    constexpr std::string_view kPasswordScheme = "password://";
+    if (input.rfind(kPasswordScheme, 0) == 0) {
+        return input.substr(kPasswordScheme.size());
     }
-    std::error_code ec;
-    if (std::filesystem::exists(candidate, ec) && std::filesystem::is_regular_file(candidate, ec)) {
-        auto data = ReadFile(candidate.string());
+    if (input.rfind(kFileScheme, 0) == 0) {
+        std::string path = input.substr(kFileScheme.size());
+        if (path.rfind("~/", 0) == 0 || path.rfind("~\\", 0) == 0) {
+            std::string home = basefwx::env::HomeDir();
+            if (!home.empty()) {
+                path = (std::filesystem::path(home) / path.substr(2)).string();
+            }
+        }
+        std::error_code ec;
+        if (!std::filesystem::exists(path, ec) || !std::filesystem::is_regular_file(path, ec)) {
+            throw std::runtime_error("Password file not found: " + path);
+        }
+        auto data = ReadFile(path);
         return std::string(reinterpret_cast<const char*>(data.data()), data.size());
     }
     return input;
@@ -1535,8 +1558,12 @@ void RequireStrongPasswordForEncryption(const std::string& password, std::string
     if (password.empty()) {
         return;
     }
-    if (!basefwx::env::Get("BASEFWX_TEST_KDF_ITERS").empty()
-        || basefwx::env::IsEnabled("BASEFWX_ALLOW_WEAK_PASSWORD", false)) {
+#if defined(BASEFWX_TESTING) && BASEFWX_TESTING
+    if (!basefwx::env::TestKdfIters().empty()) {
+        return;
+    }
+#endif
+    if (basefwx::env::IsEnabled("BASEFWX_ALLOW_WEAK_PASSWORD", false)) {
         return;
     }
     std::size_t min_len = basefwx::constants::kMinimumPasswordLength;
@@ -1809,9 +1836,8 @@ std::string A512Decode(const std::string& input) {
     }
 }
 
-std::string B1024Encode(const std::string& input) {
-    return Bi512Encode(A512Encode(input));
-}
+// B1024Encode retired in 3.6.5 — was Bi512Encode(A512Encode(input));
+// see basefwx.hpp for rationale.
 
 std::string B512Encode(const std::string& input, const std::string& password, bool use_master, const KdfOptions& kdf) {
     std::string resolved = ResolvePassword(password);

@@ -1,3 +1,9 @@
+/*
+ * BaseFWX - Cryptography Engine
+ * Copyright (C) 2020-2026  FixCraft Inc.
+ * Licensed under the GNU General Public License v3.0.
+ */
+
 package com.fixcraft.basefwx;
 
 import java.io.ByteArrayOutputStream;
@@ -31,15 +37,13 @@ public final class EcKeys {
     private EcKeys() {}
 
     public static boolean masterEcAutoCreateEnabled() {
-        String raw = System.getenv(Constants.MASTER_EC_CREATE_IF_MISSING_ENV);
-        if (raw == null) {
-            return false;
-        }
-        String normalized = raw.trim().toLowerCase();
-        return "1".equals(normalized)
-            || "true".equals(normalized)
-            || "yes".equals(normalized)
-            || "on".equals(normalized);
+        // 3.6.5: silent EC master autogeneration removed (mirrors the C++
+        // change in keywrap.cpp). The env var stays referenced so anyone
+        // setting it gets a deterministic "feature is gone" rather than
+        // surprising behavior — see basefwx CHANGELOG 3.6.5 for the
+        // rationale. To provision a master EC key, do it explicitly
+        // out-of-band and configure the resulting public-key path.
+        return false;
     }
 
     public static PublicKey loadMasterPublic(boolean createIfMissing) {

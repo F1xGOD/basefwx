@@ -1,3 +1,9 @@
+/*
+ * BaseFWX - Cryptography Engine
+ * Copyright (C) 2020-2026  FixCraft Inc.
+ * Licensed under the GNU General Public License v3.0.
+ */
+
 package com.fixcraft.basefwx;
 
 import java.io.IOException;
@@ -165,7 +171,7 @@ public final class LiveCipher {
             | ((long) (in[offset + 7] & 0xFF));
     }
 
-    public static final class LiveEncryptor {
+    public static final class LiveEncryptor implements AutoCloseable {
         private final byte[] password;
         private final boolean useMaster;
 
@@ -174,6 +180,7 @@ public final class LiveCipher {
         private long sequence;
         private byte[] key;
         private byte[] noncePrefix;
+        private boolean closed;
 
         public LiveEncryptor(String password, boolean useMaster) {
             this.password = BaseFwx.resolvePasswordBytes(password, useMaster);
@@ -285,7 +292,7 @@ public final class LiveCipher {
                 body = Arrays.copyOf(body, Math.max(4, 4 + written));
             }
             byte[] frame = packFrame(Constants.LIVE_FRAME_TYPE_DATA, sequence, body);
-            sequence += 1L;
+            advanceSequence();
             return frame;
         }
 
@@ -300,13 +307,48 @@ public final class LiveCipher {
             byte[] aad = liveAad(Constants.LIVE_FRAME_TYPE_FIN, sequence, 0);
             byte[] finBlob = Crypto.aesGcmEncryptWithIv(key, nonce, new byte[0], aad);
             byte[] frame = packFrame(Constants.LIVE_FRAME_TYPE_FIN, sequence, finBlob);
-            sequence += 1L;
+            advanceSequence();
             finalized = true;
             return frame;
         }
+
+        // Refuse to wrap the 64-bit nonce-derivation counter — nonce reuse
+        // under the same key would break AES-GCM confidentiality. 2^63 frames
+        // is more than any reasonable session would ever produce; rotate
+        // the key upstream instead.
+        private void advanceSequence() {
+            if (sequence == Long.MAX_VALUE) {
+                throw new IllegalStateException(
+                        "LiveEncryptor sequence counter exhausted; rotate the key");
+            }
+            sequence += 1L;
+        }
+
+        @Override
+        public void close() {
+            if (closed) {
+                return;
+            }
+            closed = true;
+            // Zeroize all secret material before the byte[] references
+            // become GC'able. The JVM may still keep dirty copies around
+            // depending on allocator behavior; this is best-effort hygiene
+            // to match the C++ side's SecureClear pattern.
+            if (password != null) {
+                Arrays.fill(password, (byte) 0);
+            }
+            if (key != null) {
+                Arrays.fill(key, (byte) 0);
+                key = new byte[0];
+            }
+            if (noncePrefix != null) {
+                Arrays.fill(noncePrefix, (byte) 0);
+                noncePrefix = new byte[0];
+            }
+        }
     }
 
-    public static final class LiveDecryptor {
+    public static final class LiveDecryptor implements AutoCloseable {
         private final byte[] password;
         private final boolean useMaster;
 
@@ -318,6 +360,7 @@ public final class LiveCipher {
         private byte[] buffer;
         private int bufferStart;
         private int bufferEnd;
+        private boolean closed;
 
         public LiveDecryptor(String password, boolean useMaster) {
             this.password = BaseFwx.resolvePasswordBytes(password, useMaster);
@@ -589,34 +632,61 @@ public final class LiveCipher {
                 throw new IllegalArgumentException("Trailing bytes after live stream FIN");
             }
         }
+
+        @Override
+        public void close() {
+            if (closed) {
+                return;
+            }
+            closed = true;
+            if (password != null) {
+                Arrays.fill(password, (byte) 0);
+            }
+            if (key != null) {
+                Arrays.fill(key, (byte) 0);
+                key = new byte[0];
+            }
+            if (noncePrefix != null) {
+                Arrays.fill(noncePrefix, (byte) 0);
+                noncePrefix = new byte[0];
+            }
+            if (buffer != null && buffer.length > 0) {
+                Arrays.fill(buffer, (byte) 0);
+                buffer = new byte[0];
+                bufferStart = 0;
+                bufferEnd = 0;
+            }
+        }
     }
 
     public static List<byte[]> fwxAesLiveEncryptChunks(Iterable<byte[]> chunks,
                                                        String password,
                                                        boolean useMaster) {
-        LiveEncryptor encryptor = new LiveEncryptor(password, useMaster);
-        List<byte[]> out = new ArrayList<byte[]>();
-        out.add(encryptor.start());
-        for (byte[] chunk : chunks) {
-            byte[] frame = encryptor.update(chunk == null ? new byte[0] : chunk);
-            if (frame.length > 0) {
-                out.add(frame);
+        try (LiveEncryptor encryptor = new LiveEncryptor(password, useMaster)) {
+            List<byte[]> out = new ArrayList<byte[]>();
+            out.add(encryptor.start());
+            for (byte[] chunk : chunks) {
+                byte[] frame = encryptor.update(chunk == null ? new byte[0] : chunk);
+                if (frame.length > 0) {
+                    out.add(frame);
+                }
             }
+            out.add(encryptor.finish());
+            return out;
         }
-        out.add(encryptor.finish());
-        return out;
     }
 
     public static List<byte[]> fwxAesLiveDecryptChunks(Iterable<byte[]> chunks,
                                                        String password,
                                                        boolean useMaster) {
-        LiveDecryptor decryptor = new LiveDecryptor(password, useMaster);
-        List<byte[]> out = new ArrayList<byte[]>();
-        for (byte[] chunk : chunks) {
-            out.addAll(decryptor.update(chunk == null ? new byte[0] : chunk));
+        try (LiveDecryptor decryptor = new LiveDecryptor(password, useMaster)) {
+            List<byte[]> out = new ArrayList<byte[]>();
+            for (byte[] chunk : chunks) {
+                out.addAll(decryptor.update(chunk == null ? new byte[0] : chunk));
+            }
+            decryptor.finish();
+            return out;
         }
-        decryptor.finish();
-        return out;
     }
 
     public static long fwxAesLiveEncryptStream(InputStream source,
@@ -628,9 +698,8 @@ public final class LiveCipher {
             throw new IllegalArgumentException("Source and destination streams are required");
         }
         int chunk = chunkSize > 0 ? chunkSize : Constants.STREAM_CHUNK_SIZE;
-        LiveEncryptor encryptor = new LiveEncryptor(password, useMaster);
         long total = 0L;
-        try {
+        try (LiveEncryptor encryptor = new LiveEncryptor(password, useMaster)) {
             byte[] header = encryptor.start();
             dest.write(header);
             total += header.length;
@@ -663,9 +732,8 @@ public final class LiveCipher {
             throw new IllegalArgumentException("Source and destination streams are required");
         }
         int chunk = chunkSize > 0 ? chunkSize : Constants.STREAM_CHUNK_SIZE;
-        LiveDecryptor decryptor = new LiveDecryptor(password, useMaster);
         long written = 0L;
-        try {
+        try (LiveDecryptor decryptor = new LiveDecryptor(password, useMaster)) {
             byte[] buf = new byte[chunk];
             int read;
             while ((read = source.read(buf)) != -1) {

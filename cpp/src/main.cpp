@@ -1,3 +1,9 @@
+/*
+ * BaseFWX - Cryptography Engine
+ * Copyright (C) 2020-2026  FixCraft Inc.
+ * Licensed under the GNU General Public License v3.0.
+ */
+
 #include "basefwx/basefwx.hpp"
 #include "basefwx_build_info.hpp"
 #include "basefwx_build_stamp.hpp"
@@ -206,7 +212,7 @@ bool IsLightCommand(const std::string& command) {
         "n10-enc", "n10-dec",
         "b256-enc", "b256-dec",
         "a512-enc", "a512-dec",
-        "bi512-enc", "b1024-enc",
+        "bi512-enc",
         "hash512", "uhash513"
     };
     return kLightCommands.count(command) > 0;
@@ -320,7 +326,38 @@ bool IsStdinInteractive() {
 #endif
 }
 
+// Shared synchronization so background telemetry (CommandTelemetry, defined
+// far below) cannot stomp on an interactive password prompt. The pause counter
+// blocks new emissions; the mutex serializes any in-flight write; and the
+// callback lets a guard wipe an inline (\r-rewritten) stats line so the prompt
+// is visible. The callback is registered by the active CommandTelemetry.
+struct TelemetrySuspender {
+    static std::atomic<int> pause_count;
+    static std::mutex io_mu;
+    static std::function<void()> clear_active_line;
+};
+inline std::atomic<int> TelemetrySuspender::pause_count{0};
+inline std::mutex TelemetrySuspender::io_mu;
+inline std::function<void()> TelemetrySuspender::clear_active_line;
+
+class TelemetryPauseGuard {
+  public:
+    TelemetryPauseGuard() {
+        TelemetrySuspender::pause_count.fetch_add(1, std::memory_order_acq_rel);
+        std::lock_guard<std::mutex> lock(TelemetrySuspender::io_mu);
+        if (TelemetrySuspender::clear_active_line) {
+            TelemetrySuspender::clear_active_line();
+        }
+    }
+    ~TelemetryPauseGuard() {
+        TelemetrySuspender::pause_count.fetch_sub(1, std::memory_order_acq_rel);
+    }
+    TelemetryPauseGuard(const TelemetryPauseGuard&) = delete;
+    TelemetryPauseGuard& operator=(const TelemetryPauseGuard&) = delete;
+};
+
 std::string ReadHiddenPassword(std::string_view prompt) {
+    TelemetryPauseGuard pause_telemetry;
     std::cerr << prompt;
     std::cerr.flush();
 #if defined(_WIN32)
@@ -1770,7 +1807,6 @@ void PrintUsage() {
     std::cout << "  a512-enc <text>\n";
     std::cout << "  a512-dec <text>\n";
     std::cout << "  bi512-enc <text>\n";
-    std::cout << "  b1024-enc <text>\n";
     std::cout << "  hash512 <text>\n";
     std::cout << "  uhash513 <text>\n";
     std::cout << "  b512-enc <text> [--password <password>] " << master_flags << " [--kdf <label>] [--pbkdf2-iters <n>] [--no-fallback]\n";
@@ -1831,7 +1867,7 @@ void PrintBashCompletion(const std::string& argv0) {
         << "  cur=\"${COMP_WORDS[COMP_CWORD]}\"\n"
         << "  cmd=\"${COMP_WORDS[1]}\"\n"
         << "  local commands=\"help version completion info identify probe b64-enc b64-dec n10-enc n10-dec n10file-enc n10file-dec "
-           "kFMe kFMd hash512 uhash513 a512-enc a512-dec bi512-enc b1024-enc b256-enc b256-dec "
+           "kFMe kFMd hash512 uhash513 a512-enc a512-dec bi512-enc b256-enc b256-dec "
            "b512-enc b512-dec pb512-enc pb512-dec b512file-enc b512file-dec b512file-bytes-rt pb512file-bytes-rt "
            "pb512file-enc pb512file-dec fwxaes-enc fwxaes-dec fwxaes-heavy-enc fwxaes-heavy-dec fwxaes-stream-enc fwxaes-stream-dec fwxaes-live-enc "
            "fwxaes-live-dec an7 dean7 jmge jmgd bench-text bench-hash bench-fwxaes bench-fwxaes-par bench-an7 bench-dean7 bench-live bench-b512file "
@@ -1963,12 +1999,18 @@ class CommandTelemetry {
             return;
         }
         EmitHeader();
+        {
+            std::lock_guard<std::mutex> lock(TelemetrySuspender::io_mu);
+            TelemetrySuspender::clear_active_line = [this]() { ClearInlineStatsLineLocked(); };
+        }
         running_.store(true, std::memory_order_relaxed);
         worker_ = std::thread([this]() { Loop(); });
     }
 
     ~CommandTelemetry() {
         Stop();
+        std::lock_guard<std::mutex> lock(TelemetrySuspender::io_mu);
+        TelemetrySuspender::clear_active_line = nullptr;
     }
 
     CommandTelemetry(const CommandTelemetry&) = delete;
@@ -2106,7 +2148,7 @@ class CommandTelemetry {
             }
             if (gpu.second.has_value()) {
                 line << " \\ " << std::fixed << std::setprecision(0) << *gpu.second << "C";
-                std::cerr << line.str() << "\n";
+                EmitStatsLine(line.str());
                 return;
             }
         }
@@ -2244,6 +2286,10 @@ class CommandTelemetry {
     }
 
     void EmitStatsLine(const std::string& text) {
+        std::lock_guard<std::mutex> lock(TelemetrySuspender::io_mu);
+        if (TelemetrySuspender::pause_count.load(std::memory_order_acquire) > 0) {
+            return;
+        }
         if (!inline_stats_) {
             std::cerr << text << "\n";
             return;
@@ -2255,6 +2301,17 @@ class CommandTelemetry {
         last_stats_width_ = line.size();
         had_stats_line_ = true;
         std::cerr << "\r" << line << std::flush;
+    }
+
+    // Caller must hold TelemetrySuspender::io_mu. Wipes any \r-rewritten stats
+    // line so a subsequent prompt is visible on a clean line.
+    void ClearInlineStatsLineLocked() {
+        if (!inline_stats_ || !had_stats_line_) {
+            return;
+        }
+        std::cerr << "\r" << std::string(last_stats_width_, ' ') << "\r" << std::flush;
+        had_stats_line_ = false;
+        last_stats_width_ = 0;
     }
 
     std::pair<std::optional<double>, std::optional<double>> SampleGpuPercentTemp() {
@@ -3059,13 +3116,10 @@ int main(int argc, char** argv) {
                     g_bench_sink.fetch_xor(digest.size(), std::memory_order_relaxed);
                     return digest.size();
                 };
-            } else if (method == "b1024") {
-                op = [&]() {
-                    std::string digest = basefwx::B1024Encode(text);
-                    g_bench_sink.fetch_xor(digest.size(), std::memory_order_relaxed);
-                    return digest.size();
-                };
             } else {
+                // b1024 was a Bi512(A512(...)) alias — retired in 3.6.5.
+                // Chain the primitives in your own code if you need that
+                // composition.
                 throw std::runtime_error("Unsupported hash benchmark method: " + method);
             }
             auto run = [&]() {
@@ -3638,14 +3692,7 @@ int main(int argc, char** argv) {
             std::cout << basefwx::Bi512Encode(argv[2]) << "\n";
             return 0;
         }
-        if (command == "b1024-enc") {
-            if (argc < 3) {
-                PrintUsage();
-                return 2;
-            }
-            std::cout << basefwx::B1024Encode(argv[2]) << "\n";
-            return 0;
-        }
+        // b1024-enc retired in 3.6.5; was an alias for `bi512-enc $(a512-enc text)`.
         if (command == "b256-enc") {
             if (argc < 3) {
                 PrintUsage();

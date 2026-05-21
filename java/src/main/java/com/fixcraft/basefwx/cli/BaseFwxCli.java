@@ -1,3 +1,9 @@
+/*
+ * BaseFWX - Cryptography Engine
+ * Copyright (C) 2020-2026  FixCraft Inc.
+ * Licensed under the GNU General Public License v3.0.
+ */
+
 package com.fixcraft.basefwx.cli;
 
 import com.fixcraft.basefwx.BaseFwx;
@@ -529,8 +535,7 @@ public final class BaseFwxCli {
                 return BaseFwx.uhash513(text);
             case "bi512":
                 return BaseFwx.bi512Encode(text);
-            case "b1024":
-                return BaseFwx.b1024Encode(text);
+            // b1024 retired in 3.6.5; chain bi512(a512(text)) in caller code.
             default:
                 throw new IllegalArgumentException("Unsupported hash method " + method);
         }
@@ -601,7 +606,11 @@ public final class BaseFwxCli {
         System.out.println("java: " + System.getProperty("java.version", "unknown"));
         System.out.println("gpg_fingerprint: " + VersionInfo.gpgFingerprint());
         System.out.println("gpg_signature: not checked (release signatures are detached)");
-        System.out.println("features: argon2=OFF oqs=OFF lzma=OFF");
+        // 3.6.5: Argon2id is supported in the Java runtime via BouncyCastle's
+        // Argon2BytesGenerator (always available as a runtime dep), so the
+        // feature flag flips on. OQS / LZMA remain OFF in Java; configure
+        // them out-of-band on the C++ side if you need full coverage.
+        System.out.println("features: argon2=ON oqs=OFF lzma=OFF");
     }
 
     private static boolean truthy(String raw) {
@@ -1501,13 +1510,7 @@ public final class BaseFwxCli {
                     }
                     System.out.println(BaseFwx.bi512Encode(args[1]));
                     return;
-                case "b1024-enc":
-                    if (argc < 2) {
-                        usage();
-                        return;
-                    }
-                    System.out.println(BaseFwx.b1024Encode(args[1]));
-                    return;
+                // b1024-enc retired in 3.6.5; was `bi512-enc $(a512-enc text)`.
                 default:
                     usage();
             }
@@ -1546,7 +1549,6 @@ public final class BaseFwxCli {
         System.out.println("  a512-enc <text>");
         System.out.println("  a512-dec <text>");
         System.out.println("  bi512-enc <text>");
-        System.out.println("  b1024-enc <text>");
         System.out.println("  b512-enc <text> <password> [--use-master|--no-master]");
         System.out.println("  b512-dec <text> <password> [--use-master|--no-master]");
         System.out.println("  pb512-enc <text> <password> [--use-master|--no-master]");

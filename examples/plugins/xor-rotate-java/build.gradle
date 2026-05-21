@@ -1,0 +1,48 @@
+// BaseFWX example Java plugin — xor-rotate.
+//
+// Build (uses the basefwx-java SPI jar already built in the main
+// repo at ../../../java/build/libs/basefwx-java.jar):
+//
+//     gradle --no-daemon jar
+//
+// Produces:  build/libs/basefwx-xor-rotate-java.jar
+//
+// Drop the resulting .jar on the BaseFWX host's classpath and the
+// runtime will discover the plugin via ServiceLoader.
+
+plugins {
+    id 'java'
+}
+
+group = 'com.example.basefwx'
+version = '1.0.0'
+
+// Point at the basefwx-java jar built in the main repo. Override via
+// -PbasefwxJar=/path/to/basefwx-java.jar.
+def basefwxJar = project.findProperty('basefwxJar')
+    ?: rootProject.file('../../../java/build/libs/basefwx-java.jar').absolutePath
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    compileOnly files(basefwxJar)
+}
+
+[compileJava].forEach { task ->
+    task.sourceCompatibility = '1.8'
+    task.targetCompatibility = '1.8'
+    task.options.encoding = 'UTF-8'
+}
+
+jar {
+    baseName = 'basefwx-xor-rotate-java'
+    manifest {
+        attributes(
+            'Implementation-Title': 'basefwx-xor-rotate-java',
+            'Implementation-Version': version,
+            'Basefwx-Plugin-Id': '8d4c2a01-1f70-4d3a-91ab-2c5e8f917b04',
+        )
+    }
+}

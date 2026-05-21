@@ -2,6 +2,54 @@
 
 ## [Unreleased]
 
+## [v3.7.0] - 2026-05-21
+
+Compare: <https://github.com/F1xGOD/basefwx/compare/v3.6.4...v3.7.0>
+
+> The audit-driven hardening that briefly sat under `[v3.6.5]` in working
+> trees is rolled into 3.7.0 alongside the new **blackbox plugin** ABI.
+> 3.6.5 was never tagged or published.
+
+### Added
+- **Blackbox plugin core (public ABI).** `cpp/include/basefwx/plugin.h` declares the C ABI for caller-supplied `.so` / `.dll` drivers that pre-and-post wrap the AEAD payload with custom logic — letting deployments add closed-source obfuscation on top of an open-source crypto core. Position is caller-selectable (pre-AEAD, post-AEAD, or both). The 3.7.0 ship ships the ABI **header only** plus one example plugin (`examples/plugins/passthrough/`) so reviewers can read the contract before any runtime code commits to it. Loader (`dlopen` + JNI bridge + Python ctypes), wire-format plugin-tag bytes, and the `basefwx-plugin-verify` tool are scoped for 3.7.x point releases. See `examples/plugins/README.md`.
+- **Argon2id user-KDF wrap on the Java runtime.** `KeyWrap.deriveUserKeyWithLabel` now routes the `argon2id` / `argon2` labels through BouncyCastle's `Argon2BytesGenerator` (already a runtime dep). `Crypto.argon2idHashRaw` is the new public primitive mirroring `basefwx::crypto::Argon2idHashRaw` byte-for-byte. The `KdfOptions` Java class grows `argon2TimeCost` / `argon2MemoryKib` / `argon2Parallelism` fields with defaults that mirror the C++ constants; parallelism defaults to `Runtime.availableProcessors()` (matches C++ `DefaultArgon2Parallelism`). The `❌` row in COMPATIBILITY.md flips to `✅`. The `UnsupportedKdfException` typed exception is retained for truly unsupported labels.
+- **`hardenKdfOptions` short-password step-up applies to Argon2 too** (mirrors `kShortArgon2*` from constants.hpp).
+
+### Deprecated
+- **`Bi512Encode` / `bi512encode` / `bi512Encode`** (C++ / Python / Java). Marked `[[deprecated]]`, `@Deprecated`, `DeprecationWarning`. It's SHA-256 with a custom prefilter — the prefilter adds no security beyond SHA-256 itself. Use `Hash512` / `hash512` / `Uhash513` / `uhash513` for new code. Existing blobs continue to encode/decode.
+- **`A512Encode` / `A512Decode` / `a512encode` / `a512decode`** (C++ / Python / Java). Reversible obfuscation codec with no security goal (no key, no AEAD), slower than base64 for the same output. Use `B256Encode`/`B256Decode` or plain base64 for new reversible-encoding needs. Existing blobs continue to encode/decode.
+
+### Security
+- **Drop PBKDF2-32k second-chance fallback** in C++ `keywrap.cpp::RecoverMaskKey`. AES-GCM auth failure (and any other thrown exception during decode) is now terminal — no retry with a 20× weaker derivation. Pre-3.x blobs that relied on this fallback are unsupported per SECURITY.md.
+- **`ResolvePassword` requires an explicit URI scheme** to load from disk: `file://<path>` reads, `password://<literal>` forces literal, bare strings are always literal. Removes the silent reinterpretation where a password equal to an existing path was read as that file's contents.
+- **Remove baked maintainer ML-KEM-768 public key** from upstream artifacts. Deployments that want a baked key now opt in at build time via `-DBASEFWX_MASTER_PQ_PUB_B64=<base64-key>` (C++ CMake option) or `-Dbasefwx.master.pq.public.b64=<base64-key>` (Java sysprop). The `BASEFWX_MASTER_PQ_ALLOW_BAKED` / `ALLOW_BAKED_PUB` env-var gates are gone with the literal.
+- **Remove `BASEFWX_MASTER_EC_CREATE_IF_MISSING`** silent EC master-keypair auto-generation in both C++ `keywrap.cpp` and Java `EcKeys.masterEcAutoCreateEnabled`. Callers must provision the EC keypair explicitly.
+- **Remove hardcoded Windows `W:\master_pq.sk`** maintainer-machine path in `pq.cpp::LoadMasterPrivateKey`. Configure via the new `BASEFWX_MASTER_PQ_SK` env var, falling back to `~/master_pq.sk`.
+- **Gate `BASEFWX_TEST_KDF_ITERS` behind a compile-time flag.** Honored in C++ only when built with `-DBASEFWX_TESTING=ON`; in Java only when run with `-Dbasefwx.testing=true` or `BASEFWX_TESTING=1`. Single `basefwx::env::TestKdfIters()` helper threads through every call site; the Java side adds `Constants.TESTING_BUILD`.
+- **Tighten fwxAES parser bounds.** Wrap-mode `header_len_wrap` capped at 64 KiB (was 4 MiB — real wrap headers are 200–500 bytes), PBKDF2-mode `iters` must be ≥ 10 000. A `kdf`-byte flip can no longer reinterpret one field as a plausible value of the other.
+- **Cap `format::UnpackLengthPrefixed`** at 64 MiB total / 64 MiB per part on the C++ side (matches the existing Java cap that's been there since 3.4.x). Malformed blobs declaring 4 GiB parts no longer survive to upstream pre-sizing code.
+- **Cap `pq::ReadFileBytes`** at 4 MiB. A symlink under `BASEFWX_MASTER_PQ_PUB` pointing at `/dev/zero` no longer OOMs the process.
+- **Refuse to wrap the LiveCipher sequence counter.** C++ `LiveEncryptor::Update` / `Finalize` and Java `LiveEncryptor.update` / `finish` now throw when the counter would advance past `2^64-1` / `Long.MAX_VALUE`, preventing AES-GCM nonce reuse under the same key.
+
+### Changed
+- **`fwxaes.cpp` wipes all key locals via `SecretGuard`.** 3.6.4 had zero `SecureClear` calls in this file vs nine in `keywrap.cpp`; every PBKDF2-derived AES key and HKDF mask key was leaked to the free-list. `SecretGuard` is now declared after the secrets it tracks so destruction order is correct (see code comments for the rationale — declaring it first is a use-after-free).
+- **Java `LiveEncryptor` and `LiveDecryptor` implement `AutoCloseable`** and zeroize `password`, `key`, `noncePrefix`, and the decrypt buffer on `close()`. The four in-package callers in `fwxAesLive{Encrypt,Decrypt}{Chunks,Stream}` now use try-with-resources.
+- **Java `KeyWrap` throws typed `UnsupportedKdfException`** (extends `IllegalArgumentException`, exposes `getKdfLabel()`) when asked to decode Argon2-wrapped blobs. Callers can route Argon2 blobs to a native helper without string-matching the exception message. The platform stance is unchanged — Java still rejects Argon2 by design (see SECURITY.md / COMPATIBILITY.md).
+- **Java `KeyWrap` wipes `userKey` and `wrapped`** in `prepareMaskKey` / `recoverMaskKey` via `Arrays.fill` in `finally` blocks.
+
+### Removed
+- **`b1024` retired in all three runtimes.** It was a one-line alias of `Bi512Encode(A512Encode(input))` — no new security, no new functionality, and a large chunk of the cross-runtime test-suite wall-clock. C++ `B1024Encode`, Java `BaseFwx.b1024Encode`, Python `basefwx.b1024encode`, the `b1024-enc` CLI subcommand (C++ + Java), and the `b1024` hash-bench method are all gone. Callers wanting the same output can chain `bi512(a512(input))` themselves. `scripts/test_all.sh` benchmarks and compare-blocks updated; docs cleaned.
+- `BASEFWX_MASTER_PQ_ALLOW_BAKED` env var (C++ + Java).
+- `ALLOW_BAKED_PUB` env-var alias (C++ + Java).
+- `BASEFWX_MASTER_EC_CREATE_IF_MISSING` env-driven auto-create (C++ + Java). The env-var name constant is retained in `Constants.MASTER_EC_CREATE_IF_MISSING_ENV` so callers still compile.
+- Baked `kMasterPqPublicB64` literal in `constants.hpp` and `Constants.MASTER_PQ_PUBLIC_B64` in Java.
+- Windows-specific `W:\master_pq.sk` path in `pq.cpp::LoadMasterPrivateKey`.
+- PBKDF2-32k second-chance branch in `keywrap.cpp::RecoverMaskKey`.
+
+### Notes
+- Wire format byte-identical to 3.6.4. All blobs encrypted with 3.6.4 (any algorithm, any tier) decrypt unchanged.
+- See [RELEASE-NOTES-3.6.5.md](RELEASE-NOTES-3.6.5.md) for the upgrade walkthrough.
+
 ## [v3.6.3] - 2026-03-19
 
 Compare: <https://github.com/F1xGOD/basefwx/compare/v3.6.2...v3.6.3>

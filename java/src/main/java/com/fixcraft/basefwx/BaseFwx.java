@@ -1,3 +1,9 @@
+/*
+ * BaseFWX - Cryptography Engine
+ * Copyright (C) 2020-2026  FixCraft Inc.
+ * Licensed under the GNU General Public License v3.0.
+ */
+
 package com.fixcraft.basefwx;
 
 import java.io.BufferedInputStream;
@@ -943,6 +949,12 @@ public final class BaseFwx {
         return hexToString(finalDigest);
     }
 
+    /**
+     * @deprecated since 3.7.0 — {@code bi512Encode} is SHA-256 with a custom
+     * prefilter that adds no security beyond SHA-256 itself. Use
+     * {@link #hash512(String)} or {@link #uhash513(String)} for new code.
+     */
+    @Deprecated
     public static String bi512Encode(String input) {
         if (input == null || input.isEmpty()) {
             throw new IllegalArgumentException("bi512encode expects non-empty input");
@@ -962,6 +974,13 @@ public final class BaseFwx {
         return digestHex("SHA-256", packed);
     }
 
+    /**
+     * @deprecated since 3.7.0 — {@code a512Encode} is a reversible obfuscation
+     * codec with no security goal (no key, no AEAD). Slower than base64 for
+     * the same output. Use base64 (e.g. {@link java.util.Base64}) or
+     * {@link #b256Encode(String)} for new reversible-encoding needs.
+     */
+    @Deprecated
     public static String a512Encode(String input) {
         String md = mdCode(input);
         int mdLen = md.length();
@@ -981,6 +1000,10 @@ public final class BaseFwx {
         return prefix + packed;
     }
 
+    /**
+     * @deprecated since 3.7.0 — see {@link #a512Encode(String)} for rationale.
+     */
+    @Deprecated
     public static String a512Decode(String input) {
         try {
             if (input == null || input.isEmpty()) {
@@ -1013,9 +1036,8 @@ public final class BaseFwx {
         }
     }
 
-    public static String b1024Encode(String input) {
-        return bi512Encode(a512Encode(input));
-    }
+    // b1024Encode retired in 3.6.5 — was `bi512Encode(a512Encode(input))`.
+    // Chain the two primitives in caller code if you need that composition.
 
     public static byte[] b512FileEncodeBytes(byte[] data,
                                              String extension,
@@ -2223,10 +2245,12 @@ public final class BaseFwx {
         }
         String normalized = label.toLowerCase();
         if (normalized.startsWith("argon2")) {
-            throw new IllegalArgumentException("Argon2 KDF not supported in Java module");
+            // 3.6.5: Java now supports Argon2id (via BouncyCastle); see KeyWrap.resolveKdfLabel.
+            return "argon2id";
         }
         if (!"pbkdf2".equals(normalized)) {
-            throw new IllegalArgumentException("Unsupported KDF label: " + normalized);
+            throw new UnsupportedKdfException(normalized,
+                    "Unsupported KDF label: " + normalized);
         }
         return normalized;
     }

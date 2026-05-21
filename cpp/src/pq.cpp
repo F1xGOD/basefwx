@@ -1,3 +1,9 @@
+/*
+ * BaseFWX - Cryptography Engine
+ * Copyright (C) 2020-2026  FixCraft Inc.
+ * Licensed under the GNU General Public License v3.0.
+ */
+
 #include "basefwx/pq.hpp"
 
 #include "basefwx/base64.hpp"
@@ -28,6 +34,11 @@ std::string NormalizeAlg(std::string value) {
 }
 
 Bytes ReadFileBytes(const std::filesystem::path& path) {
+    // ML-KEM-768 public/private keys are ~1.2 KiB / 2.4 KiB; ml-kem-1024 is
+    // ~1.6 KiB / 3.2 KiB. Cap at 4 MiB so a malicious symlink (e.g.
+    // BASEFWX_MASTER_PQ_PUB pointing at /dev/zero or a large file)
+    // cannot OOM the process before the format check rejects the data.
+    constexpr std::streamoff kMaxKeyFileBytes = 4 * 1024 * 1024;
     std::ifstream input(path, std::ios::binary);
     if (!input) {
         throw std::runtime_error("Failed to open key file: " + path.string());
@@ -36,6 +47,9 @@ Bytes ReadFileBytes(const std::filesystem::path& path) {
     std::streamoff size = input.tellg();
     if (size < 0) {
         throw std::runtime_error("Failed to read key size: " + path.string());
+    }
+    if (size > kMaxKeyFileBytes) {
+        throw std::runtime_error("Key file too large (>4 MiB): " + path.string());
     }
     input.seekg(0, std::ios::beg);
     Bytes data(static_cast<std::size_t>(size));
@@ -170,6 +184,8 @@ Bytes DecodeKeyBytes(const Bytes& raw) {
 
 std::optional<Bytes> LoadMasterPublicKey() {
     const std::string kem_alg = CurrentKemAlgorithm();
+
+    // 1) Runtime path: explicit env-var pointing at a key file. Always wins.
     std::string env_path = basefwx::env::Get("BASEFWX_MASTER_PQ_PUB");
     if (!env_path.empty()) {
         std::filesystem::path candidate = ExpandUser(env_path);
@@ -178,8 +194,14 @@ std::optional<Bytes> LoadMasterPublicKey() {
         }
         return DecodeKeyBytes(ReadFileBytes(candidate));
     }
-    if (basefwx::env::IsEnabled("BASEFWX_MASTER_PQ_ALLOW_BAKED", false)
-        || basefwx::env::IsEnabled("ALLOW_BAKED_PUB", false)) {
+
+    // 2) Build-time path: if this build baked a key via the
+    // BASEFWX_MASTER_PQ_PUB_B64 CMake option, use it. Empty by default
+    // for release artifacts — there is no maintainer-held escrow key in
+    // upstream binaries. The 3.6.4 BASEFWX_MASTER_PQ_ALLOW_BAKED /
+    // ALLOW_BAKED_PUB env-var path is removed; a self-baker just rebuilds
+    // with -DBASEFWX_MASTER_PQ_PUB_B64=<their-key>.
+    if (!constants::kMasterPqPublicB64.empty()) {
         if (kem_alg != constants::kMasterPqAlg) {
             throw std::runtime_error("Embedded PQ public key is available only for ml-kem-768");
         }
@@ -190,19 +212,26 @@ std::optional<Bytes> LoadMasterPublicKey() {
 }
 
 Bytes LoadMasterPrivateKey() {
+    // 3.6.5: the previous Windows-specific `W:\master_pq.sk` hardcoded
+    // path is gone — it was a maintainer-machine artifact. Callers
+    // configure their own location via BASEFWX_MASTER_PQ_SK, falling
+    // back to ~/master_pq.sk.
     std::vector<std::filesystem::path> candidates;
+    std::string env_path = basefwx::env::Get("BASEFWX_MASTER_PQ_SK");
+    if (!env_path.empty()) {
+        candidates.emplace_back(ExpandUser(env_path));
+    }
     std::string home = basefwx::env::HomeDir();
     if (!home.empty()) {
         candidates.emplace_back(std::filesystem::path(home) / "master_pq.sk");
     }
-    candidates.emplace_back(std::filesystem::path("W:\\master_pq.sk"));
 
     for (const auto& path : candidates) {
         if (!path.empty() && std::filesystem::exists(path)) {
             return DecodeKeyBytes(ReadFileBytes(path));
         }
     }
-    throw std::runtime_error("No master_pq.sk private key found");
+    throw std::runtime_error("No master_pq.sk private key found (set BASEFWX_MASTER_PQ_SK or place at ~/master_pq.sk)");
 }
 
 KemResult KemEncrypt(const Bytes& public_key) {

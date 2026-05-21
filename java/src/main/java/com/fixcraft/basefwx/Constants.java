@@ -1,3 +1,9 @@
+/*
+ * BaseFWX - Cryptography Engine
+ * Copyright (C) 2020-2026  FixCraft Inc.
+ * Licensed under the GNU General Public License v3.0.
+ */
+
 package com.fixcraft.basefwx;
 
 import java.nio.charset.StandardCharsets;
@@ -12,7 +18,16 @@ public final class Constants {
     public static final int FWXAES_SALT_LEN = 16;
     public static final int FWXAES_IV_LEN = 12;
     public static final int FWXAES_KEY_LEN = 32;
-    private static final Integer TEST_KDF_ITERS = envInt("BASEFWX_TEST_KDF_ITERS");
+    // 3.6.5: BASEFWX_TEST_KDF_ITERS is honored ONLY when the JVM is
+    // launched with -Dbasefwx.testing=true (or the env var
+    // BASEFWX_TESTING=1). The previous unconditional read meant a
+    // production shell that happened to have BASEFWX_TEST_KDF_ITERS set
+    // silently produced low-cost ciphertext indistinguishable on the wire.
+    private static final boolean TESTING_BUILD =
+            Boolean.getBoolean("basefwx.testing")
+            || "1".equals(System.getenv("BASEFWX_TESTING"));
+    private static final Integer TEST_KDF_ITERS =
+            TESTING_BUILD ? envInt("BASEFWX_TEST_KDF_ITERS") : null;
     public static final boolean TEST_KDF_OVERRIDE = TEST_KDF_ITERS != null;
     public static final int FWXAES_PBKDF2_ITERS = resolveFwxAesIters();
 
@@ -25,6 +40,28 @@ public final class Constants {
 
     public static final int USER_KDF_SALT_SIZE = 16;
     public static final int USER_KDF_ITERATIONS = resolveUserKdfIterations();
+
+    // 3.6.5: Argon2id defaults for the user-KDF wrap path. Values mirror
+    // basefwx::constants::kArgon2{TimeCost,MemoryCost} in constants.hpp.
+    // Parallelism mirrors the C++ side's DefaultArgon2Parallelism() —
+    // std::thread::hardware_concurrency() with a fallback of 4. This
+    // matches the existing wire-format quirk where Argon2 parallelism is
+    // chosen by the encrypting host's CPU count and is NOT carried in
+    // the wrap header; cross-machine portability of Argon2-wrapped blobs
+    // therefore requires both sides to share the same parallelism value
+    // (either same hardware, or the caller pins ARGON2_PARALLELISM
+    // explicitly via KdfOptions before encrypt/decrypt).
+    public static final int ARGON2_TIME_COST = 4;
+    public static final int ARGON2_MEMORY_KIB = 1 << 16;        // 64 MiB
+    public static final int ARGON2_PARALLELISM = defaultArgon2Parallelism();
+    // Short-password (<12 char) step-up to match C++ kShortArgon2*.
+    public static final int SHORT_ARGON2_TIME_COST = 5;
+    public static final int SHORT_ARGON2_MEMORY_KIB = 1 << 17;  // 128 MiB
+
+    private static int defaultArgon2Parallelism() {
+        int cores = Runtime.getRuntime().availableProcessors();
+        return cores > 0 ? cores : 4;
+    }
 
     public static final byte[] MASTER_EC_MAGIC = "EC1".getBytes(StandardCharsets.US_ASCII);
     public static final String MASTER_EC_CURVE = "secp521r1";
@@ -90,8 +127,18 @@ public final class Constants {
     public static final byte[] KEM_INFO = "basefwx.kem.v1".getBytes(StandardCharsets.US_ASCII);
 
     public static final String MASTER_PQ_ALG = "ml-kem-768";
-    public static final String MASTER_PQ_PUBLIC_B64 = "eJwBoARf+/rkrYxhXn0CNFqTkzQUrIYloydzGrqpIuWXi+qnLO/XRnspzQBDwwTKLW3Ku6Zwii1AfriFM5t8PtugqMNFt/5HoHxIZLGkytTWKP3IKoP7EH2HFu14b5bagh+KIFTWoW12qZqLRNjJLBHZmzxasEIsN7AnsOiokMHxt4XwoLk5fscIhXSANBZpHUVEO+NkBhg5UnvzWkzAqPm6rEvCfE+CHxgFg1SjBJeFfVMyzpKpsUi6iCGXSl6nZuTkr10btfi8RHCEfxDrfhcJk0bsKMWEI6wVY23KQXXlmcJ4VydGZ/ZbjWhVbX6bo0DKqG5IlwpTDPJIwlumRpxbBog8JG10p8PTaRJEAKfiVo7jiD1Aki7hYqmyyBn2Q0RFy03Bm/Rpy1zlK3DahaaoMj1mJrJ5ff2FYYVsBQbrywcDUcdHUkIpUqwrrRyqdEIHq1T6AiKHmf2KHTXQnLuZpJ3Ih59bkH1GC2UzbEIWzFSImvQDkswCBW9cF0tFYCNnReiReb57XAjaW3smdOg1o9oyk2IbyptJtNe1teHoPsMJkBGin/ugUeFmEOa0f8lTEmK4u1/GxHrQxD65kxm2IHT4NPM8Z5oqQ9z0WthUE5MouNrZLK8EltZQzAcZJ/g7CesRi40qFecyD14hDPBcr6cEV6yqOXXrcDRQVCUhuYRyUNqrFe4JPks2kZlxXjABHMD1PHVzfJpsAtsTDJa2EdpoAkKRvfg2QOK6CpYix6zIyB1yGwdCG8L2QS9DQefDQntXDlwSIieqRrwmiWcba4mSgwfxsoH2SIbQPZKbtEA4XNGqen1CcldAw1w2mnO3otspreJEBZJjVSihGcoyVjWap9dWc0pLffeDC5mUyOTzWUQ3XBAxX817G9rIbFyMQ+4AdeP2zL/nk9s2wYuZT2MEbwTHW/6UJQXbRf+svg9Kq//ryl/YRiaxdK2xRkP7oaBBVbyyXxYUJEhXOD7cUar8HsGZlXmiDSxzCBZSJG+4ooAgOKfEx6liOvqHBQKrsG4ylg3JQqmKBUdXcf6cMImRqS4MFM23vQkSPqIckxGgkrJGDKLGg8DKsuOqUvkzexAWviAIJQZsJsqjUl2stBgnltsyysE2cdI5Poh7KgOFV27bfi4iCpFSXc46Aa2jjN0WFYAgfhcRXgvIanJ3L8/sPrR7QKvpTtPFSfdcBipqp8vRdYImF5HceU1TU+QwtOcmCKDmaDTBGtJLZDXYJ3/2VQAEr8Mhk1WxGQsWUikZBi9pHTTbh93gvl9gLaGlxlRCjwzSqcJVXF80UiVMA06hfDnzi9MFpIGZL0czax+1zwdLFsnnHLGLzm/YpgrUBIk0gTgMVhqiu0+JyagxwrXCsDmGbhj8PzJGUeR8xhoxzOtTMgtaFwekbEAss+JGzuZJeakDxhMJEvvbKabIFDeQLsImO4eaAslqXyNoSg7AtnDlHfzTTFvwk2/UppeXNmcEC9n1UyfyWNW6qAZRJe5zQkijzLfkGKWsR/ksjmUQwMHwOOWVQ8qqUapYxsmbZkosPBXRDNBhY6PNjfciD2hRoIqrd/pnkJ6cZd1FQyxge6FA3PMpHw==";
+    // 3.6.5: the upstream baked ML-KEM-768 master public key has been
+    // removed from this constant. Deployments that want a baked key
+    // override it via -Dbasefwx.master.pq.public.b64=<base64-blob> on
+    // the JVM command line (analogous to the C++ -DBASEFWX_MASTER_PQ_PUB_B64
+    // CMake option). Empty by default — release artifacts ship with no
+    // baked key and rely on runtime BASEFWX_MASTER_PQ_PUB=<path>.
+    public static final String MASTER_PQ_PUBLIC_B64 =
+            System.getProperty("basefwx.master.pq.public.b64", "");
     public static final String MASTER_PQ_PUBLIC_ENV = "BASEFWX_MASTER_PQ_PUB";
+    // Retained as a string only so callers that print env-var names still
+    // compile. The actual env-var is no longer consulted by PQ.java (the
+    // baked-key opt-in was removed alongside the baked literal).
     public static final String MASTER_PQ_ALLOW_BAKED_ENV = "BASEFWX_MASTER_PQ_ALLOW_BAKED";
 
     public static final String ENGINE_VERSION = VersionInfo.engineVersion();

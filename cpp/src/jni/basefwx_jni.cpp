@@ -1,3 +1,9 @@
+/*
+ * BaseFWX - Cryptography Engine
+ * Copyright (C) 2020-2026  FixCraft Inc.
+ * Licensed under the GNU General Public License v3.0.
+ */
+
 // JNI bindings for com.fixcraft.basefwx.NativeCryptoBackend. Builds the
 // `basefwxcrypto` shared library; only AEAD primitives live here, everything
 // else is in the Java layer.

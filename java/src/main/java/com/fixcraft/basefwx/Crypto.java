@@ -265,6 +265,23 @@ public final class Crypto {
         if (timeCost <= 0 || memoryKib <= 0 || parallelism <= 0 || length <= 0) {
             throw new IllegalArgumentException("Argon2id parameters must be positive");
         }
+        // 3.7.0: try the native libargon2 bridge first. It's ~5-10× faster
+        // than BouncyCastle's pure-Java Argon2BytesGenerator at the same
+        // params, which was the dominant cost in Java fwxAES bench
+        // wall-clock. Falls through to BC when the JNI lib isn't loaded
+        // or wasn't built with libargon2 linkage (NativeCryptoBackend
+        // returns null in that case, no exception).
+        if (CryptoBackends.get().isNative() && NativeCryptoBackend.isArgon2idAvailable()) {
+            byte[] nativeOut = NativeCryptoBackend.argon2idHashRaw(
+                password, salt, timeCost, memoryKib, parallelism, length);
+            if (nativeOut != null) {
+                return nativeOut;
+            }
+            // Native available but rejected the params for some reason
+            // (e.g. ARGON2_MEMORY_TOO_LITTLE). Fall through to BC which
+            // shares the same param validation; either both succeed
+            // (then we got a free correctness check) or both fail.
+        }
         Argon2Parameters params = new Argon2Parameters.Builder(Argon2Parameters.ARGON2_id)
                 .withVersion(Argon2Parameters.ARGON2_VERSION_13)
                 .withSalt(salt)

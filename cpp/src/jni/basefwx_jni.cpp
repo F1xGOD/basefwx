@@ -5,13 +5,18 @@
  */
 
 // JNI bindings for com.fixcraft.basefwx.NativeCryptoBackend. Builds the
-// `basefwxcrypto` shared library; only AEAD primitives live here, everything
-// else is in the Java layer.
+// `basefwxcrypto` shared library; AES-GCM primitives + Argon2id KDF
+// when libargon2 was linked at build time. Everything else stays in
+// the Java layer.
 
 #include <jni.h>
 
 #include <openssl/evp.h>
 #include <openssl/err.h>
+
+#if defined(BASEFWX_JNI_HAS_ARGON2) && BASEFWX_JNI_HAS_ARGON2
+#include <argon2.h>
+#endif
 
 #include <cstdint>
 #include <cstdlib>
@@ -377,6 +382,95 @@ Java_com_fixcraft_basefwx_NativeCryptoBackend_nativeAesGcmDecryptOneShot(
     EVP_CIPHER_CTX_free(ctx);
     if (!update_ok || !tag_set_ok || !final_ok) return -1;
     return written + trailing;
+}
+
+// ============================================================================
+// Argon2id KDF (3.7.0): routes Java's Argon2id through the C libargon2
+// instead of BouncyCastle's pure-Java Argon2BytesGenerator. The pure-Java
+// path is ~5-10× slower than libargon2 for the same parameters, which
+// dominated the Java fwxAES bench results (2.7s vs C++'s 0.9s on regular
+// fwxAES at the same KDF cost). With this bridge enabled, Java should
+// close most of the gap on Argon2-dominated wall-clock paths.
+//
+// Built only when BASEFWX_JNI_HAS_ARGON2 is defined (i.e. CMake found
+// libargon2 at JNI build time). When the macro is off, the export is
+// still emitted but returns BASEFWX_JNI_ARGON2_NOT_AVAILABLE so the
+// Java caller can fall back cleanly to BouncyCastle.
+// ============================================================================
+
+constexpr jint kArgon2OK = 0;
+constexpr jint kArgon2NotAvailable = -1000;  // distinct from libargon2's own codes
+constexpr jint kArgon2BadInput     = -1001;
+constexpr jint kArgon2OutBufferBad = -1002;
+
+JNIEXPORT jboolean JNICALL
+Java_com_fixcraft_basefwx_NativeCryptoBackend_nativeArgon2idAvailable(
+    JNIEnv* /*env*/, jclass /*cls*/) {
+#if defined(BASEFWX_JNI_HAS_ARGON2) && BASEFWX_JNI_HAS_ARGON2
+    return JNI_TRUE;
+#else
+    return JNI_FALSE;
+#endif
+}
+
+JNIEXPORT jint JNICALL
+Java_com_fixcraft_basefwx_NativeCryptoBackend_nativeArgon2idHashRaw(
+    JNIEnv* env, jclass /*cls*/,
+    jbyteArray passwordArr,
+    jbyteArray saltArr,
+    jint timeCost,
+    jint memoryKib,
+    jint parallelism,
+    jbyteArray outArr) {
+#if !defined(BASEFWX_JNI_HAS_ARGON2) || !BASEFWX_JNI_HAS_ARGON2
+    (void)env; (void)passwordArr; (void)saltArr;
+    (void)timeCost; (void)memoryKib; (void)parallelism; (void)outArr;
+    return kArgon2NotAvailable;
+#else
+    if (!passwordArr || !saltArr || !outArr) return kArgon2BadInput;
+    if (timeCost <= 0 || memoryKib <= 0 || parallelism <= 0) return kArgon2BadInput;
+
+    const jsize pw_len   = env->GetArrayLength(passwordArr);
+    const jsize salt_len = env->GetArrayLength(saltArr);
+    const jsize out_len  = env->GetArrayLength(outArr);
+    if (salt_len <= 0 || out_len <= 0) return kArgon2OutBufferBad;
+
+    // Pin all three arrays via GetPrimitiveArrayCritical: libargon2 is a
+    // synchronous C call, GC pauses are fine, and we avoid the copy.
+    jbyte* pw   = static_cast<jbyte*>(env->GetPrimitiveArrayCritical(passwordArr, nullptr));
+    jbyte* salt = static_cast<jbyte*>(env->GetPrimitiveArrayCritical(saltArr,    nullptr));
+    jbyte* out  = static_cast<jbyte*>(env->GetPrimitiveArrayCritical(outArr,     nullptr));
+    if (!pw || !salt || !out) {
+        if (pw)   env->ReleasePrimitiveArrayCritical(passwordArr, pw,   JNI_ABORT);
+        if (salt) env->ReleasePrimitiveArrayCritical(saltArr,     salt, JNI_ABORT);
+        if (out)  env->ReleasePrimitiveArrayCritical(outArr,      out,  JNI_ABORT);
+        return kArgon2BadInput;
+    }
+
+    const int rc = argon2id_hash_raw(
+        static_cast<uint32_t>(timeCost),
+        static_cast<uint32_t>(memoryKib),
+        static_cast<uint32_t>(parallelism),
+        reinterpret_cast<const void*>(pw),   static_cast<size_t>(pw_len),
+        reinterpret_cast<const void*>(salt), static_cast<size_t>(salt_len),
+        reinterpret_cast<void*>(out),        static_cast<size_t>(out_len));
+
+    // Wipe the password copy in the critical region before we let go —
+    // the JNI critical pin is the only window where we can guarantee the
+    // bytes aren't moved by the GC, so this is the cleanest wipe point.
+    if (pw_len > 0) {
+        volatile jbyte* p = pw;
+        for (jsize i = 0; i < pw_len; ++i) p[i] = 0;
+    }
+
+    // Commit out on success, abort on failure so the caller's array
+    // doesn't get any partial / garbage bytes.
+    env->ReleasePrimitiveArrayCritical(outArr,      out,  rc == ARGON2_OK ? 0 : JNI_ABORT);
+    env->ReleasePrimitiveArrayCritical(saltArr,     salt, JNI_ABORT);
+    env->ReleasePrimitiveArrayCritical(passwordArr, pw,   0);  // commit wipe
+
+    return rc == ARGON2_OK ? kArgon2OK : static_cast<jint>(rc);
+#endif
 }
 
 }  // extern "C"

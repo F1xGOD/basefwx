@@ -747,6 +747,26 @@ if(BASEFWX_BUILD_JNI)
         CXX_VISIBILITY_PRESET hidden
         VISIBILITY_INLINES_HIDDEN ON
     )
+    # 3.7.0: link libargon2 into the JNI lib when available so the Java
+    # side can route Argon2id through libargon2 instead of BouncyCastle's
+    # pure-Java Argon2BytesGenerator. BC's pure-Java Argon2 is ~5-10×
+    # slower than libargon2 at the same cost params, which dominated
+    # Java fwxAES bench wall-clock. With this linkage in place,
+    # Java fwxAES gets close to C++ on Argon2-heavy paths.
+    if(ARGON2_FOUND OR ARGON2_LIBRARY)
+        target_compile_definitions(basefwxcrypto PRIVATE BASEFWX_JNI_HAS_ARGON2=1)
+        if(ARGON2_INCLUDE_DIR)
+            target_include_directories(basefwxcrypto PRIVATE ${ARGON2_INCLUDE_DIR})
+        endif()
+        if(ARGON2_LIBRARY)
+            target_link_libraries(basefwxcrypto PRIVATE ${ARGON2_LIBRARY})
+        elseif(ARGON2_LIBRARIES)
+            target_link_libraries(basefwxcrypto PRIVATE ${ARGON2_LIBRARIES})
+        endif()
+        message(STATUS "basefwxcrypto JNI lib: Argon2id bridge ENABLED (${ARGON2_LIBRARY})")
+    else()
+        message(STATUS "basefwxcrypto JNI lib: Argon2id bridge disabled (libargon2 not found)")
+    endif()
     if(APPLE)
         set_target_properties(basefwxcrypto PROPERTIES SUFFIX ".dylib")
     endif()

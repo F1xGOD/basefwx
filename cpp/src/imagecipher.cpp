@@ -1,3 +1,9 @@
+/*
+ * BaseFWX - Cryptography Engine
+ * Copyright (C) 2020-2026  FixCraft Inc.
+ * Licensed under the GNU General Public License v3.0.
+ */
+
 #include "basefwx/imagecipher.hpp"
 
 #include "basefwx/basefwx.hpp"
@@ -201,7 +207,7 @@ std::uint32_t ParseIterations(const std::string& raw, std::uint32_t fallback) {
 std::uint32_t ResolveImageKdfIterations() {
     std::string raw = basefwx::env::Get("BASEFWX_USER_KDF_ITERS");
     if (raw.empty()) {
-        raw = basefwx::env::Get("BASEFWX_TEST_KDF_ITERS");
+        raw = basefwx::env::TestKdfIters();
     }
     std::uint32_t parsed = ParseIterations(raw, basefwx::constants::kUserKdfIterations);
     return std::max<std::uint32_t>(static_cast<std::uint32_t>(basefwx::constants::kUserKdfIterations), parsed);
@@ -211,7 +217,7 @@ std::uint32_t HardenImageIterations(const std::string& password, std::uint32_t i
     if (password.empty()) {
         return iters;
     }
-    if (!basefwx::env::Get("BASEFWX_TEST_KDF_ITERS").empty()) {
+    if (!basefwx::env::TestKdfIters().empty()) {
         return iters;
     }
     if (password.size() < basefwx::constants::kShortPasswordMin) {

@@ -1,3 +1,9 @@
+/*
+ * BaseFWX - Cryptography Engine
+ * Copyright (C) 2020-2026  FixCraft Inc.
+ * Licensed under the GNU General Public License v3.0.
+ */
+
 package com.fixcraft.basefwx;
 
 import java.security.GeneralSecurityException;

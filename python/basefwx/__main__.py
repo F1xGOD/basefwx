@@ -1,3 +1,7 @@
+# BaseFWX - Cryptography Engine
+# Copyright (C) 2020-2026  FixCraft Inc.
+# Licensed under the GNU General Public License v3.0.
+
 from .main import main
 
 

@@ -1,3 +1,9 @@
+/*
+ * BaseFWX - Cryptography Engine
+ * Copyright (C) 2020-2026  FixCraft Inc.
+ * Licensed under the GNU General Public License v3.0.
+ */
+
 package com.fixcraft.basefwx;
 
 import java.nio.charset.StandardCharsets;
@@ -51,9 +57,17 @@ public final class KeyWrap {
             String label = resolveKdfLabel(kdfOpts.label);
             byte[] salt = Crypto.randomBytes(Constants.USER_KDF_SALT_SIZE);
             byte[] userKey = deriveUserKeyWithLabel(password, salt, label, kdfOpts);
-            byte[] wrapped = Crypto.aesGcmEncrypt(userKey, result.maskKey, aad);
+            byte[] wrapped;
+            try {
+                wrapped = Crypto.aesGcmEncrypt(userKey, result.maskKey, aad);
+            } finally {
+                // userKey is PBKDF2-derived from the password; wipe before
+                // it goes back to the free-list and waits for GC.
+                Arrays.fill(userKey, (byte) 0);
+            }
             byte[] labelBytes = label.getBytes(StandardCharsets.US_ASCII);
             if (labelBytes.length > 255) {
+                Arrays.fill(wrapped, (byte) 0);
                 throw new IllegalArgumentException("KDF label too long");
             }
             int total = 1 + labelBytes.length + salt.length + wrapped.length;
@@ -62,6 +76,9 @@ public final class KeyWrap {
             System.arraycopy(labelBytes, 0, userBlob, 1, labelBytes.length);
             System.arraycopy(salt, 0, userBlob, 1 + labelBytes.length, salt.length);
             System.arraycopy(wrapped, 0, userBlob, 1 + labelBytes.length + salt.length, wrapped.length);
+            // wrapped is also derived from the maskKey-encryption pass —
+            // not as sensitive as userKey but still scrubbed for hygiene.
+            Arrays.fill(wrapped, (byte) 0);
             result.userBlob = userBlob;
         }
         return result;
@@ -111,7 +128,11 @@ public final class KeyWrap {
         byte[] wrapped = Arrays.copyOfRange(userBlob, headerLen, userBlob.length);
         KdfOptions hardened = hardenKdfOptions(password, kdf);
         byte[] userKey = deriveUserKeyWithLabel(password, salt, label, hardened);
-        return Crypto.aesGcmDecrypt(userKey, wrapped, aad);
+        try {
+            return Crypto.aesGcmDecrypt(userKey, wrapped, aad);
+        } finally {
+            Arrays.fill(userKey, (byte) 0);
+        }
     }
 
     public static byte[] maskPayload(byte[] maskKey, byte[] payload, byte[] info) {
@@ -167,8 +188,18 @@ public final class KeyWrap {
             return kdf;
         }
         KdfOptions hardened = new KdfOptions(kdf.label, kdf.pbkdf2Iterations);
+        hardened.argon2TimeCost = kdf.argon2TimeCost;
+        hardened.argon2MemoryKib = kdf.argon2MemoryKib;
+        hardened.argon2Parallelism = kdf.argon2Parallelism;
         if (hardened.pbkdf2Iterations < Constants.SHORT_PBKDF2_ITERS) {
             hardened.pbkdf2Iterations = Constants.SHORT_PBKDF2_ITERS;
+        }
+        // Match the C++ side's short-password Argon2 step-up.
+        if (hardened.argon2TimeCost < Constants.SHORT_ARGON2_TIME_COST) {
+            hardened.argon2TimeCost = Constants.SHORT_ARGON2_TIME_COST;
+        }
+        if (hardened.argon2MemoryKib < Constants.SHORT_ARGON2_MEMORY_KIB) {
+            hardened.argon2MemoryKib = Constants.SHORT_ARGON2_MEMORY_KIB;
         }
         return hardened;
     }
@@ -178,11 +209,18 @@ public final class KeyWrap {
             return "pbkdf2";
         }
         String normalized = label.toLowerCase();
+        // 3.6.5: Argon2id now supported on the Java side too (uses
+        // BouncyCastle's Argon2BytesGenerator, which has been a
+        // declared dep since the BC-PQ migration). Normalize both
+        // "argon2" and "argon2id" to "argon2id" to match the C++ side.
         if (normalized.startsWith("argon2")) {
-            throw new IllegalArgumentException("Argon2 KDF not supported in Java module");
+            return "argon2id";
         }
         if (!"pbkdf2".equals(normalized)) {
-            throw new IllegalArgumentException("Unsupported KDF label: " + normalized);
+            // True unknown label — typed exception so callers can route
+            // to a native helper or surface a specific error.
+            throw new UnsupportedKdfException(normalized,
+                    "Unsupported KDF label: " + normalized);
         }
         return normalized;
     }
@@ -191,8 +229,13 @@ public final class KeyWrap {
         if (salt.length < Constants.USER_KDF_SALT_SIZE) {
             throw new IllegalArgumentException("User key salt must be at least 16 bytes");
         }
+        if ("argon2id".equals(label) || "argon2".equals(label)) {
+            return Crypto.argon2idHashRaw(password, salt,
+                    kdf.argon2TimeCost, kdf.argon2MemoryKib, kdf.argon2Parallelism, 32);
+        }
         if (!"pbkdf2".equals(label)) {
-            throw new IllegalArgumentException("Unsupported KDF label: " + label);
+            throw new UnsupportedKdfException(label,
+                    "Unsupported KDF label: " + label);
         }
         return Crypto.pbkdf2HmacSha256(password, salt, kdf.pbkdf2Iterations, 32);
     }
@@ -212,6 +255,15 @@ public final class KeyWrap {
     public static final class KdfOptions {
         public String label = "pbkdf2";
         public int pbkdf2Iterations = Constants.USER_KDF_ITERATIONS;
+        // 3.6.5: Argon2id support — these defaults mirror the C++ side and
+        // are only consulted when {@link #label} resolves to "argon2id" /
+        // "argon2". Wire-format compatibility relies on encoder and
+        // decoder agreeing on these values (they are not stored in the
+        // wrap header), so callers should leave them at the defaults
+        // unless they also control the C++ side.
+        public int argon2TimeCost = Constants.ARGON2_TIME_COST;
+        public int argon2MemoryKib = Constants.ARGON2_MEMORY_KIB;
+        public int argon2Parallelism = Constants.ARGON2_PARALLELISM;
 
         public KdfOptions() {}
 

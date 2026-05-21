@@ -1,3 +1,9 @@
+/*
+ * BaseFWX - Cryptography Engine
+ * Copyright (C) 2020-2026  FixCraft Inc.
+ * Licensed under the GNU General Public License v3.0.
+ */
+
 #include "basefwx/format.hpp"
 
 #include "basefwx/base64.hpp"
@@ -43,12 +49,26 @@ Bytes PackLengthPrefixed(const std::vector<Bytes>& parts) {
 }
 
 std::vector<Bytes> UnpackLengthPrefixed(const Bytes& data, std::size_t count) {
+    // Match the 64 MiB total cap that Format.java has had since 3.4.x.
+    // Without this, a malicious blob declaring a single 4 GiB part survives
+    // until the data.size() bounds check fires — long enough for any
+    // upstream code that pre-sizes a buffer from the length field to OOM.
+    constexpr std::size_t kMaxPartLen = 64 * 1024 * 1024;
+    constexpr std::size_t kMaxTotalLen = 64 * 1024 * 1024;
     std::vector<Bytes> parts;
     parts.reserve(count);
     std::size_t offset = 0;
+    std::size_t total_consumed = 0;
     for (std::size_t i = 0; i < count; ++i) {
         std::uint32_t len = ReadU32BE(data, offset);
         offset += 4;
+        if (len > kMaxPartLen) {
+            throw std::runtime_error("Length-prefixed part exceeds 64 MiB cap");
+        }
+        total_consumed += len;
+        if (total_consumed > kMaxTotalLen) {
+            throw std::runtime_error("Length-prefixed blob exceeds 64 MiB total cap");
+        }
         if (offset + len > data.size()) {
             throw std::runtime_error("Malformed length-prefixed blob (truncated part)");
         }

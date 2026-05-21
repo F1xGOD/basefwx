@@ -1,3 +1,9 @@
+/*
+ * BaseFWX - Cryptography Engine
+ * Copyright (C) 2020-2026  FixCraft Inc.
+ * Licensed under the GNU General Public License v3.0.
+ */
+
 #include "basefwx/crypto.hpp"
 #include "basefwx/crypto_utils.hpp"
 #include "basefwx/constants.hpp"

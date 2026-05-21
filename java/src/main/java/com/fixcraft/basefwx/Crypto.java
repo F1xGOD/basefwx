@@ -1,3 +1,9 @@
+/*
+ * BaseFWX - Cryptography Engine
+ * Copyright (C) 2020-2026  FixCraft Inc.
+ * Licensed under the GNU General Public License v3.0.
+ */
+
 package com.fixcraft.basefwx;
 
 import java.nio.ByteBuffer;
@@ -11,6 +17,8 @@ import javax.crypto.SecretKeyFactory;
 import javax.crypto.spec.GCMParameterSpec;
 import javax.crypto.spec.PBEKeySpec;
 import javax.crypto.spec.SecretKeySpec;
+import org.bouncycastle.crypto.generators.Argon2BytesGenerator;
+import org.bouncycastle.crypto.params.Argon2Parameters;
 
 public final class Crypto {
     private static final SecureRandom RNG = new SecureRandom();
@@ -229,6 +237,46 @@ public final class Crypto {
             }
         }
         return pbkdf2HmacSha256Slow(password, salt, iterations, length);
+    }
+
+    /**
+     * Argon2id raw hash. Matches the C++ {@code basefwx::crypto::Argon2idHashRaw}
+     * primitive byte-for-byte: same Argon2 type (id), same v1.3 version,
+     * same salt and password handling.
+     *
+     * <p>Added in BaseFWX 3.6.5 — Java was previously documented as not
+     * supporting Argon2 in the user-KDF path (see SECURITY.md / COMPATIBILITY.md
+     * pre-3.6.5). BouncyCastle has shipped {@code Argon2BytesGenerator}
+     * for years, so the limitation was a policy choice in
+     * {@link KeyWrap}, not a missing library.
+     */
+    public static byte[] argon2idHashRaw(byte[] password,
+                                         byte[] salt,
+                                         int timeCost,
+                                         int memoryKib,
+                                         int parallelism,
+                                         int length) {
+        if (password == null) {
+            throw new IllegalArgumentException("password must not be null");
+        }
+        if (salt == null || salt.length == 0) {
+            throw new IllegalArgumentException("salt must not be empty");
+        }
+        if (timeCost <= 0 || memoryKib <= 0 || parallelism <= 0 || length <= 0) {
+            throw new IllegalArgumentException("Argon2id parameters must be positive");
+        }
+        Argon2Parameters params = new Argon2Parameters.Builder(Argon2Parameters.ARGON2_id)
+                .withVersion(Argon2Parameters.ARGON2_VERSION_13)
+                .withSalt(salt)
+                .withIterations(timeCost)
+                .withMemoryAsKB(memoryKib)
+                .withParallelism(parallelism)
+                .build();
+        Argon2BytesGenerator generator = new Argon2BytesGenerator();
+        generator.init(params);
+        byte[] out = new byte[length];
+        generator.generateBytes(password, out);
+        return out;
     }
 
     private static byte[] pbkdf2HmacSha256Native(byte[] password, byte[] salt, int iterations, int length) {

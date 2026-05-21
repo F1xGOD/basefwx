@@ -36,8 +36,13 @@ dependencies {
     task.options.encoding = 'UTF-8'
 }
 
+// JAR file name follows rootProject.name automatically (settings.gradle
+// sets it to 'basefwx-xor-rotate-java'), so we don't override it here.
+// Setting `baseName` / `archiveBaseName` directly diverges between
+// Gradle versions — `baseName` was removed in Gradle 8 (ubuntu-latest),
+// `archiveBaseName =` rejected by older gradles, `archiveBaseName.set()`
+// requires Gradle 5+. Letting the default name win works everywhere.
 jar {
-    baseName = 'basefwx-xor-rotate-java'
     manifest {
         attributes(
             'Implementation-Title': 'basefwx-xor-rotate-java',

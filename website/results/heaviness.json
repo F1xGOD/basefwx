@@ -49,7 +49,7 @@
                                                        "status": "retired", "since": "3.7.0" },
     { "match": "a512",          "level": "medium",  "notes": "Deprecated in 3.7.0 — reversible obfuscation codec with no security goal; slower than base64 for the same output. Calls b256 internally. Existing blobs still decode.",
                                                        "status": "deprecated", "since": "3.7.0" },
-    { "match": "fwxaes_live",   "level": "high",    "notes": "KDF + streaming AEAD + ffmpeg pipe; multi-MiB working set.", "status": "active" },
+    { "match": "fwxaes-live",   "level": "high",    "notes": "KDF + streaming AEAD + ffmpeg pipe; multi-MiB working set.", "status": "active" },
     { "match": "fwxaes",        "level": "medium",  "notes": "Argon2id + AES-256-GCM; KDF dominates wall time.", "status": "active" },
     { "match": "pb512",         "level": "high",    "notes": "KDF + whole-buffer codec; not streaming.", "status": "active" },
     { "match": "b512",          "level": "high",    "notes": "KDF + whole-buffer codec; not streaming.", "status": "active" },

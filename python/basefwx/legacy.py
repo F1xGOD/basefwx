@@ -320,7 +320,10 @@ class basefwx:
     HEAVY_PBKDF2_ITERATIONS = 2_000_000
     HEAVY_ARGON2_TIME_COST = 6
     HEAVY_ARGON2_MEMORY_COST = 2 ** 18
-    HEAVY_ARGON2_PARALLELISM = max(1, os.cpu_count() or 1)
+    # 3.7.0: fixed at 4 so blobs are portable across hosts — the wire
+    # format does not carry parallelism, so hardware-dependent defaults
+    # caused silent AEAD failures when ciphertext crossed machines.
+    HEAVY_ARGON2_PARALLELISM = 4
     OFB_FAST_MIN = 64 * 1024
     PERM_FAST_MIN = 4 * 1024
     USER_KDF_SALT_SIZE = 16
@@ -329,7 +332,7 @@ class basefwx:
     SHORT_PBKDF2_ITERATIONS = 1_000_000
     SHORT_ARGON2_TIME_COST = 5
     SHORT_ARGON2_MEMORY_COST = 2 ** 17
-    SHORT_ARGON2_PARALLELISM = max(1, os.cpu_count() or 1)
+    SHORT_ARGON2_PARALLELISM = 4  # see HEAVY_ARGON2_PARALLELISM note above
     if _Argon2Type is None:
         class _FallbackArgon2Type(enum.Enum):
             ID = 2
@@ -2723,7 +2726,8 @@ class basefwx:
             raise ValueError("User key salt must be at least 16 bytes")
         if basefwx.hash_secret_raw is None:
             raise RuntimeError("Argon2 backend unavailable")
-        parallelism = parallelism or basefwx._CPU_COUNT
+        # Fixed default (4); wire format does not carry parallelism.
+        parallelism = parallelism or 4
         password_bytes = basefwx._coerce_password_bytes(password)
         
         # Calculate memory requirement (in bytes)
@@ -2792,7 +2796,9 @@ class basefwx:
         iterations = iterations or basefwx.USER_KDF_ITERATIONS
         argon2_time_cost = argon2_time_cost or 4
         argon2_memory_cost = argon2_memory_cost or (2 ** 16)
-        argon2_parallelism = argon2_parallelism or basefwx._CPU_COUNT
+        # Fixed default (4) so cross-host decrypt agrees with encrypt — the
+        # wire format carries no parallelism field, see HEAVY_ARGON2_PARALLELISM.
+        argon2_parallelism = argon2_parallelism or 4
         iterations, argon2_time_cost, argon2_memory_cost, argon2_parallelism = basefwx._harden_kdf_params(
             password,
             iterations=iterations,

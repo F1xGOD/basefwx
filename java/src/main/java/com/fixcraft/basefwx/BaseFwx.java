@@ -24,6 +24,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.attribute.FileAttribute;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.nio.file.attribute.PosixFilePermission;
 import java.nio.file.attribute.PosixFilePermissions;
 import java.util.EnumSet;
@@ -834,11 +835,46 @@ public final class BaseFwx {
             Constants.PB512_MASK_INFO, Constants.MASK_AAD_PB512, Constants.PB512_STREAM_INFO);
     }
 
+    // One-time retirement notice for b256. Fires the first time either
+    // public b256Encode or b256Decode runs in a JVM. Internal callers
+    // route through Codec.b256Encode / Codec.b256Decode directly, so
+    // the already-deprecated a512Encode / bi512Encode don't trigger a
+    // second retirement message of their own.
+    private static final AtomicBoolean B256_RETIREMENT_WARNED = new AtomicBoolean(false);
+
+    private static void warnB256RetiredOnce() {
+        if (B256_RETIREMENT_WARNED.compareAndSet(false, true)) {
+            System.err.println(
+                "🫡 b256 has been retired as of BaseFWX 3.7.0.\n" +
+                "   b256 was the very first encoding method in BaseFWX —\n" +
+                "   born in V1, back when this was a proof of concept and\n" +
+                "   not a project. It served from day one. Existing\n" +
+                "   b256-encoded blobs still decode; use base64 or\n" +
+                "   hash512 / uhash513 for new code.\n" +
+                "   ❤️  Thank you for the journey. It's time to go.");
+        }
+    }
+
+    /**
+     * @deprecated since 3.7.0 — b256 is retired. It was the very first
+     * encoding method in BaseFWX, born in V1 when this was a proof of
+     * concept. Existing b256-encoded blobs still decode; use base64
+     * (e.g. {@link java.util.Base64}) or {@link #hash512(String)} /
+     * {@link #uhash513(String)} for new code. Emits a one-time
+     * retirement notice on first call.
+     */
+    @Deprecated
     public static String b256Encode(String input) {
+        warnB256RetiredOnce();
         return Codec.b256Encode(input);
     }
 
+    /**
+     * @deprecated since 3.7.0 — see {@link #b256Encode(String)}.
+     */
+    @Deprecated
     public static String b256Decode(String input) {
+        warnB256RetiredOnce();
         return Codec.b256Decode(input);
     }
 
@@ -935,6 +971,16 @@ public final class BaseFwx {
         return hash512Bytes(input.getBytes(StandardCharsets.UTF_8));
     }
 
+    /**
+     * @deprecated since 3.7.0 — {@code uhash513} is a non-standard chained
+     * hash (SHA-256 → SHA-1 → SHA-512 → SHA-256 over the concatenation).
+     * The embedded SHA-1 step adds no security and uses a hash with known
+     * collision weaknesses; the overall collision resistance is bounded
+     * by the outer SHA-256 anyway. The "513" in the name is marketing —
+     * the output is a 256-bit SHA-256 hex string. Use {@link #hash512(String)}
+     * (SHA-512) or SHA3-512 for new code. Existing call sites continue to work.
+     */
+    @Deprecated
     public static String uhash513(String input) {
         return uhash513Bytes(input.getBytes(StandardCharsets.UTF_8));
     }
@@ -946,6 +992,11 @@ public final class BaseFwx {
         return digestHex(SHA512_DIGEST.get(), input);
     }
 
+    /**
+     * @deprecated since 3.7.0 — see {@link #uhash513(String)} for the
+     * deprecation rationale. Existing call sites continue to work.
+     */
+    @Deprecated
     public static String uhash513Bytes(byte[] inputBytes) {
         if (inputBytes == null) {
             throw new IllegalArgumentException("uhash513 expects bytes");
@@ -1003,8 +1054,8 @@ public final class BaseFwx {
     /**
      * @deprecated since 3.7.0 — {@code a512Encode} is a reversible obfuscation
      * codec with no security goal (no key, no AEAD). Slower than base64 for
-     * the same output. Use base64 (e.g. {@link java.util.Base64}) or
-     * {@link #b256Encode(String)} for new reversible-encoding needs.
+     * the same output. Use base64 (e.g. {@link java.util.Base64}) for new
+     * reversible-encoding needs.
      */
     @Deprecated
     public static String a512Encode(String input) {

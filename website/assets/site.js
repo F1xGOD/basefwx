@@ -300,19 +300,98 @@ const renderBenchTable = (tableBody, timesByLang, epsilon) => {
   }
 };
 
+// Loaded lazily by ensureHeavinessManifest(). Shape matches
+// website/results/heaviness.json: { levels: {low,medium,high,extreme:
+// {label,color,explanation}}, methods: [{match,level,notes},...] }.
+let heavinessManifest = null;
+let heavinessManifestPromise = null;
+
+const ensureHeavinessManifest = async () => {
+  if (heavinessManifest !== null) return heavinessManifest;
+  if (heavinessManifestPromise) return heavinessManifestPromise;
+  const root = document.documentElement;
+  const base = root.getAttribute("data-results-base") || "results/";
+  const url = `${base}heaviness.json`;
+  heavinessManifestPromise = fetch(url, { cache: "no-store" })
+    .then((r) => (r.ok ? r.json() : null))
+    .catch(() => null)
+    .then((manifest) => {
+      heavinessManifest = manifest || { levels: {}, methods: [] };
+      return heavinessManifest;
+    });
+  return heavinessManifestPromise;
+};
+
+const _matchMethodEntry = (label) => {
+  if (!heavinessManifest || !label) return null;
+  const lower = label.toLowerCase();
+  // Match longest "match" string first so e.g. "fwxaes_live" wins
+  // over "fwxaes" when both apply.
+  const methods = (heavinessManifest.methods || [])
+    .slice()
+    .sort((a, b) => (b.match || "").length - (a.match || "").length);
+  for (const m of methods) {
+    if (m.match && lower.includes(m.match.toLowerCase())) return m;
+  }
+  return null;
+};
+
+const classifyHeaviness = (label) => {
+  const m = _matchMethodEntry(label);
+  if (!m) return null;
+  const level = (heavinessManifest.levels || {})[m.level];
+  if (!level) return null;
+  return { level: m.level, ...level, notes: m.notes || "" };
+};
+
+const classifyLifecycle = (label) => {
+  const m = _matchMethodEntry(label);
+  if (!m) return null;
+  const status = m.status || "active";
+  if (status === "active") return null;
+  const tier = (heavinessManifest.lifecycle || {})[status];
+  if (!tier) return null;
+  return {
+    status,
+    ...tier,
+    since: m.since || "",
+    notes: m.notes || ""
+  };
+};
+
+const renderHeavinessChip = (label) => {
+  const cls = classifyHeaviness(label);
+  if (!cls) return "";
+  const tooltip = (cls.notes || cls.explanation || "").replace(/"/g, "&quot;");
+  return `<span class="chip heaviness heaviness-${cls.level}" title="${tooltip}" aria-label="Heaviness: ${cls.label}. ${tooltip}">${cls.label}</span>`;
+};
+
+const renderLifecycleChip = (label) => {
+  const cls = classifyLifecycle(label);
+  if (!cls) return "";
+  const since = cls.since ? ` since ${cls.since}` : "";
+  const visible = `${cls.label}${since}`;
+  const tooltip = (cls.notes || cls.explanation || "").replace(/"/g, "&quot;");
+  return `<span class="chip lifecycle lifecycle-${cls.status}" title="${tooltip}" aria-label="${cls.label}${since}. ${tooltip}">${visible}</span>`;
+};
+
 const renderBenchDetails = (container, tests, epsilon) => {
   container.innerHTML = "";
   if (!tests.length) {
     container.innerHTML = "<div class=\"card\">No detailed benchmark data available.</div>";
     return;
   }
+  // Best-effort fetch of the heaviness manifest. If it isn't loaded
+  // by the time renderBenchDetails runs, summaries just skip the
+  // chip — the benchmark data still renders.
+  ensureHeavinessManifest();
   tests.forEach((entry) => {
     const baseNs = entry.times?.python;
     const details = document.createElement("details");
     details.className = "bench-detail";
     const summary = document.createElement("summary");
     summary.innerHTML = `
-      <span>${entry.label}</span>
+      <span>${entry.label} ${renderHeavinessChip(entry.label)}${renderLifecycleChip(entry.label)}</span>
       <span class="bench-summary">${baseNs ? `Python ${formatNs(baseNs, epsilon)}` : "Python n/a"}</span>
     `;
     details.appendChild(summary);

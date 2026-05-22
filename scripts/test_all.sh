@@ -9,6 +9,17 @@ if [[ ! -f "$PY_ROOT/pyproject.toml" && ! -f "$PY_ROOT/setup.py" ]]; then
 fi
 cd "$ROOT"
 
+# Resource guards: install CPU + memory caps so a runaway bench can't
+# OOM-kill the host's UI / sddm / audio. Default leaves one core free
+# and caps the shell at 75% of system RAM. Pass --no-guards to disable
+# or set BASEFWX_NO_GUARDS=1 for unbounded runs (use only on dedicated
+# build boxes).
+# shellcheck source=lib/resource_guards.sh
+source "$ROOT/scripts/lib/resource_guards.sh"
+bench_guards_parse_args "$@"
+set -- "${BASEFWX_GUARDS_REMAINING_ARGS[@]}"
+bench_guards_apply
+
 USE_VENV="${USE_VENV:-1}"
 VENV_DIR="${VENV_DIR:-$ROOT/.venv}"
 VENV_PY="$VENV_DIR/bin/python"

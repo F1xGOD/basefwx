@@ -35,6 +35,16 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
+# Resource guards: same policy as test_all.sh. The smoke itself is
+# bounded (~5 s total, <100 MiB peak) but the example plugin builds
+# fan out to gcc / cmake — leaving one core free keeps the host UI
+# responsive. Pass --no-guards to disable.
+# shellcheck source=lib/resource_guards.sh
+source "$ROOT/scripts/lib/resource_guards.sh"
+bench_guards_parse_args "$@"
+set -- "${BASEFWX_GUARDS_REMAINING_ARGS[@]}"
+bench_guards_apply
+
 QUIET=0
 KEEP_BUILDS=0
 for arg in "$@"; do
@@ -112,6 +122,90 @@ run_step() {
 # =====================================================================
 
 CPP_PROBE_BIN=""
+CPP_KEYED_PROBE_BIN=""
+
+prepare_cpp_keyed_probe() {
+    # Probe for the 3.7.0 keyed plugin path. Verifies capabilities(),
+    # exercises forward_keyed / inverse_keyed with a fixed
+    # (tweak, host_secret) pair, asserts round-trip equality.
+    CPP_KEYED_PROBE_BIN=$(mktemp /tmp/basefwx-plugin-keyed-probe.XXXXXX)
+    cat > "$CPP_KEYED_PROBE_BIN.c" <<'EOF'
+#include <dlfcn.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "basefwx/plugin.h"
+int main(int argc, char** argv) {
+    if (argc < 2) { fprintf(stderr, "usage: %s <so>\n", argv[0]); return 2; }
+    void* h = dlopen(argv[1], RTLD_NOW);
+    if (!h) { fprintf(stderr, "dlopen: %s\n", dlerror()); return 3; }
+    typedef const basefwx_plugin_vtable* (*fn)(void);
+    fn entry = (fn)dlsym(h, "basefwx_plugin_entry");
+    if (!entry) { fprintf(stderr, "dlsym: %s\n", dlerror()); return 4; }
+    const basefwx_plugin_vtable* v = entry();
+    if (v->api_version != BASEFWX_PLUGIN_API_VERSION) {
+        fprintf(stderr, "API mismatch\n"); return 5;
+    }
+    if (v->capabilities == NULL || v->forward_keyed == NULL || v->inverse_keyed == NULL) {
+        fprintf(stderr, "plugin lacks keyed slots — not a Profile B plugin\n"); return 6;
+    }
+    basefwx_plugin_ctx* ctx = NULL;
+    if (v->init(&ctx, NULL, 0) != 0) { fprintf(stderr, "init fail\n"); return 7; }
+    uint32_t caps = v->capabilities(ctx);
+    if ((caps & BASEFWX_PLUGIN_CAP_KEYED) == 0) {
+        fprintf(stderr, "plugin did not declare CAP_KEYED (caps=0x%x)\n", caps);
+        v->destroy(ctx); return 8;
+    }
+    /* Fixed test vectors: 16-byte tweak, 32-byte host_secret. */
+    uint8_t tweak[16];
+    for (int i = 0; i < 16; ++i) tweak[i] = (uint8_t)(0xa0 + i);
+    uint8_t host_secret[32];
+    for (int i = 0; i < 32; ++i) host_secret[i] = (uint8_t)(0x33 ^ i);
+    const char* msg = "plugin-smoke keyed probe round-trip 3.7.0";
+    size_t in_len = strlen(msg);
+    size_t cap = v->max_output_for_input(ctx, in_len);
+    uint8_t* mid = (uint8_t*)malloc(cap);
+    uint8_t* back = (uint8_t*)malloc(cap + 1);
+    size_t mid_len = 0, back_len = 0;
+    int rc = v->forward_keyed(ctx, (const uint8_t*)msg, in_len,
+                              tweak, sizeof(tweak),
+                              host_secret, sizeof(host_secret),
+                              mid, cap, &mid_len);
+    if (rc != 0) { fprintf(stderr, "forward_keyed rc=%d\n", rc); return 9; }
+    rc = v->inverse_keyed(ctx, mid, mid_len,
+                          tweak, sizeof(tweak),
+                          host_secret, sizeof(host_secret),
+                          back, cap + 1, &back_len);
+    if (rc != 0) { fprintf(stderr, "inverse_keyed rc=%d\n", rc); return 10; }
+    if (back_len != in_len || memcmp(back, msg, in_len) != 0) {
+        fprintf(stderr, "keyed round-trip mismatch\n"); return 11;
+    }
+    /* If the plugin declares CAP_SAFE_RAW_MODE, also verify that
+     * a tampered ciphertext is rejected. */
+    if ((caps & BASEFWX_PLUGIN_CAP_SAFE_RAW_MODE) && mid_len > 0) {
+        mid[0] ^= 0x01;  /* flip one bit in the ciphertext */
+        rc = v->inverse_keyed(ctx, mid, mid_len,
+                              tweak, sizeof(tweak),
+                              host_secret, sizeof(host_secret),
+                              back, cap + 1, &back_len);
+        if (rc == 0) {
+            fprintf(stderr, "tampered ciphertext was NOT rejected — integrity broken\n");
+            return 12;
+        }
+        mid[0] ^= 0x01;  /* restore */
+    }
+    free(mid); free(back);
+    v->destroy(ctx);
+    dlclose(h);
+    printf("OK caps=0x%x\n", caps);
+    return 0;
+}
+EOF
+    gcc -std=c99 -Wall -Icpp/include "$CPP_KEYED_PROBE_BIN.c" \
+        -o "$CPP_KEYED_PROBE_BIN" -ldl 2>&1 \
+        || { echo "keyed probe compile failed"; return 1; }
+    rm -f "$CPP_KEYED_PROBE_BIN.c"
+}
 
 prepare_cpp_probe() {
     # One-shot compile of a probe that takes <so-path> and round-trips
@@ -177,10 +271,14 @@ EOF
 
 cleanup() {
     [[ -n "$CPP_PROBE_BIN" ]] && rm -f "$CPP_PROBE_BIN" "$CPP_PROBE_BIN.c"
+    [[ -n "$CPP_KEYED_PROBE_BIN" ]] && rm -f "$CPP_KEYED_PROBE_BIN" "$CPP_KEYED_PROBE_BIN.c"
     if [[ $KEEP_BUILDS -eq 0 ]]; then
         rm -rf examples/plugins/passthrough/build \
                examples/plugins/xor-rotate/build \
-               examples/plugins/xor-rotate-java/build
+               examples/plugins/xor-rotate-java/build \
+               examples/plugins/aead-wrapped-keyed/build \
+               examples/plugins/time-tweak/build \
+               examples/plugins/static-embed/build
     fi
 }
 trap cleanup EXIT
@@ -199,6 +297,30 @@ cpp_build_xor() {
     cmake -S examples/plugins/xor-rotate -B examples/plugins/xor-rotate/build >/dev/null 2>&1 \
         && cmake --build examples/plugins/xor-rotate/build >/dev/null 2>&1 \
         && [[ -f examples/plugins/xor-rotate/build/libbasefwx-xor-rotate.so ]]
+}
+
+cpp_build_aead_keyed() {
+    rm -rf examples/plugins/aead-wrapped-keyed/build
+    cmake -S examples/plugins/aead-wrapped-keyed \
+          -B examples/plugins/aead-wrapped-keyed/build >/dev/null 2>&1 \
+        && cmake --build examples/plugins/aead-wrapped-keyed/build >/dev/null 2>&1 \
+        && [[ -f examples/plugins/aead-wrapped-keyed/build/libbasefwx-aead-wrapped-keyed.so ]]
+}
+
+cpp_build_time_tweak() {
+    rm -rf examples/plugins/time-tweak/build
+    cmake -S examples/plugins/time-tweak \
+          -B examples/plugins/time-tweak/build >/dev/null 2>&1 \
+        && cmake --build examples/plugins/time-tweak/build >/dev/null 2>&1 \
+        && [[ -f examples/plugins/time-tweak/build/libbasefwx-time-tweak.so ]]
+}
+
+cpp_build_static_embed() {
+    rm -rf examples/plugins/static-embed/build
+    cmake -S examples/plugins/static-embed \
+          -B examples/plugins/static-embed/build >/dev/null 2>&1 \
+        && cmake --build examples/plugins/static-embed/build >/dev/null 2>&1 \
+        && [[ -x examples/plugins/static-embed/build/basefwx-static-embed-demo ]]
 }
 
 java_build_xor() {
@@ -233,6 +355,20 @@ cpp_load_passthrough() {
 
 cpp_load_xor() {
     "$CPP_PROBE_BIN" examples/plugins/xor-rotate/build/libbasefwx-xor-rotate.so needs-key >/dev/null
+}
+
+cpp_load_aead_keyed() {
+    "$CPP_KEYED_PROBE_BIN" \
+        examples/plugins/aead-wrapped-keyed/build/libbasefwx-aead-wrapped-keyed.so >/dev/null
+}
+
+cpp_load_time_tweak() {
+    "$CPP_KEYED_PROBE_BIN" \
+        examples/plugins/time-tweak/build/libbasefwx-time-tweak.so >/dev/null
+}
+
+cpp_run_static_embed() {
+    examples/plugins/static-embed/build/basefwx-static-embed-demo >/dev/null
 }
 
 py_load_xor_native() {
@@ -361,17 +497,27 @@ if ! prepare_cpp_probe; then
     printf "%s✗%s probe compile failed; aborting\n" "$RED" "$RESET"
     exit 2
 fi
+if ! prepare_cpp_keyed_probe; then
+    printf "%s✗%s keyed-probe compile failed; aborting\n" "$RED" "$RESET"
+    exit 2
+fi
 
 # Builds (parallelizable in spirit; serial here for clean output)
-run_step "build C++ passthrough .so"  cpp_build_passthrough
-run_step "build C++ xor-rotate .so"   cpp_build_xor
-run_step "build Java xor-rotate .jar" java_build_xor
+run_step "build C++ passthrough .so"          cpp_build_passthrough
+run_step "build C++ xor-rotate .so"           cpp_build_xor
+run_step "build C++ aead-wrapped-keyed .so"   cpp_build_aead_keyed
+run_step "build C++ time-tweak .so"           cpp_build_time_tweak
+run_step "build C++ static-embed binary"      cpp_build_static_embed
+run_step "build Java xor-rotate .jar"         java_build_xor
 
 # Loads + round-trips
-run_step "C++ load passthrough + selftest + round-trip" cpp_load_passthrough
-run_step "C++ load xor-rotate + selftest + round-trip"   cpp_load_xor
-run_step "Python ctypes load xor-rotate.so + round-trip" py_load_xor_native
-run_step "Python pure-Python plugin round-trip"          py_pure_plugin
+run_step "C++ load passthrough + selftest + round-trip"             cpp_load_passthrough
+run_step "C++ load xor-rotate + selftest + round-trip"              cpp_load_xor
+run_step "C++ keyed-load aead-wrapped-keyed + integrity check"      cpp_load_aead_keyed
+run_step "C++ keyed-load time-tweak (nondeterministic + round-trip)" cpp_load_time_tweak
+run_step "Run static-embed demo (in-process registry, no dlopen)"   cpp_run_static_embed
+run_step "Python ctypes load xor-rotate.so + round-trip"            py_load_xor_native
+run_step "Python pure-Python plugin round-trip"                     py_pure_plugin
 
 # Java SPI smoke (best-effort: skip if BC jars not on user's gradle cache)
 if [[ -f java/build/libs/basefwx-java.jar ]] && \

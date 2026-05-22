@@ -1,0 +1,154 @@
+name: Memory leak detection
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+# Detects leaks in three layers and fails the workflow if any layer
+# reports a regression:
+#
+#   1. Python: scripts/leak_detect.py uses tracemalloc + RSS slope.
+#      Each codec runs N iterations; if the linear-regression slope
+#      of RSS over the iterations exceeds the threshold (default
+#      8 KiB/iter), the codec is flagged. Used for the Python
+#      runtime (basefwx package) and the Python plugin bridge.
+#
+#   2. C++: scripts/leak_detect_cpp.sh rebuilds basefwxcpp with
+#      -fsanitize=address,leak and runs a probe that exercises the
+#      main allocating paths. LSan's leak report is the verdict;
+#      ASan halts on any heap-use-after-free or double-free.
+#
+#   3. Java: a tiny probe runs each codec N times under
+#      -Xmx128m -XX:+HeapDumpOnOutOfMemoryError, then GC.runs and
+#      compares MemoryMXBean heap usage to the warm-up baseline.
+#      Fails if delta exceeds threshold or the JVM hits OOM.
+#
+# Memory leak in the wider sense (RSS not returned to OS via
+# allocator-pool fragmentation) is NOT what this catches. That's a
+# benchmark-runtime concern handled by scripts/lib/resource_guards.sh
+# at run time. THIS workflow catches code-level leaks: missing
+# free/delete, unfreed RAII state, JNI globalrefs not released, etc.
+
+jobs:
+  python-leak:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: System deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libargon2-dev libssl-dev liblzma-dev
+      - name: Install basefwx (editable + extras)
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e "python[argon2]"
+      - name: Run Python leak detector
+        env:
+          BASEFWX_NO_GUARDS: "1"  # CI container bounds RAM already
+        run: |
+          python3 scripts/leak_detect.py \
+            --iters 300 \
+            --sample-every 20 \
+            --leak-kib-per-iter 8
+      - name: Run Python leak detector (b256 only, retired-path smoke)
+        env:
+          BASEFWX_NO_GUARDS: "1"
+        run: |
+          python3 scripts/leak_detect.py --codecs b256 --iters 200
+
+  cpp-asan-leak:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: System deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            cmake build-essential ninja-build \
+            libssl-dev zlib1g-dev liblzma-dev libargon2-dev
+      - name: Run C++ ASan/LSan leak detector
+        env:
+          BASEFWX_NO_GUARDS: "1"
+        run: |
+          bash scripts/leak_detect_cpp.sh --iters 100
+
+  java-heap-delta:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: "temurin"
+          java-version: "21"
+      - name: Build basefwx-java jar
+        run: |
+          cd java
+          gradle --no-daemon -q jar
+      - name: Java heap-delta probe
+        run: |
+          mkdir -p .leak-java
+          cat > .leak-java/HeapLeakProbe.java <<'EOF'
+          import com.fixcraft.basefwx.BaseFwx;
+          import com.fixcraft.basefwx.Codec;
+          import java.lang.management.ManagementFactory;
+          import java.lang.management.MemoryMXBean;
+          import java.lang.management.MemoryUsage;
+
+          public class HeapLeakProbe {
+              public static void main(String[] args) throws Exception {
+                  int iters = args.length > 0 ? Integer.parseInt(args[0]) : 500;
+                  long thresholdKib = args.length > 1 ? Long.parseLong(args[1]) : 8_192; // 8 MiB
+                  MemoryMXBean mem = ManagementFactory.getMemoryMXBean();
+
+                  // Warm-up: let HotSpot tier-up and the heap stabilise.
+                  for (int i = 0; i < 100; i++) {
+                      BaseFwx.hash512("warmup");
+                      BaseFwx.uhash513("warmup");
+                      BaseFwx.b64Encode("warmup");
+                      Codec.b256Encode("warmup"); // internal helper, no warn
+                  }
+                  System.gc(); Thread.sleep(50); System.gc();
+                  MemoryUsage baseline = mem.getHeapMemoryUsage();
+                  long baseUsed = baseline.getUsed();
+
+                  for (int i = 0; i < iters; i++) {
+                      BaseFwx.hash512("leak-probe");
+                      BaseFwx.uhash513("leak-probe");
+                      BaseFwx.b64Encode("leak-probe");
+                      Codec.b256Encode("leak-probe");
+                  }
+                  System.gc(); Thread.sleep(100); System.gc();
+                  MemoryUsage end = mem.getHeapMemoryUsage();
+                  long endUsed = end.getUsed();
+                  long delta = endUsed - baseUsed;
+                  long deltaKib = delta / 1024;
+
+                  System.out.printf("Java heap baseline=%d KiB end=%d KiB delta=%d KiB threshold=%d KiB%n",
+                      baseUsed / 1024, endUsed / 1024, deltaKib, thresholdKib);
+                  if (deltaKib > thresholdKib) {
+                      System.err.println("FAIL: Java heap grew beyond threshold across "
+                          + iters + " iterations.");
+                      System.exit(1);
+                  }
+                  System.out.println("PASS: Java heap stable.");
+              }
+          }
+          EOF
+          javac -cp java/build/libs/basefwx-java.jar -d .leak-java .leak-java/HeapLeakProbe.java
+          java -Xmx256m -XX:+HeapDumpOnOutOfMemoryError \
+               -cp .leak-java:java/build/libs/basefwx-java.jar \
+               HeapLeakProbe 500 8192

@@ -6,21 +6,31 @@
 
 | Runtime | Argon2id | PQ/OQS | LZMA/XZ | AN7/DEAN7 | Notes |
 | :-- | :--: | :--: | :--: | :--: | :-- |
-| C++ | ✅ | ✅ | ✅ | ✅ | Reference release runtime for performance and full native feature set |
-| Python | ✅ with `basefwx[argon2]` | ✅ via `pqcrypto` | ✅ | ✅ | Feature-complete scripting/runtime path |
-| Java | ✅ since 3.6.5 (BouncyCastle `Argon2BytesGenerator`) | ❌ | ❌ | ✅ | Argon2id user-KDF wrap now supported. Argon2 parallelism is set to `Runtime.availableProcessors()` to match the C++ side's `DefaultArgon2Parallelism()` — see "Argon2 parallelism portability" below before exchanging blobs across machines with different CPU counts. |
+| C++ | ✅ | ✅ | ✅ | ✅ | Reference release runtime for performance and full native feature set. |
+| Python | ✅ with `basefwx[argon2]` | ✅ via `pqcrypto` | ✅ | ✅ | Feature-complete scripting/runtime path. |
+| Java | ✅ since 3.7.0 (BouncyCastle `Argon2BytesGenerator`; libargon2 JNI optional) | ❌ | ❌ | ✅ | Argon2id user-KDF wrap supported. JNI bridge to libargon2 (`NativeCryptoBackend.argon2idHashRaw`) speeds it up ~5–10× on systems where the native lib is loadable; falls through to pure-Java BouncyCastle otherwise (byte-identical output, just slower). |
 
 ### Argon2 parallelism portability
 
 The Argon2id parallelism parameter is not stored in the wrap header.
-Both C++ and Java pick a default at runtime based on the encrypting
-host's CPU count (`std::thread::hardware_concurrency()` and
-`Runtime.getRuntime().availableProcessors()` respectively, with a
-fallback of 4). Two same-CPU-count peers round-trip without ceremony.
-Cross-CPU-count peers must override `KdfOptions.argon2Parallelism`
-(Java) / `KdfOptions::argon2_parallelism` (C++) to a shared constant
-before encrypt and decrypt; pinning to `4` is a safe default if you
-want portable Argon2 blobs.
+As of 3.7.0, **all three runtimes hardcode the default lane count to
+`4`** so blobs are portable across hosts regardless of the encrypting
+machine's CPU count:
+
+| Runtime | Default | Source |
+| :-- | :--: | :-- |
+| C++ | 4 | `kArgon2Parallelism` in `cpp/include/basefwx/constants.hpp` |
+| Java | 4 | `ARGON2_PARALLELISM` in `Constants.java` (`defaultArgon2Parallelism()` returns 4) |
+| Python | 4 | `_DEFAULT_ARGON2_PARALLELISM` in `python/basefwx/legacy.py` |
+
+Pre-3.7.0 each runtime resolved the default from
+`std::thread::hardware_concurrency()` /
+`Runtime.getRuntime().availableProcessors()` / `os.cpu_count()`, so a
+blob encrypted on a 16-core machine could not be decrypted on a 4-core
+machine without the caller explicitly pinning
+`KdfOptions.argon2Parallelism`. The 3.7.0 fix closes that. Callers who
+genuinely want host-tuned parallelism can still set the field on
+`KdfOptions` before the encrypt — the **default** just stops varying.
 
 Release policy:
 

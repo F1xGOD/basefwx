@@ -8,20 +8,35 @@ it's shipped as a separate dynamically-loaded artifact and doesn't
 include any BaseFWX source beyond the public ABI headers. The
 exact safe-harbor rules are in [LICENSING.md](../../LICENSING.md).
 
+**Required reading before you start: [THREAT_MODEL.md](THREAT_MODEL.md).**
+It tells you which attacks a plugin can and cannot defend against,
+which functions to implement for which threat model, and which
+mistakes break the security argument. It also documents the three
+plugin profiles — pick one before you write any code.
+
 This directory contains:
 
-| Path | What |
-| --- | --- |
-| `passthrough/` | Minimal viable plugin (pure C). Identity transforms. Use as a starting template for plain C plugins. |
-| `xor-rotate/` | Slightly more interesting plugin (C++). Uses the `basefwx/plugin.hpp` helper layer + the `BASEFWX_PLUGIN_DEFINE` macro. **Recommended starting point** if you're writing the plugin in C++. |
+| Path | Profile | What |
+| --- | --- | --- |
+| `passthrough/` | A | Minimal viable plugin (pure C). Identity transforms. Starting template for plain C plugins. |
+| `xor-rotate/` | A | Deterministic XOR-with-key (C++). Uses the `basefwx/plugin.hpp` helper + `BASEFWX_PLUGIN_DEFINE` macro. **Recommended starting point** for Profile A plugins. |
+| `aead-wrapped-keyed/` | B | Realistic raw-mode-safe keyed plugin (C++). HKDF + AES-256-CTR + HMAC-SHA256 with constant-time tag compare. Defends against THREAT_MODEL.md TM-1..TM-4. **Use this as the template for Profile B.** |
+| `time-tweak/` | B (no integrity) | Self-derived per-call entropy (unix time embedded in output). Shows the nondeterministic-tweak pattern; intentionally has NO integrity, so it must run inside an AEAD layer. Read its top-of-file comment before copying. |
+| `static-embed/` | C | Plugin source compiled directly into a host binary; no `.so` on disk. Demonstrates the `plugin_static.hpp` Registry API. |
+| `xor-rotate-java/` | A | Java equivalent of `xor-rotate/`. |
+| `xor-rotate-py/` | A | Python equivalent. |
 
-> **Status (3.7.0):** the ABI header, C++ helper layer, and example
-> plugins are committed. The runtime loader inside the BaseFWX CLI,
-> the Java SPI for `.jar` plugins, the Python `ctypes` shim, the
-> wire-format plugin tag, and the `basefwx-plugin-verify` tool all
-> ship in this same 3.7.0 release cycle (separate files in the
-> source tree, not separate version bumps). You can build and
-> unit-test plugins against the ABI today.
+> **Status (3.7.0):** the C ABI (`plugin.h`), C++ helper layer
+> (`plugin.hpp`), static-embed Registry (`plugin_static.hpp`), and
+> all the example plugins above are committed. The runtime loader
+> inside the BaseFWX CLI, the Java SPI for `.jar` plugins, the Python
+> `ctypes` shim, the wire-format plugin tag, and the
+> `basefwx-plugin-verify` tool are scoped for the 3.7.x point
+> releases (separate files in the source tree, not separate version
+> bumps). You can build and unit-test plugins against the ABI today;
+> the `static-embed/` example is a self-contained host that
+> exercises the contract end-to-end without any of the deferred
+> pieces.
 
 ## The thirty-second pitch
 
@@ -43,35 +58,57 @@ This directory contains:
 
 The plugin is two functions: `forward` (used at encrypt) and `inverse`
 (used at decrypt). Length change is allowed. AES-GCM still wraps the
-plaintext, so a buggy plugin produces a tag mismatch — your plaintext
-stays confidential even if your transform is wrong.
+plaintext, so a buggy Profile-A plugin produces a tag mismatch — your
+plaintext stays confidential even if your transform is wrong.
+
+Profile B plugins additionally implement `forward_keyed` /
+`inverse_keyed`, which receive a per-call `tweak` (host-supplied or
+self-derived from external entropy) and a `host_secret` derived from
+the user's password. Read [THREAT_MODEL.md](THREAT_MODEL.md) for why
+this matters and which threats it closes.
+
+## Three plugin profiles (pick one)
+
+| Profile | When to pick it | API used | Example |
+| --- | --- | --- | --- |
+| **A — Traffic-shaping (AEAD-wrapped)** | You want DPI evasion, byte-distribution shaping, header mimicry. The plugin runs PRE or POST of AES-GCM, which provides confidentiality and integrity. A deterministic transform is fine. | `forward` / `inverse` | `xor-rotate/`, `passthrough/` |
+| **B — Authenticated keyed (raw-mode safe)** | The plugin's output is exposed without an AEAD layer above it, OR you want the plugin's transform to be cryptographically meaningful in its own right. Mandatory if a malicious client must not be able to forge blobs the server accepts. | `forward_keyed` / `inverse_keyed` + `capabilities()` returning `SAFE_RAW_MODE` | `aead-wrapped-keyed/` |
+| **C — Statically embedded** | You ship a single binary with no `.so` on disk. Combine with Profile A or B depending on the security goal — static embedding raises the cost of plugin extraction; it is NOT a cryptographic primitive on its own. Static-linking BaseFWX itself requires a commercial license (see [LICENSING.md](../../LICENSING.md)). | Same as A or B, plus `BASEFWX_PLUGIN_REGISTER_STATIC` from [`plugin_static.hpp`](../../cpp/include/basefwx/plugin_static.hpp) | `static-embed/` |
 
 ## Authoring contract
 
 1. **Pick a stable 16-byte ID.** Run `uuidgen`, write the bytes into
    `kVtable.plugin_id` (and a matching comment for humans). Never
    change it after release; the wire format identifies your plugin
-   by this ID.
+   by this ID. If you change the transform's semantics, mint a
+   NEW UUID.
 2. **`forward` and `inverse` must be exact inverses.** For any input
    `x`, `inverse(forward(x)) == x`. This is the single invariant.
-   Test it. The example plugin has a `selftest` slot that does this
-   against a fixed vector — fill yours in with whatever test vectors
-   you trust.
-3. **Be deterministic.** `forward(x)` must always produce the same
-   output within an instance. If you need randomness, derive it
-   from the input or from the config blob passed to `init()`; never
-   call `rand()` or `getrandom()` inside `forward`.
+   For keyed plugins, the same holds for `forward_keyed` /
+   `inverse_keyed` under the same (`tweak`, `host_secret`) pair.
+3. **Deterministic by default; nondeterministic if you set the
+   capability.** A Profile-A plugin must produce identical output
+   for identical input. A Profile-B plugin MAY produce different
+   output every call (e.g. self-embedded unix-time tweak); if so,
+   set `BASEFWX_PLUGIN_CAP_NONDETERMINISTIC` in `capabilities()` so
+   the host stops treating you as snapshot-test-friendly.
 4. **Be thread-safe per-instance OR document that you aren't.** The
    host calls one instance from one thread at a time by default.
    If your transform is cheap and you want to share an instance
    across threads, say so in your README; the host won't lock for you.
-5. **Wipe sensitive state in `destroy()`.** If your plugin holds a
-   key, zero the memory before `free()`. Use `OPENSSL_cleanse`,
-   `memset_s`, or `explicit_bzero` — the compiler is allowed to
-   elide a plain `memset` after the last use.
-6. **Return clean error codes, not `abort()`.** The host catches
+5. **Wipe sensitive state in `destroy()`** and for any per-call
+   derived keys. Use `basefwx::plugin::SecretBuffer` (defined in
+   `plugin.hpp`) for any derived material that lives inside
+   `forward_keyed`/`inverse_keyed` — it wipes on destruction.
+6. **Compare MACs in constant time.** Use `CRYPTO_memcmp` (OpenSSL)
+   or write a portable constant-time compare. `memcmp` leaks
+   timing on partial-match.
+7. **Return clean error codes, not `abort()`.** The host catches
    `BASEFWX_PLUGIN_ERR_*` and surfaces them as normal errors.
    Crashing the host is a worse user experience.
+8. **Raw mode requires `CAP_SAFE_RAW_MODE`.** The host refuses
+   `BASEFWX_PLUGIN_POS_RAW` for any plugin that doesn't declare
+   this. Don't try to work around it; ship Profile B properly.
 
 ## Vtable fields, slot by slot
 
@@ -81,19 +118,25 @@ typedef struct {
     uint8_t  plugin_id[16];                // unique, frozen
     const char* name;                      // human-readable
     const char* version;                   // your own semver
-    uint32_t supported_positions;          // PRE_AEAD | POST_AEAD
+    uint32_t supported_positions;          // PRE_AEAD | POST_AEAD | RAW (RAW needs CAP_SAFE_RAW_MODE)
     int  (*init)(...);                     // mandatory
     void (*destroy)(...);                  // mandatory
-    int  (*forward)(...);                  // mandatory
-    int  (*inverse)(...);                  // mandatory
-    size_t (*max_output_for_input)(...);   // mandatory (return in_len if length-preserving)
-    int  (*selftest)(...);                 // optional; return 0 if OK
+    int  (*forward)(...);                  // mandatory (may throw if Profile-B-only)
+    int  (*inverse)(...);                  // mandatory (may throw if Profile-B-only)
+    size_t (*max_output_for_input)(...);   // mandatory
+    int  (*selftest)(...);                 // optional
+    uint32_t (*capabilities)(...);         // optional; NULL means "no CAP_* bits, v1 plugin"
+    int  (*forward_keyed)(...);            // Profile B: keyed forward with tweak + host_secret
+    int  (*inverse_keyed)(...);            // Profile B: keyed inverse
     void (*reserved_1)(void);              // leave NULL
-    void (*reserved_2)(void);              // leave NULL
-    void (*reserved_3)(void);              // leave NULL
-    void (*reserved_4)(void);              // leave NULL
 } basefwx_plugin_vtable;
 ```
+
+Profile-A plugins implement `forward` / `inverse` only and use the
+`BASEFWX_PLUGIN_DEFINE(...)` macro. Profile-B plugins additionally
+implement `forward_keyed` / `inverse_keyed` / `Capabilities()` and use
+`BASEFWX_PLUGIN_DEFINE_KEYED(...)`. The macro fills the right vtable
+slots either way.
 
 ### `api_version`
 
@@ -166,11 +209,48 @@ pass. The host calls this:
 If you don't have test vectors, set the pointer to `NULL` — the
 host will fall back to a black-box round-trip on random bytes.
 
+### `capabilities` (optional but recommended)
+
+Returns a bitwise OR of `BASEFWX_PLUGIN_CAP_*`. The host calls this
+exactly once after `init` and stores the result; the plugin must
+return the same value for the lifetime of the instance.
+
+| Flag | Meaning |
+| --- | --- |
+| `BASEFWX_PLUGIN_CAP_KEYED` | Plugin implements `forward_keyed` / `inverse_keyed`. |
+| `BASEFWX_PLUGIN_CAP_SAFE_RAW_MODE` | Plugin self-certifies as safe to run in `POS_RAW` (no AEAD wrapping). Required to ship Profile B with raw-mode use. |
+| `BASEFWX_PLUGIN_CAP_REQUIRES_TWEAK` | Host MUST pass a non-empty `tweak` to keyed calls. |
+| `BASEFWX_PLUGIN_CAP_REQUIRES_HOST_KEY` | Host MUST pass a non-empty `host_secret` to keyed calls. |
+| `BASEFWX_PLUGIN_CAP_NONDETERMINISTIC` | Same input may produce different output (typical: self-embedded unix-time tweak). |
+
+A `NULL` `capabilities` slot is treated as `0` — host runs only the
+deterministic `forward` / `inverse` and refuses `POS_RAW`.
+
+### `forward_keyed` / `inverse_keyed`
+
+```c
+int (*)(basefwx_plugin_ctx* ctx,
+        const uint8_t* in, size_t in_len,
+        const uint8_t* tweak, size_t tweak_len,
+        const uint8_t* host_secret, size_t host_secret_len,
+        uint8_t* out, size_t out_cap, size_t* out_len);
+```
+
+Implement these if your plugin is Profile B. Use `host_secret` to
+bind the transform to user-derived key material (defends against
+THREAT_MODEL.md TM-2). Use `tweak` to bind to per-blob randomness
+(defends against TM-3). The plugin may treat `tweak` as host-supplied
+or as a self-derived value it reads back from its own output — set
+`CAP_NONDETERMINISTIC` in the latter case.
+
+The `aead-wrapped-keyed/` example is the canonical Profile B
+shape; copy it.
+
 ### `reserved_*`
 
-Leave them `NULL`. Future ABI revisions may use these slots without
-bumping `api_version`; setting them to anything other than `NULL`
-in 3.7.0 will be treated as "feature not supported."
+One slot remains as `reserved_1`. Leave `NULL`. Future ABI revisions
+may use it without bumping `api_version`; setting it to anything other
+than `NULL` in 3.7.0 will be treated as "feature not supported."
 
 ## Error codes
 
@@ -179,9 +259,10 @@ in 3.7.0 will be treated as "feature not supported."
 | `BASEFWX_PLUGIN_OK` (0) | Success. |
 | `BASEFWX_PLUGIN_ERR_GENERIC` (-1) | Internal error you don't have a better code for. |
 | `BASEFWX_PLUGIN_ERR_OUTPUT_TOO_SMALL` (-2) | `out_cap` is smaller than what you'd produce. (Host should never see this if `max_output_for_input` is honest.) |
-| `BASEFWX_PLUGIN_ERR_BAD_INPUT` (-3) | Input is malformed or not what your `inverse` expects. The host surfaces this as a "plugin rejected payload" error. |
+| `BASEFWX_PLUGIN_ERR_BAD_INPUT` (-3) | Input is malformed or not what your `inverse` expects. The host surfaces this as a "plugin rejected payload" error. Use this for MAC failures too. |
 | `BASEFWX_PLUGIN_ERR_BAD_STATE` (-4) | Called before `init` or after `destroy`. Defensive check. |
 | `BASEFWX_PLUGIN_ERR_NOT_SUPPORTED` (-5) | Asked for a position you didn't list in `supported_positions`. |
+| `BASEFWX_PLUGIN_ERR_CAP_MISMATCH` (-6) | Host invoked a function the plugin didn't declare it supports — e.g. `forward_keyed` on a v1 plugin that left the slot NULL. |
 
 ## Build
 

@@ -232,6 +232,50 @@ std::size_t generic_max_output(::basefwx_plugin_ctx* ctx, std::size_t in_len) no
 }
 
 template <typename PluginT>
+std::uint32_t generic_capabilities(const ::basefwx_plugin_ctx* ctx) noexcept {
+    if (ctx == nullptr) return 0u;
+    try {
+        return reinterpret_cast<const PluginT*>(ctx)->Capabilities();
+    } catch (...) {
+        return 0u;
+    }
+}
+
+template <typename PluginT, bool IsInverse>
+int generic_transform_keyed(::basefwx_plugin_ctx* ctx,
+                            const std::uint8_t* in, std::size_t in_len,
+                            const std::uint8_t* tweak, std::size_t tweak_len,
+                            const std::uint8_t* host_secret, std::size_t host_secret_len,
+                            std::uint8_t* out, std::size_t out_cap,
+                            std::size_t* out_len) noexcept
+{
+    if (ctx == nullptr) return BASEFWX_PLUGIN_ERR_BAD_STATE;
+    if (out_len == nullptr) return BASEFWX_PLUGIN_ERR_BAD_INPUT;
+    if (out_cap > 0 && out == nullptr) return BASEFWX_PLUGIN_ERR_BAD_INPUT;
+    if (in_len > 0 && in == nullptr) return BASEFWX_PLUGIN_ERR_BAD_INPUT;
+    if (tweak_len > 0 && tweak == nullptr) return BASEFWX_PLUGIN_ERR_BAD_INPUT;
+    if (host_secret_len > 0 && host_secret == nullptr) return BASEFWX_PLUGIN_ERR_BAD_INPUT;
+    try {
+        PluginT* p = reinterpret_cast<PluginT*>(ctx);
+        BytesView in_view(in, in_len);
+        BytesView tweak_view(tweak, tweak_len);
+        BytesView secret_view(host_secret, host_secret_len);
+        BytesSpan out_span(out, out_cap);
+        std::size_t written = 0;
+        if constexpr (IsInverse) {
+            written = p->InverseKeyed(in_view, tweak_view, secret_view, out_span);
+        } else {
+            written = p->ForwardKeyed(in_view, tweak_view, secret_view, out_span);
+        }
+        if (written > out_cap) return BASEFWX_PLUGIN_ERR_OUTPUT_TOO_SMALL;
+        *out_len = written;
+        return BASEFWX_PLUGIN_OK;
+    } catch (...) {
+        return translate_exception(std::current_exception());
+    }
+}
+
+template <typename PluginT>
 int generic_selftest(::basefwx_plugin_ctx* ctx) noexcept {
     /* Default selftest: round-trip a fixed 32-byte vector through
      * Forward → Inverse and compare. Plugin authors can override by
@@ -297,7 +341,11 @@ int generic_selftest(::basefwx_plugin_ctx* ctx) noexcept {
         &basefwx::plugin::detail::generic_transform<plugin_cls, /*IsInverse=*/true>, \
         &basefwx::plugin::detail::generic_max_output<plugin_cls>, \
         &basefwx::plugin::detail::generic_selftest<plugin_cls>, \
-        nullptr, nullptr, nullptr, nullptr, \
+        /* capabilities, forward_keyed, inverse_keyed: not implemented \
+         * by this v1-style plugin. Host will refuse POS_RAW and run \
+         * only the deterministic forward/inverse. */ \
+        nullptr, nullptr, nullptr, \
+        nullptr, \
     }; \
     extern "C" BASEFWX_PLUGIN_EXPORT \
     const ::basefwx_plugin_vtable* basefwx_plugin_entry(void) { \
@@ -305,5 +353,55 @@ int generic_selftest(::basefwx_plugin_ctx* ctx) noexcept {
     } \
     /* eat trailing semicolon */ \
     struct BASEFWX_PLUGIN_DEFINE_force_semicolon_##plugin_cls {}
+
+/*
+ * BASEFWX_PLUGIN_DEFINE_KEYED — drop this in your translation unit
+ * ONCE when your plugin supports the keyed forward / inverse path.
+ * In addition to the v1 requirements (ctor, MaxOutput, Forward,
+ * Inverse), the plugin class must also define:
+ *
+ *   std::uint32_t Capabilities() const noexcept
+ *   std::size_t ForwardKeyed(BytesView in,
+ *                            BytesView tweak,
+ *                            BytesView host_secret,
+ *                            BytesSpan out)
+ *   std::size_t InverseKeyed(BytesView in,
+ *                            BytesView tweak,
+ *                            BytesView host_secret,
+ *                            BytesSpan out)
+ *
+ * The non-keyed Forward / Inverse are still required: hosts that
+ * choose to wrap the plugin between AEAD layers may opt to call the
+ * cheaper deterministic path. For raw-mode safety, return a
+ * capabilities mask containing BASEFWX_PLUGIN_CAP_SAFE_RAW_MODE.
+ */
+#define BASEFWX_PLUGIN_DEFINE_KEYED(plugin_cls, \
+                                    id0,id1,id2,id3,id4,id5,id6,id7, \
+                                    id8,id9,id10,id11,id12,id13,id14,id15, \
+                                    name_literal, version_literal, positions_mask) \
+    static const ::basefwx_plugin_vtable kBasefwxPluginVtable = { \
+        BASEFWX_PLUGIN_API_VERSION, \
+        { id0,id1,id2,id3,id4,id5,id6,id7, \
+          id8,id9,id10,id11,id12,id13,id14,id15 }, \
+        name_literal, \
+        version_literal, \
+        (positions_mask), \
+        &basefwx::plugin::detail::generic_init<plugin_cls>, \
+        &basefwx::plugin::detail::generic_destroy<plugin_cls>, \
+        &basefwx::plugin::detail::generic_transform<plugin_cls, /*IsInverse=*/false>, \
+        &basefwx::plugin::detail::generic_transform<plugin_cls, /*IsInverse=*/true>, \
+        &basefwx::plugin::detail::generic_max_output<plugin_cls>, \
+        &basefwx::plugin::detail::generic_selftest<plugin_cls>, \
+        &basefwx::plugin::detail::generic_capabilities<plugin_cls>, \
+        &basefwx::plugin::detail::generic_transform_keyed<plugin_cls, /*IsInverse=*/false>, \
+        &basefwx::plugin::detail::generic_transform_keyed<plugin_cls, /*IsInverse=*/true>, \
+        nullptr, \
+    }; \
+    extern "C" BASEFWX_PLUGIN_EXPORT \
+    const ::basefwx_plugin_vtable* basefwx_plugin_entry(void) { \
+        return &kBasefwxPluginVtable; \
+    } \
+    /* eat trailing semicolon */ \
+    struct BASEFWX_PLUGIN_DEFINE_KEYED_force_semicolon_##plugin_cls {}
 
 #endif  /* BASEFWX_PLUGIN_HPP */

@@ -27,6 +27,7 @@
 #include <fstream>
 #include <iostream>
 #include <limits>
+#include <mutex>
 #include <optional>
 #include <openssl/evp.h>
 #include <random>
@@ -1652,11 +1653,44 @@ InspectResult InspectBlob(const std::vector<std::uint8_t>& blob) {
     return result;
 }
 
+namespace {
+
+// One-time retirement notice for b256. Fires the first time either
+// the public B256Encode or B256Decode is called in a process. The
+// internal `basefwx::codec::B256Encode/Decode` helpers stay silent
+// because the surviving callers of those (the already-deprecated
+// Bi512Encode / A512Encode) would otherwise emit two retirement
+// messages per call.
+void WarnB256RetiredOnce() {
+    static std::once_flag flag;
+    std::call_once(flag, []() {
+        std::cerr <<
+            "🫡 b256 has been retired as of BaseFWX 3.7.0.\n"
+            "   b256 was the very first encoding method in BaseFWX —\n"
+            "   born in V1, back when this was a proof of concept and\n"
+            "   not a project. It served from day one. Existing\n"
+            "   b256-encoded blobs still decode; use base64 or\n"
+            "   Hash512 / Uhash513 for new code.\n"
+            "   ❤️  Thank you for the journey. It's time to go.\n";
+    });
+}
+
+}  // namespace
+
+// Public API: stays callable (existing blobs still decode), but
+// flags itself at compile time via [[deprecated]] in basefwx.hpp
+// and at runtime via WarnB256RetiredOnce. Internal callers
+// (Bi512Encode, A512Encode, …) go through `basefwx::codec::B256*`
+// instead — those helpers stay un-deprecated to keep the build
+// quiet, since their parent methods carry their own deprecation
+// notice already.
 std::string B256Encode(const std::string& input) {
+    WarnB256RetiredOnce();
     return basefwx::codec::B256Encode(input);
 }
 
 std::string B256Decode(const std::string& input) {
+    WarnB256RetiredOnce();
     return basefwx::codec::B256Decode(input);
 }
 

@@ -396,10 +396,18 @@ section {
  * agree on a single source of truth (the manifest stays authoritative
  * for tooling that doesn't render — e.g. CI, leak detector reports).
  */
+/*
+ * Heaviness chip — warm palette (green→amber→orange→red). Sits on the
+ * RIGHT side of the bench-detail summary, suffixing the timing text,
+ * where it reads as "operational class" rather than "lifecycle status".
+ * Spatially separated from the slate lifecycle chip on the opposite
+ * end of the summary so the two never compete for the same visual slot.
+ */
 .chip.heaviness {
   margin-bottom: 0;
-  margin-left: 8px;
-  padding: 2px 8px;
+  margin-left: 10px;
+  margin-right: 0;
+  padding: 2px 10px;
   font-size: 11px;
   font-weight: 600;
   text-transform: uppercase;
@@ -432,33 +440,43 @@ section {
 }
 
 /*
- * Lifecycle chip — sits next to the heaviness chip. Yellow for both
- * deprecated and retired (visually similar: "no longer recommended"
- * is the shared signal); the label text and tooltip distinguish them.
- * Carries the version the lifecycle changed in (e.g. "Retired since 3.7.0")
- * so visitors can find the corresponding CHANGELOG entry.
+ * Lifecycle chip — slate gray. Sits on the LEFT side of the bench-detail
+ * summary, prefixing the method label, where the eye lands first. The
+ * slate palette is the modern "deprecated/inactive" convention (used in
+ * Vue docs, Tailwind UI, GitHub itself) and is intentionally OUTSIDE the
+ * warm-color heaviness palette so the two chips never look related —
+ * the previous yellow-on-yellow collision with the medium heaviness
+ * chip is gone.
+ *
+ * Text is mixed-case (e.g. "Retired since 3.7.0") rather than the
+ * uppercase used by the heaviness chip. Mixed case reads more naturally
+ * for the longer phrase and reinforces that this is informational metadata
+ * about the method itself, not a category label like "MEDIUM" / "HIGH".
+ *
+ * The tooltip carries the per-method retirement / deprecation note from
+ * website/results/heaviness.json so visitors can find the CHANGELOG entry.
  */
 .chip.lifecycle {
   margin-bottom: 0;
-  margin-left: 8px;
-  padding: 2px 8px;
+  margin-left: 0;
+  margin-right: 10px;
+  padding: 2px 10px;
   font-size: 11px;
   font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.02em;
   vertical-align: middle;
-  background: rgba(234, 179, 8, 0.16);
-  border-color: rgba(234, 179, 8, 0.60);
-  color: #eab308;
+  background: rgba(100, 116, 139, 0.16);   /* slate-500 @ 16% */
+  border-color: rgba(100, 116, 139, 0.55);
+  color: #94a3b8;                          /* slate-400 */
 }
 
 .chip.lifecycle.lifecycle-retired {
-  /* Slightly stronger highlight than plain deprecated — the retirement
-   * tier carries the runtime banner and the "first method ever" note,
-   * so it deserves an extra nudge of visual weight. */
-  background: rgba(234, 179, 8, 0.22);
-  border-color: rgba(234, 179, 8, 0.75);
-  color: #ca8a04;
+  /* Retired carries the runtime banner and the "first method ever" note,
+   * so it gets a slightly darker, more emphasized shade than plain
+   * Deprecated — still slate, just heavier. */
+  background: rgba(71, 85, 105, 0.22);     /* slate-600 @ 22% */
+  border-color: rgba(71, 85, 105, 0.75);
+  color: #cbd5e1;                          /* slate-300 */
 }
 
 .hash-block {

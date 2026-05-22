@@ -15,6 +15,7 @@ import javax.crypto.Cipher;
 import javax.crypto.Mac;
 import javax.crypto.SecretKeyFactory;
 import javax.crypto.spec.GCMParameterSpec;
+import javax.crypto.spec.IvParameterSpec;
 import javax.crypto.spec.PBEKeySpec;
 import javax.crypto.spec.SecretKeySpec;
 import org.bouncycastle.crypto.generators.Argon2BytesGenerator;
@@ -26,6 +27,12 @@ public final class Crypto {
     // ThreadLocals must be initialized before detectPbkdf2Compat() to avoid init-order bug
     private static final ThreadLocal<Cipher> AES_GCM_ENC = ThreadLocal.withInitial(Crypto::initAesGcmCipher);
     private static final ThreadLocal<Cipher> AES_GCM_DEC = ThreadLocal.withInitial(Crypto::initAesGcmCipher);
+    // Shared CTR Cipher — encrypt and decrypt are the same operation for a
+    // stream cipher, so a single thread-local works for both. an7's chunk
+    // loop was calling Cipher.getInstance("AES/CTR/NoPadding") per chunk
+    // (~220 times on a 220 MiB bench file); JCA provider lookup is
+    // ~0.5-1 ms each, so the cached instance saves ~150 ms per run.
+    private static final ThreadLocal<Cipher> AES_CTR = ThreadLocal.withInitial(Crypto::initAesCtrCipher);
     private static final ThreadLocal<Mac> HMAC_SHA256 = ThreadLocal.withInitial(Crypto::initHmacInstance);
     private static final ThreadLocal<SecretKeyFactory> PBKDF2_FACTORY = ThreadLocal.withInitial(Crypto::initPbkdf2Factory);
     // DirectByteBuffer pools for fast AES-GCM (16x faster than byte[] arrays for large data)
@@ -564,6 +571,54 @@ public final class Crypto {
             return Cipher.getInstance("AES/GCM/NoPadding");
         } catch (GeneralSecurityException exc) {
             throw new IllegalStateException("AES-GCM unavailable", exc);
+        }
+    }
+
+    private static Cipher initAesCtrCipher() {
+        try {
+            return Cipher.getInstance("AES/CTR/NoPadding");
+        } catch (GeneralSecurityException exc) {
+            throw new IllegalStateException("AES-CTR unavailable", exc);
+        }
+    }
+
+    /**
+     * AES-256-CTR one-shot transform reusing a thread-local Cipher to skip
+     * the per-call provider lookup. Encrypt and decrypt are the same op
+     * for a stream cipher; pass either the input or the in-place buffer.
+     * Throws IllegalStateException on JCE failure.
+     */
+    public static byte[] aesCtrTransform(byte[] key, byte[] iv, byte[] data) {
+        try {
+            Cipher cipher = AES_CTR.get();
+            cipher.init(Cipher.ENCRYPT_MODE, new SecretKeySpec(key, "AES"), new IvParameterSpec(iv));
+            return cipher.doFinal(data);
+        } catch (GeneralSecurityException exc) {
+            throw new IllegalStateException("AES-CTR transform failed", exc);
+        }
+    }
+
+    /**
+     * AES-256-CTR in-place transform. Mutates {@code buf[off..off+len)} so
+     * the caller can avoid the per-chunk byte[] allocation that doFinal(input)
+     * pays. CTR is a stream cipher so in-place is safe for both encrypt and
+     * decrypt; the cipher key schedule is amortised via the thread-local
+     * Cipher.
+     */
+    public static void aesCtrTransformInPlace(byte[] key, byte[] iv, byte[] buf, int off, int len) {
+        if (len == 0) {
+            return;
+        }
+        try {
+            Cipher cipher = AES_CTR.get();
+            cipher.init(Cipher.ENCRYPT_MODE, new SecretKeySpec(key, "AES"), new IvParameterSpec(iv));
+            int n = cipher.update(buf, off, len, buf, off);
+            int m = cipher.doFinal(buf, off + n);
+            if (n + m != len) {
+                throw new IllegalStateException("AES-CTR in-place length mismatch (" + (n + m) + " vs " + len + ")");
+            }
+        } catch (GeneralSecurityException exc) {
+            throw new IllegalStateException("AES-CTR transform failed", exc);
         }
     }
 

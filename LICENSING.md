@@ -38,12 +38,19 @@ The free GPL-3.0 track requires the credit string
 to appear in a place where it's actually seen by users of your
 product. The bar isn't subjective:
 
-- **Where:** on the same screen, page, dialog, document, or surface
-  as other third-party credits or open-source attributions used by
-  your product. If your product has an "About" screen or a NOTICES
-  page, that's where it goes. If your product has a CLI `--version`
-  flag, that's where it goes. If your product has none of these,
-  you need to add one for this attribution.
+- **Where the credit goes:** on the same screen / page / dialog /
+  surface that already carries your product's other third-party
+  attributions — the **credits / about / acknowledgments / open-source
+  notices** surface. If your product has an "About" screen, a
+  "Credits" screen, a settings → "Open-source components" page, or a
+  CLI `--version` flag that lists dependencies, the BaseFWX credit
+  belongs **right there, alongside the others**. If your product has
+  none of these surfaces, you need to add one for this attribution.
+- **Where the credit does NOT have to go:** the credit does **not**
+  belong on the main / home / landing screen of your app. Mixing
+  third-party attribution into your primary UX is awkward for users
+  and not what this license is asking for. The rule is "with the
+  other credits", not "front and center".
 - **How big:** in a font / weight / size equal to or larger than the
   smallest credit already on that surface. "Smallest" is measured
   by visual rendering, not source-code length.
@@ -52,7 +59,9 @@ product. The bar isn't subjective:
 
 What does **NOT** satisfy attribution:
 
-- Buried 3 menus deep when other credits sit on the front page.
+- Buried 3 menus deep when other open-source credits sit on a
+  single, easily-discovered credits page (i.e. listed in a less
+  prominent location than peer credits).
 - "BaseFWX" abbreviated, without the URL.
 - A footnote in 6pt grey on a white background when other credits
   are 12pt black.
@@ -63,9 +72,24 @@ If you're not sure whether your attribution placement passes the
 bar, open an issue with a screenshot. The maintainers will tell you
 yes or no. The point is to be clear, not adversarial.
 
-If attribution would harm your product (white-label use, branding
-constraints, contractual obligations to other licensors), purchase
-a commercial license.
+### "Hidden BaseFWX" — paid attribution removal
+
+If the credit line above does not fit your product — white-label
+deployments, branding policy forbidding third-party callouts,
+contractual obligations to other licensors, or simply a preference
+to not name dependencies publicly — the **commercial license**
+includes an **attribution-removal option**. Contact
+`admin@fixcraft.jp` with a short note describing your product and
+the reason for hiding the credit; pricing is per-customer. With the
+commercial license active, the GPL-3.0 + Attribution requirement no
+longer applies to your usage and the "Powered by BaseFWX" string is
+not required anywhere in your product.
+
+This is intentionally a paid tier, not a free toggle. The
+attribution is the consideration for the GPL-3.0 free track;
+removing it shifts you to commercial terms. See the [Commercial
+license](#commercial-license) section below for the broader scope of
+what the commercial license unlocks.
 
 ## Plugin Exception rules — when is your plugin in the safe harbor?
 
@@ -189,7 +213,10 @@ plugins.
 
 Available on request. Typical reasons companies buy:
 
-- Branding policy forbids third-party attribution.
+- **"Hidden BaseFWX"** — remove the "Powered by BaseFWX" attribution
+  entirely (white-label, branding policy, contractual constraints).
+  See the [Hidden BaseFWX](#hidden-basefwx--paid-attribution-removal)
+  section above.
 - Need to statically link BaseFWX into a single-file distribution
   (the static-embed plugin track above).
 - Need to embed BaseFWX in a closed-source SDK that is itself

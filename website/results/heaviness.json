@@ -1,0 +1,64 @@
+{
+  "version": 2,
+  "doc": "Per-method classification used by the website to render Detailed Results chips. Each method carries (a) a heaviness level (low/medium/high/extreme) determined by typical peak working set and CPU time per call, and (b) an optional lifecycle status (active/deprecated/retired) with the version it changed in. Match is case-insensitive substring on the bench label; longest match wins.",
+  "levels": {
+    "low": {
+      "label": "Low",
+      "color": "#1aa260",
+      "explanation": "Cheap and bounded. Safe to run on any host."
+    },
+    "medium": {
+      "label": "Medium",
+      "color": "#d4a017",
+      "explanation": "Modest CPU + RAM. Fine on laptops; expect a few seconds."
+    },
+    "high": {
+      "label": "High",
+      "color": "#d97706",
+      "explanation": "Heavy CPU and/or hundreds of MiB peak RSS. Use a dedicated build box if your laptop is small."
+    },
+    "extreme": {
+      "label": "Extreme",
+      "color": "#dc2626",
+      "explanation": "Multi-GiB peak RSS or multi-second CPU per call. Do not run on machines under 32 GiB RAM."
+    }
+  },
+  "lifecycle": {
+    "active": null,
+    "deprecated": {
+      "label": "Deprecated",
+      "color": "#eab308",
+      "explanation": "Public API stays callable so existing blobs / call sites keep working, but the method is no longer recommended for new code. Emits a deprecation warning at compile time and (where applicable) at first call. See CHANGELOG for the alternative."
+    },
+    "retired": {
+      "label": "Retired",
+      "color": "#eab308",
+      "explanation": "Same as deprecated, plus a one-time runtime banner with the retirement story. Existing blobs still decode; nothing new is built on top. Will be removed in a future major bump."
+    }
+  },
+  "methods": [
+    { "match": "hash512",       "level": "low",     "notes": "SHA-512, fixed output size.", "status": "active" },
+    { "match": "uhash513",      "level": "low",     "notes": "Deprecated in 3.7.0 — non-standard chained hash (SHA-256 → SHA-1 → SHA-512 → SHA-256). Includes a SHA-1 hop with known collision weaknesses; output is 256 bits despite the '513' name. Use hash512 (SHA-512) or SHA3-512 for new code. Existing call sites continue to work.",
+                                                       "status": "deprecated", "since": "3.7.0" },
+    { "match": "b64",           "level": "low",     "notes": "stdlib base64; O(N) but bounded buffers.", "status": "active" },
+    { "match": "n10",           "level": "low",     "notes": "Numeric encoding: turns arbitrary bytes into a fixed-10-digit-block string with an embedded FNV-1a checksum. Not obfuscation — the point is producing digit-only output for channels that only carry digits (SMS, phone fields, certain DBs). Sibling-in-spirit of kFMe (turn-data-into-numbers). Stays active as long as it stays fast.",
+                                                       "status": "active" },
+    { "match": "bi512",         "level": "low",     "notes": "Deprecated in 3.7.0 — SHA-256 with a custom prefilter (no added security). Use hash512 / uhash513 instead. Existing blobs still encode/decode.",
+                                                       "status": "deprecated", "since": "3.7.0" },
+    { "match": "b256",          "level": "high",    "notes": "🫡 Retired in 3.7.0. First encoding method in BaseFWX (V1, proof-of-concept era). Non-streaming whole-buffer NumPy path; peak RSS ≈ 5–6× input. Use base64 / hash512 for new code. Existing blobs still decode. ❤️",
+                                                       "status": "retired", "since": "3.7.0" },
+    { "match": "a512",          "level": "medium",  "notes": "Deprecated in 3.7.0 — reversible obfuscation codec with no security goal; slower than base64 for the same output. Calls b256 internally. Existing blobs still decode.",
+                                                       "status": "deprecated", "since": "3.7.0" },
+    { "match": "fwxaes_live",   "level": "high",    "notes": "KDF + streaming AEAD + ffmpeg pipe; multi-MiB working set.", "status": "active" },
+    { "match": "fwxaes",        "level": "medium",  "notes": "Argon2id + AES-256-GCM; KDF dominates wall time.", "status": "active" },
+    { "match": "pb512",         "level": "high",    "notes": "KDF + whole-buffer codec; not streaming.", "status": "active" },
+    { "match": "b512",          "level": "high",    "notes": "KDF + whole-buffer codec; not streaming.", "status": "active" },
+    { "match": "kFMe",          "level": "extreme", "notes": "File mode encrypt with master key; full Argon2 + ML-KEM wrap + AEAD over the whole file.", "status": "active" },
+    { "match": "kFMd",          "level": "extreme", "notes": "Inverse of kFMe; same memory profile.", "status": "active" },
+    { "match": "kFAe",          "level": "extreme", "notes": "File mode encrypt with archive packing; multi-GiB capable.", "status": "active" },
+    { "match": "kFAd",          "level": "extreme", "notes": "Inverse of kFAe.", "status": "active" },
+    { "match": "jmg",           "level": "high",    "notes": "Image cipher; whole-pixel-buffer AEAD.", "status": "active" },
+    { "match": "an7",           "level": "medium",  "notes": "AN7 stealth anonymisation; streaming with small working set.", "status": "active" },
+    { "match": "dean7",         "level": "medium",  "notes": "Inverse of AN7.", "status": "active" }
+  ]
+}

@@ -45,13 +45,28 @@ std::optional<KfmCarrierInspectResult> InspectKfmCarrierFile(const std::string& 
 std::string ResolvePassword(const std::string& input);
 void RequireStrongPasswordForEncryption(const std::string& password, std::string_view context = {});
 
+// Deprecated since 3.7.0. b256 was the very first encoding method in
+// BaseFWX — born in V1, back when this was a proof of concept and not
+// a project. It served from day one. Existing b256-encoded blobs still
+// decode; use base64 (stdlib) or Hash512 / Uhash513 for new code.
+// Retired but loved. 🫡 ❤️  See CHANGELOG for the full retirement note.
+[[deprecated("Retired since 3.7.0 — b256 was the first BaseFWX encoding (V1, PoC era). Use base64 / Hash512 / Uhash513. Existing blobs still decode.")]]
 std::string B256Encode(const std::string& input);
+[[deprecated("Retired since 3.7.0 — see B256Encode. Existing blobs still decode.")]]
 std::string B256Decode(const std::string& input);
 std::string B64Encode(const std::string& input);
 std::string B64Decode(const std::string& input);
 std::string N10Encode(const std::string& input);
 std::string N10Decode(const std::string& input);
 std::string Hash512(const std::string& input);
+// Deprecated since 3.7.0. `Uhash513` is a non-standard chained hash
+// (SHA-256 → SHA-1 → SHA-512 → SHA-256 over the concatenation). The
+// embedded SHA-1 step adds no security and uses a hash with known
+// collision weaknesses; the overall collision resistance is bounded
+// by the outer SHA-256 anyway. The "513" in the name is marketing —
+// the output is a 256-bit SHA-256 hex string. Use `Hash512` (SHA-512)
+// or SHA3-512 for new code. Existing call sites continue to work.
+[[deprecated("Use Hash512 (SHA-512) or SHA3-512 — Uhash513 is a non-standard chain with a SHA-1 hop and a misleading name")]]
 std::string Uhash513(const std::string& input);
 // Deprecated since 3.7.0. `Bi512Encode` is "SHA-256 with a custom prefilter"
 // — the prefilter adds no security beyond SHA-256 itself. Use `Hash512`
@@ -63,11 +78,12 @@ std::string Bi512Encode(const std::string& input);
 
 // Deprecated since 3.7.0. `A512Encode` / `A512Decode` are a reversible
 // obfuscation codec with no security goal (no key, no AEAD). Slower than
-// base64 for the same output. Use `B256Encode`/`B256Decode` or plain
-// base64 for new reversible-encoding needs.
-[[deprecated("Use B256Encode / base64 — A512 has no security goal and is slower")]]
+// base64 for the same output. Use base64 for new reversible-encoding
+// needs. (Their internal b256 building block is also deprecated as of
+// 3.7.0 — see B256Encode.)
+[[deprecated("Use base64 — A512 has no security goal and is slower")]]
 std::string A512Encode(const std::string& input);
-[[deprecated("Use B256Decode / base64 — A512 has no security goal and is slower")]]
+[[deprecated("Use base64 — A512 has no security goal and is slower")]]
 std::string A512Decode(const std::string& input);
 // B1024Encode removed in 3.6.5 — it was a one-line alias for
 // Bi512Encode(A512Encode(input)) that added no security or functionality

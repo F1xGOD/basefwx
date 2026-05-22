@@ -14,14 +14,41 @@
 
 ## Plugin (blackbox) core — what's in 3.7.0 vs queued
 
-3.7.0 ships the **public ABI header** (`basefwx/plugin.h`) and a
-working example plugin (`examples/plugins/passthrough/`). The runtime
-loader, the JNI bridge, the Python `ctypes` shim, the wire-format
-plugin-tag bytes, and the `basefwx-plugin-verify` tool are scoped for
-the next 3.7.x point releases (sequenced so reviewers can read the
-ABI before any code commits to it). See
-[examples/plugins/README.md](examples/plugins/README.md) for the
-authoring contract.
+3.7.0 ships the **complete ABI surface** — the C ABI header
+([plugin.h](cpp/include/basefwx/plugin.h)), the C++ helper layer
+([plugin.hpp](cpp/include/basefwx/plugin.hpp)) with two macro
+variants for Profile-A (`BASEFWX_PLUGIN_DEFINE`) and Profile-B
+(`BASEFWX_PLUGIN_DEFINE_KEYED`), the static-embed Registry
+([plugin_static.hpp](cpp/include/basefwx/plugin_static.hpp)), and
+**five example plugins** covering all three usage profiles:
+
+| Example | Profile | Demonstrates |
+| --- | --- | --- |
+| `passthrough/` | A | Pure-C minimal viable plugin |
+| `xor-rotate/` | A | C++ helper layer + `BASEFWX_PLUGIN_DEFINE` |
+| `aead-wrapped-keyed/` | B | Raw-mode-safe keyed plugin (HKDF + AES-256-CTR + HMAC-SHA256) |
+| `time-tweak/` | B | Self-derived per-call entropy (unix time embedded in output) |
+| `static-embed/` | C | Plugin compiled into host binary; no `.so` on disk |
+
+[examples/plugins/THREAT_MODEL.md](examples/plugins/THREAT_MODEL.md)
+is the authoritative document for what each profile defends against.
+The short version: a deterministic plugin is fine for traffic-shaping
+inside an AEAD layer (Profile A); a keyed plugin with `host_secret`
++ per-call tweak is required for raw-mode use without AEAD wrapping
+(Profile B); static embedding is a deployment choice that raises the
+cost of plugin extraction but does not provide cryptographic
+security on its own (Profile C).
+
+What is **NOT** in 3.7.0 and is scoped for 3.7.x point releases:
+the runtime loader inside the BaseFWX CLI, the JNI bridge for
+`.jar` plugins, the Python `ctypes` shim, the wire-format
+plugin-tag bytes, and the `basefwx-plugin-verify` tool. You can
+build and unit-test plugins against the ABI today; the
+`static-embed/` example exercises the full contract end-to-end
+without any of the deferred pieces.
+
+Wire format is unchanged in 3.7.0 — blobs without a plugin tag
+round-trip identically to 3.6.x.
 
 ## TL;DR (security/hardening track)
 
@@ -41,8 +68,14 @@ authoring contract.
 | **Format `UnpackLengthPrefixed` capped at 64 MiB total** (C++ matches the Java side that's had this cap since 3.4.x). | Previously a malformed blob declaring a 4 GiB part survived to the data.size() check — long enough for upstream pre-sizing code to OOM. |
 | **`pq.cpp::ReadFileBytes` caps key files at 4 MiB.** | A symlink under `BASEFWX_MASTER_PQ_PUB` pointing at `/dev/zero` no longer OOMs the process. |
 | **LiveCipher refuses to wrap the sequence counter** (C++ + Java). Throws when `sequence_` would advance past 2⁶⁴-1 (C++) / `Long.MAX_VALUE` (Java). | 2⁶⁴ frames is unreasonable, but the existing path silently wrapped → nonce reuse under the same key → breaks AES-GCM. |
-| **Java now supports Argon2id** in the user-KDF wrap path via BouncyCastle's `Argon2BytesGenerator` (already a runtime dep). Three-way Argon2id cross-runtime parity verified end-to-end. The COMPATIBILITY.md Java row flips `❌ → ✅`. Typed `UnsupportedKdfException` retained for truly unknown labels. Parallelism follows `Runtime.availableProcessors()` to match the C++ side; pin `KdfOptions.argon2Parallelism` explicitly if you need Argon2 blobs to round-trip across machines with different core counts (see COMPATIBILITY.md "Argon2 parallelism portability"). |
+| **Java now supports Argon2id** in the user-KDF wrap path via BouncyCastle's `Argon2BytesGenerator` (already a runtime dep). Three-way Argon2id cross-runtime parity verified end-to-end. The COMPATIBILITY.md Java row flips `❌ → ✅`. Typed `UnsupportedKdfException` retained for truly unknown labels. |
+| **Argon2id parallelism default is hardcoded to 4** across C++, Java, and Python (`kArgon2Parallelism` / `ARGON2_PARALLELISM` / `_DEFAULT_ARGON2_PARALLELISM`). The wire format does not carry the lane count; pre-3.7.0 each runtime defaulted to `std::thread::hardware_concurrency()` / `Runtime.availableProcessors()` / `os.cpu_count()`, so a blob encrypted on a 16-core machine could not be decrypted on a 4-core machine. Callers who want host-tuned parallelism can still set `KdfOptions.argon2Parallelism` explicitly before encrypt — the default just stops varying. |
 | **`b1024` retired** in C++ / Java / Python. Was `Bi512Encode(A512Encode(input))` — no new behavior, ate cross-runtime test time. |
+| **🫡 `b256` retired** in C++ / Java / Python. b256 was the very first encoding method in BaseFWX, born in V1 when this was a proof of concept and not a project. Marked deprecated; emits a one-time retirement notice (with ❤️) on first call. Existing blobs still decode. Use base64 / `Hash512` for new code. |
+| **`uhash513` deprecated** in C++ / Java / Python. Non-standard chained hash with a SHA-1 hop and misleading "513" name (actual output is 256 bits). The SHA-1 step adds no security and uses a hash with known collision weaknesses. Use `Hash512` (SHA-512) or SHA3-512 for new code. Existing call sites continue to work. |
+| **Resource guards for bench / test runners.** `scripts/lib/resource_guards.sh` caps the runner's CPU to `nproc - 1` and bounds virtual memory to 75 % of system RAM by default. `scripts/test_all.sh` and `scripts/plugin-smoke.sh` source it automatically; opt out with `--no-guards` or `BASEFWX_NO_GUARDS=1`. Stops the laptop-OOM failure mode where a bench process accumulates pool memory across heavy methods until KDE / sddm freeze. |
+| **Memory-leak detection CI** (`.github/workflows/leak-detect.yml`). Three jobs that each fail the workflow on a leak: Python tracemalloc + RSS slope (`scripts/leak_detect.py`), C++ ASan/LSan probe (`scripts/leak_detect_cpp.sh`), Java heap-delta probe. Catches code-level leaks (missing free, unfreed JNI globalrefs); the resource guards above handle allocator-pool fragmentation at run time. |
+| **Benchmark heaviness chips on the website.** `website/results/heaviness.json` classifies each benchmark method by typical peak RSS + wall time (`low` / `medium` / `high` / `extreme`); the Detailed Results panel now renders a colored chip next to each method so visitors can see at a glance which methods can run on a laptop and which need a build box. |
 
 The full security-policy stance lives in [SECURITY.md](SECURITY.md);
 this document focuses on **what changed in 3.7.0 and what it costs**.

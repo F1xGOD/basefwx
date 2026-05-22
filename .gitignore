@@ -80,6 +80,13 @@ _codeql_detected_source_root
 /--*
 
 # Example plugin build artifacts (already covered by `build/` but listed
-# explicitly so the intent is obvious to anyone reading this file)
+# explicitly so the intent is obvious to anyone reading this file).
+# 3.7.0 added: aead-wrapped-keyed/, time-tweak/, static-embed/ — all
+# match the wildcard.
 examples/plugins/*/build/
 examples/plugins/*/bin/
+
+# Leak-detect helpers (3.7.0+): the C++ ASan probe writes into
+# build-asan-leak/ (matched by build-*/ above); the Java heap probe
+# writes into .leak-java/ when run locally outside the CI workflow.
+.leak-java/

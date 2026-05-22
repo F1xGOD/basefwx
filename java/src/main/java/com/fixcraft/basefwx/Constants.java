@@ -41,16 +41,13 @@ public final class Constants {
     public static final int USER_KDF_SALT_SIZE = 16;
     public static final int USER_KDF_ITERATIONS = resolveUserKdfIterations();
 
-    // 3.6.5: Argon2id defaults for the user-KDF wrap path. Values mirror
-    // basefwx::constants::kArgon2{TimeCost,MemoryCost} in constants.hpp.
-    // Parallelism mirrors the C++ side's DefaultArgon2Parallelism() —
-    // std::thread::hardware_concurrency() with a fallback of 4. This
-    // matches the existing wire-format quirk where Argon2 parallelism is
-    // chosen by the encrypting host's CPU count and is NOT carried in
-    // the wrap header; cross-machine portability of Argon2-wrapped blobs
-    // therefore requires both sides to share the same parallelism value
-    // (either same hardware, or the caller pins ARGON2_PARALLELISM
-    // explicitly via KdfOptions before encrypt/decrypt).
+    // Argon2id defaults for the user-KDF wrap path. Values mirror
+    // basefwx::constants::kArgon2{TimeCost,MemoryCost,Parallelism} in
+    // constants.hpp. Parallelism is fixed at 4 (see
+    // defaultArgon2Parallelism() below) so Argon2-wrapped blobs are
+    // portable across hosts even though the wire format does not carry
+    // the lane count. Callers who want a different lane count pin
+    // KdfOptions.argon2Parallelism before the encrypt.
     public static final int ARGON2_TIME_COST = 4;
     public static final int ARGON2_MEMORY_KIB = 1 << 16;        // 64 MiB
     public static final int ARGON2_PARALLELISM = defaultArgon2Parallelism();

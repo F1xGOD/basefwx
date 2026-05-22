@@ -6,6 +6,52 @@
 > the existing top-level `README.md` is the right entry point for
 > human onboarding — this file is the agent-shaped index.
 
+## ⚠️ READ FIRST — DO NOT RUN HEAVY WORK ON THIS MACHINE
+
+**This is the user's daily-driver laptop, ~16 GiB RAM.** Do **not**
+run `scripts/test_all.sh`, any benchmark phase, Argon2id at default
+memory cost, `gradle test` cold-cache, multi-runtime parity sweeps
+(C++ + Java + Python + PyPy together), or anything else that
+sustains CPU for more than ~30s or pushes RAM past ~60 %. When you
+ignore this, the laptop OOM-kills KDE / sddm / background apps,
+TTY-switching hangs, and the offending process is very hard to
+kill. There is an incident on record from a prior session that
+caused exactly this.
+
+**Where heavy work runs:** `192.168.1.165` (hostname `raptorlake`,
+32 cores, 62 GiB RAM, passwordless SSH from this laptop). **Always
+ask the user** which target to use before you `ssh` — they may have
+a different host up, or want to skip the run.
+
+**Mandatory workflow for heavy commands:**
+
+1. **Stop, ask the user** "which host should I run this on?" — do
+   not assume `192.168.1.165` is the right answer today.
+2. After confirmation, rsync the active subtree:
+   ```
+   rsync -az --delete \
+     --exclude .git --exclude build --exclude '.gradle' \
+     --exclude 'cpp/build' --exclude 'java/build' \
+     ~/yume/basefwx/ <host>:~/yume/basefwx/
+   ```
+3. Run the command over SSH on that host.
+4. `rsync` artifacts back if needed.
+5. Commit + push from this laptop, not the remote.
+
+**OK locally (cheap, bounded):** source edits, single-plugin example
+builds (`cmake --build` of one `examples/plugins/*/build`),
+`scripts/plugin-smoke.sh` (15 steps in ~5 s), `scripts/check_version_sync.py`,
+`grep`/`find`, `git`. The `static-embed/` example exercises the
+full plugin contract end-to-end without invoking the heavy crypto
+suite — prefer it for ABI-shape verification.
+
+**NOT OK locally:** `scripts/test_all.sh` in any mode (the bench
+phase runs `b256_py_correct` and similar memory-heavy paths that
+push the laptop into OOM territory; `TEST_MODE=fast` does not
+disable it), `gradle test` from cold cache, liboqs-from-source,
+the full Python parity suite, Argon2id benches at default cost,
+multi-GiB encrypt/decrypt timing runs.
+
 ## 30-second pitch
 
 BaseFWX is a cryptography library that encrypts and decrypts bytes
@@ -91,24 +137,62 @@ Java, and Android trees. Read it before touching anything in
 ## The blackbox plugin contract (new in 3.7.0)
 
 The contract has three layers; pick the one that matches your task.
+Required reading before writing any plugin code:
+`examples/plugins/THREAT_MODEL.md` — the five threat models the
+ABI is designed against and the three plugin profiles to choose
+between.
 
-**Adding a plugin.** Start at `examples/plugins/README.md`. Copy
-`passthrough/` (C) or `xor-rotate/` (C++) and edit. The plugin's
-`forward` and `inverse` functions are the only required logic;
-`BASEFWX_PLUGIN_DEFINE(...)` in `plugin.hpp` generates the C-ABI
-glue for you.
+**Adding a plugin (Profile A — AEAD-wrapped).** Start at
+`examples/plugins/README.md`. Copy `passthrough/` (C) or
+`xor-rotate/` (C++) and edit. The plugin's `forward` and `inverse`
+functions are the only required logic; `BASEFWX_PLUGIN_DEFINE(...)`
+in `plugin.hpp` generates the C-ABI glue for you. Suitable for
+traffic-shaping inside an AEAD layer; not suitable for raw-mode
+use.
+
+**Adding a plugin (Profile B — keyed, raw-mode safe).** Copy
+`examples/plugins/aead-wrapped-keyed/` and edit. Plugin class
+additionally implements `Capabilities()`, `ForwardKeyed`,
+`InverseKeyed`; the host threads a per-call `tweak` and a
+host-derived `host_secret` through the transform.
+`BASEFWX_PLUGIN_DEFINE_KEYED(...)` generates the glue. Required
+for any plugin that runs without an AEAD layer above or below it.
+The self-derived-entropy variant is in `examples/plugins/time-tweak/`
+(unix-time tweak embedded in the plugin's own output).
+
+**Adding a plugin (Profile C — static-embedded).** Compile your
+plugin source into the host binary, then register it at startup
+with `BASEFWX_PLUGIN_REGISTER_STATIC(basefwx_plugin_entry())` from
+`cpp/include/basefwx/plugin_static.hpp`. The host's loader resolves
+the plugin by its 16-byte ID from the in-process Registry,
+bypassing `dlopen`. `examples/plugins/static-embed/` is a complete
+self-contained host that demonstrates the pattern. Statically
+linking BaseFWX itself remains commercial-license-only — see
+LICENSING.md.
 
 **Implementing the host-side loader.** The C ABI is in
 `cpp/include/basefwx/plugin.h`. The loader is responsible for:
-`dlopen`, `dlsym basefwx_plugin_entry`, ABI version check, calling
-`init` with the caller-supplied config, applying `forward` /
-`inverse` at the chosen position, calling `destroy` at teardown.
-The wire-format plugin tag (16-byte `plugin_id` + position bits) is
-the receiver's hint for which plugin to load.
+checking `Registry::Find(plugin_id)` FIRST (so an embedded plugin
+wins over a same-ID file on disk), then `dlopen` + `dlsym
+basefwx_plugin_entry`, ABI version check, calling `init` with the
+caller-supplied config, calling `capabilities()` once and storing
+the result, applying `forward` / `inverse` (Profile A) or
+`forward_keyed` / `inverse_keyed` (Profile B) at the chosen
+position, calling `destroy` at teardown. **The host MUST refuse
+`BASEFWX_PLUGIN_POS_RAW` for any plugin that does not declare
+`BASEFWX_PLUGIN_CAP_SAFE_RAW_MODE`** — fail closed, no flag, no
+override. The wire-format plugin tag (16-byte `plugin_id` +
+position bits) is the receiver's hint for which plugin to load.
 
-**Verifying a plugin.** `tools/plugin-verifier/DESIGN.md` is the
-spec the `basefwx-plugin-verify` tool conforms to. Run it against
-any `.so` to confirm ABI conformance, round-trip safety, and
+**Verifying a plugin.** `scripts/plugin-smoke.sh` is the canonical
+end-to-end smoke for the ABI surface; it builds all five example
+plugins, exercises both `forward`/`inverse` and
+`forward_keyed`/`inverse_keyed` via dlopen, runs the static-embed
+binary, and runs the Java SPI and Python ctypes round-trips.
+`tools/plugin-verifier/DESIGN.md` is the spec the
+`basefwx-plugin-verify` tool conforms to (scoped for 3.7.x —
+spec exists, runtime implementation deferred). Run smoke against
+any new `.so` to confirm ABI conformance, round-trip safety, and
 metadata sanity.
 
 ## Tools you have when working on this repo

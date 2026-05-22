@@ -3036,8 +3036,19 @@ int main(int argc, char** argv) {
                 };
             } else if (method == "b256") {
                 op = [&]() {
+                    // b256 is retired since 3.7.0; the CLI still dispatches it
+                    // so existing scripts / blobs keep working. Suppress the
+                    // deprecation warning here only — user-written code that
+                    // calls basefwx::B256Encode will still see it.
+#if defined(__GNUC__) || defined(__clang__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+#endif
                     std::string enc = basefwx::B256Encode(text);
                     std::string dec = basefwx::B256Decode(enc);
+#if defined(__GNUC__) || defined(__clang__)
+#pragma GCC diagnostic pop
+#endif
                     g_bench_sink.fetch_xor(dec.size(), std::memory_order_relaxed);
                     return dec.size();
                 };
@@ -3106,7 +3117,18 @@ int main(int argc, char** argv) {
                 };
             } else if (method == "uhash513") {
                 op = [&]() {
+                    // uhash513 deprecated in 3.7.0; suppress the
+                    // compile-time warning at the CLI bench dispatch
+                    // only — user code calling basefwx::Uhash513 still
+                    // sees it.
+#if defined(__GNUC__) || defined(__clang__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+#endif
                     std::string digest = basefwx::Uhash513(text);
+#if defined(__GNUC__) || defined(__clang__)
+#pragma GCC diagnostic pop
+#endif
                     g_bench_sink.fetch_xor(digest.size(), std::memory_order_relaxed);
                     return digest.size();
                 };
@@ -3660,6 +3682,13 @@ int main(int argc, char** argv) {
             std::cout << basefwx::Hash512(argv[2]) << "\n";
             return 0;
         }
+        // uhash513 deprecated in 3.7.0 — CLI keeps dispatching for
+        // backwards compat. Suppress the [[deprecated]] warning at
+        // this internal site only; user code still sees it.
+#if defined(__GNUC__) || defined(__clang__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+#endif
         if (command == "uhash513") {
             if (argc < 3) {
                 PrintUsage();
@@ -3668,6 +3697,9 @@ int main(int argc, char** argv) {
             std::cout << basefwx::Uhash513(argv[2]) << "\n";
             return 0;
         }
+#if defined(__GNUC__) || defined(__clang__)
+#pragma GCC diagnostic pop
+#endif
         if (command == "a512-enc") {
             if (argc < 3) {
                 PrintUsage();
@@ -3693,6 +3725,16 @@ int main(int argc, char** argv) {
             return 0;
         }
         // b1024-enc retired in 3.6.5; was an alias for `bi512-enc $(a512-enc text)`.
+        // b256 is retired since 3.7.0 — see basefwx.hpp / CHANGELOG.
+        // The CLI keeps dispatching it so existing scripts keep working;
+        // the runtime warning emits from inside the function. Suppress
+        // the [[deprecated]] compile-time warning only at these two CLI
+        // dispatch sites — user code calling basefwx::B256Encode still
+        // sees it.
+#if defined(__GNUC__) || defined(__clang__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+#endif
         if (command == "b256-enc") {
             if (argc < 3) {
                 PrintUsage();
@@ -3709,6 +3751,9 @@ int main(int argc, char** argv) {
             std::cout << basefwx::B256Decode(argv[2]) << "\n";
             return 0;
         }
+#if defined(__GNUC__) || defined(__clang__)
+#pragma GCC diagnostic pop
+#endif
         if (command == "b512-enc" || command == "b512-dec" || command == "pb512-enc" || command == "pb512-dec") {
             ParsedOptions opts = ParseCodecArgs(argc, argv, 2);
             ResolveCliPassword(

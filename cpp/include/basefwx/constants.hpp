@@ -60,14 +60,21 @@ inline std::uint32_t HeavyPbkdf2Iterations() {
     }
 }
 
+// 3.7.0: parallelism is fixed at the compile-time constant (4 / 4) so
+// blobs are portable across hosts. The wire format carries the salt
+// and KDF label, but NOT the Argon2 parallelism lane count; previously
+// every runtime resolved it from std::thread::hardware_concurrency()
+// at decrypt time, so a blob encrypted on a 16-core machine could not
+// be decrypted on a 4-core machine without the caller explicitly
+// pinning argon2_parallelism via KdfOptions. Callers who deliberately
+// want host-tuned parallelism can still set it on KdfOptions before
+// the encrypt — the default now just stops silently varying.
 inline std::uint32_t DefaultArgon2Parallelism() {
-    auto count = std::thread::hardware_concurrency();
-    return count > 0 ? count : kArgon2Parallelism;
+    return kArgon2Parallelism;
 }
 
 inline std::uint32_t DefaultHeavyArgon2Parallelism() {
-    auto count = std::thread::hardware_concurrency();
-    return count > 0 ? count : kHeavyArgon2Parallelism;
+    return kHeavyArgon2Parallelism;
 }
 
 inline constexpr std::size_t kAeadNonceLen = 12;

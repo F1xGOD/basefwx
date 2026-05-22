@@ -392,9 +392,15 @@ const renderBenchDetails = async (container, tests, epsilon) => {
     const details = document.createElement("details");
     details.className = "bench-detail";
     const summary = document.createElement("summary");
+    // Layout: lifecycle (deprecated/retired) prefixes the LEFT span next
+    // to the label — slate gray, attention-grabbing where the eye lands
+    // first. Heaviness (low/medium/high/extreme) suffixes the RIGHT span
+    // next to the timing — warm-palette colored, sits with the
+    // operational data. This split also avoids the visual clash that
+    // existed when both chips appeared adjacent with similar yellow tones.
     summary.innerHTML = `
-      <span>${entry.label} ${renderHeavinessChip(entry.label)}${renderLifecycleChip(entry.label)}</span>
-      <span class="bench-summary">${baseNs ? `Python ${formatNs(baseNs, epsilon)}` : "Python n/a"}</span>
+      <span>${renderLifecycleChip(entry.label)}${entry.label}</span>
+      <span class="bench-summary">${baseNs ? `Python ${formatNs(baseNs, epsilon)}` : "Python n/a"}${renderHeavinessChip(entry.label)}</span>
     `;
     details.appendChild(summary);
     const table = document.createElement("table");

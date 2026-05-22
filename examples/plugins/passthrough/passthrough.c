@@ -119,10 +119,15 @@ static const basefwx_plugin_vtable kVtable = {
     .inverse = pt_inverse,
     .max_output_for_input = pt_max_output,
     .selftest = pt_selftest,
+    /* 3.7.0: three of the four reserved slots were repurposed for
+     * the keyed plugin path. This passthrough example is Profile A
+     * (deterministic, AEAD-wrapped); leave the new slots NULL. The
+     * host treats NULL as "v1 plugin, no keyed support" and refuses
+     * BASEFWX_PLUGIN_POS_RAW for us. */
+    .capabilities = NULL,
+    .forward_keyed = NULL,
+    .inverse_keyed = NULL,
     .reserved_1 = NULL,
-    .reserved_2 = NULL,
-    .reserved_3 = NULL,
-    .reserved_4 = NULL,
 };
 
 BASEFWX_PLUGIN_EXPORT

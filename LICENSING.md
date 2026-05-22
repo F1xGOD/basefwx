@@ -152,12 +152,46 @@ header, treat it as a bug and report it.
   whole application. → use dynamic linking, write a plugin, or buy
   commercial license.
 
+## Static-embedded plugins (commercial track)
+
+3.7.0 ships [`basefwx/plugin_static.hpp`](./cpp/include/basefwx/plugin_static.hpp),
+an in-process plugin registry. Calling
+`basefwx::plugin::Registry::Register(...)` lets the host resolve a
+plugin by its 16-byte ID without `dlopen`, so the plugin source can
+be compiled directly into the host binary with no `.so` on disk.
+The [`examples/plugins/static-embed/`](./examples/plugins/static-embed/)
+example demonstrates the pattern end-to-end.
+
+How this interacts with the dual-license:
+
+- **Static plugin against a dynamically-linked BaseFWX** stays inside
+  the free track (GPL-3.0 + Attribution). The plugin source you embed
+  is yours; the host just loads BaseFWX as a shared library.
+
+- **Static plugin against a statically-linked BaseFWX** — i.e. a
+  single-file binary with both BaseFWX and the plugin baked in —
+  needs a **commercial license**, same as any other static linking
+  of BaseFWX. The licensing question is about how BaseFWX is linked,
+  not how plugins are registered.
+
+For the security implications of static embedding, read
+[examples/plugins/THREAT_MODEL.md](./examples/plugins/THREAT_MODEL.md).
+The short version: static embedding raises the cost of extracting
+the plugin code from the binary, but extraction cost is not
+cryptographic security. The actual security mechanism is making the
+plugin **keyed** via `forward_keyed` / `inverse_keyed`, so that
+extracting the plugin and its config still doesn't let an attacker
+reproduce the transform without the user's password / host-derived
+secret. Static embedding alone is not a substitute for keyed
+plugins.
+
 ## Commercial license
 
 Available on request. Typical reasons companies buy:
 
 - Branding policy forbids third-party attribution.
-- Need to statically link BaseFWX into a single-file distribution.
+- Need to statically link BaseFWX into a single-file distribution
+  (the static-embed plugin track above).
 - Need to embed BaseFWX in a closed-source SDK that is itself
   redistributed.
 - Need indemnification, written warranty, or support SLAs.

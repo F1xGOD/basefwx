@@ -168,6 +168,46 @@ replacement.
 * From **N-1 or older** → **latest**: plan a one-way migration, re-test interoperability, and re-encrypt sensitive archives when format/KDF behavior changed.
 * From **< 2.6**: treat as potentially breached; rotate credentials, invalidate legacy ciphertext at rest, and perform a clean re‑ingest under the latest release.
 
+### Plugin security model (3.7.0+)
+
+3.7.0 introduces the blackbox plugin ABI (`cpp/include/basefwx/plugin.h`).
+A plugin is an opt-in transform that can sit before, after, or
+instead of the AEAD layer. The full threat model is documented in
+[examples/plugins/THREAT_MODEL.md](./examples/plugins/THREAT_MODEL.md);
+the policy points that matter for security reports:
+
+* **Open-source crypto, keyed plugins.** The crypto core is public.
+  An attacker can extract a closed-source `.so` from a host binary
+  via debugger, `objdump`, or `strings`. Treat the plugin code as
+  public from day one. The security mechanism is **keying** —
+  `forward_keyed` / `inverse_keyed` with a host-derived secret — not
+  hiding the plugin source. Static embedding raises extraction cost
+  but is not a cryptographic primitive.
+
+* **Raw mode is opt-in and gated by capability.** The host refuses
+  `BASEFWX_PLUGIN_POS_RAW` for any plugin that does not declare
+  `BASEFWX_PLUGIN_CAP_SAFE_RAW_MODE` in `capabilities()`. The
+  refusal is structural; there is no flag to disable it. A
+  deterministic plugin used in raw mode is a substitution cipher,
+  not encryption.
+
+* **`host_secret` is mandatory when claimed.** The host fails the
+  call closed if a plugin sets `CAP_REQUIRES_HOST_KEY` and the
+  host passes `host_secret_len == 0`. Same for `CAP_REQUIRES_TWEAK`.
+
+* **Plugin scope of this document.** Vulnerabilities **in the ABI
+  contract** (e.g. host accepts a plugin without checking
+  capabilities, plugin can write past `out_cap`, registry can
+  resolve a wrong ID) are in scope. Vulnerabilities **in
+  third-party plugins** are out of scope — report those to the
+  plugin's maintainer. Examples shipped under `examples/plugins/`
+  ARE in scope.
+
+* **What we do not promise.** No defense against TM-5 (live
+  debugger / memory read on the host process). Use OS-level
+  isolation, secure enclaves, or hardware-backed key storage for
+  that layer.
+
 ---
 
 ## Reporting a Vulnerability

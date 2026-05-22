@@ -385,6 +385,82 @@ section {
   margin-bottom: 10px;
 }
 
+/*
+ * Heaviness chips on the benchmark detail summaries.
+ *   low      — cheap, bounded.
+ *   medium   — modest CPU/RAM.
+ *   high     — hundreds of MiB peak or > 1s wall.
+ *   extreme  — multi-GiB peak; do not run on small hosts.
+ * Colors mirror the levels.<level>.color values in
+ * website/results/heaviness.json so the renderer and the manifest
+ * agree on a single source of truth (the manifest stays authoritative
+ * for tooling that doesn't render — e.g. CI, leak detector reports).
+ */
+.chip.heaviness {
+  margin-bottom: 0;
+  margin-left: 8px;
+  padding: 2px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  vertical-align: middle;
+}
+
+.chip.heaviness.heaviness-low {
+  background: rgba(26, 162, 96, 0.15);
+  border-color: rgba(26, 162, 96, 0.55);
+  color: #1aa260;
+}
+
+.chip.heaviness.heaviness-medium {
+  background: rgba(212, 160, 23, 0.15);
+  border-color: rgba(212, 160, 23, 0.55);
+  color: #d4a017;
+}
+
+.chip.heaviness.heaviness-high {
+  background: rgba(217, 119, 6, 0.18);
+  border-color: rgba(217, 119, 6, 0.60);
+  color: #d97706;
+}
+
+.chip.heaviness.heaviness-extreme {
+  background: rgba(220, 38, 38, 0.18);
+  border-color: rgba(220, 38, 38, 0.60);
+  color: #dc2626;
+}
+
+/*
+ * Lifecycle chip — sits next to the heaviness chip. Yellow for both
+ * deprecated and retired (visually similar: "no longer recommended"
+ * is the shared signal); the label text and tooltip distinguish them.
+ * Carries the version the lifecycle changed in (e.g. "Retired since 3.7.0")
+ * so visitors can find the corresponding CHANGELOG entry.
+ */
+.chip.lifecycle {
+  margin-bottom: 0;
+  margin-left: 8px;
+  padding: 2px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  vertical-align: middle;
+  background: rgba(234, 179, 8, 0.16);
+  border-color: rgba(234, 179, 8, 0.60);
+  color: #eab308;
+}
+
+.chip.lifecycle.lifecycle-retired {
+  /* Slightly stronger highlight than plain deprecated — the retirement
+   * tier carries the runtime banner and the "first method ever" note,
+   * so it deserves an extra nudge of visual weight. */
+  background: rgba(234, 179, 8, 0.22);
+  border-color: rgba(234, 179, 8, 0.75);
+  color: #ca8a04;
+}
+
 .hash-block {
   background: var(--panel-2);
   border: 1px solid var(--border);

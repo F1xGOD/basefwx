@@ -7,6 +7,7 @@
 package com.fixcraft.basefwx.cli;
 
 import com.fixcraft.basefwx.BaseFwx;
+import com.fixcraft.basefwx.BaseFwxImage;
 import com.fixcraft.basefwx.Constants;
 import com.fixcraft.basefwx.MediaCipher;
 import com.fixcraft.basefwx.RuntimeLog;
@@ -857,25 +858,25 @@ public final class BaseFwxCli {
                     return;
                 case "kFMe": {
                     KfmArgs opts = parseKfmArgs(args, 1);
-                    File out = BaseFwx.kFMe(opts.input, opts.output, opts.bwMode);
+                    File out = BaseFwxImage.kFMe(opts.input, opts.output, opts.bwMode);
                     System.out.println(out.getPath());
                     return;
                 }
                 case "kFMd": {
                     KfmArgs opts = parseKfmArgs(args, 1);
-                    File out = BaseFwx.kFMd(opts.input, opts.output, opts.bwMode);
+                    File out = BaseFwxImage.kFMd(opts.input, opts.output, opts.bwMode);
                     System.out.println(out.getPath());
                     return;
                 }
                 case "kFAe": {
                     KfmArgs opts = parseKfmArgs(args, 1);
-                    File out = BaseFwx.kFAe(opts.input, opts.output, opts.bwMode);
+                    File out = BaseFwxImage.kFAe(opts.input, opts.output, opts.bwMode);
                     System.out.println(out.getPath());
                     return;
                 }
                 case "kFAd": {
                     KfmArgs opts = parseKfmArgs(args, 1);
-                    File out = BaseFwx.kFAd(opts.input, opts.output);
+                    File out = BaseFwxImage.kFAd(opts.input, opts.output);
                     System.out.println(out.getPath());
                     return;
                 }
@@ -982,7 +983,7 @@ public final class BaseFwxCli {
                     return;
                 case "jmge": {
                     JmgArgs opts = parseJmgArgs(args, 1);
-                    BaseFwx.jmgEncryptFile(
+                    BaseFwxImage.jmgEncryptFile(
                         opts.input,
                         opts.output,
                         opts.password,
@@ -995,7 +996,7 @@ public final class BaseFwxCli {
                 }
                 case "jmgd": {
                     JmgArgs opts = parseJmgArgs(args, 1);
-                    BaseFwx.jmgDecryptFile(opts.input, opts.output, opts.password, useMaster);
+                    BaseFwxImage.jmgDecryptFile(opts.input, opts.output, opts.password, useMaster);
                     return;
                 }
                 case "bench-text": {
@@ -1417,9 +1418,9 @@ public final class BaseFwxCli {
                             File encFile = encFiles[idx];
                             File decFile = decFiles[idx];
                             // Encrypt
-                            BaseFwx.jmgEncryptFile(mediaFile, encFile, benchPassFinal, useMasterFlag, false, true);
+                            BaseFwxImage.jmgEncryptFile(mediaFile, encFile, benchPassFinal, useMasterFlag, false, true);
                             // Decrypt
-                            BaseFwx.jmgDecryptFile(encFile, decFile, benchPassFinal, useMasterFlag);
+                            BaseFwxImage.jmgDecryptFile(encFile, decFile, benchPassFinal, useMasterFlag);
                             long size = decFile.length();
                             BENCH_SINK ^= (int) size;
                             encFile.delete();

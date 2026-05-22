@@ -2,6 +2,24 @@
 
 ## [Unreleased]
 
+### Changed
+- **`BaseFwx.java` no longer imports `java.awt.*` / `javax.imageio.ImageIO`.** The
+  image-carrier public API (`kFMe`, `kFMd`, `kFAe`, `kFAd`, `jmgEncryptFile`,
+  `jmgDecryptFile`) moved verbatim to a new **`BaseFwxImage.java`** class in
+  the same package, together with their private kfm* helpers and KFM_*
+  constants. The core `BaseFwx` class now compiles cleanly without the AWT
+  toolkit — that's what makes it syncable into the Android Gradle build
+  (which doesn't ship `java.awt`). `MediaCipher.java` still uses AWT and
+  stays desktop-only; the Android sync explicitly excludes it. **Source-level
+  breaking change for direct Java callers**: update
+  `BaseFwx.kFMe(...)` → `BaseFwxImage.kFMe(...)` (same for the other 5
+  methods). Existing kFM blobs / PNG / WAV carriers decode identically;
+  no wire-format change. Five shared utility helpers (`getExtension`,
+  `samePath`, `createPrivateTempFile`, `readFileBytes`, `writeFileBytes`,
+  plus the byte[] overloads of `writeU64` / `writeU32` / `readU32`) were
+  bumped from `private` to package-private in `BaseFwx` so `BaseFwxImage`
+  can call them; their behavior is unchanged.
+
 ## [v3.7.0] - 2026-05-21
 
 Compare: <https://github.com/F1xGOD/basefwx/compare/v3.6.4...v3.7.0>

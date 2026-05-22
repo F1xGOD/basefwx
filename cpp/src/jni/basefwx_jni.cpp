@@ -441,7 +441,16 @@ Java_com_fixcraft_basefwx_NativeCryptoBackend_nativeArgon2idHashRaw(
     jbyte* salt = static_cast<jbyte*>(env->GetPrimitiveArrayCritical(saltArr,    nullptr));
     jbyte* out  = static_cast<jbyte*>(env->GetPrimitiveArrayCritical(outArr,     nullptr));
     if (!pw || !salt || !out) {
-        if (pw)   env->ReleasePrimitiveArrayCritical(passwordArr, pw,   JNI_ABORT);
+        // Wipe the password bytes in the pinned region BEFORE releasing —
+        // an early return after partial pinning otherwise leaks the
+        // plaintext password back to the Java heap. We can't run the
+        // wipe loop unless pw is non-null, but if any other pin failed
+        // we still want to scrub pw's contents.
+        if (pw && pw_len > 0) {
+            volatile jbyte* p = pw;
+            for (jsize i = 0; i < pw_len; ++i) p[i] = 0;
+        }
+        if (pw)   env->ReleasePrimitiveArrayCritical(passwordArr, pw,   0);  // commit wipe
         if (salt) env->ReleasePrimitiveArrayCritical(saltArr,     salt, JNI_ABORT);
         if (out)  env->ReleasePrimitiveArrayCritical(outArr,      out,  JNI_ABORT);
         return kArgon2BadInput;

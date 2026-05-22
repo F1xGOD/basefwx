@@ -58,9 +58,16 @@ public final class Constants {
     public static final int SHORT_ARGON2_TIME_COST = 5;
     public static final int SHORT_ARGON2_MEMORY_KIB = 1 << 17;  // 128 MiB
 
+    // 3.7.0: parallelism is fixed at 4 so blobs are portable across
+    // hosts. The wire format does not carry the Argon2 parallelism lane
+    // count, so a default of Runtime.availableProcessors() makes
+    // ciphertext silently non-portable between machines with different
+    // core counts (decrypt picks a different parallelism than encrypt,
+    // Argon2 produces a different mask key, AEAD tag fails). Callers
+    // who want host-tuned parallelism can still set
+    // KdfOptions.argon2Parallelism explicitly before encrypt.
     private static int defaultArgon2Parallelism() {
-        int cores = Runtime.getRuntime().availableProcessors();
-        return cores > 0 ? cores : 4;
+        return 4;
     }
 
     public static final byte[] MASTER_EC_MAGIC = "EC1".getBytes(StandardCharsets.US_ASCII);

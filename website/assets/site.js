@@ -375,16 +375,18 @@ const renderLifecycleChip = (label) => {
   return `<span class="chip lifecycle lifecycle-${cls.status}" title="${tooltip}" aria-label="${cls.label}${since}. ${tooltip}">${visible}</span>`;
 };
 
-const renderBenchDetails = (container, tests, epsilon) => {
+const renderBenchDetails = async (container, tests, epsilon) => {
   container.innerHTML = "";
   if (!tests.length) {
     container.innerHTML = "<div class=\"card\">No detailed benchmark data available.</div>";
     return;
   }
-  // Best-effort fetch of the heaviness manifest. If it isn't loaded
-  // by the time renderBenchDetails runs, summaries just skip the
-  // chip — the benchmark data still renders.
-  ensureHeavinessManifest();
+  // Make sure the heaviness manifest is loaded BEFORE the forEach
+  // runs — otherwise the chip helpers see `heavinessManifest === null`
+  // and return empty strings, and the page renders without chips.
+  // The fetch is one-shot (subsequent calls hit the cached promise),
+  // so the await is free after first load.
+  await ensureHeavinessManifest();
   tests.forEach((entry) => {
     const baseNs = entry.times?.python;
     const details = document.createElement("details");
@@ -855,7 +857,7 @@ const loadBenchmarks = async (explicitTag = "") => {
     status.textContent = `Report generated ${generatedAt}`;
     status.className = "status-pill ok";
     renderBenchTable(tableBody, overall, epsilon);
-    renderBenchDetails(detailsContainer, tests, epsilon);
+    await renderBenchDetails(detailsContainer, tests, epsilon);
 
     await loadJavaBackendsForTag(explicitTag || data.release_tag || "");
   } catch (err) {

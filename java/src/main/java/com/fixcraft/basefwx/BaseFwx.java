@@ -191,20 +191,63 @@ public final class BaseFwx {
         byte[] iv = Crypto.randomBytes(Constants.FWXAES_IV_LEN);
         if (useWrap) {
             byte[] key = Crypto.hkdfSha256(maskKey, Constants.FWXAES_KEY_INFO, Constants.FWXAES_KEY_LEN);
+            try {
+                int ctLen = plaintext.length + Constants.AEAD_TAG_LEN;
+                byte[] out = new byte[16 + keyHeader.length + iv.length + ctLen];
+                System.arraycopy(Constants.FWXAES_MAGIC, 0, out, 0, Constants.FWXAES_MAGIC.length);
+                out[4] = (byte) Constants.FWXAES_ALGO;
+                out[5] = (byte) Constants.FWXAES_KDF_WRAP;
+                out[6] = 0;
+                out[7] = (byte) Constants.FWXAES_IV_LEN;
+                writeU32(out, 8, keyHeader.length);
+                writeU32(out, 12, ctLen);
+                int offset = 16;
+                if (keyHeader.length > 0) {
+                    System.arraycopy(keyHeader, 0, out, offset, keyHeader.length);
+                    offset += keyHeader.length;
+                }
+                System.arraycopy(iv, 0, out, offset, iv.length);
+                offset += iv.length;
+                int written = Crypto.aesGcmEncryptWithIvInto(
+                    key,
+                    iv,
+                    plaintext,
+                    0,
+                    plaintext.length,
+                    out,
+                    offset,
+                    Constants.FWXAES_AAD
+                );
+                if (written != ctLen) {
+                    throw new IllegalStateException("fwxAES encrypt length mismatch");
+                }
+                return out;
+            } finally {
+                // Mirror C++'s SecretGuard discipline: wipe the AES key
+                // and the wrap mask before the buffers escape into GC.
+                Arrays.fill(key, (byte) 0);
+                if (maskKey.length > 0) {
+                    Arrays.fill(maskKey, (byte) 0);
+                }
+            }
+        }
+
+        byte[] salt = Crypto.randomBytes(Constants.FWXAES_SALT_LEN);
+        int iters = fwxaesIterations(pw);
+        byte[] key = Crypto.pbkdf2HmacSha256(pw, salt, iters, Constants.FWXAES_KEY_LEN);
+        try {
             int ctLen = plaintext.length + Constants.AEAD_TAG_LEN;
-            byte[] out = new byte[16 + keyHeader.length + iv.length + ctLen];
+            byte[] out = new byte[16 + salt.length + iv.length + ctLen];
             System.arraycopy(Constants.FWXAES_MAGIC, 0, out, 0, Constants.FWXAES_MAGIC.length);
             out[4] = (byte) Constants.FWXAES_ALGO;
-            out[5] = (byte) Constants.FWXAES_KDF_WRAP;
-            out[6] = 0;
+            out[5] = (byte) Constants.FWXAES_KDF_PBKDF2;
+            out[6] = (byte) Constants.FWXAES_SALT_LEN;
             out[7] = (byte) Constants.FWXAES_IV_LEN;
-            writeU32(out, 8, keyHeader.length);
+            writeU32(out, 8, iters);
             writeU32(out, 12, ctLen);
             int offset = 16;
-            if (keyHeader.length > 0) {
-                System.arraycopy(keyHeader, 0, out, offset, keyHeader.length);
-                offset += keyHeader.length;
-            }
+            System.arraycopy(salt, 0, out, offset, salt.length);
+            offset += salt.length;
             System.arraycopy(iv, 0, out, offset, iv.length);
             offset += iv.length;
             int written = Crypto.aesGcmEncryptWithIvInto(
@@ -221,39 +264,9 @@ public final class BaseFwx {
                 throw new IllegalStateException("fwxAES encrypt length mismatch");
             }
             return out;
+        } finally {
+            Arrays.fill(key, (byte) 0);
         }
-
-        byte[] salt = Crypto.randomBytes(Constants.FWXAES_SALT_LEN);
-        int iters = fwxaesIterations(pw);
-        byte[] key = Crypto.pbkdf2HmacSha256(pw, salt, iters, Constants.FWXAES_KEY_LEN);
-        int ctLen = plaintext.length + Constants.AEAD_TAG_LEN;
-        byte[] out = new byte[16 + salt.length + iv.length + ctLen];
-        System.arraycopy(Constants.FWXAES_MAGIC, 0, out, 0, Constants.FWXAES_MAGIC.length);
-        out[4] = (byte) Constants.FWXAES_ALGO;
-        out[5] = (byte) Constants.FWXAES_KDF_PBKDF2;
-        out[6] = (byte) Constants.FWXAES_SALT_LEN;
-        out[7] = (byte) Constants.FWXAES_IV_LEN;
-        writeU32(out, 8, iters);
-        writeU32(out, 12, ctLen);
-        int offset = 16;
-        System.arraycopy(salt, 0, out, offset, salt.length);
-        offset += salt.length;
-        System.arraycopy(iv, 0, out, offset, iv.length);
-        offset += iv.length;
-        int written = Crypto.aesGcmEncryptWithIvInto(
-            key,
-            iv,
-            plaintext,
-            0,
-            plaintext.length,
-            out,
-            offset,
-            Constants.FWXAES_AAD
-        );
-        if (written != ctLen) {
-            throw new IllegalStateException("fwxAES encrypt length mismatch");
-        }
-        return out;
     }
 
     public static byte[] fwxAesDecryptRaw(byte[] blob, String password, boolean useMaster) {
@@ -311,6 +324,46 @@ public final class BaseFwx {
                 new KeyWrap.KdfOptions("pbkdf2", Constants.USER_KDF_ITERATIONS)
             );
             byte[] key = Crypto.hkdfSha256(maskKey, Constants.FWXAES_KEY_INFO, Constants.FWXAES_KEY_LEN);
+            try {
+                if (ctLen < Constants.AEAD_TAG_LEN) {
+                    throw new IllegalArgumentException("fwxAES ciphertext too short");
+                }
+                byte[] plain = new byte[ctLen - Constants.AEAD_TAG_LEN];
+                int written = Crypto.aesGcmDecryptWithIvInto(
+                    key,
+                    iv,
+                    blob,
+                    offset,
+                    ctLen,
+                    plain,
+                    0,
+                    Constants.FWXAES_AAD
+                );
+                if (written != plain.length) {
+                    return Arrays.copyOf(plain, Math.max(0, written));
+                }
+                return plain;
+            } finally {
+                // Mirror C++ SecretGuard: wipe AES key and wrap mask
+                // before they escape into GC.
+                Arrays.fill(key, (byte) 0);
+                if (maskKey.length > 0) {
+                    Arrays.fill(maskKey, (byte) 0);
+                }
+            }
+        }
+        if (blob.length < offset + saltLen + ivLen + ctLen) {
+            throw new IllegalArgumentException("fwxAES blob truncated");
+        }
+        byte[] salt = Arrays.copyOfRange(blob, offset, offset + saltLen);
+        offset += saltLen;
+        byte[] iv = Arrays.copyOfRange(blob, offset, offset + ivLen);
+        offset += ivLen;
+        if (pw.length == 0) {
+            throw new IllegalArgumentException("fwxAES password required for PBKDF2 payload");
+        }
+        byte[] key = Crypto.pbkdf2HmacSha256(pw, salt, iters, Constants.FWXAES_KEY_LEN);
+        try {
             if (ctLen < Constants.AEAD_TAG_LEN) {
                 throw new IllegalArgumentException("fwxAES ciphertext too short");
             }
@@ -329,36 +382,9 @@ public final class BaseFwx {
                 return Arrays.copyOf(plain, Math.max(0, written));
             }
             return plain;
+        } finally {
+            Arrays.fill(key, (byte) 0);
         }
-        if (blob.length < offset + saltLen + ivLen + ctLen) {
-            throw new IllegalArgumentException("fwxAES blob truncated");
-        }
-        byte[] salt = Arrays.copyOfRange(blob, offset, offset + saltLen);
-        offset += saltLen;
-        byte[] iv = Arrays.copyOfRange(blob, offset, offset + ivLen);
-        offset += ivLen;
-        if (pw.length == 0) {
-            throw new IllegalArgumentException("fwxAES password required for PBKDF2 payload");
-        }
-        byte[] key = Crypto.pbkdf2HmacSha256(pw, salt, iters, Constants.FWXAES_KEY_LEN);
-        if (ctLen < Constants.AEAD_TAG_LEN) {
-            throw new IllegalArgumentException("fwxAES ciphertext too short");
-        }
-        byte[] plain = new byte[ctLen - Constants.AEAD_TAG_LEN];
-        int written = Crypto.aesGcmDecryptWithIvInto(
-            key,
-            iv,
-            blob,
-            offset,
-            ctLen,
-            plain,
-            0,
-            Constants.FWXAES_AAD
-        );
-        if (written != plain.length) {
-            return Arrays.copyOf(plain, Math.max(0, written));
-        }
-        return plain;
     }
 
     /**

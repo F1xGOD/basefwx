@@ -1,26 +1,26 @@
 {
-  "version": 2,
-  "doc": "Per-method classification used by the website to render Detailed Results chips. Each method carries (a) a heaviness level (low/medium/high/extreme) determined by typical peak working set and CPU time per call, and (b) an optional lifecycle status (active/deprecated/retired) with the version it changed in. Match is case-insensitive substring on the bench label; longest match wins.",
+  "version": 3,
+  "doc": "Per-method classification used by the website to render Detailed Results chips. Each method carries (a) a heaviness level anchored on the Python baseline wall time at the published bench scale (~2 MiB text input, 3 iters, 1 worker per cf6e8e7), and (b) an optional lifecycle status (active/deprecated/retired) with the version it changed in. Match is case-insensitive substring on the bench label; longest match wins. Notes additionally describe peak-RAM-at-scale where it differs from bench-scale heaviness — e.g. kFMe/kFAe are medium at 2 MiB but can become extreme on multi-GiB files.",
   "levels": {
     "low": {
       "label": "Low",
       "color": "#1aa260",
-      "explanation": "Cheap and bounded. Safe to run on any host."
+      "explanation": "Under 100 ms in Python at bench scale. Cheap and bounded. Safe to run on any host."
     },
     "medium": {
       "label": "Medium",
       "color": "#d4a017",
-      "explanation": "Modest CPU + RAM. Fine on laptops; expect a few seconds."
+      "explanation": "100 ms to 1 s in Python at bench scale. Modest CPU + RAM. Fine on laptops."
     },
     "high": {
       "label": "High",
       "color": "#d97706",
-      "explanation": "Heavy CPU and/or hundreds of MiB peak RSS. Use a dedicated build box if your laptop is small."
+      "explanation": "1 s to 5 s in Python at bench scale, or hundreds of MiB peak RSS. Use a dedicated build box if your laptop is small."
     },
     "extreme": {
       "label": "Extreme",
       "color": "#dc2626",
-      "explanation": "Multi-GiB peak RSS or multi-second CPU per call. Do not run on machines under 32 GiB RAM."
+      "explanation": "Over 5 s in Python at bench scale, or multi-GiB peak RSS. Do not run on machines under 32 GiB RAM for production-scale inputs."
     }
   },
   "lifecycle": {
@@ -37,28 +37,47 @@
     }
   },
   "methods": [
-    { "match": "hash512",       "level": "low",     "notes": "SHA-512, fixed output size.", "status": "active" },
-    { "match": "uhash513",      "level": "low",     "notes": "Deprecated in 3.7.0 — non-standard chained hash (SHA-256 → SHA-1 → SHA-512 → SHA-256). Includes a SHA-1 hop with known collision weaknesses; output is 256 bits despite the '513' name. Use hash512 (SHA-512) or SHA3-512 for new code. Existing call sites continue to work.",
-                                                       "status": "deprecated", "since": "3.7.0" },
-    { "match": "b64",           "level": "low",     "notes": "stdlib base64; O(N) but bounded buffers.", "status": "active" },
-    { "match": "n10",           "level": "low",     "notes": "Numeric encoding: turns arbitrary bytes into a fixed-10-digit-block string with an embedded FNV-1a checksum. Not obfuscation — the point is producing digit-only output for channels that only carry digits (SMS, phone fields, certain DBs). Sibling-in-spirit of kFMe (turn-data-into-numbers). Stays active as long as it stays fast.",
+    { "match": "hash512",       "level": "low",     "notes": "SHA-512, fixed-size output. ~7 ms in Python at 2 MiB — near the OpenSSL throughput ceiling; C++/Java are within 30%.",
                                                        "status": "active" },
-    { "match": "bi512",         "level": "low",     "notes": "Deprecated in 3.7.0 — SHA-256 with a custom prefilter (no added security). Use hash512 / uhash513 instead. Existing blobs still encode/decode.",
+    { "match": "uhash513",      "level": "low",     "notes": "Deprecated in 3.7.0 — non-standard chained hash (SHA-256 → SHA-1 → SHA-512 → SHA-256). Includes a SHA-1 hop with known collision weaknesses; output is 256 bits despite the '513' name. ~8 ms in Python at 2 MiB. Use hash512 (SHA-512) or SHA3-512 for new code.",
                                                        "status": "deprecated", "since": "3.7.0" },
-    { "match": "b256",          "level": "high",    "notes": "🫡 Retired in 3.7.0. First encoding method in BaseFWX (V1, proof-of-concept era). Non-streaming whole-buffer NumPy path; peak RSS ≈ 5–6× input. Use base64 / hash512 for new code. Existing blobs still decode. ❤️",
+    { "match": "b64",           "level": "low",     "notes": "stdlib base64 — memory-bandwidth bound. ~21 ms in Python at 2 MiB.",
+                                                       "status": "active" },
+    { "match": "fwxaes-light",  "level": "medium",  "notes": "Lightweight AEAD variant — Argon2id at reduced cost + AES-256-GCM. ~180 ms in Python at 2 MiB; the KDF dominates wall time.",
+                                                       "status": "active" },
+    { "match": "bi512",         "level": "medium",  "notes": "Deprecated in 3.7.0 — SHA-256 with a custom prefilter (no added security). ~280 ms in Python at 2 MiB (prefilter walk is pure-Python). Use hash512 / uhash513 instead.",
+                                                       "status": "deprecated", "since": "3.7.0" },
+    { "match": "kFMe",          "level": "medium",  "notes": "File mode encrypt with master key; ~440 ms in Python at 2 MiB bench input. Peak RAM at scale grows with file size — full Argon2 + ML-KEM wrap + AEAD over the whole file means a multi-GiB input lands in the EXTREME RAM tier. The chip reflects bench scale, not worst-case.",
+                                                       "status": "active" },
+    { "match": "kFMd",          "level": "medium",  "notes": "Inverse of kFMe; same bench profile and same scale-up RAM caveat.",
+                                                       "status": "active" },
+    { "match": "fwxaes-live",   "level": "medium",  "notes": "Streaming AEAD with chunked frames (1 MiB chunks) + optional ffmpeg pipe. ~470 ms in Python at 2 MiB. Note: Java is currently SLOWER than Python here because the small bench input doesn't amortize the per-frame AES-GCM Cipher init overhead; at 200 MiB Java overtakes by ~3×.",
+                                                       "status": "active" },
+    { "match": "kFAe",          "level": "medium",  "notes": "File mode encrypt with archive packing. ~480 ms in Python at 2 MiB bench input. Same scale-up RAM caveat as kFMe — multi-GiB archives land in the EXTREME RAM tier.",
+                                                       "status": "active" },
+    { "match": "kFAd",          "level": "medium",  "notes": "Inverse of kFAe; same bench profile and scale-up RAM caveat.",
+                                                       "status": "active" },
+    { "match": "dean7",         "level": "medium",  "notes": "Inverse of AN7. ~500 ms in Python at 2 MiB. Java is unexpectedly slower at this scale; see an7 note.",
+                                                       "status": "active" },
+    { "match": "an7",           "level": "medium",  "notes": "AN7 stealth anonymisation — chunked AES-CTR + sparse-flip + super-block permutation. ~520 ms in Python at 2 MiB. At this size Java is ~1.8× slower than Python because the per-chunk Cipher.init overhead doesn't amortize over only 2 chunks; the Java path is already optimized (cached ThreadLocal Cipher + Mac, in-place AES-CTR per commit 92a8a68). At ≥50 MiB inputs Java overtakes Python decisively.",
+                                                       "status": "active" },
+    { "match": "fwxaes",        "level": "medium",  "notes": "Full AEAD — Argon2id at default cost + AES-256-GCM. ~710 ms in Python at 2 MiB; the KDF is ~90% of wall time and cannot be sped up without weakening security parameters.",
+                                                       "status": "active" },
+    { "match": "n10",           "level": "high",    "notes": "Numeric encoding — turns arbitrary bytes into fixed-10-digit blocks with embedded FNV-1a checksum, for channels that only carry digits (SMS, phone fields, numeric-only DB columns). ~1.5 s in Python at 2 MiB because the inner modular arithmetic operates on CPython bigints — that can't be vectorized via NumPy, so pure-Python is structurally slow here. C++/Java are 18–30× faster. Active because the digit-only output has a legitimate purpose, but expect Python to lag.",
+                                                       "status": "active" },
+    { "match": "b256",          "level": "high",    "notes": "🫡 Retired in 3.7.0. First encoding method in BaseFWX (V1, proof-of-concept era). Non-streaming whole-buffer NumPy path; peak RSS ≈ 5–6× input. ~1.7 s in Python at 2 MiB (C++ is 8.8× faster). Use base64 / hash512 for new code. Existing blobs still decode. ❤️",
                                                        "status": "retired", "since": "3.7.0" },
-    { "match": "a512",          "level": "medium",  "notes": "Deprecated in 3.7.0 — reversible obfuscation codec with no security goal; slower than base64 for the same output. Calls b256 internally. Existing blobs still decode.",
+    { "match": "a512",          "level": "high",    "notes": "Deprecated in 3.7.0 — reversible obfuscation codec with no security goal; ~2.8 s in Python at 2 MiB because it calls the (retired) b256 internally. C++ is 13.8× faster. Use stdlib base64 for new code.",
                                                        "status": "deprecated", "since": "3.7.0" },
-    { "match": "fwxaes-live",   "level": "high",    "notes": "KDF + streaming AEAD + ffmpeg pipe; multi-MiB working set.", "status": "active" },
-    { "match": "fwxaes",        "level": "medium",  "notes": "Argon2id + AES-256-GCM; KDF dominates wall time.", "status": "active" },
-    { "match": "pb512",         "level": "high",    "notes": "KDF + whole-buffer codec; not streaming.", "status": "active" },
-    { "match": "b512",          "level": "high",    "notes": "KDF + whole-buffer codec; not streaming.", "status": "active" },
-    { "match": "kFMe",          "level": "extreme", "notes": "File mode encrypt with master key; full Argon2 + ML-KEM wrap + AEAD over the whole file.", "status": "active" },
-    { "match": "kFMd",          "level": "extreme", "notes": "Inverse of kFMe; same memory profile.", "status": "active" },
-    { "match": "kFAe",          "level": "extreme", "notes": "File mode encrypt with archive packing; multi-GiB capable.", "status": "active" },
-    { "match": "kFAd",          "level": "extreme", "notes": "Inverse of kFAe.", "status": "active" },
-    { "match": "jmg",           "level": "high",    "notes": "Image cipher; whole-pixel-buffer AEAD.", "status": "active" },
-    { "match": "an7",           "level": "medium",  "notes": "AN7 stealth anonymisation; streaming with small working set.", "status": "active" },
-    { "match": "dean7",         "level": "medium",  "notes": "Inverse of AN7.", "status": "active" }
+    { "match": "pb512",         "level": "high",    "notes": "Password-keyed AEAD over a whole-buffer string — URL-safe output. ~3.2 s in Python at 2 MiB; the PBKDF2 step dominates. Sibling of b512 (password required, URL-safe base64); see CHANGELOG for the pick-one-of comparison.",
+                                                       "status": "active" },
+    { "match": "b512",          "level": "high",    "notes": "Password-or-master-keyed AEAD over a whole-buffer string — standard base64 output. ~3.2 s in Python at 2 MiB; PBKDF2-bound. Sibling of pb512.",
+                                                       "status": "active" },
+    { "match": "jmg",           "level": "high",    "notes": "Image cipher — whole-pixel-buffer AEAD. Heaviness scales with image dimensions.",
+                                                       "status": "active" },
+    { "match": "b512file",      "level": "extreme", "notes": "File-mode wrapper around b512 — KDF + AEAD over the whole file. ~7.3 s in Python at the bench input; multi-GiB files extend linearly.",
+                                                       "status": "active" },
+    { "match": "pb512file",     "level": "extreme", "notes": "File-mode wrapper around pb512. ~8.6 s in Python at the bench input; multi-GiB files extend linearly.",
+                                                       "status": "active" }
   ]
 }

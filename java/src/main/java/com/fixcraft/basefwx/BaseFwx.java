@@ -4091,14 +4091,14 @@ public final class BaseFwx {
     }
 
     private static byte[] an7ApplyXorTransform(byte[] chunk, byte[] streamKey, byte[] streamNonce, long chunkIndex) {
-        try {
-            Cipher cipher = Cipher.getInstance("AES/CTR/NoPadding");
-            byte[] iv = an7CtrIv(streamKey, streamNonce, chunkIndex);
-            cipher.init(Cipher.ENCRYPT_MODE, new SecretKeySpec(streamKey, "AES"), new IvParameterSpec(iv));
-            return cipher.doFinal(chunk);
-        } catch (GeneralSecurityException exc) {
-            throw new IllegalStateException("AN7 AES-CTR transform failed", exc);
-        }
+        byte[] iv = an7CtrIv(streamKey, streamNonce, chunkIndex);
+        // In-place CTR on the caller's chunk buffer: skips both the
+        // per-call JCA provider lookup (now cached on a thread-local)
+        // and the fresh byte[chunk.length] that doFinal(byte[]) used to
+        // allocate per chunk. For a 220 MiB an7 run that's ~220 MiB of
+        // pure heap allocations + zero-fills removed from the hot loop.
+        Crypto.aesCtrTransformInPlace(streamKey, iv, chunk, 0, chunk.length);
+        return chunk;
     }
 
     private static int an7FlipStart(byte[] permKey, long chunkIndex, int stride) {

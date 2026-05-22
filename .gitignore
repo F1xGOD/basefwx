@@ -82,3 +82,4 @@ _codeql_detected_source_root
 # Example plugin build artifacts (already covered by `build/` but listed
 # explicitly so the intent is obvious to anyone reading this file)
 examples/plugins/*/build/
+examples/plugins/*/bin/

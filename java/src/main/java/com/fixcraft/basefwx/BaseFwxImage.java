@@ -622,7 +622,7 @@ public final class BaseFwxImage {
         }
         try {
             if (exitCode != 0) {
-                String trimmed = output == null ? "" : output.trim();
+                String trimmed = output.trim();
                 throw new IllegalArgumentException(
                     trimmed.isEmpty()
                         ? "ffmpeg failed to decode non-WAV audio input"

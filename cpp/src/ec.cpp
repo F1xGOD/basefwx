@@ -7,6 +7,7 @@
 #include "basefwx/ec.hpp"
 
 #include "basefwx/constants.hpp"
+#include "basefwx/crypto.hpp"
 #include "basefwx/env.hpp"
 
 #include <algorithm>
@@ -14,6 +15,7 @@
 #include <fstream>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <openssl/ec.h>
@@ -21,6 +23,23 @@
 #include <openssl/pem.h>
 
 namespace basefwx::ec {
+
+KemResult& KemResult::operator=(KemResult&& other) noexcept {
+    if (this != &other) {
+        wipe_shared();
+        blob = std::move(other.blob);
+        shared = std::move(other.shared);
+    }
+    return *this;
+}
+
+KemResult::~KemResult() {
+    wipe_shared();
+}
+
+void KemResult::wipe_shared() noexcept {
+    basefwx::crypto::SecureClear(shared);
+}
 
 namespace {
 

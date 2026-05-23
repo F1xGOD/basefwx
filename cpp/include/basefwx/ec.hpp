@@ -8,6 +8,7 @@
 
 #include <cstdint>
 #include <optional>
+#include <utility>
 #include <vector>
 
 namespace basefwx::ec {
@@ -30,22 +31,11 @@ struct KemResult {
     KemResult(const KemResult&) = delete;
     KemResult& operator=(const KemResult&) = delete;
     KemResult(KemResult&&) noexcept = default;
-    KemResult& operator=(KemResult&& other) noexcept {
-        if (this != &other) {
-            wipe_shared();
-            blob = std::move(other.blob);
-            shared = std::move(other.shared);
-        }
-        return *this;
-    }
-    ~KemResult() { wipe_shared(); }
+    KemResult& operator=(KemResult&& other) noexcept;
+    ~KemResult();
 
 private:
-    void wipe_shared() noexcept {
-        if (shared.empty()) return;
-        volatile std::uint8_t* p = shared.data();
-        for (std::size_t i = 0; i < shared.size(); ++i) p[i] = 0;
-    }
+    void wipe_shared() noexcept;
 };
 
 std::optional<Bytes> LoadMasterPublicKey(bool create_if_missing);

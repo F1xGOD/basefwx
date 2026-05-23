@@ -596,21 +596,15 @@ std::string DecryptAesPayload(const Bytes& blob,
             if (StrictPqOnly()) {
                 throw std::runtime_error("EC master blobs are disabled in PQ strict mode");
             }
-            Bytes private_key = basefwx::ec::LoadMasterPrivateKey();
-            basefwx::crypto::SecretGuard pk_guard;
-            pk_guard.Add(private_key);
-            Bytes shared = basefwx::ec::KemDecrypt(private_key, master_blob);
-            basefwx::crypto::SecretGuard sh_guard;
-            sh_guard.Add(shared);
-            ephemeral_key = basefwx::crypto::HkdfSha256(shared, constants::kKemInfo, 32);
+            basefwx::crypto::SecureBytes private_key{basefwx::ec::LoadMasterPrivateKey()};
+            basefwx::crypto::SecureBytes shared{
+                basefwx::ec::KemDecrypt(private_key.bytes(), master_blob)};
+            ephemeral_key = basefwx::crypto::HkdfSha256(shared.bytes(), constants::kKemInfo, 32);
         } else {
-            Bytes private_key = basefwx::pq::LoadMasterPrivateKey();
-            basefwx::crypto::SecretGuard pk_guard;
-            pk_guard.Add(private_key);
-            Bytes shared = basefwx::pq::KemDecrypt(private_key, master_blob);
-            basefwx::crypto::SecretGuard sh_guard;
-            sh_guard.Add(shared);
-            ephemeral_key = basefwx::crypto::HkdfSha256(shared, constants::kKemInfo, 32);
+            basefwx::crypto::SecureBytes private_key{basefwx::pq::LoadMasterPrivateKey()};
+            basefwx::crypto::SecureBytes shared{
+                basefwx::pq::KemDecrypt(private_key.bytes(), master_blob)};
+            ephemeral_key = basefwx::crypto::HkdfSha256(shared.bytes(), constants::kKemInfo, 32);
         }
     } else if (!user_blob.empty()) {
         if (resolved.empty()) {
@@ -1666,21 +1660,15 @@ std::string Pb512DecodeFileStream(const std::filesystem::path& input,
             if (StrictPqOnly()) {
                 throw std::runtime_error("EC master blobs are disabled in PQ strict mode");
             }
-            Bytes private_key = basefwx::ec::LoadMasterPrivateKey();
-            basefwx::crypto::SecretGuard pk_guard;
-            pk_guard.Add(private_key);
-            Bytes shared = basefwx::ec::KemDecrypt(private_key, master_blob);
-            basefwx::crypto::SecretGuard sh_guard;
-            sh_guard.Add(shared);
-            ephemeral_key = basefwx::crypto::HkdfSha256(shared, constants::kKemInfo, 32);
+            basefwx::crypto::SecureBytes private_key{basefwx::ec::LoadMasterPrivateKey()};
+            basefwx::crypto::SecureBytes shared{
+                basefwx::ec::KemDecrypt(private_key.bytes(), master_blob)};
+            ephemeral_key = basefwx::crypto::HkdfSha256(shared.bytes(), constants::kKemInfo, 32);
         } else {
-            Bytes private_key = basefwx::pq::LoadMasterPrivateKey();
-            basefwx::crypto::SecretGuard pk_guard;
-            pk_guard.Add(private_key);
-            Bytes shared = basefwx::pq::KemDecrypt(private_key, master_blob);
-            basefwx::crypto::SecretGuard sh_guard;
-            sh_guard.Add(shared);
-            ephemeral_key = basefwx::crypto::HkdfSha256(shared, constants::kKemInfo, 32);
+            basefwx::crypto::SecureBytes private_key{basefwx::pq::LoadMasterPrivateKey()};
+            basefwx::crypto::SecureBytes shared{
+                basefwx::pq::KemDecrypt(private_key.bytes(), master_blob)};
+            ephemeral_key = basefwx::crypto::HkdfSha256(shared.bytes(), constants::kKemInfo, 32);
         }
     } else if (!user_blob.empty()) {
         if (resolved.empty()) {

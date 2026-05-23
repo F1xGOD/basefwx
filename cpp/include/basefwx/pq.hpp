@@ -10,6 +10,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace basefwx::pq {
@@ -38,30 +39,11 @@ struct KemResult {
     KemResult(const KemResult&) = delete;
     KemResult& operator=(const KemResult&) = delete;
     KemResult(KemResult&& other) noexcept = default;
-    KemResult& operator=(KemResult&& other) noexcept {
-        if (this != &other) {
-            // Wipe the outgoing secret before letting the new content
-            // take over — without this an assignment chain like
-            //   a = std::move(b); a = std::move(c);
-            // would leak `b`'s shared secret into freed heap pages.
-            wipe_shared();
-            ciphertext = std::move(other.ciphertext);
-            shared = std::move(other.shared);
-        }
-        return *this;
-    }
-    ~KemResult() { wipe_shared(); }
+    KemResult& operator=(KemResult&& other) noexcept;
+    ~KemResult();
 
 private:
-    void wipe_shared() noexcept {
-        if (shared.empty()) return;
-        // `volatile` keeps the compiler from eliding the store. This
-        // is the same pattern basefwx::crypto::SecureClear uses; we
-        // open-code it here to avoid pulling crypto.hpp into this
-        // public header (and to stay header-only).
-        volatile std::uint8_t* p = shared.data();
-        for (std::size_t i = 0; i < shared.size(); ++i) p[i] = 0;
-    }
+    void wipe_shared() noexcept;
 };
 
 std::optional<Bytes> LoadMasterPublicKey();

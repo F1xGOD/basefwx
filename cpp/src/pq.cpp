@@ -8,6 +8,7 @@
 
 #include "basefwx/base64.hpp"
 #include "basefwx/constants.hpp"
+#include "basefwx/crypto.hpp"
 #include "basefwx/env.hpp"
 
 #include <algorithm>
@@ -16,6 +17,7 @@
 #include <filesystem>
 #include <fstream>
 #include <stdexcept>
+#include <utility>
 
 #include <zlib.h>
 
@@ -24,6 +26,24 @@
 #endif
 
 namespace basefwx::pq {
+
+KemResult& KemResult::operator=(KemResult&& other) noexcept {
+    if (this != &other) {
+        // Wipe the outgoing secret before letting the new content take over.
+        wipe_shared();
+        ciphertext = std::move(other.ciphertext);
+        shared = std::move(other.shared);
+    }
+    return *this;
+}
+
+KemResult::~KemResult() {
+    wipe_shared();
+}
+
+void KemResult::wipe_shared() noexcept {
+    basefwx::crypto::SecureClear(shared);
+}
 
 namespace {
 

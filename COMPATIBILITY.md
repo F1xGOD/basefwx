@@ -32,6 +32,45 @@ machine without the caller explicitly pinning
 genuinely want host-tuned parallelism can still set the field on
 `KdfOptions` before the encrypt — the **default** just stops varying.
 
+### Master-key wrap: Java is EC-only
+
+The C++ and Python runtimes accept two kinds of `master_blob` in a
+keywrap header — an EC-magic-prefixed blob (`EC1` + ECIES-wrapped
+key) decoded by `basefwx::ec::KemDecrypt`, and a magic-less PQ blob
+(raw Kyber/ML-KEM ciphertext) decoded by `basefwx::pq::KemDecrypt`
+([cpp/src/keywrap.cpp:186-189](basefwx/cpp/src/keywrap.cpp#L186)).
+The Java runtime currently accepts **only the EC variant** —
+[KeyWrap.java:99](basefwx/java/src/main/java/com/fixcraft/basefwx/KeyWrap.java#L99)
+hard-codes `startsWith(masterBlob, Constants.MASTER_EC_MAGIC)` and
+rejects anything else.
+
+Practical impact:
+
+- **Password-only blobs** (no master key) — work everywhere (C++,
+  Python, Java).
+- **EC-master-wrapped blobs** — work everywhere.
+- **PQ-master-wrapped blobs without a usable password** — only
+  decode in C++/Python. Java throws "Invalid master key blob
+  magic" and there is no fallback because no password was
+  configured.
+- **PQ-master-wrapped blobs WITH a usable password** — Java's
+  catch-handler at
+  [KeyWrap.java:105](basefwx/java/src/main/java/com/fixcraft/basefwx/KeyWrap.java#L105)
+  falls back to the user-key path and the decode succeeds. Visible
+  consequence: the master-key recovery path is silently bypassed on
+  Java even though the producer expected it to be available.
+
+This asymmetry exists because BouncyCastle's ML-KEM bindings are
+PQC-API-only (no JCE-style integration); adding a PQ decode path
+in `KeyWrap.java` requires a `PQ.kemDecrypt` helper that the Java
+runtime doesn't currently expose. Tracked for a future basefwx
+minor release.
+
+Until then: do not rely on master-key-only blobs round-tripping
+through the Java runtime. The Android client (which consumes the
+synced Java codec) inherits this limitation. The C++ CLI and the
+Python `basefwx` package are unaffected.
+
 Release policy:
 
 - Native release binaries are expected to ship with Argon2, OQS, and LZMA enabled.

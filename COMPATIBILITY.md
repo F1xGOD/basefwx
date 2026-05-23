@@ -8,7 +8,7 @@
 | :-- | :--: | :--: | :--: | :--: | :-- |
 | C++ | ✅ | ✅ | ✅ | ✅ | Reference release runtime for performance and full native feature set. |
 | Python | ✅ with `basefwx[argon2]` | ✅ via `pqcrypto` | ✅ | ✅ | Feature-complete scripting/runtime path. |
-| Java | ✅ since 3.7.0 (BouncyCastle `Argon2BytesGenerator`; libargon2 JNI optional) | ❌ | ❌ | ✅ | Argon2id user-KDF wrap supported. JNI bridge to libargon2 (`NativeCryptoBackend.argon2idHashRaw`) speeds it up ~5–10× on systems where the native lib is loadable; falls through to pure-Java BouncyCastle otherwise (byte-identical output, just slower). |
+| Java | ✅ since 3.7.0 (BouncyCastle `Argon2BytesGenerator`; libargon2 JNI optional) | Partial | ❌ | ✅ | Argon2id user-KDF wrap supported. ML-KEM primitives exist via BouncyCastle (`PQ.kemEncrypt` / `PQ.kemDecrypt`), but Java keywrap still lacks the PQ master-blob dispatch path documented below. JNI bridge to libargon2 (`NativeCryptoBackend.argon2idHashRaw`) speeds Argon2 up ~5–10× on systems where the native lib is loadable; falls through to pure-Java BouncyCastle otherwise (byte-identical output, just slower). |
 
 ### Argon2 parallelism portability
 
@@ -31,6 +31,65 @@ machine without the caller explicitly pinning
 `KdfOptions.argon2Parallelism`. The 3.7.0 fix closes that. Callers who
 genuinely want host-tuned parallelism can still set the field on
 `KdfOptions` before the encrypt — the **default** just stops varying.
+
+### Heavy-mode KDF parameter divergence in Android Yume
+
+The C++ YUME/BaseFWX heavy-mode defaults are the reference values:
+PBKDF2 uses `2_000_000` iterations, and Argon2id uses
+`time=6`, `memory=1 << 18` KiB (256 MiB), `parallelism=4`.
+
+The Android transport currently sends lower mobile-tuned values from
+`YumeInnerCrypto.kt`: PBKDF2 uses `1_000_000` iterations, and Argon2id
+uses `time=3`, `memory=1 << 16` KiB (64 MiB), `parallelism<=4`.
+The server honors the client's advertised KDF params, so
+Android-initiated heavy sessions are objectively weaker than desktop
+heavy sessions.
+
+This is documented as an Android performance trade-off, not parity.
+Do not describe Android "heavy" as equivalent to desktop "heavy" until
+the constants are reconciled and the resulting auth latency / memory
+use is benchmarked on the Android device class being targeted.
+
+### Master-key wrap: Java is EC-only
+
+The C++ and Python runtimes accept two kinds of `master_blob` in a
+keywrap header — an EC-magic-prefixed blob (`EC1` + ECIES-wrapped
+key) decoded by `basefwx::ec::KemDecrypt`, and a magic-less PQ blob
+(raw Kyber/ML-KEM ciphertext) decoded by `basefwx::pq::KemDecrypt`
+([cpp/src/keywrap.cpp:186-189](basefwx/cpp/src/keywrap.cpp#L186)).
+The Java runtime currently accepts **only the EC variant** —
+[KeyWrap.java:99](basefwx/java/src/main/java/com/fixcraft/basefwx/KeyWrap.java#L99)
+hard-codes `startsWith(masterBlob, Constants.MASTER_EC_MAGIC)` and
+rejects anything else.
+
+Practical impact:
+
+- **Password-only blobs** (no master key) — work everywhere (C++,
+  Python, Java).
+- **EC-master-wrapped blobs** — work everywhere.
+- **PQ-master-wrapped blobs without a usable password** — only
+  decode in C++/Python. Java throws "Invalid master key blob
+  magic" and there is no fallback because no password was
+  configured.
+- **PQ-master-wrapped blobs WITH a usable password** — Java's
+  catch-handler at
+  [KeyWrap.java:105](basefwx/java/src/main/java/com/fixcraft/basefwx/KeyWrap.java#L105)
+  falls back to the user-key path and the decode succeeds. Visible
+  consequence: the master-key recovery path is silently bypassed on
+  Java even though the producer expected it to be available.
+
+This asymmetry is not caused by a missing primitive:
+`PQ.kemDecrypt(byte[] privateKeyBytes, byte[] ciphertext)` exists in
+the Java runtime. The blocker is `KeyWrap.recoverMaskKey(...)` itself:
+it treats every non-empty `masterBlob` as EC-only, hard-codes a
+`Constants.MASTER_EC_MAGIC` check, and has no non-EC/PQ branch that
+loads the PQ private key and dispatches to `PQ.kemDecrypt`. Tracked for
+a future basefwx minor release.
+
+Until then: do not rely on master-key-only blobs round-tripping
+through the Java runtime. The Android client (which consumes the
+synced Java codec) inherits this limitation. The C++ CLI and the
+Python `basefwx` package are unaffected.
 
 Release policy:
 

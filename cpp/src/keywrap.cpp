@@ -239,14 +239,18 @@ Bytes RecoverMaskKey(const Bytes& user_blob,
                 throw std::runtime_error("EC master blobs are disabled in PQ strict mode");
             }
             Bytes private_key = basefwx::ec::LoadMasterPrivateKey();
+            secrets.Add(private_key);
             Bytes shared = basefwx::ec::KemDecrypt(private_key, master_blob);
+            secrets.Add(shared);
             Bytes out = basefwx::crypto::HkdfSha256(shared, mask_info, 32);
             basefwx::crypto::SecureClear(shared);
             basefwx::crypto::SecureClear(private_key);
             return out;
         }
         Bytes private_key = basefwx::pq::LoadMasterPrivateKey();
+        secrets.Add(private_key);
         Bytes shared = basefwx::pq::KemDecrypt(private_key, master_blob);
+        secrets.Add(shared);
         Bytes out = basefwx::crypto::HkdfSha256(shared, mask_info, 32);
         basefwx::crypto::SecureClear(shared);
         basefwx::crypto::SecureClear(private_key);

@@ -645,4 +645,27 @@ void SecretGuard::Add(std::string& text) {
     string_buffers_.push_back(&text);
 }
 
+SecureBytes& SecureBytes::operator=(SecureBytes&& other) noexcept {
+    if (this != &other) {
+        SecureClear(bytes_);
+        bytes_ = std::move(other.bytes_);
+    }
+    return *this;
+}
+
+SecureBytes::~SecureBytes() noexcept {
+    SecureClear(bytes_);
+}
+
+void SecureBytes::Reset(Bytes bytes) noexcept {
+    SecureClear(bytes_);
+    bytes_ = std::move(bytes);
+}
+
+Bytes SecureBytes::Release() noexcept {
+    Bytes out = std::move(bytes_);
+    bytes_.clear();
+    return out;
+}
+
 }  // namespace basefwx::crypto

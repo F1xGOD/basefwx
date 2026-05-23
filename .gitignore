@@ -13,6 +13,13 @@ venv/
 .idea/
 *.iml
 
+# AI tools — per-machine state, not for the repo
+.claude/
+.codex/
+.aider*
+.cursor/
+.copilot/
+
 build/
 build-*/
 java/build/

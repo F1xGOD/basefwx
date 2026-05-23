@@ -126,8 +126,8 @@ class BasefwxPlugin(abc.ABC):
 
     def __init__(self, config: bytes = b""):
         """Subclasses MAY override to parse ``config``. Raise
-        :class:`PluginErrorBadInput` on malformed config."""
-        del config  # default: ignore
+        :class:`PluginErrorBadInput` on malformed config. The default
+        implementation ignores ``config`` entirely."""
 
     # ----- metadata ----------------------------------------------------
 

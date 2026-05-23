@@ -238,21 +238,15 @@ Bytes RecoverMaskKey(const Bytes& user_blob,
             if (StrictPqOnly()) {
                 throw std::runtime_error("EC master blobs are disabled in PQ strict mode");
             }
-            Bytes private_key = basefwx::ec::LoadMasterPrivateKey();
-            basefwx::crypto::SecretGuard pk_guard;
-            pk_guard.Add(private_key);
-            Bytes shared = basefwx::ec::KemDecrypt(private_key, master_blob);
-            basefwx::crypto::SecretGuard sh_guard;
-            sh_guard.Add(shared);
-            return basefwx::crypto::HkdfSha256(shared, mask_info, 32);
+            basefwx::crypto::SecureBytes private_key{basefwx::ec::LoadMasterPrivateKey()};
+            basefwx::crypto::SecureBytes shared{
+                basefwx::ec::KemDecrypt(private_key.bytes(), master_blob)};
+            return basefwx::crypto::HkdfSha256(shared.bytes(), mask_info, 32);
         }
-        Bytes private_key = basefwx::pq::LoadMasterPrivateKey();
-        basefwx::crypto::SecretGuard pk_guard;
-        pk_guard.Add(private_key);
-        Bytes shared = basefwx::pq::KemDecrypt(private_key, master_blob);
-        basefwx::crypto::SecretGuard sh_guard;
-        sh_guard.Add(shared);
-        return basefwx::crypto::HkdfSha256(shared, mask_info, 32);
+        basefwx::crypto::SecureBytes private_key{basefwx::pq::LoadMasterPrivateKey()};
+        basefwx::crypto::SecureBytes shared{
+            basefwx::pq::KemDecrypt(private_key.bytes(), master_blob)};
+        return basefwx::crypto::HkdfSha256(shared.bytes(), mask_info, 32);
     }
     if (user_blob.empty()) {
         throw std::runtime_error("Ciphertext missing key transport data");

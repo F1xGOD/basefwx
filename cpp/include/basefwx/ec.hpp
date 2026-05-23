@@ -14,9 +14,38 @@ namespace basefwx::ec {
 
 using Bytes = std::vector<std::uint8_t>;
 
+// Move-only, self-wiping result of EC KemEncrypt(). `blob` is the
+// public ECIES-style wrapped output that goes on the wire; `shared`
+// is the secret material that must not persist in heap pages. Same
+// pattern as basefwx::pq::KemResult — see that struct's header
+// comment for the move-only + destructor-wipe rationale.
 struct KemResult {
     Bytes blob;
     Bytes shared;
+
+    KemResult() = default;
+    KemResult(Bytes b, Bytes sh) noexcept
+        : blob(std::move(b)), shared(std::move(sh)) {}
+
+    KemResult(const KemResult&) = delete;
+    KemResult& operator=(const KemResult&) = delete;
+    KemResult(KemResult&&) noexcept = default;
+    KemResult& operator=(KemResult&& other) noexcept {
+        if (this != &other) {
+            wipe_shared();
+            blob = std::move(other.blob);
+            shared = std::move(other.shared);
+        }
+        return *this;
+    }
+    ~KemResult() { wipe_shared(); }
+
+private:
+    void wipe_shared() noexcept {
+        if (shared.empty()) return;
+        volatile std::uint8_t* p = shared.data();
+        for (std::size_t i = 0; i < shared.size(); ++i) p[i] = 0;
+    }
 };
 
 std::optional<Bytes> LoadMasterPublicKey(bool create_if_missing);

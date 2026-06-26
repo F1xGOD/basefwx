@@ -65,7 +65,7 @@ final class LengthPrefixedCodec {
             byte[] salt = Crypto.randomBytes(Constants.USER_KDF_SALT_SIZE);
             String label = FileCodecs.resolveKdfLabel(kdfLabel);
             if (!"pbkdf2".equals(label)) {
-                throw new IllegalArgumentException("Unsupported KDF label: " + label);
+                throw new UnsupportedKdfException(label, "Unsupported KDF label: " + label);
             }
             byte[] userKey = Crypto.pbkdf2HmacSha256(pw, salt, iters, 32);
             byte[] wrapped = Crypto.aesGcmEncrypt(userKey, ephemeralKey, aad);

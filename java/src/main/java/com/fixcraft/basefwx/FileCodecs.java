@@ -997,6 +997,10 @@ final class FileCodecs {
             throw new IllegalArgumentException("Password required for AES-heavy streaming mode");
         }
         String kdfLabel = resolveUserKdfLabel();
+        if (!"pbkdf2".equals(kdfLabel)) {
+            throw new UnsupportedKdfException(kdfLabel,
+                "pb512file: Argon2 KDF is not yet implemented in Java; use pbkdf2");
+        }
         int heavyIters = Constants.HEAVY_PBKDF2_ITERATIONS;
         boolean obfuscate = payloadObfuscationEnabled();
         boolean useMasterEffective = false;
@@ -1873,6 +1877,10 @@ final class FileCodecs {
         String ext = extension == null ? "" : extension;
         String b64Payload = Base64Codec.encode(data);
         String kdfLabel = resolveUserKdfLabel();
+        if (!"pbkdf2".equals(kdfLabel)) {
+            throw new UnsupportedKdfException(kdfLabel,
+                "pb512file: Argon2 KDF is not yet implemented in Java; use pbkdf2");
+        }
         boolean obfuscate = payloadObfuscationEnabled();
         int heavyIters = Constants.HEAVY_PBKDF2_ITERATIONS;
 

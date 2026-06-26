@@ -351,14 +351,8 @@ final class BenchCommands {
             return 0;
         } finally {
             for (int i = 0; i < workers; i++) {
-                if (encFiles[i] != null) {
-                    encFiles[i].delete();
-                }
-                if (decFiles[i] != null) {
-                    decFiles[i].delete();
-                }
                 if (tempDirs[i] != null) {
-                    tempDirs[i].delete();
+                    cleanupPath(tempDirs[i]);
                 }
             }
         }
@@ -417,14 +411,8 @@ final class BenchCommands {
             return 0;
         } finally {
             for (int i = 0; i < workers; i++) {
-                if (encFiles[i] != null) {
-                    encFiles[i].delete();
-                }
-                if (decFiles[i] != null) {
-                    decFiles[i].delete();
-                }
                 if (tempDirs[i] != null) {
-                    tempDirs[i].delete();
+                    cleanupPath(tempDirs[i]);
                 }
             }
         }

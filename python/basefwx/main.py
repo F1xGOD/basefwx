@@ -8,6 +8,7 @@ The full implementation now lives in `legacy.py` so the package can be
 organized into smaller modules without changing public imports.
 """
 
-from .legacy import basefwx, cli, main
+from .legacy import basefwx
+from ._cli import cli, main
 
 __all__ = ["basefwx", "cli", "main"]

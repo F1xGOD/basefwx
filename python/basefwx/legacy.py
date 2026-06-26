@@ -461,49 +461,13 @@ class basefwx:
 
     _load_master_pq_private = staticmethod(_master_key._load_master_pq_private)
 
-    @staticmethod
-    def _default_master_ec_public_path() -> "basefwx.pathlib.Path":
-        return basefwx.pathlib.Path('~/master_ec_public.pem').expanduser()
+    _default_master_ec_public_path = staticmethod(_master_key._default_master_ec_public_path)
 
-    @staticmethod
-    def _default_master_ec_private_path() -> "basefwx.pathlib.Path":
-        return basefwx.pathlib.Path('~/master_ec_private.pem').expanduser()
+    _default_master_ec_private_path = staticmethod(_master_key._default_master_ec_private_path)
 
-    @staticmethod
-    def _decode_ec_public_key(raw: bytes) -> "basefwx.ec.EllipticCurvePublicKey":
-        if not raw:
-            raise ValueError("Empty EC public key data")
-        loaders = (
-            lambda data: basefwx.serialization.load_pem_public_key(data),
-            lambda data: basefwx.serialization.load_pem_private_key(data, password=None).public_key(),
-            lambda data: basefwx.serialization.load_der_public_key(data),
-            lambda data: basefwx.serialization.load_der_private_key(data, password=None).public_key(),
-        )
-        for loader in loaders:
-            try:
-                key = loader(raw)
-            except Exception:
-                continue
-            if isinstance(key, basefwx.ec.EllipticCurvePublicKey):
-                return key
-        raise ValueError("Unsupported EC public key format")
+    _decode_ec_public_key = staticmethod(_master_key._decode_ec_public_key)
 
-    @staticmethod
-    def _decode_ec_private_key(raw: bytes) -> "basefwx.ec.EllipticCurvePrivateKey":
-        if not raw:
-            raise ValueError("Empty EC private key data")
-        loaders = (
-            lambda data: basefwx.serialization.load_pem_private_key(data, password=None),
-            lambda data: basefwx.serialization.load_der_private_key(data, password=None),
-        )
-        for loader in loaders:
-            try:
-                key = loader(raw)
-            except Exception:
-                continue
-            if isinstance(key, basefwx.ec.EllipticCurvePrivateKey):
-                return key
-        raise ValueError("Unsupported EC private key format")
+    _decode_ec_private_key = staticmethod(_master_key._decode_ec_private_key)
 
     _write_ec_keypair = staticmethod(_master_key._write_ec_keypair)
 
@@ -610,354 +574,55 @@ class basefwx:
 
     _kdf_pbkdf2_raw = staticmethod(_kdf._kdf_pbkdf2_raw)
 
-    @staticmethod
-    def _an7_read_exact(handle: "basefwx.typing.BinaryIO", size: int, error: str) -> bytes:
-        data = handle.read(size)
-        if len(data) != size:
-            raise ValueError(error)
-        return data
+    _an7_read_exact = staticmethod(_an7._an7_read_exact)
 
-    @staticmethod
-    def _an7_random_digits10() -> str:
-        return f"{basefwx.secrets.randbelow(basefwx.N10_MOD):010d}"
+    _an7_random_digits10 = staticmethod(_an7._an7_random_digits10)
 
-    @staticmethod
-    def _an7_same_path(a: "basefwx.pathlib.Path", b: "basefwx.pathlib.Path") -> bool:
-        return basefwx._normalize_path(a) == basefwx._normalize_path(b)
+    _an7_same_path = staticmethod(_an7._an7_same_path)
 
-    @staticmethod
-    def _an7_ensure_collision_suffix(path: "basefwx.pathlib.Path") -> "basefwx.pathlib.Path":
-        if not path.exists():
-            return path
-        base = str(path)
-        idx = 1
-        while idx < (1 << 31):
-            candidate = basefwx.pathlib.Path(f"{base}.{idx}")
-            if not candidate.exists():
-                return candidate
-            idx += 1
-        raise RuntimeError("Unable to resolve output path collision")
+    _an7_ensure_collision_suffix = staticmethod(_an7._an7_ensure_collision_suffix)
 
-    @staticmethod
-    def _an7_make_temp_path(final_path: "basefwx.pathlib.Path") -> "basefwx.pathlib.Path":
-        parent = final_path.parent
-        for _ in range(128):
-            candidate = parent / f"{final_path.name}.tmp.{basefwx._an7_random_digits10()}"
-            if not candidate.exists():
-                return candidate
-        raise RuntimeError("Failed to allocate temp output file path")
+    _an7_make_temp_path = staticmethod(_an7._an7_make_temp_path)
 
-    @staticmethod
-    def _an7_commit_temp_file(temp_path: "basefwx.pathlib.Path", final_path: "basefwx.pathlib.Path") -> None:
-        try:
-            basefwx.os.replace(temp_path, final_path)
-            return
-        except OSError:
-            pass
-        basefwx.shutil.copy2(str(temp_path), str(final_path))
-        try:
-            temp_path.unlink()
-        except FileNotFoundError:
-            pass
+    _an7_commit_temp_file = staticmethod(_an7._an7_commit_temp_file)
 
-    @staticmethod
-    def _an7_chunk_bytes_at(payload_len: int, chunk_size: int, chunk_index: int) -> int:
-        if payload_len <= 0:
-            return 0
-        offset = chunk_index * chunk_size
-        if offset >= payload_len:
-            return 0
-        remain = payload_len - offset
-        return min(chunk_size, remain)
+    _an7_chunk_bytes_at = staticmethod(_an7._an7_chunk_bytes_at)
 
-    @staticmethod
-    def _an7_total_chunks(payload_len: int, chunk_size: int) -> int:
-        if payload_len <= 0:
-            return 0
-        return (payload_len + chunk_size - 1) // chunk_size
+    _an7_total_chunks = staticmethod(_an7._an7_total_chunks)
 
-    @staticmethod
-    def _an7_hmac_sha256(key: bytes, data: bytes) -> bytes:
-        return basefwx.stdlib_hmac.new(key, data, basefwx.hashlib.sha256).digest()
+    _an7_hmac_sha256 = staticmethod(_an7._an7_hmac_sha256)
 
-    @staticmethod
-    def _an7_build_label(prefix: bytes, nonce: bytes, index: int) -> bytes:
-        return prefix + nonce + basefwx.struct.pack("<Q", index)
+    _an7_build_label = staticmethod(_an7._an7_build_label)
 
-    @staticmethod
-    def _an7_derive_ctr_iv(stream_key: bytes, stream_nonce: bytes, chunk_index: int) -> bytes:
-        label = basefwx._an7_build_label(b"ctr:", stream_nonce, chunk_index)
-        digest = basefwx._an7_hmac_sha256(stream_key, label)
-        return digest[:16]
+    _an7_derive_ctr_iv = staticmethod(_an7._an7_derive_ctr_iv)
 
-    @staticmethod
-    def _an7_apply_xor_transform(chunk: bytes, stream_key: bytes, stream_nonce: bytes, chunk_index: int) -> bytes:
-        if not chunk:
-            return chunk
-        iv = basefwx._an7_derive_ctr_iv(stream_key, stream_nonce, chunk_index)
-        cipher = basefwx.Cipher(basefwx.algorithms.AES(stream_key), basefwx.modes.CTR(iv))
-        enc = cipher.encryptor()
-        return enc.update(chunk) + enc.finalize()
+    _an7_apply_xor_transform = staticmethod(_an7._an7_apply_xor_transform)
 
-    @staticmethod
-    def _an7_flip_start(perm_key: bytes, chunk_index: int, stride: int) -> int:
-        if stride <= 0:
-            return 0
-        label = b"flip:" + basefwx.struct.pack("<Q", chunk_index)
-        digest = basefwx._an7_hmac_sha256(perm_key, label)
-        value = basefwx.struct.unpack_from("<Q", digest, 0)[0]
-        return int(value % stride)
+    _an7_flip_start = staticmethod(_an7._an7_flip_start)
 
-    @staticmethod
-    def _an7_apply_sparse_flip(chunk: bytearray, start: int, stride: int) -> None:
-        if not chunk or stride <= 0:
-            return
-        for idx in range(start, len(chunk), stride):
-            chunk[idx] ^= 0xFF
+    _an7_apply_sparse_flip = staticmethod(_an7._an7_apply_sparse_flip)
 
-    @staticmethod
-    def _an7_build_permutation(perm_key: bytes, superblock_index: int, count: int) -> "list[int]":
-        order = list(range(count))
-        if count <= 1:
-            return order
-        label = b"perm:" + basefwx.struct.pack("<Q", superblock_index)
-        digest = basefwx._an7_hmac_sha256(perm_key, label)
-        rng_state = basefwx.struct.unpack_from("<Q", digest, 0)[0]
-        for idx in range(count - 1, 0, -1):
-            rng_state, rnd = basefwx._splitmix64(rng_state)
-            j = rnd % (idx + 1)
-            order[idx], order[j] = order[j], order[idx]
-        return order
+    _an7_build_permutation = staticmethod(_an7._an7_build_permutation)
 
-    @staticmethod
-    def _an7_derive_keys(password: bytes, salt: bytes) -> "dict[str, bytes]":
-        if not password:
-            raise ValueError("Password is required for AN7")
-        if len(salt) != basefwx.AN7_SALT_LEN:
-            raise ValueError("Invalid AN7 salt length")
-        if basefwx.hash_secret_raw is None:
-            raise RuntimeError("AN7 requires Argon2 support in this build")
-        root_key, _ = basefwx._derive_user_key_argon2id(
-            password,
-            salt,
-            length=64,
-            time_cost=basefwx.AN7_ARGON2_TIME_COST,
-            memory_cost=basefwx.AN7_ARGON2_MEMORY_COST,
-            parallelism=basefwx.AN7_ARGON2_PARALLELISM,
-        )
-        return {
-            "stream": basefwx._hkdf_sha256(root_key, info=b"an7-stream", length=32),
-            "perm": basefwx._hkdf_sha256(root_key, info=b"an7-perm", length=32),
-            "meta": basefwx._hkdf_sha256(root_key, info=b"an7-meta", length=32),
-            "tail": basefwx._hkdf_sha256(root_key, info=b"an7-tail", length=32),
-        }
+    _an7_derive_keys = staticmethod(_an7._an7_derive_keys)
 
-    @staticmethod
-    def _an7_serialize_trailer(info: "dict[str, basefwx.typing.Any]") -> bytes:
-        stream_nonce = info["stream_nonce"]
-        if len(stream_nonce) != basefwx.AN7_TRAILER_NONCE_LEN:
-            raise ValueError("AN7 trailer has invalid stream nonce length")
-        basename_bytes = info["original_basename"].encode("utf-8")
-        extension_bytes = info["original_extension"].encode("utf-8")
-        created_bytes = info["created_utc"].encode("utf-8")
-        if len(basename_bytes) > 0xFFFF or len(extension_bytes) > 0xFFFF or len(created_bytes) > 64:
-            raise ValueError("AN7 trailer metadata is too large")
-        payload = bytearray()
-        payload += basefwx.AN7_TRAILER_VERSION
-        payload += basefwx.struct.pack("<I", int(info["chunk_size"]))
-        payload += basefwx.struct.pack("<H", int(info["superblock_chunks"]))
-        payload += basefwx.struct.pack("<H", int(info["flip_stride"]))
-        payload += basefwx.struct.pack("<Q", int(info["original_size"]))
-        payload += basefwx.struct.pack("<H", len(created_bytes))
-        payload += created_bytes
-        payload += stream_nonce
-        payload += info["sha256_original"]
-        payload += basefwx.struct.pack("<H", len(basename_bytes))
-        payload += basename_bytes
-        payload += basefwx.struct.pack("<H", len(extension_bytes))
-        payload += extension_bytes
-        return bytes(payload)
+    _an7_serialize_trailer = staticmethod(_an7._an7_serialize_trailer)
 
-    @staticmethod
-    def _an7_parse_trailer(data: bytes) -> "dict[str, basefwx.typing.Any]":
-        min_len = (
-            len(basefwx.AN7_TRAILER_VERSION)
-            + 4 + 2 + 2 + 8 + 2
-            + basefwx.AN7_TRAILER_NONCE_LEN
-            + basefwx.AN7_SHA256_LEN
-            + 2 + 2
-        )
-        if len(data) < min_len:
-            raise ValueError("AN7 trailer is too short")
-        if not data.startswith(basefwx.AN7_TRAILER_VERSION):
-            raise ValueError("AN7 trailer version mismatch")
-        offset = len(basefwx.AN7_TRAILER_VERSION)
+    _an7_parse_trailer = staticmethod(_an7._an7_parse_trailer)
 
-        def read_u16() -> int:
-            nonlocal offset
-            if offset + 2 > len(data):
-                raise ValueError("AN7 trailer is truncated (u16)")
-            value = basefwx.struct.unpack_from("<H", data, offset)[0]
-            offset += 2
-            return value
+    _an7_parse_footer_and_derive = staticmethod(_an7._an7_parse_footer_and_derive)
 
-        def read_u32() -> int:
-            nonlocal offset
-            if offset + 4 > len(data):
-                raise ValueError("AN7 trailer is truncated (u32)")
-            value = basefwx.struct.unpack_from("<I", data, offset)[0]
-            offset += 4
-            return value
+    _an7_is_ascii_alnum = staticmethod(_an7._an7_is_ascii_alnum)
 
-        def read_u64() -> int:
-            nonlocal offset
-            if offset + 8 > len(data):
-                raise ValueError("AN7 trailer is truncated (u64)")
-            value = basefwx.struct.unpack_from("<Q", data, offset)[0]
-            offset += 8
-            return value
+    _an7_sanitize_basename = staticmethod(_an7._an7_sanitize_basename)
 
-        chunk_size = read_u32()
-        superblock_chunks = read_u16()
-        flip_stride = read_u16()
-        original_size = read_u64()
-        created_len = read_u16()
-        if created_len > 64 or offset + created_len > len(data):
-            raise ValueError("AN7 trailer created timestamp is invalid")
-        created_utc = data[offset:offset + created_len].decode("utf-8", errors="strict")
-        offset += created_len
+    _an7_sanitize_extension = staticmethod(_an7._an7_sanitize_extension)
 
-        if offset + basefwx.AN7_TRAILER_NONCE_LEN + basefwx.AN7_SHA256_LEN > len(data):
-            raise ValueError("AN7 trailer payload is truncated")
-        stream_nonce = data[offset:offset + basefwx.AN7_TRAILER_NONCE_LEN]
-        offset += basefwx.AN7_TRAILER_NONCE_LEN
-        sha256_original = data[offset:offset + basefwx.AN7_SHA256_LEN]
-        offset += basefwx.AN7_SHA256_LEN
+    _an7_resolve_output_path = staticmethod(_an7._an7_resolve_output_path)
 
-        basename_len = read_u16()
-        if offset + basename_len > len(data):
-            raise ValueError("AN7 trailer basename is truncated")
-        original_basename = data[offset:offset + basename_len].decode("utf-8", errors="strict")
-        offset += basename_len
+    _an7_resolve_restored_name = staticmethod(_an7._an7_resolve_restored_name)
 
-        ext_len = read_u16()
-        if offset + ext_len > len(data):
-            raise ValueError("AN7 trailer extension is truncated")
-        original_extension = data[offset:offset + ext_len].decode("utf-8", errors="strict")
-        offset += ext_len
-
-        if offset != len(data):
-            raise ValueError("AN7 trailer has trailing bytes")
-
-        return {
-            "format_version": basefwx.AN7_TRAILER_VERSION.decode("ascii"),
-            "chunk_size": chunk_size,
-            "superblock_chunks": superblock_chunks,
-            "flip_stride": flip_stride,
-            "original_size": original_size,
-            "created_utc": created_utc,
-            "stream_nonce": stream_nonce,
-            "sha256_original": sha256_original,
-            "original_basename": original_basename,
-            "original_extension": original_extension,
-        }
-
-    @staticmethod
-    def _an7_parse_footer_and_derive(
-        footer: bytes,
-        password: bytes,
-    ) -> "dict[str, basefwx.typing.Any]":
-        if len(footer) != basefwx.AN7_FOOTER_SIZE:
-            raise ValueError("AN7 footer length mismatch")
-        salt = footer[:basefwx.AN7_SALT_LEN]
-        tail_nonce = footer[
-            basefwx.AN7_SALT_LEN:basefwx.AN7_SALT_LEN + basefwx.AN7_TAIL_NONCE_LEN
-        ]
-        tail_blob = footer[basefwx.AN7_SALT_LEN + basefwx.AN7_TAIL_NONCE_LEN:]
-        keys = basefwx._an7_derive_keys(password, salt)
-        tail_plain = basefwx.AESGCM(keys["tail"]).decrypt(tail_nonce, tail_blob, None)
-        if len(tail_plain) != basefwx.AN7_TAIL_PLAIN_LEN:
-            raise ValueError("AN7 footer tail length mismatch")
-        trailer_len, payload_len, trailer_crc32 = basefwx.struct.unpack("<QQI", tail_plain)
-        return {
-            "keys": keys,
-            "footer": {
-                "salt": salt,
-                "tail_nonce": tail_nonce,
-                "trailer_len": int(trailer_len),
-                "payload_len": int(payload_len),
-                "trailer_crc32": int(trailer_crc32),
-            },
-        }
-
-    @staticmethod
-    def _an7_is_ascii_alnum(ch: str) -> bool:
-        return ("0" <= ch <= "9") or ("a" <= ch <= "z") or ("A" <= ch <= "Z")
-
-    @staticmethod
-    def _an7_sanitize_basename(value: str) -> str:
-        chars = []
-        for ch in value:
-            if ch == "/" or ch == "\\" or ord(ch) < 32:
-                chars.append("_")
-            else:
-                chars.append(ch)
-        out = "".join(chars)
-        return out if out else "data"
-
-    @staticmethod
-    def _an7_sanitize_extension(value: str) -> str:
-        if not value:
-            return ""
-        ext = value if value.startswith(".") else "." + value
-        chars = []
-        for ch in ext:
-            if ch == ".":
-                chars.append(ch)
-            elif basefwx._an7_is_ascii_alnum(ch) or ch in "_-":
-                chars.append(ch)
-            else:
-                chars.append("_")
-        return "".join(chars)
-
-    @staticmethod
-    def _an7_resolve_output_path(
-        input_path: "basefwx.pathlib.Path",
-        out: "basefwx.typing.Optional[basefwx.typing.Union[str, basefwx.pathlib.Path]]",
-    ) -> "basefwx.pathlib.Path":
-        if out is not None:
-            desired = basefwx._normalize_path(out)
-            if desired.exists() and desired.is_dir():
-                desired = desired / f"data{basefwx._an7_random_digits10()}"
-        else:
-            desired = input_path.parent / f"data{basefwx._an7_random_digits10()}"
-        desired = basefwx._an7_ensure_collision_suffix(desired)
-        desired.parent.mkdir(parents=True, exist_ok=True)
-        return desired
-
-    @staticmethod
-    def _an7_resolve_restored_name(trailer: "dict[str, basefwx.typing.Any]") -> str:
-        base = basefwx._an7_sanitize_basename(trailer.get("original_basename", ""))
-        ext = basefwx._an7_sanitize_extension(trailer.get("original_extension", ""))
-        name = f"{base}{ext}"
-        return name if name else "dean7.out"
-
-    @staticmethod
-    def _an7_resolve_dean_output_path(
-        input_path: "basefwx.pathlib.Path",
-        trailer: "dict[str, basefwx.typing.Any]",
-        out: "basefwx.typing.Optional[basefwx.typing.Union[str, basefwx.pathlib.Path]]",
-    ) -> "basefwx.pathlib.Path":
-        restored_name = basefwx._an7_resolve_restored_name(trailer)
-        if out is not None:
-            desired = basefwx._normalize_path(out)
-            if desired.exists() and desired.is_dir():
-                desired = desired / restored_name
-        else:
-            desired = input_path.parent / restored_name
-        desired = basefwx._an7_ensure_collision_suffix(desired)
-        desired.parent.mkdir(parents=True, exist_ok=True)
-        return desired
+    _an7_resolve_dean_output_path = staticmethod(_an7._an7_resolve_dean_output_path)
 
     an7_file = staticmethod(_an7.an7_file)
 
@@ -1039,451 +704,53 @@ class basefwx:
 
     n10decode_bytes = staticmethod(_codecs_n10.n10decode_bytes)
 
-    @staticmethod
-    def _kfm_clean_ext(ext: str) -> str:
-        normalized = (ext or "").strip().lower()
-        if not normalized:
-            return ".bin"
-        if not normalized.startswith("."):
-            normalized = f".{normalized}"
-        if len(normalized) > 24:
-            return ".bin"
-        allowed = set("._-abcdefghijklmnopqrstuvwxyz0123456789")
-        if any(ch not in allowed for ch in normalized):
-            return ".bin"
-        return normalized
+    _kfm_clean_ext = staticmethod(_kfm._kfm_clean_ext)
 
-    @staticmethod
-    def _kfm_is_audio_ext(ext: str) -> bool:
-        return basefwx._kfm_clean_ext(ext) in basefwx.KFM_AUDIO_EXTENSIONS
+    _kfm_is_audio_ext = staticmethod(_kfm._kfm_is_audio_ext)
 
-    @staticmethod
-    def _kfm_is_image_ext(ext: str) -> bool:
-        return basefwx._kfm_clean_ext(ext) in basefwx.KFM_IMAGE_EXTENSIONS
+    _kfm_is_image_ext = staticmethod(_kfm._kfm_is_image_ext)
 
-    @staticmethod
-    def _kfm_warn(message: str) -> None:
-        _warnings_module.warn(message, RuntimeWarning, stacklevel=3)
+    _kfm_warn = staticmethod(_kfm._kfm_warn)
 
-    @staticmethod
-    def _kfm_accel_mode() -> str:
-        raw = basefwx.os.getenv(basefwx.KFM_ACCEL_ENV, "auto").strip().lower()
-        if raw in {"", "auto"}:
-            return "auto"
-        if raw in {"cuda", "gpu", "nvidia"}:
-            return "cuda"
-        if raw in {"cpu", "off", "none"}:
-            return "cpu"
-        return "auto"
+    _kfm_accel_mode = staticmethod(_kfm._kfm_accel_mode)
 
-    @staticmethod
-    def _kfm_accel_min_bytes() -> int:
-        raw = basefwx.os.getenv(basefwx.KFM_ACCEL_MIN_BYTES_ENV, "").strip()
-        if raw:
-            try:
-                return max(1, int(raw))
-            except Exception:
-                return basefwx.KFM_ACCEL_DEFAULT_MIN_BYTES
-        return basefwx.KFM_ACCEL_DEFAULT_MIN_BYTES
+    _kfm_accel_min_bytes = staticmethod(_kfm._kfm_accel_min_bytes)
 
     _ensure_cp = classmethod(_kfm._ensure_cp)
 
-    @staticmethod
-    def _kfm_should_use_cuda(length: int) -> bool:
-        mode = basefwx._kfm_accel_mode()
-        if mode == "cpu":
-            return False
-        if length <= 0:
-            return False
-        if mode == "auto" and length < basefwx._kfm_accel_min_bytes():
-            return False
-        basefwx._ensure_cp()
-        if basefwx.cp is None or basefwx.np is None:
-            if mode == "cuda":
-                raise RuntimeError(
-                    "kFM CUDA mode requested but CuPy/NumPy is unavailable. "
-                    "Install CuPy or set BASEFWX_KFM_ACCEL=cpu."
-                )
-            return False
-        cuda_status_fn = None
-        with basefwx.contextlib.suppress(Exception):
-            cuda_status_fn = getattr(basefwx.MediaCipher, "_cuda_runtime_status", None)
-        if cuda_status_fn is None:
-            if mode == "cuda":
-                raise RuntimeError(
-                    "kFM CUDA mode requested but CUDA runtime probes are unavailable."
-                )
-            return False
-        ready, reason = cuda_status_fn()
-        if not ready:
-            if mode == "cuda":
-                raise RuntimeError(
-                    "kFM CUDA mode requested but CUDA runtime is unavailable: "
-                    f"{reason}"
-                )
-            return False
-        return True
+    _kfm_should_use_cuda = staticmethod(_kfm._kfm_should_use_cuda)
 
-    @staticmethod
-    def _kfm_paths_equal(a: "basefwx.pathlib.Path", b: "basefwx.pathlib.Path") -> bool:
-        try:
-            return a.resolve() == b.resolve()
-        except Exception:
-            return a.absolute() == b.absolute()
+    _kfm_paths_equal = staticmethod(_kfm._kfm_paths_equal)
 
-    @staticmethod
-    def _kfm_default_output(src: "basefwx.pathlib.Path", ext: str, tag: str) -> "basefwx.pathlib.Path":
-        candidate = src.with_suffix(ext)
-        if basefwx._kfm_paths_equal(candidate, src):
-            candidate = src.with_name(f"{src.stem}.{tag}{ext}")
-        return candidate
+    _kfm_default_output = staticmethod(_kfm._kfm_default_output)
 
-    @staticmethod
-    def _kfm_resolve_output(src: "basefwx.pathlib.Path",
-                            output: str | None,
-                            ext: str,
-                            tag: str) -> "basefwx.pathlib.Path":
-        if output:
-            out_path = basefwx.pathlib.Path(output)
-            if basefwx._kfm_paths_equal(out_path, src):
-                raise ValueError("Refusing to overwrite input file; choose a different output path")
-            return out_path
-        return basefwx._kfm_default_output(src, ext, tag)
+    _kfm_resolve_output = staticmethod(_kfm._kfm_resolve_output)
 
-    @staticmethod
-    def _kfm_keystream(seed: int, length: int, *, legacy_blake2s: bool = False) -> bytes:
-        if length <= 0:
-            return b""
-        out = bytearray(length)
-        seed_bytes = seed.to_bytes(8, "big", signed=False)
-        cursor = 0
-        counter = 0
-        digest_fn = basefwx.hashlib.blake2s if legacy_blake2s else basefwx.hashlib.sha256
-        while cursor < length:
-            block = digest_fn(
-                seed_bytes + counter.to_bytes(8, "big", signed=False)
-            ).digest()
-            take = min(length - cursor, len(block))
-            out[cursor:cursor + take] = block[:take]
-            cursor += take
-            counter += 1
-        return bytes(out)
+    _kfm_keystream = staticmethod(_kfm._kfm_keystream)
 
-    @staticmethod
-    def _kfm_xor(data: bytes, mask: bytes) -> bytes:
-        if len(data) != len(mask):
-            raise ValueError("kFM mask length mismatch")
-        if basefwx.np is not None:
-            try:
-                np_data = basefwx.np.frombuffer(data, dtype=basefwx.np.uint8)
-                np_mask = basefwx.np.frombuffer(mask, dtype=basefwx.np.uint8)
-                if basefwx._kfm_should_use_cuda(len(data)):
-                    gpu_data = basefwx.cp.asarray(np_data)
-                    gpu_mask = basefwx.cp.asarray(np_mask)
-                    gpu_out = basefwx.cp.bitwise_xor(gpu_data, gpu_mask)
-                    return basefwx.cp.asnumpy(gpu_out).tobytes()
-                return basefwx.np.bitwise_xor(np_data, np_mask).tobytes()
-            except Exception:
-                pass
-        out = bytearray(len(data))
-        for idx in range(len(data)):
-            out[idx] = data[idx] ^ mask[idx]
-        return bytes(out)
+    _kfm_xor = staticmethod(_kfm._kfm_xor)
 
-    @staticmethod
-    def _kfm_pack_container(mode: int, payload: bytes, ext: str, *, flags: int = 0) -> bytes:
-        if mode not in (basefwx.KFM_MODE_IMAGE_AUDIO, basefwx.KFM_MODE_AUDIO_IMAGE):
-            raise ValueError("kFM mode is invalid")
-        if isinstance(payload, memoryview):
-            raw = payload.tobytes()
-        elif isinstance(payload, bytearray):
-            raw = bytes(payload)
-        elif isinstance(payload, bytes):
-            raw = payload
-        else:
-            raise TypeError("kFM payload must be bytes-like")
-        if len(raw) > basefwx.KFM_MAX_PAYLOAD:
-            raise ValueError("kFM payload is too large")
-        ext_clean = basefwx._kfm_clean_ext(ext)
-        ext_bytes = ext_clean.encode("utf-8")
-        if len(ext_bytes) > 255:
-            ext_bytes = b".bin"
-        seed = int.from_bytes(basefwx.secrets.token_bytes(8), "big", signed=False)
-        body = ext_bytes + raw
-        masked = basefwx._kfm_xor(body, basefwx._kfm_keystream(seed, len(body)))
-        crc32 = basefwx.zlib.crc32(raw) & 0xFFFFFFFF
-        header = basefwx.KFM_HEADER_STRUCT.pack(
-            basefwx.KFM_MAGIC,
-            basefwx.KFM_VERSION,
-            mode,
-            flags & 0xFF,
-            len(ext_bytes),
-            len(raw),
-            crc32,
-            seed,
-            0,
-        )
-        return header + masked
+    _kfm_pack_container = staticmethod(_kfm._kfm_pack_container)
 
-    @staticmethod
-    def _kfm_unpack_container(blob: bytes) -> "basefwx.typing.Optional[dict]":
-        if isinstance(blob, memoryview):
-            data = blob.tobytes()
-        elif isinstance(blob, bytearray):
-            data = bytes(blob)
-        elif isinstance(blob, bytes):
-            data = blob
-        else:
-            return None
-        if len(data) < basefwx.KFM_HEADER_LEN:
-            return None
-        try:
-            magic, version, mode, flags, ext_len, payload_len, crc32, seed, _ = (
-                basefwx.KFM_HEADER_STRUCT.unpack(data[:basefwx.KFM_HEADER_LEN])
-            )
-        except basefwx.struct.error:
-            return None
-        if magic != basefwx.KFM_MAGIC or version != basefwx.KFM_VERSION:
-            return None
-        if mode not in (basefwx.KFM_MODE_IMAGE_AUDIO, basefwx.KFM_MODE_AUDIO_IMAGE):
-            return None
-        body_len = ext_len + payload_len
-        if body_len < ext_len:
-            return None
-        if body_len > len(data) - basefwx.KFM_HEADER_LEN:
-            return None
-        masked = data[basefwx.KFM_HEADER_LEN:basefwx.KFM_HEADER_LEN + body_len]
-        body = basefwx._kfm_xor(masked, basefwx._kfm_keystream(seed, body_len))
-        ext_bytes = body[:ext_len]
-        payload = body[ext_len:]
-        if (basefwx.zlib.crc32(payload) & 0xFFFFFFFF) != crc32:
-            # Backward compatibility: older Python previews used BLAKE2s here.
-            legacy_body = basefwx._kfm_xor(
-                masked,
-                basefwx._kfm_keystream(seed, body_len, legacy_blake2s=True),
-            )
-            legacy_payload = legacy_body[ext_len:]
-            if (basefwx.zlib.crc32(legacy_payload) & 0xFFFFFFFF) != crc32:
-                return None
-            body = legacy_body
-            ext_bytes = body[:ext_len]
-            payload = legacy_payload
-        try:
-            ext = ext_bytes.decode("utf-8")
-        except UnicodeDecodeError:
-            ext = ".bin"
-        return {
-            "mode": mode,
-            "flags": flags,
-            "ext": basefwx._kfm_clean_ext(ext),
-            "payload": payload,
-        }
+    _kfm_unpack_container = staticmethod(_kfm._kfm_unpack_container)
 
-    @staticmethod
-    def _kfm_bytes_to_wav(data: bytes, output_path: "basefwx.pathlib.Path") -> None:
-        if isinstance(data, memoryview):
-            raw = data.tobytes()
-        elif isinstance(data, bytearray):
-            raw = bytes(data)
-        else:
-            raw = data
-        if len(raw) % 2:
-            raw += b"\x00"
-        pcm_bytes: bytes
-        if basefwx.np is not None:
-            try:
-                np_u16 = basefwx.np.frombuffer(raw, dtype=basefwx.np.dtype("<u2"))
-                if basefwx._kfm_should_use_cuda(len(raw)):
-                    gpu_u16 = basefwx.cp.asarray(np_u16, dtype=basefwx.cp.uint16)
-                    gpu_i16 = (gpu_u16.astype(basefwx.cp.int32) - 32768).astype(basefwx.cp.int16)
-                    pcm_bytes = basefwx.cp.asnumpy(gpu_i16).tobytes()
-                else:
-                    np_i16 = (np_u16.astype(basefwx.np.int32) - 32768).astype(basefwx.np.int16)
-                    pcm_bytes = np_i16.tobytes()
-            except Exception:
-                pcm_bytes = b""
-        else:
-            pcm_bytes = b""
-        if not pcm_bytes:
-            pcm = bytearray(len(raw))
-            for idx in range(0, len(raw), 2):
-                value = raw[idx] | (raw[idx + 1] << 8)
-                sample = value - 32768
-                pcm[idx:idx + 2] = basefwx.struct.pack("<h", sample)
-            pcm_bytes = bytes(pcm)
-        with basefwx.wave.open(str(output_path), "wb") as wav_file:
-            wav_file.setnchannels(1)
-            wav_file.setsampwidth(2)
-            wav_file.setframerate(basefwx.KFM_AUDIO_RATE)
-            wav_file.writeframes(pcm_bytes)
+    _kfm_bytes_to_wav = staticmethod(_kfm._kfm_bytes_to_wav)
 
-    @staticmethod
-    def _kfm_wav_to_bytes(path: "basefwx.pathlib.Path") -> bytes:
-        with basefwx.wave.open(str(path), "rb") as wav_file:
-            channels = wav_file.getnchannels()
-            width = wav_file.getsampwidth()
-            frames = wav_file.readframes(wav_file.getnframes())
-        if channels != 1 or width != 2:
-            return frames
-        return basefwx._kfm_pcm16le_to_bytes(frames)
+    _kfm_wav_to_bytes = staticmethod(_kfm._kfm_wav_to_bytes)
 
-    @staticmethod
-    def _kfm_pcm16le_to_bytes(frames: bytes) -> bytes:
-        if len(frames) % 2:
-            frames += b"\x00"
-        if basefwx.np is not None:
-            try:
-                np_i16 = basefwx.np.frombuffer(frames, dtype=basefwx.np.dtype("<i2"))
-                if basefwx._kfm_should_use_cuda(len(frames)):
-                    gpu_i16 = basefwx.cp.asarray(np_i16, dtype=basefwx.cp.int16)
-                    gpu_u16 = (
-                        (gpu_i16.astype(basefwx.cp.int32) + 32768)
-                        & basefwx.cp.asarray(0xFFFF, dtype=basefwx.cp.int32)
-                    ).astype(basefwx.cp.uint16)
-                    return basefwx.cp.asnumpy(gpu_u16).tobytes()
-                np_u16 = ((np_i16.astype(basefwx.np.int32) + 32768) & 0xFFFF).astype(basefwx.np.uint16)
-                return np_u16.tobytes()
-            except Exception:
-                pass
-        out = bytearray(len(frames))
-        for idx in range(0, len(frames), 2):
-            sample = basefwx.struct.unpack("<h", frames[idx:idx + 2])[0]
-            value = (sample + 32768) & 0xFFFF
-            out[idx:idx + 2] = basefwx.struct.pack("<H", value)
-        return bytes(out)
+    _kfm_pcm16le_to_bytes = staticmethod(_kfm._kfm_pcm16le_to_bytes)
 
-    @staticmethod
-    def _kfm_ffmpeg_audio_to_bytes(path: "basefwx.pathlib.Path") -> bytes:
-        ffmpeg_bin = basefwx.os.environ.get("BASEFWX_FFMPEG_BIN", "ffmpeg")
-        cmd = [
-            ffmpeg_bin,
-            "-v", "error",
-            "-i", str(path),
-            "-f", "s16le",
-            "-ac", "1",
-            "-ar", str(basefwx.KFM_AUDIO_RATE),
-            "-",
-        ]
-        try:
-            result = basefwx.subprocess.run(cmd, capture_output=True, check=False)
-        except FileNotFoundError as exc:
-            raise RuntimeError(
-                "ffmpeg is required to read non-WAV audio (mp3/m4a). "
-                "Install ffmpeg or provide WAV input."
-            ) from exc
-        if result.returncode != 0:
-            stderr = (result.stderr or b"").decode("utf-8", errors="replace").strip()
-            detail = f": {stderr}" if stderr else ""
-            raise RuntimeError(f"ffmpeg failed to decode audio{detail}")
-        if not result.stdout:
-            raise RuntimeError("ffmpeg produced no PCM output")
-        return basefwx._kfm_pcm16le_to_bytes(result.stdout)
+    _kfm_ffmpeg_audio_to_bytes = staticmethod(_kfm._kfm_ffmpeg_audio_to_bytes)
 
-    @staticmethod
-    def _kfm_audio_to_bytes(path: "basefwx.pathlib.Path") -> bytes:
-        wav_error = None
-        try:
-            return basefwx._kfm_wav_to_bytes(path)
-        except Exception as exc:
-            wav_error = exc
-        try:
-            return basefwx._kfm_ffmpeg_audio_to_bytes(path)
-        except Exception as ffmpeg_error:
-            raise RuntimeError(
-                f"Failed to decode audio carrier from {path.name}. "
-                f"WAV parse error: {wav_error}; ffmpeg error: {ffmpeg_error}"
-            ) from ffmpeg_error
+    _kfm_audio_to_bytes = staticmethod(_kfm._kfm_audio_to_bytes)
 
-    @staticmethod
-    def _kfm_bytes_to_png(data: bytes, output_path: "basefwx.pathlib.Path", *, bw_mode: bool = False) -> None:
-        if basefwx.Image is None:
-            raise RuntimeError("Pillow is required for kFM PNG operations")
-        if isinstance(data, memoryview):
-            raw = data.tobytes()
-        elif isinstance(data, bytearray):
-            raw = bytes(data)
-        else:
-            raw = data
-        channels = 1 if bw_mode else 3
-        mode = "L" if bw_mode else "RGB"
-        pixels = max(1, (len(raw) + channels - 1) // channels)
-        width = max(1, int(basefwx.math.sqrt(pixels)))
-        if width * width < pixels:
-            width += 1
-        height = (pixels + width - 1) // width
-        capacity = width * height * channels
-        carrier = bytearray(basefwx.secrets.token_bytes(capacity))
-        carrier[:len(raw)] = raw
-        image = basefwx.Image.frombytes(mode, (width, height), bytes(carrier))
-        image.save(str(output_path), format="PNG")
+    _kfm_bytes_to_png = staticmethod(_kfm._kfm_bytes_to_png)
 
-    @staticmethod
-    def _kfm_png_to_bytes(path: "basefwx.pathlib.Path") -> bytes:
-        if basefwx.Image is None:
-            raise RuntimeError("Pillow is required for kFM PNG operations")
-        with basefwx.Image.open(str(path)) as image:
-            if image.mode == "L":
-                return image.tobytes()
-            if image.mode != "RGB":
-                image = image.convert("RGB")
-            return image.tobytes()
+    _kfm_png_to_bytes = staticmethod(_kfm._kfm_png_to_bytes)
 
-    @staticmethod
-    def _kfm_detect_carrier_kinds(
-        src: "basefwx.pathlib.Path",
-        src_ext: str
-    ) -> "basefwx.typing.List[str]":
-        if basefwx._kfm_is_audio_ext(src_ext):
-            return ["audio"]
-        if basefwx._kfm_is_image_ext(src_ext):
-            return ["image"]
-        head = b""
-        try:
-            with src.open("rb") as handle:
-                head = handle.read(16)
-        except Exception:
-            head = b""
-        kinds: list[str] = []
-        if head.startswith(b"\x89PNG\r\n\x1a\n"):
-            kinds.append("image")
-        if len(head) >= 12 and head[:4] == b"RIFF" and head[8:12] == b"WAVE":
-            kinds.append("audio")
-        if not kinds:
-            kinds = ["audio", "image"]
-        else:
-            if "audio" not in kinds:
-                kinds.append("audio")
-            if "image" not in kinds:
-                kinds.append("image")
-        return kinds
+    _kfm_detect_carrier_kinds = staticmethod(_kfm._kfm_detect_carrier_kinds)
 
-    @staticmethod
-    def _kfm_decode_container(src: "basefwx.pathlib.Path", src_ext: str) -> dict:
-        kinds = basefwx._kfm_detect_carrier_kinds(src, src_ext)
-        attempt_errors: list[str] = []
-        for kind in kinds:
-            try:
-                carrier = (
-                    basefwx._kfm_audio_to_bytes(src)
-                    if kind == "audio"
-                    else basefwx._kfm_png_to_bytes(src)
-                )
-            except Exception as exc:
-                if len(kinds) == 1:
-                    raise
-                attempt_errors.append(f"{kind}: {exc}")
-                continue
-            decoded = basefwx._kfm_unpack_container(carrier)
-            if decoded is not None:
-                return decoded
-            attempt_errors.append(f"{kind}: no BaseFWX header")
-        detail = "; ".join(attempt_errors[:2])
-        if detail:
-            detail = f" ({detail})"
-        raise ValueError(
-            "kFMd refused input: file is not a BaseFWX kFM carrier. "
-            f"Use kFMe to encode first{detail}."
-        )
+    _kfm_decode_container = staticmethod(_kfm._kfm_decode_container)
 
     kFMe = staticmethod(_kfm.kFMe)
 
@@ -1617,5 +884,3 @@ class basefwx:
 
 
 basefwx._warn_single_thread_api()
-
-from ._cli import cli, main

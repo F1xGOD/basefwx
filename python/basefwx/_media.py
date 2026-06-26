@@ -310,7 +310,7 @@ class MediaCipher:
 
     @staticmethod
     def _cuda_runtime_env_key() -> str:
-        return f'CUDA_PATH={basefwx.os.getenv('CUDA_PATH', '')}|LD_LIBRARY_PATH={basefwx.os.getenv('LD_LIBRARY_PATH', '')}'
+        return f"CUDA_PATH={basefwx.os.getenv('CUDA_PATH', '')}|LD_LIBRARY_PATH={basefwx.os.getenv('LD_LIBRARY_PATH', '')}"
 
     @classmethod
     def _set_cuda_runtime_state(cls, ready: bool, error: str) -> None:
@@ -482,7 +482,7 @@ class MediaCipher:
             if basefwx.sys.platform.startswith('linux'):
                 with open('/proc/cpuinfo', 'r', encoding='utf-8', errors='ignore') as handle:
                     data = handle.read().lower()
-                return 'aesni' if ' aes ' in f' {data.replace(chr(10), ' ')} ' else 'unknown'
+                return "aesni" if " aes " in f" {data.replace(chr(10), ' ')} " else "unknown"
             if basefwx.sys.platform == 'darwin':
                 cmd = ['sysctl', '-n', 'machdep.cpu.features']
                 result = basefwx.subprocess.run(cmd, capture_output=True, text=True)
@@ -601,11 +601,20 @@ class MediaCipher:
         parallel_enabled = bool(plan.get('parallel_enabled', False))
         parallel_workers = int(plan.get('parallel_workers') or 1)
         parallel_text = f'ON({parallel_workers}w)' if parallel_enabled else 'OFF'
-        header = f'🎛️ [basefwx.hw] op={plan.get('op_name', 'unknown')} encode={encode} decode={decode} pixels={pixels} parallel={parallel_text} crypto={crypto} aes_accel={aes}'
-        detail = f'   reason: {reason or 'n/a'}'
+        header = f"🎛️ [basefwx.hw] op={plan.get('op_name', 'unknown')} encode={encode} decode={decode} pixels={pixels} parallel={parallel_text} crypto={crypto} aes_accel={aes}"
+        detail = f"   reason: {reason or 'n/a'}"
         if basefwx.MediaCipher._hw_log_color_enabled():
-            header = f'🎛️ {basefwx.MediaCipher._hw_color('[basefwx.hw]', '36;1')} op={basefwx.MediaCipher._hw_color(str(plan.get('op_name', 'unknown')), '1')} encode={basefwx.MediaCipher._hw_color(encode, '32;1')} decode={basefwx.MediaCipher._hw_color(decode, '33;1')} pixels={basefwx.MediaCipher._hw_color(pixels, '35;1')} parallel={basefwx.MediaCipher._hw_color(parallel_text, '37;1')} crypto={basefwx.MediaCipher._hw_color(crypto, '34;1')} aes_accel={basefwx.MediaCipher._hw_color(aes, '36')}'
-            detail = f'   {basefwx.MediaCipher._hw_color('reason:', '2')} {reason or 'n/a'}'
+            header = (
+                f"🎛️ {basefwx.MediaCipher._hw_color('[basefwx.hw]', '36;1')} "
+                f"op={basefwx.MediaCipher._hw_color(str(plan.get('op_name', 'unknown')), '1')} "
+                f"encode={basefwx.MediaCipher._hw_color(encode, '32;1')} "
+                f"decode={basefwx.MediaCipher._hw_color(decode, '33;1')} "
+                f"pixels={basefwx.MediaCipher._hw_color(pixels, '35;1')} "
+                f"parallel={basefwx.MediaCipher._hw_color(parallel_text, '37;1')} "
+                f"crypto={basefwx.MediaCipher._hw_color(crypto, '34;1')} "
+                f"aes_accel={basefwx.MediaCipher._hw_color(aes, '36')}"
+            )
+            detail = f"   {basefwx.MediaCipher._hw_color('reason:', '2')} {reason or 'n/a'}"
         if basefwx.MediaCipher._hw_verbose_enabled():
             msg = f'{header}\n{detail}'
         else:
@@ -636,7 +645,7 @@ class MediaCipher:
         cmd = ['ffprobe', '-v', 'error', '-show_entries', 'stream=codec_type,width,height,avg_frame_rate,r_frame_rate,sample_rate,channels,bit_rate:stream_disposition=attached_pic:format=duration,bit_rate', '-of', 'json', str(path)]
         result = basefwx.subprocess.run(cmd, capture_output=True, text=True)
         if result.returncode != 0:
-            raise RuntimeError(f'ffprobe failed: {result.stderr.strip() or 'unknown error'}')
+            raise RuntimeError(f"ffprobe failed: {result.stderr.strip() or 'unknown error'}")
         data = basefwx.json.loads(result.stdout or '{}')
         streams = data.get('streams', []) or []
         video = None

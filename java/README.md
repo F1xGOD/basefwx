@@ -95,11 +95,11 @@ On platforms without AES-NI or with weaker JCA implementations the gap is wider;
 
 
 ## Scope (v1)
-- fwxAES raw encrypt/decrypt (PBKDF2 mode + EC master-key wrap)
+- fwxAES raw encrypt/decrypt (PBKDF2 or Argon2id KDF + EC master-key wrap)
 - fwxAES streaming encrypt/decrypt (InputStream/OutputStream)
 - fwxAES live packet streaming encrypt/decrypt (frame-based, transport-agnostic)
 - jMG media cipher for images/audio (video path is temporarily disabled by default unless `BASEFWX_ENABLE_JMG_VIDEO=1`)
-- b512 / pb512 encode/decode (PBKDF2 + optional EC master-key wrap)
+- b512 / pb512 encode/decode (PBKDF2 or Argon2id + optional EC master-key wrap)
 - b256 encode/decode
 - n10 numeric encode/decode (text + bytes/file helpers)
 - kFM carrier transforms (auto media/audio encode + strict carrier decode)
@@ -112,7 +112,6 @@ On platforms without AES-NI or with weaker JCA implementations the gap is wider;
 
 Not yet included:
 - PQ master-key (ML-KEM) support
-- Argon2 KDF support
 
 ## Build
 Use Gradle if available:
@@ -195,7 +194,7 @@ Notes:
 - `kFMd` only decodes BaseFWX carriers and refuses plain WAV/PNG/MP3/M4A inputs.
 
 ## Cross-compat notes
-- For b512/pb512, set the KDF label to `pbkdf2` in Python/C++ when you need Java interop.
+- For b512/pb512/fwxAES, use the same KDF label on all runtimes (`pbkdf2` or `argon2id`). Argon2id blobs require a peer that supports Argon2 (Java via BouncyCastle in `KeyWrap`/`Crypto`; C++/Python via libargon2).
 - fwxAES PBKDF2 mode is fully compatible across Python/C++/Java.
 - EC master-key wrap is supported using P-521 (secp521r1) and EC1 blobs.
 - AES-heavy file containers (pb512file) are implemented and cross-compatible with Python/C++ (PBKDF2 mode).

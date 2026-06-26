@@ -2,14 +2,17 @@
 <img src="https://raw.githubusercontent.com/f1xgod/basefwx/main/src/ui/basefwx.svg" width="300">
 </h1><br>
 
-[![PyPI version](https://img.shields.io/pypi/v/basefwx)](https://pypi.org/project/basefwx/)
-[![PyPI downloads](https://img.shields.io/pypi/dm/basefwx.svg?label=PyPI%20downloads)](https://pypi.org/project/basefwx/)
-[![CI](https://img.shields.io/github/actions/workflow/status/F1xGOD/basefwx/ci.yml?label=CI)](https://github.com/F1xGOD/basefwx/actions/workflows/ci.yml)
-[![Memleak](https://img.shields.io/github/actions/workflow/status/F1xGOD/basefwx/leak-detect.yml?label=Memleak)](https://github.com/F1xGOD/basefwx/actions/workflows/leak-detect.yml)
-[![Release](https://img.shields.io/github/actions/workflow/status/F1xGOD/basefwx/publish.yml?label=Release)](https://github.com/F1xGOD/basefwx/actions/workflows/publish.yml)
-[![CodeQL](https://img.shields.io/github/actions/workflow/status/F1xGOD/basefwx/codeql.yml?label=CodeQL)](https://github.com/F1xGOD/basefwx/actions/workflows/codeql.yml)
-[![License](https://img.shields.io/github/license/F1xGOD/basefwx?style=flat)](https://github.com/F1xGOD/basefwx/blob/main/LICENCE)
-[![Discord](https://img.shields.io/discord/1130897522051788821?color=7289da&label=Discord&logo=discord&logoColor=ffffff)](https://discord.gg/6d3QxXnzbV)
+[![PyPI](https://img.shields.io/pypi/v/basefwx?style=flat&logo=pypi&logoColor=white&label=PyPI)](https://pypi.org/project/basefwx/)
+[![Downloads](https://img.shields.io/pypi/dm/basefwx?style=flat&logo=pypi&logoColor=white&label=downloads)](https://pypi.org/project/basefwx/)
+[![Python](https://img.shields.io/pypi/pyversions/basefwx?style=flat&logo=python&logoColor=white)](https://pypi.org/project/basefwx/)
+[![Platforms](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey?style=flat)](https://github.com/F1xGOD/basefwx/releases/latest)
+
+[![CI](https://img.shields.io/github/actions/workflow/status/F1xGOD/basefwx/ci.yml?branch=main&style=flat&logo=githubactions&logoColor=white&label=CI)](https://github.com/F1xGOD/basefwx/actions/workflows/ci.yml)
+[![Memleak](https://img.shields.io/github/actions/workflow/status/F1xGOD/basefwx/leak-detect.yml?branch=main&style=flat&logo=githubactions&logoColor=white&label=Memleak)](https://github.com/F1xGOD/basefwx/actions/workflows/leak-detect.yml)
+[![CodeQL](https://img.shields.io/github/actions/workflow/status/F1xGOD/basefwx/codeql.yml?branch=main&style=flat&logo=github&logoColor=white&label=CodeQL)](https://github.com/F1xGOD/basefwx/actions/workflows/codeql.yml)
+
+[![Latest release](https://img.shields.io/github/v/release/F1xGOD/basefwx?style=flat&logo=github&logoColor=white&label=Release)](https://github.com/F1xGOD/basefwx/releases/latest)
+[![License](https://img.shields.io/github/license/F1xGOD/basefwx?style=flat&label=License)](https://github.com/F1xGOD/basefwx/blob/main/LICENCE)
 
 BaseFWX is a hybrid post-quantum + AEAD encryption toolkit for files and media. It ships in three implementations (Python, C++, Java) that share the same on-disk and on-wire formats, so a file you encrypt in one binds out the other two without conversion.
 

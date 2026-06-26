@@ -191,7 +191,7 @@ Notes:
 - `--no-log` suppresses telemetry/warnings while preserving primary outputs/errors.
 - `--verbose` prints additional hardware routing reason lines.
 - jMG video is disabled by default unless `BASEFWX_ENABLE_JMG_VIDEO=1`.
-- `kFMd` only decodes BaseFWX carriers and refuses plain WAV/PNG/MP3/M4A inputs.
+- `kFMd` only decodes BaseFWX carriers and refuses plain WAV/PNG/MP3/M4A inputs (Java: `BaseFwxImage.kFMd`).
 
 ## Cross-compat notes
 - For b512/pb512/fwxAES, use the same KDF label on all runtimes (`pbkdf2` or `argon2id`). Argon2id blobs require a peer that supports Argon2 (Java via BouncyCastle in `KeyWrap`/`Crypto`; C++/Python via libargon2).
@@ -199,13 +199,14 @@ Notes:
 - EC master-key wrap is supported using P-521 (secp521r1) and EC1 blobs.
 - AES-heavy file containers (pb512file) are implemented and cross-compatible with Python/C++ (PBKDF2 mode).
 - kFM containers are compatible across Python/C++/Java (including `--bw` PNG carrier mode).
-- `kFMe` is the primary encoder (`kFAe` is deprecated alias).
-- `kFMd` is the primary decoder (`kFAd` is deprecated alias).
+- `kFMe` is the primary encoder (`kFAe` is deprecated alias; Java API: `BaseFwxImage.kFMe`).
+- `kFMd` is the primary decoder (`kFAd` is deprecated alias; Java API: `BaseFwxImage.kFMd`).
 
 ## API quick refs
 
 ```java
 import com.fixcraft.basefwx.BaseFwx;
+import com.fixcraft.basefwx.BaseFwxImage;
 import java.io.File;
 
 // n10 API
@@ -213,11 +214,11 @@ String digits = BaseFwx.n10Encode("hello");
 String text = BaseFwx.n10Decode(digits);
 
 // kFM API (auto media/audio encode + strict decode)
-File carrier = BaseFwx.kFMe(new File("input.mp3"), new File("input.png"), true);
-File restored = BaseFwx.kFMd(new File("input.png"), new File("restored.mp3"));
+File carrier = BaseFwxImage.kFMe(new File("input.mp3"), new File("input.png"), true);
+File restored = BaseFwxImage.kFMd(new File("input.png"), new File("restored.mp3"));
 
 // jMG API (archive_original defaults to true)
-BaseFwx.jmgEncryptFile(
+BaseFwxImage.jmgEncryptFile(
     new File("input.mp4"),
     new File("out.mp4"),
     "password",

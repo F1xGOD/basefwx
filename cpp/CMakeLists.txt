@@ -593,9 +593,17 @@ add_library(basefwxcpp
     src/cli_colors.cpp
     src/format.cpp
     src/basefwx.cpp
+    src/basefwx_kfm.cpp
+    src/basefwx_kfm_carriers.cpp
     src/crypto.cpp
     src/codec.cpp
     src/imagecipher.cpp
+    src/imagecipher_common.cpp
+    src/imagecipher_image.cpp
+    src/imagecipher_media.cpp
+    src/imagecipher_media_support.cpp
+    src/imagecipher_media_transform.cpp
+    src/imagecipher_trailer.cpp
     src/ec.cpp
     src/pb512.cpp
     src/fwxaes.cpp
@@ -606,6 +614,9 @@ add_library(basefwxcpp
     src/obfuscation.cpp
     src/metadata.cpp
     src/filecodec.cpp
+    src/filecodec_impl.cpp
+    src/filecodec_b512.cpp
+    src/filecodec_pb512.cpp
     src/system_info.cpp
 )
 

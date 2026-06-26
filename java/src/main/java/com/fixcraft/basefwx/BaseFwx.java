@@ -384,16 +384,7 @@ public final class BaseFwx {
     // Package-private (was private): BaseFwxImage calls this via
     // BaseFwx.createPrivateTempFile for kfmDecodeAudioViaFfmpeg.
     static File createPrivateTempFile(String prefix, String suffix) throws IOException {
-        try {
-            FileAttribute<?> attr = PosixFilePermissions.asFileAttribute(
-                EnumSet.of(PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_WRITE));
-            Path tempPath = Files.createTempFile(prefix, suffix, attr);
-            return tempPath.toFile();
-        } catch (UnsupportedOperationException e) {
-            // Non-POSIX filesystem (typically Windows). The per-user temp dir already
-            // restricts access, so a plain createTempFile is acceptable here.
-            return File.createTempFile(prefix, suffix);
-        }
+        return BaseFwxUtil.createPrivateTempFile(prefix, suffix);
     }
 
     public static long fwxAesEncryptStream(InputStream input,
@@ -3589,10 +3580,7 @@ public final class BaseFwx {
     // Package-private (was private): byte[] overload, used by BaseFwxImage
     // for kfmPackContainer.
     static void writeU32(byte[] target, int offset, int value) {
-        target[offset] = (byte) ((value >> 24) & 0xFF);
-        target[offset + 1] = (byte) ((value >> 16) & 0xFF);
-        target[offset + 2] = (byte) ((value >> 8) & 0xFF);
-        target[offset + 3] = (byte) (value & 0xFF);
+        BaseFwxUtil.writeU32(target, offset, value);
     }
 
     private static void writeU32(OutputStream output, int value) throws IOException {
@@ -3617,10 +3605,7 @@ public final class BaseFwx {
     // Package-private (was private): byte[] overload, used by BaseFwxImage
     // for kfmUnpackContainer.
     static int readU32(byte[] source, int offset) {
-        return ((source[offset] & 0xFF) << 24)
-            | ((source[offset + 1] & 0xFF) << 16)
-            | ((source[offset + 2] & 0xFF) << 8)
-            | (source[offset + 3] & 0xFF);
+        return BaseFwxUtil.readU32(source, offset);
     }
 
     private static byte[] concat(byte[]... parts) {
@@ -4413,23 +4398,14 @@ public final class BaseFwx {
     // Package-private (was private): BaseFwxImage calls this via
     // BaseFwx.getExtension(input) for its image-carrier public API.
     static String getExtension(File file) {
-        String name = file.getName();
-        int idx = name.lastIndexOf('.');
-        if (idx < 0) {
-            return "";
-        }
-        return name.substring(idx);
+        return BaseFwxUtil.getExtension(file);
     }
 
     // Package-private (was private): used by BaseFwxImage for
     // kfmResolveOutput AND by non-image callers in this file (lines 534, 690).
     // Survived the kfm-cluster deletion by being re-declared here.
     static boolean samePath(File a, File b) {
-        try {
-            return a.getCanonicalFile().equals(b.getCanonicalFile());
-        } catch (IOException ignored) {
-            return a.getAbsoluteFile().equals(b.getAbsoluteFile());
-        }
+        return BaseFwxUtil.samePath(a, b);
     }
 
     // replaceExtension / replaceExtensionWithTag / kfmResolveOutput / kfmCleanExt /
@@ -4441,11 +4417,7 @@ public final class BaseFwx {
     // declared further up the file (line ~3606) stays private — only
     // non-image code uses that one.
     static void writeU64(byte[] target, int offset, long value) {
-        long v = value;
-        for (int i = 7; i >= 0; i--) {
-            target[offset + i] = (byte) (v & 0xFFL);
-            v >>>= 8;
-        }
+        BaseFwxUtil.writeU64(target, offset, value);
     }
 
     public static byte[] resolvePasswordBytes(String password, boolean useMaster) {
@@ -4480,29 +4452,11 @@ public final class BaseFwx {
 
     // Package-private (was private): used by BaseFwxImage carrier path.
     static byte[] readFileBytes(File file) {
-        try (FileInputStream in = new FileInputStream(file);
-             ByteArrayOutputStream out = new ByteArrayOutputStream((int) Math.min(file.length(), Integer.MAX_VALUE))) {
-            byte[] buffer = new byte[Constants.STREAM_CHUNK_SIZE];
-            int read;
-            while ((read = in.read(buffer)) != -1) {
-                out.write(buffer, 0, read);
-            }
-            return out.toByteArray();
-        } catch (IOException exc) {
-            throw new IllegalStateException("Failed to read file bytes", exc);
-        }
+        return BaseFwxUtil.readFileBytes(file);
     }
 
     // Package-private (was private): used by BaseFwxImage carrier path.
     static void writeFileBytes(File file, byte[] data) {
-        File parent = file.getParentFile();
-        if (parent != null) {
-            parent.mkdirs();
-        }
-        try (FileOutputStream out = new FileOutputStream(file)) {
-            out.write(data);
-        } catch (IOException exc) {
-            throw new IllegalStateException("Failed to write file bytes", exc);
-        }
+        BaseFwxUtil.writeFileBytes(file, data);
     }
 }

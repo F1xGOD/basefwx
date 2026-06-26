@@ -311,3 +311,38 @@ def _pq_unwrap_secret_with_shared(ciphertext: bytes, wrapped: bytes) -> 'basefwx
     nonce, ct = (wrapped[:12], wrapped[12:])
     secret = aesgcm.decrypt(nonce, ct, None)
     return (secret, kem_shared)
+
+def _default_master_ec_public_path() -> 'basefwx.pathlib.Path':
+    return basefwx.pathlib.Path('~/master_ec_public.pem').expanduser()
+
+
+def _default_master_ec_private_path() -> 'basefwx.pathlib.Path':
+    return basefwx.pathlib.Path('~/master_ec_private.pem').expanduser()
+
+
+def _decode_ec_public_key(raw: bytes) -> 'basefwx.ec.EllipticCurvePublicKey':
+    if not raw:
+        raise ValueError('Empty EC public key data')
+    loaders = (lambda data: basefwx.serialization.load_pem_public_key(data), lambda data: basefwx.serialization.load_pem_private_key(data, password=None).public_key(), lambda data: basefwx.serialization.load_der_public_key(data), lambda data: basefwx.serialization.load_der_private_key(data, password=None).public_key())
+    for loader in loaders:
+        try:
+            key = loader(raw)
+        except Exception:
+            continue
+        if isinstance(key, basefwx.ec.EllipticCurvePublicKey):
+            return key
+    raise ValueError('Unsupported EC public key format')
+
+
+def _decode_ec_private_key(raw: bytes) -> 'basefwx.ec.EllipticCurvePrivateKey':
+    if not raw:
+        raise ValueError('Empty EC private key data')
+    loaders = (lambda data: basefwx.serialization.load_pem_private_key(data, password=None), lambda data: basefwx.serialization.load_der_private_key(data, password=None))
+    for loader in loaders:
+        try:
+            key = loader(raw)
+        except Exception:
+            continue
+        if isinstance(key, basefwx.ec.EllipticCurvePrivateKey):
+            return key
+    raise ValueError('Unsupported EC private key format')

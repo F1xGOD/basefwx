@@ -63,6 +63,14 @@ setup(
         "argon2": [],  # kept for compat; argon2-cffi is now a hard dep
     },
     python_requires=">=3.10",
+    classifiers=[
+        "Programming Language :: Python :: 3",
+        "Programming Language :: Python :: 3.10",
+        "Programming Language :: Python :: 3.11",
+        "Programming Language :: Python :: 3.12",
+        "Programming Language :: Python :: 3.13",
+        "Operating System :: OS Independent",
+    ],
     author="F1xGOD",
     author_email="f1xgodim@gmail.com",
     description="The encryption you can trust, the performance you need, the security you deserve.",

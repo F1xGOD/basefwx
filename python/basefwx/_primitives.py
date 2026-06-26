@@ -165,7 +165,7 @@ def _check_ram_for_argon2():
 
 def _fast_b32hexencode(data: bytes) -> bytes:
     """NumPy-accelerated base32hex encoding (18x faster than stdlib)."""
-    np = np
+    import numpy as np
     arr = np.frombuffer(data, dtype=np.uint8)
     pad_len = (5 - len(arr) % 5) % 5
     if pad_len:
@@ -191,7 +191,7 @@ def _fast_b32hexencode(data: bytes) -> bytes:
 
 def _fast_b32hexdecode(data: bytes) -> bytes:
     """NumPy-accelerated base32hex decoding."""
-    np = np
+    import numpy as np
     pad_count = 0
     while data and data[-1 - pad_count] == ord('='):
         pad_count += 1

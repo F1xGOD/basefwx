@@ -7,11 +7,7 @@
 package com.fixcraft.basefwx.cli;
 
 import com.fixcraft.basefwx.BaseFwx;
-import com.fixcraft.basefwx.BaseFwxImage;
-import com.fixcraft.basefwx.Constants;
-import com.fixcraft.basefwx.MediaCipher;
 import com.fixcraft.basefwx.RuntimeLog;
-import com.fixcraft.basefwx.VersionInfo;
 
 import java.io.BufferedReader;
 import java.io.File;
@@ -20,29 +16,13 @@ import java.lang.management.ManagementFactory;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.Arrays;
 import java.util.ArrayList;
-import java.util.Locale;
 import java.util.List;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
+import java.util.Locale;
 import java.util.concurrent.TimeUnit;
 
 public final class BaseFwxCli {
-    private static volatile int BENCH_SINK = 0;
-
-    private static final class GlobalOptions {
-        final boolean verbose;
-        final boolean noLog;
-        final String[] args;
-
-        GlobalOptions(boolean verbose, boolean noLog, String[] args) {
-            this.verbose = verbose;
-            this.noLog = noLog;
-            this.args = args;
-        }
-    }
+    private BaseFwxCli() {}
 
     private static final class CommandTelemetry implements AutoCloseable {
         private final boolean enabled;
@@ -119,7 +99,6 @@ public final class BaseFwxCli {
                 }
             } catch (Exception ignored) {
             }
-            // Linux fallback via /proc/stat
             try {
                 List<String> lines = Files.readAllLines(java.nio.file.Paths.get("/proc/stat"), StandardCharsets.UTF_8);
                 if (lines.isEmpty() || !lines.get(0).startsWith("cpu ")) {
@@ -284,398 +263,12 @@ public final class BaseFwxCli {
         }
     }
 
-    private BaseFwxCli() {}
-
-    private static byte[] readAllBytes(File file) {
-        try {
-            return Files.readAllBytes(file.toPath());
-        } catch (java.io.IOException exc) {
-            throw new RuntimeException("Failed to read file: " + file.getPath(), exc);
-        }
-    }
-
-    private static String readText(File file) {
-        byte[] data = readAllBytes(file);
-        return new String(data, StandardCharsets.UTF_8);
-    }
-
-    private static void cleanupPath(File path) {
-        if (path == null || !path.exists()) {
-            return;
-        }
-        if (path.isDirectory()) {
-            File[] children = path.listFiles();
-            if (children != null) {
-                for (File child : children) {
-                    cleanupPath(child);
-                }
-            }
-        }
-        path.delete();
-    }
-
-    private static int readEnvInt(String name, int defaultValue, int minValue) {
-        String value = System.getenv(name);
-        if (value == null || value.isEmpty()) {
-            return defaultValue;
-        }
-        try {
-            int parsed = Integer.parseInt(value.trim());
-            return parsed >= minValue ? parsed : defaultValue;
-        } catch (NumberFormatException exc) {
-            return defaultValue;
-        }
-    }
-
-    private static int benchWarmup() {
-        return readEnvInt("BASEFWX_BENCH_WARMUP", 2, 0);
-    }
-
-    private static int benchIters() {
-        return readEnvInt("BASEFWX_BENCH_ITERS", 50, 1);
-    }
-
-    private static boolean benchParallelEnabled() {
-        String raw = System.getenv("BASEFWX_BENCH_PARALLEL");
-        if (raw == null || raw.isEmpty()) {
-            return true;
-        }
-        String value = raw.trim().toLowerCase(Locale.ROOT);
-        return !(value.equals("0") || value.equals("false") || value.equals("off") || value.equals("no"));
-    }
-
-    private static int benchWorkers() {
-        if (!benchParallelEnabled()) {
-            return 1;
-        }
-        int defaultWorkers = Runtime.getRuntime().availableProcessors();
-        if (defaultWorkers <= 0) {
-            defaultWorkers = 1;
-        }
-        return readEnvInt("BASEFWX_BENCH_WORKERS", defaultWorkers, 1);
-    }
-
-    private static void confirmSingleThreadCli(int workers) {
-        // Single-thread mode only triggers with explicit BASEFWX_FORCE_SINGLE_THREAD=1
-        String forceSingle = System.getenv("BASEFWX_FORCE_SINGLE_THREAD");
-        int available = Runtime.getRuntime().availableProcessors();
-        boolean forced = "1".equals(forceSingle) && available > 1;
-        boolean nonInteractive = "1".equals(System.getenv("BASEFWX_ALLOW_SINGLE_THREAD"))
-                || "1".equals(System.getenv("BASEFWX_NONINTERACTIVE"));
-        if (forced) {
-            RuntimeLog.warn("MULTI-THREAD IS DISABLED; THIS MAY CAUSE SEVERE PERFORMANCE DETERIORATION");
-            RuntimeLog.warn("SINGLE-THREAD MODE MAY REDUCE SECURITY MARGIN");
-            if (nonInteractive) {
-                return;
-            }
-            System.err.print("Type YES to continue with single-thread mode: ");
-            String resp;
-            try (java.util.Scanner scanner = new java.util.Scanner(System.in)) {
-                resp = scanner.nextLine();
-            }
-            if (!"YES".equals(resp != null ? resp.trim() : "")) {
-                throw new RuntimeException("Aborted: multi-thread disabled by user override");
-            }
-        }
-    }
-
-    private static long medianOf(long[] samples) {
-        Arrays.sort(samples);
-        int mid = samples.length / 2;
-        if ((samples.length & 1) == 1) {
-            return samples[mid];
-        }
-        long low = samples[mid - 1];
-        long high = samples[mid];
-        return low + (high - low) / 2;
-    }
-
-    private static long benchMedian(int warmup, int iters, Runnable run) {
-        if (warmup < 0) {
-            warmup = 0;
-        }
-        if (iters < 1) {
-            iters = 1;
-        }
-        for (int i = 0; i < warmup; i++) {
-            run.run();
-        }
-        long[] samples = new long[iters];
-        for (int i = 0; i < iters; i++) {
-            long start = System.nanoTime();
-            run.run();
-            long end = System.nanoTime();
-            samples[i] = end - start;
-        }
-        return medianOf(samples);
-    }
-
-    @FunctionalInterface
-    private interface BenchWorker {
-        long run(int workerId);
-    }
-
-    private static long runParallel(ExecutorService pool, int workers, BenchWorker worker) {
-        CountDownLatch latch = new CountDownLatch(workers);
-        final long[] totalBytes = new long[1];
-        for (int i = 0; i < workers; i++) {
-            final int idx = i;
-            pool.execute(() -> {
-                try {
-                    long bytes = worker.run(idx);
-                    synchronized (totalBytes) {
-                        totalBytes[0] += bytes;
-                    }
-                } finally {
-                    latch.countDown();
-                }
-            });
-        }
-        try {
-            latch.await();
-        } catch (InterruptedException exc) {
-            Thread.currentThread().interrupt();
-            throw new RuntimeException("Parallel benchmark interrupted", exc);
-        }
-        return totalBytes[0];
-    }
-
-    private static long benchParallelMedian(int warmup, int iters, int workers, BenchWorker worker) {
-        ExecutorService pool = Executors.newFixedThreadPool(workers);
-        try {
-            for (int i = 0; i < warmup; i++) {
-                runParallel(pool, workers, worker);
-            }
-            long[] samples = new long[iters];
-            for (int i = 0; i < iters; i++) {
-                long start = System.nanoTime();
-                runParallel(pool, workers, worker);
-                long end = System.nanoTime();
-                samples[i] = end - start;
-            }
-            return medianOf(samples);
-        } finally {
-            pool.shutdown();
-        }
-    }
-
-    private static long benchFwxaesParallel(ExecutorService pool,
-                                            int workers,
-                                            byte[] data,
-                                            byte[] password,
-                                            boolean useMaster) {
-        CountDownLatch latch = new CountDownLatch(workers);
-        // Use a simple AtomicLong instead of LongAdder for low contention scenarios
-        final long[] totalBytes = new long[1];
-        for (int i = 0; i < workers; i++) {
-            pool.execute(() -> {
-                try {
-                    byte[] blob = BaseFwx.fwxAesEncryptRawBytes(data, password, useMaster);
-                    byte[] plain = BaseFwx.fwxAesDecryptRawBytes(blob, password, useMaster);
-                    BENCH_SINK ^= plain.length;
-                    synchronized (totalBytes) {
-                        totalBytes[0] += plain.length;
-                    }
-                } finally {
-                    latch.countDown();
-                }
-            });
-        }
-        try {
-            latch.await();
-        } catch (InterruptedException exc) {
-            Thread.currentThread().interrupt();
-            throw new RuntimeException("Parallel benchmark interrupted", exc);
-        }
-        return totalBytes[0];
-    }
-
-    private static String encodeText(String method, String text, String password, boolean useMaster) {
-        switch (method) {
-            case "b64":
-                return BaseFwx.b64Encode(text);
-            case "b256":
-                return BaseFwx.b256Encode(text);
-            case "a512":
-                return BaseFwx.a512Encode(text);
-            case "n10":
-                return BaseFwx.n10Encode(text);
-            case "b512":
-                return BaseFwx.b512Encode(text, password, useMaster);
-            case "pb512":
-                return BaseFwx.pb512Encode(text, password, useMaster);
-            default:
-                throw new IllegalArgumentException("Unsupported method " + method);
-        }
-    }
-
-    private static String decodeText(String method, String text, String password, boolean useMaster) {
-        switch (method) {
-            case "b64":
-                return BaseFwx.b64Decode(text);
-            case "b256":
-                return BaseFwx.b256Decode(text);
-            case "a512":
-                return BaseFwx.a512Decode(text);
-            case "n10":
-                return BaseFwx.n10Decode(text);
-            case "b512":
-                return BaseFwx.b512Decode(text, password, useMaster);
-            case "pb512":
-                return BaseFwx.pb512Decode(text, password, useMaster);
-            default:
-                throw new IllegalArgumentException("Unsupported method " + method);
-        }
-    }
-
-    private static String hashText(String method, String text) {
-        switch (method) {
-            case "hash512":
-                return BaseFwx.hash512(text);
-            case "uhash513":
-                return BaseFwx.uhash513(text);
-            case "bi512":
-                return BaseFwx.bi512Encode(text);
-            // b1024 retired in 3.6.5; chain bi512(a512(text)) in caller code.
-            default:
-                throw new IllegalArgumentException("Unsupported hash method " + method);
-        }
-    }
-
-    private static GlobalOptions parseGlobalOptions(String[] args) {
-        boolean verbose = false;
-        boolean noLog = false;
-        List<String> cleaned = new ArrayList<String>(args.length);
-        for (String arg : args) {
-            if ("--verbose".equals(arg) || "-v".equals(arg)) {
-                verbose = true;
-                continue;
-            }
-            if ("--no-log".equals(arg)) {
-                noLog = true;
-                continue;
-            }
-            cleaned.add(arg);
-        }
-        return new GlobalOptions(verbose, noLog, cleaned.toArray(new String[0]));
-    }
-
-    private static String humanizeUtcTimestamp(String value) {
-        if (value == null || value.length() < 20 || value.charAt(4) != '-' || value.charAt(7) != '-' || value.charAt(10) != 'T') {
-            return value == null ? "unknown" : value;
-        }
-        String human = value.substring(0, 10) + " " + value.substring(11);
-        if (human.endsWith("Z")) {
-            human = human.substring(0, human.length() - 1) + " UTC";
-        }
-        return human;
-    }
-
-    private static String runtimeArch() {
-        String arch = System.getProperty("os.arch", "unknown").toLowerCase(Locale.ROOT);
-        if (arch.equals("x86_64") || arch.equals("amd64")) {
-            return "amd64";
-        }
-        if (arch.equals("aarch64") || arch.equals("arm64")) {
-            return "arm64";
-        }
-        if (arch.startsWith("arm")) {
-            return "arm";
-        }
-        if (arch.matches("i[3-6]86") || arch.equals("x86")) {
-            return "x86";
-        }
-        return arch;
-    }
-
-    private static String buildOriginLabel() {
-        String origin = VersionInfo.buildOrigin();
-        if ("github".equalsIgnoreCase(origin)) {
-            return "GitHub Actions";
-        }
-        return "local/manual";
-    }
-
-    private static void printVersionInfo() {
-        System.out.println("basefwx_java " + Constants.ENGINE_VERSION);
-        String buildUtc = VersionInfo.buildUtc();
-        System.out.println("build_time: " + humanizeUtcTimestamp(buildUtc) + " (" + buildUtc + ")");
-        System.out.println("build_origin: " + buildOriginLabel());
-        System.out.println("os: " + System.getProperty("os.name", "unknown"));
-        System.out.println("arch: " + runtimeArch());
-        System.out.println("linkage: java");
-        System.out.println("java: " + System.getProperty("java.version", "unknown"));
-        System.out.println("gpg_fingerprint: " + VersionInfo.gpgFingerprint());
-        System.out.println("gpg_signature: not checked (release signatures are detached)");
-        // 3.6.5: Argon2id is supported in the Java runtime via BouncyCastle's
-        // Argon2BytesGenerator (always available as a runtime dep), so the
-        // feature flag flips on. OQS / LZMA remain OFF in Java; configure
-        // them out-of-band on the C++ side if you need full coverage.
-        System.out.println("features: argon2=ON oqs=OFF lzma=OFF");
-    }
-
-    private static boolean truthy(String raw) {
-        if (raw == null) {
-            return false;
-        }
-        String value = raw.trim().toLowerCase(Locale.US);
-        return "1".equals(value) || "true".equals(value) || "yes".equals(value) || "on".equals(value);
-    }
-
-    private static String aesAccelState() {
-        String arch = System.getProperty("os.arch", "").toLowerCase(Locale.US);
-        if (arch.contains("x86") || arch.contains("amd64")) {
-            return "aesni";
-        }
-        if (arch.contains("arm") || arch.contains("aarch")) {
-            return "arm-crypto";
-        }
-        return "cpu";
-    }
-
-    private static String parallelText() {
-        if (truthy(System.getenv("BASEFWX_FORCE_SINGLE_THREAD"))) {
-            return "OFF";
-        }
-        int workers = Runtime.getRuntime().availableProcessors();
-        if (workers <= 1) {
-            return "OFF";
-        }
-        return "ON(" + workers + "w)";
-    }
-
-    private static String[] hwPlanForCommand(String command) {
-        String encode = "CPU";
-        String decode = "CPU";
-        String pixels = "CPU";
-        String reason = "command uses CPU crypto path";
-        if ("jmge".equals(command) || "jmgd".equals(command) || "bench-jmg".equals(command)) {
-            String hw = MediaCipher.selectedHwaccelForCli().toLowerCase(Locale.US);
-            if ("nvenc".equals(hw)) {
-                encode = "NVENC";
-                decode = "NVENC";
-                reason = "BASEFWX_HWACCEL selected NVIDIA media acceleration";
-            } else if ("qsv".equals(hw)) {
-                encode = "QSV";
-                decode = "QSV";
-                reason = "BASEFWX_HWACCEL selected Intel QSV media acceleration";
-            } else if ("vaapi".equals(hw)) {
-                encode = "VAAPI";
-                decode = "VAAPI";
-                reason = "BASEFWX_HWACCEL selected VAAPI media acceleration";
-            } else {
-                reason = "media acceleration unavailable, CPU fallback in effect";
-            }
-        }
-        return new String[] {encode, decode, pixels, reason};
-    }
-
     public static void main(String[] args) {
         if (args == null || args.length == 0) {
             usage();
             return;
         }
-        GlobalOptions globals = parseGlobalOptions(args);
+        CliOptions.GlobalOptions globals = CliOptions.parseGlobalOptions(args);
         RuntimeLog.configureFromCli(globals.verbose, globals.noLog);
         args = globals.args;
         if (args.length == 0) {
@@ -684,14 +277,11 @@ public final class BaseFwxCli {
         }
 
         String command = args[0];
-        if ("--version".equals(command) || "-V".equals(command)) {
-            printVersionInfo();
+        if ("--version".equals(command) || "-V".equals(command) || "version".equals(command)) {
+            CliOptions.printVersionInfo();
             return;
         }
-        if ("version".equals(command)) {
-            printVersionInfo();
-            return;
-        }
+
         boolean useMaster = false;
         int argc = args.length;
         for (String arg : args) {
@@ -702,824 +292,137 @@ public final class BaseFwxCli {
             }
         }
 
-        String[] hw = hwPlanForCommand(command);
+        String[] hw = CliOptions.hwPlanForCommand(command);
         RuntimeLog.hwLine(
             "🎛 [basefwx.hw] op=" + command
                 + " encode=" + hw[0]
                 + " decode=" + hw[1]
                 + " pixels=" + hw[2]
-                + " parallel=" + parallelText()
+                + " parallel=" + CliOptions.parallelText()
                 + " crypto=CPU"
-                + " aes_accel=" + aesAccelState()
+                + " aes_accel=" + CliOptions.aesAccelState()
         );
         RuntimeLog.hwReason(hw[3] + "; AES operations remain on CPU (JCE/OpenSSL-backed providers)");
         boolean expectGpu = "NVENC".equals(hw[0]) || "QSV".equals(hw[0]) || "VAAPI".equals(hw[0]);
         CommandTelemetry telemetry = new CommandTelemetry(RuntimeLog.shouldLog(), expectGpu);
 
         try {
-            switch (command) {
-                case "fwxaes-enc":
-                    if (argc < 4) {
-                        usage();
-                        return;
-                    }
-                    File inEnc = new File(args[1]);
-                    File outEnc = new File(args[2]);
-                    String passEnc = args[3];
-                    BaseFwx.fwxAesEncryptFile(inEnc, outEnc, passEnc, useMaster);
-                    return;
-                case "fwxaes-stream-enc":
-                    if (argc < 4) {
-                        usage();
-                        return;
-                    }
-                    try (java.io.FileInputStream inStream = new java.io.FileInputStream(args[1]);
-                         java.io.FileOutputStream outStream = new java.io.FileOutputStream(args[2])) {
-                        BaseFwx.fwxAesEncryptStream(inStream, outStream, args[3], useMaster);
-                    } catch (java.io.IOException exc) {
-                        throw new RuntimeException("fwxAES stream encrypt failed", exc);
-                    }
-                    return;
-                case "fwxaes-dec":
-                    if (argc < 4) {
-                        usage();
-                        return;
-                    }
-                    File inDec = new File(args[1]);
-                    File outDec = new File(args[2]);
-                    String passDec = args[3];
-                    BaseFwx.fwxAesDecryptFile(inDec, outDec, passDec, useMaster);
-                    return;
-                case "an7": {
-                    An7Args opts = parseAn7Args(args, 1, true);
-                    File out = BaseFwx.an7File(
-                        opts.input,
-                        opts.password,
-                        opts.output,
-                        opts.keepInput,
-                        opts.forceAny
-                    );
-                    System.out.println(out.getPath());
-                    return;
-                }
-                case "dean7": {
-                    An7Args opts = parseAn7Args(args, 1, false);
-                    BaseFwx.An7Result result = BaseFwx.dean7File(
-                        opts.input,
-                        opts.password,
-                        opts.output,
-                        opts.keepInput
-                    );
-                    System.out.println(result.outputPath.getPath());
-                    return;
-                }
-                case "fwxaes-stream-dec":
-                    if (argc < 4) {
-                        usage();
-                        return;
-                    }
-                    try (java.io.FileInputStream inStream = new java.io.FileInputStream(args[1]);
-                         java.io.FileOutputStream outStream = new java.io.FileOutputStream(args[2])) {
-                        BaseFwx.fwxAesDecryptStream(inStream, outStream, args[3], useMaster);
-                    } catch (java.io.IOException exc) {
-                        throw new RuntimeException("fwxAES stream decrypt failed", exc);
-                    }
-                    return;
-                case "fwxaes-live-enc":
-                    if (argc < 4) {
-                        usage();
-                        return;
-                    }
-                    try (java.io.FileInputStream inStream = new java.io.FileInputStream(args[1]);
-                         java.io.FileOutputStream outStream = new java.io.FileOutputStream(args[2])) {
-                        BaseFwx.fwxAesLiveEncryptStream(inStream, outStream, args[3], useMaster);
-                    } catch (java.io.IOException exc) {
-                        throw new RuntimeException("fwxAES live encrypt failed", exc);
-                    }
-                    return;
-                case "fwxaes-live-dec":
-                    if (argc < 4) {
-                        usage();
-                        return;
-                    }
-                    try (java.io.FileInputStream inStream = new java.io.FileInputStream(args[1]);
-                         java.io.FileOutputStream outStream = new java.io.FileOutputStream(args[2])) {
-                        BaseFwx.fwxAesLiveDecryptStream(inStream, outStream, args[3], useMaster);
-                    } catch (java.io.IOException exc) {
-                        throw new RuntimeException("fwxAES live decrypt failed", exc);
-                    }
-                    return;
-                case "b512-enc":
-                    if (argc < 3) {
-                        usage();
-                        return;
-                    }
-                    System.out.println(BaseFwx.b512Encode(args[1], args[2], useMaster));
-                    return;
-                case "n10-enc":
-                    if (argc < 2) {
-                        usage();
-                        return;
-                    }
-                    System.out.println(BaseFwx.n10Encode(args[1]));
-                    return;
-                case "n10-dec":
-                    if (argc < 2) {
-                        usage();
-                        return;
-                    }
-                    System.out.println(BaseFwx.n10Decode(args[1]));
-                    return;
-                case "n10file-enc":
-                    if (argc < 3) {
-                        usage();
-                        return;
-                    }
-                    try {
-                        byte[] data = java.nio.file.Files.readAllBytes(new File(args[1]).toPath());
-                        String digits = BaseFwx.n10EncodeBytes(data);
-                        java.nio.file.Files.write(new File(args[2]).toPath(), digits.getBytes(StandardCharsets.UTF_8));
-                    } catch (java.io.IOException exc) {
-                        throw new RuntimeException("n10 file encode failed", exc);
-                    }
-                    return;
-                case "n10file-dec":
-                    if (argc < 3) {
-                        usage();
-                        return;
-                    }
-                    try {
-                        String digits = new String(java.nio.file.Files.readAllBytes(new File(args[1]).toPath()), StandardCharsets.UTF_8);
-                        byte[] decoded = BaseFwx.n10DecodeBytes(digits);
-                        java.nio.file.Files.write(new File(args[2]).toPath(), decoded);
-                    } catch (java.io.IOException exc) {
-                        throw new RuntimeException("n10 file decode failed", exc);
-                    }
-                    return;
-                case "kFMe": {
-                    KfmArgs opts = parseKfmArgs(args, 1);
-                    File out = BaseFwxImage.kFMe(opts.input, opts.output, opts.bwMode);
-                    System.out.println(out.getPath());
-                    return;
-                }
-                case "kFMd": {
-                    KfmArgs opts = parseKfmArgs(args, 1);
-                    File out = BaseFwxImage.kFMd(opts.input, opts.output, opts.bwMode);
-                    System.out.println(out.getPath());
-                    return;
-                }
-                case "kFAe": {
-                    KfmArgs opts = parseKfmArgs(args, 1);
-                    File out = BaseFwxImage.kFAe(opts.input, opts.output, opts.bwMode);
-                    System.out.println(out.getPath());
-                    return;
-                }
-                case "kFAd": {
-                    KfmArgs opts = parseKfmArgs(args, 1);
-                    File out = BaseFwxImage.kFAd(opts.input, opts.output);
-                    System.out.println(out.getPath());
-                    return;
-                }
-                case "b512-dec":
-                    if (argc < 3) {
-                        usage();
-                        return;
-                    }
-                    System.out.println(BaseFwx.b512Decode(args[1], args[2], useMaster));
-                    return;
-                case "pb512-enc":
-                    if (argc < 3) {
-                        usage();
-                        return;
-                    }
-                    System.out.println(BaseFwx.pb512Encode(args[1], args[2], useMaster));
-                    return;
-                case "pb512-dec":
-                    if (argc < 3) {
-                        usage();
-                        return;
-                    }
-                    System.out.println(BaseFwx.pb512Decode(args[1], args[2], useMaster));
-                    return;
-                case "b512file-enc":
-                    if (argc < 4) {
-                        usage();
-                        return;
-                    }
-                    File b512In = new File(args[1]);
-                    File b512Out = new File(args[2]);
-                    String b512Pass = args[3];
-                    BaseFwx.b512FileEncodeFile(b512In, b512Out, b512Pass, useMaster);
-                    return;
-                case "b512file-bytes-rt":
-                    if (argc < 4) {
-                        usage();
-                        return;
-                    }
-                    File b512BytesIn = new File(args[1]);
-                    File b512BytesOut = new File(args[2]);
-                    String b512BytesPass = args[3];
-                    try {
-                        byte[] data = java.nio.file.Files.readAllBytes(b512BytesIn.toPath());
-                        String name = b512BytesIn.getName();
-                        int dot = name.lastIndexOf('.');
-                        String ext = dot >= 0 ? name.substring(dot) : "";
-                        byte[] blob = BaseFwx.b512FileEncodeBytes(data, ext, b512BytesPass, useMaster);
-                        BaseFwx.DecodedFile decoded = BaseFwx.b512FileDecodeBytes(blob, b512BytesPass, useMaster);
-                        java.nio.file.Files.write(b512BytesOut.toPath(), decoded.data);
-                    } catch (java.io.IOException exc) {
-                        throw new RuntimeException("b512file bytes roundtrip failed", exc);
-                    }
-                    return;
-                case "b512file-dec":
-                    if (argc < 4) {
-                        usage();
-                        return;
-                    }
-                    File b512DecIn = new File(args[1]);
-                    File b512DecOut = new File(args[2]);
-                    String b512DecPass = args[3];
-                    BaseFwx.b512FileDecodeFile(b512DecIn, b512DecOut, b512DecPass, useMaster);
-                    return;
-                case "pb512file-enc":
-                    if (argc < 4) {
-                        usage();
-                        return;
-                    }
-                    File pb512In = new File(args[1]);
-                    File pb512Out = new File(args[2]);
-                    String pb512Pass = args[3];
-                    BaseFwx.pb512FileEncodeFile(pb512In, pb512Out, pb512Pass, useMaster);
-                    return;
-                case "pb512file-dec":
-                    if (argc < 4) {
-                        usage();
-                        return;
-                    }
-                    File pb512DecIn = new File(args[1]);
-                    File pb512DecOut = new File(args[2]);
-                    String pb512DecPass = args[3];
-                    BaseFwx.pb512FileDecodeFile(pb512DecIn, pb512DecOut, pb512DecPass, useMaster);
-                    return;
-                case "pb512file-bytes-rt":
-                    if (argc < 4) {
-                        usage();
-                        return;
-                    }
-                    File pb512BytesIn = new File(args[1]);
-                    File pb512BytesOut = new File(args[2]);
-                    String pb512BytesPass = args[3];
-                    try {
-                        byte[] data = java.nio.file.Files.readAllBytes(pb512BytesIn.toPath());
-                        String name = pb512BytesIn.getName();
-                        int dot = name.lastIndexOf('.');
-                        String ext = dot >= 0 ? name.substring(dot) : "";
-                        byte[] blob = BaseFwx.pb512FileEncodeBytes(data, ext, pb512BytesPass, useMaster);
-                        BaseFwx.DecodedFile decoded = BaseFwx.pb512FileDecodeBytes(blob, pb512BytesPass, useMaster);
-                        java.nio.file.Files.write(pb512BytesOut.toPath(), decoded.data);
-                    } catch (java.io.IOException exc) {
-                        throw new RuntimeException("pb512file bytes roundtrip failed", exc);
-                    }
-                    return;
-                case "jmge": {
-                    JmgArgs opts = parseJmgArgs(args, 1);
-                    BaseFwxImage.jmgEncryptFile(
-                        opts.input,
-                        opts.output,
-                        opts.password,
-                        useMaster,
-                        opts.keepMeta,
-                        opts.keepInput,
-                        opts.archiveOriginal
-                    );
-                    return;
-                }
-                case "jmgd": {
-                    JmgArgs opts = parseJmgArgs(args, 1);
-                    BaseFwxImage.jmgDecryptFile(opts.input, opts.output, opts.password, useMaster);
-                    return;
-                }
-                case "bench-text": {
-                    if (argc < 4) {
-                        usage();
-                        return;
-                    }
-                    String method = args[1].toLowerCase();
-                    File textFile = new File(args[2]);
-                    String benchPass = args[3];
-                    final String methodFinal = method;
-                    final String benchPassFinal = benchPass;
-                    final boolean useMasterFlag = useMaster;
-                    int warmup = benchWarmup();
-                    int iters = benchIters();
-                    int workers = benchWorkers();
-                    String text = readText(textFile);
-                    confirmSingleThreadCli((int) workers);
-
-                    BenchWorker worker = (idx) -> {
-                        String enc = encodeText(methodFinal, text, benchPassFinal, useMasterFlag);
-                        String dec = decodeText(methodFinal, enc, benchPassFinal, useMasterFlag);
-                        BENCH_SINK ^= dec.length();
-                        return dec.length();
-                    };
-                    long ns = workers > 1
-                        ? benchParallelMedian(warmup, iters, workers, worker)
-                        : benchMedian(warmup, iters, () -> worker.run(0));
-                    System.out.println("BENCH_NS=" + ns);
-                    return;
-                }
-                case "bench-hash": {
-                    if (argc < 3) {
-                        usage();
-                        return;
-                    }
-                    String method = args[1].toLowerCase();
-                    File textFile = new File(args[2]);
-                    int warmup = benchWarmup();
-                    int iters = benchIters();
-                    int workers = benchWorkers();
-                    String text = readText(textFile);
-                    confirmSingleThreadCli(workers);
-                    byte[] textBytes = text.getBytes(StandardCharsets.UTF_8);
-                    BenchWorker worker;
-                    if (method.equals("hash512")) {
-                        worker = (idx) -> {
-                            String digest = BaseFwx.hash512Bytes(textBytes);
-                            BENCH_SINK ^= digest.length();
-                            return digest.length();
-                        };
-                    } else if (method.equals("uhash513")) {
-                        worker = (idx) -> {
-                            String digest = BaseFwx.uhash513Bytes(textBytes);
-                            BENCH_SINK ^= digest.length();
-                            return digest.length();
-                        };
-                    } else {
-                        worker = (idx) -> {
-                            String digest = hashText(method, text);
-                            BENCH_SINK ^= digest.length();
-                            return digest.length();
-                        };
-                    }
-                    long ns = workers > 1
-                        ? benchParallelMedian(warmup, iters, workers, worker)
-                        : benchMedian(warmup, iters, () -> worker.run(0));
-                    System.out.println("BENCH_NS=" + ns);
-                    return;
-                }
-                case "bench-fwxaes": {
-                    if (argc < 3) {
-                        usage();
-                        return;
-                    }
-                    File input = new File(args[1]);
-                    String benchPass = args[2];
-                    final String benchPassFinal = benchPass;
-                    final boolean useMasterFlag = useMaster;
-                    int warmup = benchWarmup();
-                    int iters = benchIters();
-                    byte[] data = readAllBytes(input);
-                    byte[] benchPassBytes = BaseFwx.resolvePasswordBytes(benchPassFinal, useMasterFlag);
-                    long ns = benchMedian(warmup, iters, () -> {
-                        byte[] blob = BaseFwx.fwxAesEncryptRawBytes(data, benchPassBytes, useMasterFlag);
-                        byte[] plain = BaseFwx.fwxAesDecryptRawBytes(blob, benchPassBytes, useMasterFlag);
-                        BENCH_SINK ^= plain.length;
-                    });
-                    System.out.println("BENCH_NS=" + ns);
-                    return;
-                }
-                case "bench-fwxaes-par": {
-                    if (argc < 3) {
-                        usage();
-                        return;
-                    }
-                    File input = new File(args[1]);
-                    String benchPass = args[2];
-                    final String benchPassFinal = benchPass;
-                    final boolean useMasterFlag = useMaster;
-                    int warmup = benchWarmup();
-                    int iters = benchIters();
-                    int workers = benchWorkers();
-                    confirmSingleThreadCli(workers);
-                    byte[] data = readAllBytes(input);
-                    byte[] benchPassBytes = BaseFwx.resolvePasswordBytes(benchPassFinal, useMasterFlag);
-                    ExecutorService pool = Executors.newFixedThreadPool(workers);
-                    try {
-                        for (int i = 0; i < warmup; i++) {
-                            benchFwxaesParallel(pool, workers, data, benchPassBytes, useMasterFlag);
-                        }
-                        long[] samples = new long[iters];
-                        long bytesPerRun = 0;
-                        for (int i = 0; i < iters; i++) {
-                            long start = System.nanoTime();
-                            bytesPerRun = benchFwxaesParallel(pool, workers, data, benchPassBytes, useMasterFlag);
-                            long end = System.nanoTime();
-                            samples[i] = end - start;
-                        }
-                        long median = medianOf(samples);
-                        System.out.println("BENCH_NS=" + median);
-                        if (bytesPerRun > 0 && median > 0) {
-                            double seconds = median / 1_000_000_000.0;
-                            double gib = bytesPerRun / (double) (1L << 30);
-                            double throughput = gib / seconds;
-                            System.out.println("THROUGHPUT_GiBps=" +
-                                               String.format(Locale.US, "%.3f", throughput) +
-                                               " WORKERS=" + workers);
-                        }
-                        return;
-                    } finally {
-                        pool.shutdown();
-                    }
-                }
-                case "bench-an7":
-                case "bench-dean7": {
-                    if (argc < 3) {
-                        usage();
-                        return;
-                    }
-                    File input = new File(args[1]);
-                    String benchPass = args[2];
-                    final String benchPassFinal = benchPass;
-                    final boolean useMasterFlag = useMaster;
-                    final String benchCommand = command;
-                    int warmup = benchWarmup();
-                    int iters = benchIters();
-                    int workers = benchWorkers();
-                    confirmSingleThreadCli(workers);
-
-                    File[] tempDirs = new File[workers];
-                    File[] seedFwx = new File[workers];
-                    File[] seedAn7 = new File[workers];
-                    try {
-                        for (int i = 0; i < workers; i++) {
-                            try {
-                                tempDirs[i] = Files.createTempDirectory("basefwx-bench-an7-" + i).toFile();
-                            } catch (java.io.IOException exc) {
-                                throw new RuntimeException("Failed to create bench temp dir", exc);
-                            }
-                            File workerInput = new File(tempDirs[i], input.getName());
-                            try {
-                                Files.copy(input.toPath(), workerInput.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING);
-                            } catch (java.io.IOException exc) {
-                                throw new RuntimeException("Failed to copy bench input", exc);
-                            }
-                            seedFwx[i] = new File(tempDirs[i], "seed_" + i + ".fwx");
-                            BaseFwx.fwxAesEncryptFile(workerInput, seedFwx[i], benchPassFinal, useMasterFlag);
-                            workerInput.delete();
-
-                            seedAn7[i] = new File(tempDirs[i], "seed_" + i + ".an7");
-                            BaseFwx.an7File(seedFwx[i], benchPassFinal, seedAn7[i], true, false);
-                        }
-
-                        BenchWorker worker = (idx) -> {
-                            File out = new File(
-                                tempDirs[idx],
-                                ("bench-an7".equals(benchCommand) ? "an7_" : "dean7_") + idx + ".out"
-                            );
-                            out.delete();
-                            long size;
-                            if ("bench-an7".equals(benchCommand)) {
-                                File produced = BaseFwx.an7File(seedFwx[idx], benchPassFinal, out, true, false);
-                                size = produced.length();
-                                produced.delete();
-                            } else {
-                                BaseFwx.An7Result result = BaseFwx.dean7File(seedAn7[idx], benchPassFinal, out, true);
-                                size = result.outputPath.length();
-                                result.outputPath.delete();
-                            }
-                            BENCH_SINK ^= (int) size;
-                            return size;
-                        };
-
-                        long ns = workers > 1
-                            ? benchParallelMedian(warmup, iters, workers, worker)
-                            : benchMedian(warmup, iters, () -> worker.run(0));
-                        System.out.println("BENCH_NS=" + ns);
-                        return;
-                    } finally {
-                        for (int i = 0; i < workers; i++) {
-                            cleanupPath(tempDirs[i]);
-                        }
-                    }
-                }
-                case "bench-live": {
-                    if (argc < 3) {
-                        usage();
-                        return;
-                    }
-                    File input = new File(args[1]);
-                    String benchPass = args[2];
-                    final String benchPassFinal = benchPass;
-                    final boolean useMasterFlag = useMaster;
-                    int warmup = benchWarmup();
-                    int iters = benchIters();
-                    int workers = benchWorkers();
-                    confirmSingleThreadCli(workers);
-                    final byte[] data = readAllBytes(input);
-                    BenchWorker worker = (idx) -> {
-                        try {
-                            java.io.ByteArrayInputStream src = new java.io.ByteArrayInputStream(data);
-                            java.io.ByteArrayOutputStream encOut = new java.io.ByteArrayOutputStream(
-                                data.length + (data.length / 16) + 512
-                            );
-                            BaseFwx.fwxAesLiveEncryptStream(src, encOut, benchPassFinal, useMasterFlag);
-                            byte[] encrypted = encOut.toByteArray();
-
-                            java.io.ByteArrayInputStream encIn = new java.io.ByteArrayInputStream(encrypted);
-                            java.io.ByteArrayOutputStream decOut = new java.io.ByteArrayOutputStream(data.length);
-                            BaseFwx.fwxAesLiveDecryptStream(encIn, decOut, benchPassFinal, useMasterFlag);
-                            long size = decOut.size();
-                            BENCH_SINK ^= (int) size;
-                            return size;
-                        } catch (RuntimeException exc) {
-                            throw new RuntimeException("bench-live roundtrip failed", exc);
-                        }
-                    };
-                    long ns = workers > 1
-                        ? benchParallelMedian(warmup, iters, workers, worker)
-                        : benchMedian(warmup, iters, () -> worker.run(0));
-                    System.out.println("BENCH_NS=" + ns);
-                    return;
-                }
-                case "bench-b512file": {
-                    if (argc < 3) {
-                        usage();
-                        return;
-                    }
-                    File input = new File(args[1]);
-                    String benchPass = args[2];
-                    final String benchPassFinal = benchPass;
-                    final boolean useMasterFlag = useMaster;
-                    int warmup = benchWarmup();
-                    int iters = benchIters();
-                    int workers = benchWorkers();
-                    confirmSingleThreadCli(workers);
-                    String name = input.getName();
-                    int dot = name.lastIndexOf('.');
-                    String ext = dot >= 0 ? name.substring(dot) : "";
-                    File[] tempDirs = new File[workers];
-                    File[] inputs = new File[workers];
-                    File[] encFiles = new File[workers];
-                    File[] decFiles = new File[workers];
-                    try {
-                        for (int i = 0; i < workers; i++) {
-                            try {
-                                tempDirs[i] = Files.createTempDirectory("basefwx-bench-" + i).toFile();
-                            } catch (java.io.IOException exc) {
-                                throw new RuntimeException("Failed to create bench temp dir", exc);
-                            }
-                            inputs[i] = new File(tempDirs[i], input.getName());
-                            try {
-                                Files.copy(input.toPath(), inputs[i].toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING);
-                            } catch (java.io.IOException exc) {
-                                throw new RuntimeException("Failed to copy bench input", exc);
-                            }
-                            encFiles[i] = new File(tempDirs[i], "bench.fwx");
-                            decFiles[i] = new File(tempDirs[i], "bench_dec" + ext);
-                        }
-                        BenchWorker worker = (idx) -> {
-                            File encFile = encFiles[idx];
-                            File decFile = decFiles[idx];
-                            BaseFwx.b512FileEncodeFile(inputs[idx], encFile, benchPassFinal, useMasterFlag);
-                            BaseFwx.b512FileDecodeFile(encFile, decFile, benchPassFinal, useMasterFlag);
-                            long size = decFile.length();
-                            BENCH_SINK ^= (int) size;
-                            encFile.delete();
-                            decFile.delete();
-                            return size;
-                        };
-                        long ns = workers > 1
-                            ? benchParallelMedian(warmup, iters, workers, worker)
-                            : benchMedian(warmup, iters, () -> worker.run(0));
-                        System.out.println("BENCH_NS=" + ns);
-                        return;
-                    } finally {
-                        for (int i = 0; i < workers; i++) {
-                            if (encFiles[i] != null) {
-                                encFiles[i].delete();
-                            }
-                            if (decFiles[i] != null) {
-                                decFiles[i].delete();
-                            }
-                            if (tempDirs[i] != null) {
-                                tempDirs[i].delete();
-                            }
-                        }
-                    }
-                }
-                case "bench-pb512file": {
-                    if (argc < 3) {
-                        usage();
-                        return;
-                    }
-                    File input = new File(args[1]);
-                    String benchPass = args[2];
-                    final String benchPassFinal = benchPass;
-                    final boolean useMasterFlag = useMaster;
-                    int warmup = benchWarmup();
-                    int iters = benchIters();
-                    int workers = benchWorkers();
-                    confirmSingleThreadCli(workers);
-                    String name = input.getName();
-                    int dot = name.lastIndexOf('.');
-                    String ext = dot >= 0 ? name.substring(dot) : "";
-                    File[] tempDirs = new File[workers];
-                    File[] inputs = new File[workers];
-                    File[] encFiles = new File[workers];
-                    File[] decFiles = new File[workers];
-                    try {
-                        for (int i = 0; i < workers; i++) {
-                            try {
-                                tempDirs[i] = Files.createTempDirectory("basefwx-bench-" + i).toFile();
-                            } catch (java.io.IOException exc) {
-                                throw new RuntimeException("Failed to create bench temp dir", exc);
-                            }
-                            inputs[i] = new File(tempDirs[i], input.getName());
-                            try {
-                                Files.copy(input.toPath(), inputs[i].toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING);
-                            } catch (java.io.IOException exc) {
-                                throw new RuntimeException("Failed to copy bench input", exc);
-                            }
-                            encFiles[i] = new File(tempDirs[i], "bench.fwx");
-                            decFiles[i] = new File(tempDirs[i], "bench_dec" + ext);
-                        }
-                        BenchWorker worker = (idx) -> {
-                            File encFile = encFiles[idx];
-                            File decFile = decFiles[idx];
-                            BaseFwx.pb512FileEncodeFile(inputs[idx], encFile, benchPassFinal, useMasterFlag);
-                            BaseFwx.pb512FileDecodeFile(encFile, decFile, benchPassFinal, useMasterFlag);
-                            long size = decFile.length();
-                            BENCH_SINK ^= (int) size;
-                            encFile.delete();
-                            decFile.delete();
-                            return size;
-                        };
-                        long ns = workers > 1
-                            ? benchParallelMedian(warmup, iters, workers, worker)
-                            : benchMedian(warmup, iters, () -> worker.run(0));
-                        System.out.println("BENCH_NS=" + ns);
-                        return;
-                    } finally {
-                        for (int i = 0; i < workers; i++) {
-                            if (encFiles[i] != null) {
-                                encFiles[i].delete();
-                            }
-                            if (decFiles[i] != null) {
-                                decFiles[i].delete();
-                            }
-                            if (tempDirs[i] != null) {
-                                tempDirs[i].delete();
-                            }
-                        }
-                    }
-                }
-                case "bench-jmg": {
-                    if (argc < 3) {
-                        usage();
-                        return;
-                    }
-                    File mediaFile = new File(args[1]);
-                    String benchPass = args[2];
-                    final String benchPassFinal = benchPass;
-                    final boolean useMasterFlag = useMaster;
-                    int warmup = benchWarmup();
-                    int iters = benchIters();
-                    int workers = benchWorkers();
-                    
-                    if (!mediaFile.exists()) {
-                        throw new RuntimeException("Media file not found: " + mediaFile.getAbsolutePath());
-                    }
-                    
-                    confirmSingleThreadCli(workers);
-                    File[] tempDirs = new File[workers];
-                    File[] encFiles = new File[workers];
-                    File[] decFiles = new File[workers];
-                    
-                    try {
-                        // Create temporary directories for each worker
-                        String baseName = mediaFile.getName();
-                        String ext = "";
-                        int dotIdx = baseName.lastIndexOf('.');
-                        if (dotIdx > 0) {
-                            ext = baseName.substring(dotIdx);
-                        }
-                        
-                        for (int i = 0; i < workers; i++) {
-                            try {
-                                tempDirs[i] = Files.createTempDirectory("basefwx-bench-jmg-" + i).toFile();
-                            } catch (java.io.IOException exc) {
-                                throw new RuntimeException("Failed to create temp directory for bench-jmg worker " + i, exc);
-                            }
-                            encFiles[i] = new File(tempDirs[i], "bench_enc" + ext);
-                            decFiles[i] = new File(tempDirs[i], "bench_dec" + ext);
-                        }
-                        
-                        BenchWorker worker = (idx) -> {
-                            File encFile = encFiles[idx];
-                            File decFile = decFiles[idx];
-                            // Encrypt
-                            BaseFwxImage.jmgEncryptFile(mediaFile, encFile, benchPassFinal, useMasterFlag, false, true);
-                            // Decrypt
-                            BaseFwxImage.jmgDecryptFile(encFile, decFile, benchPassFinal, useMasterFlag);
-                            long size = decFile.length();
-                            BENCH_SINK ^= (int) size;
-                            encFile.delete();
-                            decFile.delete();
-                            return size;
-                        };
-                        
-                        long ns = workers > 1
-                            ? benchParallelMedian(warmup, iters, workers, worker)
-                            : benchMedian(warmup, iters, () -> worker.run(0));
-                        System.out.println("BENCH_NS=" + ns);
-                        return;
-                    } finally {
-                        // Cleanup temporary files
-                        for (int i = 0; i < workers; i++) {
-                            if (encFiles[i] != null && encFiles[i].exists()) {
-                                encFiles[i].delete();
-                            }
-                            if (decFiles[i] != null && decFiles[i].exists()) {
-                                decFiles[i].delete();
-                            }
-                            if (tempDirs[i] != null && tempDirs[i].exists()) {
-                                tempDirs[i].delete();
-                            }
-                        }
-                    }
-                }
-                case "b256-enc":
-                    if (argc < 2) {
-                        usage();
-                        return;
-                    }
-                    System.out.println(BaseFwx.b256Encode(args[1]));
-                    return;
-                case "b256-dec":
-                    if (argc < 2) {
-                        usage();
-                        return;
-                    }
-                    System.out.println(BaseFwx.b256Decode(args[1]));
-                    return;
-                case "b64-enc":
-                    if (argc < 2) {
-                        usage();
-                        return;
-                    }
-                    System.out.println(BaseFwx.b64Encode(args[1]));
-                    return;
-                case "b64-dec":
-                    if (argc < 2) {
-                        usage();
-                        return;
-                    }
-                    System.out.println(BaseFwx.b64Decode(args[1]));
-                    return;
-                case "hash512":
-                    if (argc < 2) {
-                        usage();
-                        return;
-                    }
-                    System.out.println(BaseFwx.hash512(args[1]));
-                    return;
-                case "uhash513":
-                    if (argc < 2) {
-                        usage();
-                        return;
-                    }
-                    System.out.println(BaseFwx.uhash513(args[1]));
-                    return;
-                case "a512-enc":
-                    if (argc < 2) {
-                        usage();
-                        return;
-                    }
-                    System.out.println(BaseFwx.a512Encode(args[1]));
-                    return;
-                case "a512-dec":
-                    if (argc < 2) {
-                        usage();
-                        return;
-                    }
-                    System.out.println(BaseFwx.a512Decode(args[1]));
-                    return;
-                case "bi512-enc":
-                    if (argc < 2) {
-                        usage();
-                        return;
-                    }
-                    System.out.println(BaseFwx.bi512Encode(args[1]));
-                    return;
-                // b1024-enc retired in 3.6.5; was `bi512-enc $(a512-enc text)`.
-                default:
-                    usage();
+            int code = dispatchCommand(command, args, argc, useMaster);
+            if (code == 1) {
+                usage();
             }
         } catch (RuntimeException exc) {
             System.err.println("Error: " + exc.getMessage());
             System.exit(1);
         } finally {
             telemetry.close();
+        }
+    }
+
+    /** @return 0 success, 1 usage, -1 unknown command (usage) */
+    private static int dispatchCommand(String command, String[] args, int argc, boolean useMaster) {
+        int code = CodecCommands.handle(command, args, argc, useMaster);
+        if (code >= 0) {
+            return code;
+        }
+        code = FileCommands.handle(command, args, argc, useMaster);
+        if (code >= 0) {
+            return code;
+        }
+        code = MediaCommands.handle(command, args, argc, useMaster);
+        if (code >= 0) {
+            return code;
+        }
+        code = BenchCommands.handle(command, args, argc, useMaster);
+        if (code >= 0) {
+            return code;
+        }
+        return dispatchCoreCommand(command, args, argc, useMaster);
+    }
+
+    private static int dispatchCoreCommand(String command, String[] args, int argc, boolean useMaster) {
+        switch (command) {
+            case "fwxaes-enc":
+                if (argc < 4) {
+                    return 1;
+                }
+                BaseFwx.fwxAesEncryptFile(new File(args[1]), new File(args[2]), args[3], useMaster);
+                return 0;
+            case "fwxaes-stream-enc":
+                if (argc < 4) {
+                    return 1;
+                }
+                try (java.io.FileInputStream inStream = new java.io.FileInputStream(args[1]);
+                     java.io.FileOutputStream outStream = new java.io.FileOutputStream(args[2])) {
+                    BaseFwx.fwxAesEncryptStream(inStream, outStream, args[3], useMaster);
+                } catch (java.io.IOException exc) {
+                    throw new RuntimeException("fwxAES stream encrypt failed", exc);
+                }
+                return 0;
+            case "fwxaes-dec":
+                if (argc < 4) {
+                    return 1;
+                }
+                BaseFwx.fwxAesDecryptFile(new File(args[1]), new File(args[2]), args[3], useMaster);
+                return 0;
+            case "an7": {
+                CliOptions.An7Args opts = CliOptions.parseAn7Args(args, 1, true);
+                File out = BaseFwx.an7File(
+                    opts.input,
+                    opts.password,
+                    opts.output,
+                    opts.keepInput,
+                    opts.forceAny
+                );
+                System.out.println(out.getPath());
+                return 0;
+            }
+            case "dean7": {
+                CliOptions.An7Args opts = CliOptions.parseAn7Args(args, 1, false);
+                BaseFwx.An7Result result = BaseFwx.dean7File(
+                    opts.input,
+                    opts.password,
+                    opts.output,
+                    opts.keepInput
+                );
+                System.out.println(result.outputPath.getPath());
+                return 0;
+            }
+            case "fwxaes-stream-dec":
+                if (argc < 4) {
+                    return 1;
+                }
+                try (java.io.FileInputStream inStream = new java.io.FileInputStream(args[1]);
+                     java.io.FileOutputStream outStream = new java.io.FileOutputStream(args[2])) {
+                    BaseFwx.fwxAesDecryptStream(inStream, outStream, args[3], useMaster);
+                } catch (java.io.IOException exc) {
+                    throw new RuntimeException("fwxAES stream decrypt failed", exc);
+                }
+                return 0;
+            case "fwxaes-live-enc":
+                if (argc < 4) {
+                    return 1;
+                }
+                try (java.io.FileInputStream inStream = new java.io.FileInputStream(args[1]);
+                     java.io.FileOutputStream outStream = new java.io.FileOutputStream(args[2])) {
+                    BaseFwx.fwxAesLiveEncryptStream(inStream, outStream, args[3], useMaster);
+                } catch (java.io.IOException exc) {
+                    throw new RuntimeException("fwxAES live encrypt failed", exc);
+                }
+                return 0;
+            case "fwxaes-live-dec":
+                if (argc < 4) {
+                    return 1;
+                }
+                try (java.io.FileInputStream inStream = new java.io.FileInputStream(args[1]);
+                     java.io.FileOutputStream outStream = new java.io.FileOutputStream(args[2])) {
+                    BaseFwx.fwxAesLiveDecryptStream(inStream, outStream, args[3], useMaster);
+                } catch (java.io.IOException exc) {
+                    throw new RuntimeException("fwxAES live decrypt failed", exc);
+                }
+                return 0;
+            default:
+                return 1;
         }
     }
 
@@ -1574,186 +477,5 @@ public final class BaseFwxCli {
         System.out.println("  bench-b512file <file> <password> [--use-master|--no-master]");
         System.out.println("  bench-pb512file <file> <password> [--use-master|--no-master]");
         System.out.println("  bench-jmg <media> <password> [--use-master|--no-master]");
-    }
-
-    private static KfmArgs parseKfmArgs(String[] args, int startIndex) {
-        KfmArgs parsed = new KfmArgs();
-        java.util.List<String> positional = new java.util.ArrayList<>();
-        for (int i = startIndex; i < args.length; i++) {
-            String arg = args[i];
-            if ("--no-master".equalsIgnoreCase(arg) || "--use-master".equalsIgnoreCase(arg)) {
-                continue;
-            }
-            if ("--bw".equalsIgnoreCase(arg)) {
-                parsed.bwMode = true;
-                continue;
-            }
-            if ("-o".equalsIgnoreCase(arg) || "--out".equalsIgnoreCase(arg)) {
-                if (i + 1 >= args.length) {
-                    throw new IllegalArgumentException("Missing output value");
-                }
-                parsed.output = new File(args[++i]);
-                continue;
-            }
-            positional.add(arg);
-        }
-        if (positional.isEmpty()) {
-            throw new IllegalArgumentException("Missing input path");
-        }
-        parsed.input = new File(positional.get(0));
-        if (parsed.output == null && positional.size() >= 2) {
-            parsed.output = new File(positional.get(1));
-        }
-        if (positional.size() > 2) {
-            throw new IllegalArgumentException("Too many kFM arguments");
-        }
-        return parsed;
-    }
-
-    private static JmgArgs parseJmgArgs(String[] args, int startIndex) {
-        JmgArgs parsed = new JmgArgs();
-        java.util.List<String> positional = new java.util.ArrayList<>();
-        for (int i = startIndex; i < args.length; i++) {
-            String arg = args[i];
-            if ("--keep-meta".equalsIgnoreCase(arg)) {
-                parsed.keepMeta = true;
-                continue;
-            }
-            if ("--keep-input".equalsIgnoreCase(arg)) {
-                parsed.keepInput = true;
-                continue;
-            }
-            if ("--no-archive".equalsIgnoreCase(arg)) {
-                parsed.archiveOriginal = false;
-                continue;
-            }
-            if ("--no-master".equalsIgnoreCase(arg) || "--use-master".equalsIgnoreCase(arg)) {
-                continue;
-            }
-            if ("-p".equalsIgnoreCase(arg) || "--password".equalsIgnoreCase(arg)) {
-                if (i + 1 >= args.length) {
-                    throw new IllegalArgumentException("Missing password value");
-                }
-                parsed.password = args[++i];
-                continue;
-            }
-            if ("-o".equalsIgnoreCase(arg) || "--out".equalsIgnoreCase(arg)) {
-                if (i + 1 >= args.length) {
-                    throw new IllegalArgumentException("Missing output value");
-                }
-                parsed.output = new File(args[++i]);
-                continue;
-            }
-            positional.add(arg);
-        }
-        if (positional.isEmpty()) {
-            throw new IllegalArgumentException("Missing input path");
-        }
-        parsed.input = new File(positional.get(0));
-        if (parsed.output == null) {
-            if (positional.size() >= 3) {
-                parsed.output = new File(positional.get(1));
-                if (parsed.password == null || parsed.password.isEmpty()) {
-                    parsed.password = positional.get(2);
-                }
-                if (positional.size() > 3) {
-                    throw new IllegalArgumentException("Too many arguments for jMG command");
-                }
-            } else if (positional.size() == 2) {
-                if (parsed.password == null || parsed.password.isEmpty()) {
-                    parsed.password = positional.get(1);
-                } else {
-                    parsed.output = new File(positional.get(1));
-                }
-            }
-        } else if (positional.size() >= 2) {
-            if (parsed.password == null || parsed.password.isEmpty()) {
-                parsed.password = positional.get(1);
-            }
-            if (positional.size() > 2) {
-                throw new IllegalArgumentException("Too many arguments for jMG command");
-            }
-        }
-        if (parsed.output == null) {
-            parsed.output = parsed.input;
-        }
-        if (parsed.password == null) {
-            parsed.password = "";
-        }
-        return parsed;
-    }
-
-    private static An7Args parseAn7Args(String[] args, int startIndex, boolean allowForceAny) {
-        An7Args parsed = new An7Args();
-        java.util.List<String> positional = new java.util.ArrayList<>();
-        for (int i = startIndex; i < args.length; i++) {
-            String arg = args[i];
-            if ("--keep-input".equalsIgnoreCase(arg)) {
-                parsed.keepInput = true;
-                continue;
-            }
-            if ("--force-any".equalsIgnoreCase(arg)) {
-                if (!allowForceAny) {
-                    throw new IllegalArgumentException("--force-any is only valid for an7");
-                }
-                parsed.forceAny = true;
-                continue;
-            }
-            if ("-p".equalsIgnoreCase(arg) || "--password".equalsIgnoreCase(arg)) {
-                if (i + 1 >= args.length) {
-                    throw new IllegalArgumentException("Missing password value");
-                }
-                parsed.password = args[++i];
-                continue;
-            }
-            if ("-o".equalsIgnoreCase(arg) || "--out".equalsIgnoreCase(arg)) {
-                if (i + 1 >= args.length) {
-                    throw new IllegalArgumentException("Missing output value");
-                }
-                parsed.output = new File(args[++i]);
-                continue;
-            }
-            if ("--no-master".equalsIgnoreCase(arg) || "--use-master".equalsIgnoreCase(arg)) {
-                continue;
-            }
-            positional.add(arg);
-        }
-        if (positional.isEmpty()) {
-            throw new IllegalArgumentException("Missing input path");
-        }
-        parsed.input = new File(positional.get(0));
-        if (parsed.output == null && positional.size() >= 2) {
-            parsed.output = new File(positional.get(1));
-        }
-        if (parsed.password == null || parsed.password.isEmpty()) {
-            throw new IllegalArgumentException("Password is required");
-        }
-        if (positional.size() > 2) {
-            throw new IllegalArgumentException("Too many arguments");
-        }
-        return parsed;
-    }
-
-    private static final class KfmArgs {
-        File input;
-        File output;
-        boolean bwMode = false;
-    }
-
-    private static final class JmgArgs {
-        File input;
-        File output;
-        String password = "";
-        boolean keepMeta = false;
-        boolean keepInput = false;
-        boolean archiveOriginal = true;
-    }
-
-    private static final class An7Args {
-        File input;
-        File output;
-        String password = "";
-        boolean keepInput = false;
-        boolean forceAny = false;
     }
 }

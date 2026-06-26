@@ -14,7 +14,8 @@ option(BASEFWX_REQUIRE_ARGON2 "Require libargon2 for Argon2id support" ON)
 option(BASEFWX_REQUIRE_OQS "Require liboqs for ML-KEM-768 support" OFF)
 option(BASEFWX_OQS_STATIC "Prefer static liboqs when available" OFF)
 option(BASEFWX_REQUIRE_LZMA "Require liblzma for xz support" OFF)
-option(BASEFWX_NATIVE_OPT "Enable -march/-mtune native optimizations" ON)
+option(BASEFWX_NATIVE_OPT "Enable -march/-mtune native optimizations" OFF)
+option(BASEFWX_FAST_MATH "Enable -ffast-math and loop/inline opts in Release" OFF)
 option(BASEFWX_USE_VENDOR_DEPS "Prefer vendored liboqs/argon2 when available" ON)
 set(BASEFWX_USE_VENDOR_OQS "${BASEFWX_USE_VENDOR_DEPS}" CACHE BOOL "Prefer vendored liboqs when available")
 set(BASEFWX_USE_VENDOR_ARGON2 "${BASEFWX_USE_VENDOR_DEPS}" CACHE BOOL "Prefer vendored libargon2 when available")
@@ -50,13 +51,14 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
             $<$<CONFIG:Release>:-mtune=native>
         )
     endif()
-    # Performance optimizations
-    add_compile_options(
-        $<$<CONFIG:Release>:-ffast-math>
-        $<$<CONFIG:Release>:-funroll-loops>
-        $<$<CONFIG:Release>:-finline-functions>
-        $<$<CONFIG:Release>:-fomit-frame-pointer>
-    )
+    if(BASEFWX_FAST_MATH)
+        add_compile_options(
+            $<$<CONFIG:Release>:-ffast-math>
+            $<$<CONFIG:Release>:-funroll-loops>
+            $<$<CONFIG:Release>:-finline-functions>
+            $<$<CONFIG:Release>:-fomit-frame-pointer>
+        )
+    endif()
     add_compile_options($<$<CONFIG:Release>:-flto>)
     add_link_options($<$<CONFIG:Release>:-flto>)
 elseif(MSVC)
@@ -65,8 +67,10 @@ elseif(MSVC)
         $<$<CONFIG:Release>:/Oi>
         $<$<CONFIG:Release>:/Ot>
         $<$<CONFIG:Release>:/Oy>
-        $<$<CONFIG:Release>:/fp:fast>
     )
+    if(BASEFWX_FAST_MATH)
+        add_compile_options($<$<CONFIG:Release>:/fp:fast>)
+    endif()
     if(BASEFWX_WIN_IPO)
         add_compile_options($<$<CONFIG:Release>:/GL>)
         add_link_options($<$<CONFIG:Release>:/LTCG>)

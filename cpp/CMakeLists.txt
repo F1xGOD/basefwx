@@ -606,6 +606,7 @@ add_library(basefwxcpp
     src/obfuscation.cpp
     src/metadata.cpp
     src/filecodec.cpp
+    src/filecodec_impl.cpp
     src/system_info.cpp
 )
 

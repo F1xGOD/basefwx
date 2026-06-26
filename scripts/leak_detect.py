@@ -80,7 +80,13 @@ def _hash512_op() -> None:
 
 
 def _uhash513_op() -> None:
-    basefwx.uhash513("leak-detector probe payload")
+    # uhash513 is intentionally deprecated, but still included here so
+    # retirement does not hide leak regressions in the compatibility path.
+    import warnings as _w
+
+    with _w.catch_warnings():
+        _w.simplefilter("ignore", category=DeprecationWarning)
+        basefwx.uhash513("leak-detector probe payload")
 
 
 def _b64_op() -> None:
@@ -122,20 +128,20 @@ CODECS: dict[str, Tuple[Callable[[], None], int]] = {
 }
 
 
-def _slope_kib_per_iter(samples: list[int]) -> float:
-    """Linear-regression slope of RSS over iteration index.
+def _slope_kib_per_iter(samples: list[tuple[int, int]]) -> float:
+    """Linear-regression slope of RSS over actual iteration number.
 
-    Inputs: list of RSS samples (KiB) recorded at evenly-spaced
-    intervals. Returns the slope in KiB / iteration. A positive slope
+    Inputs: list of (iteration, RSS KiB) samples. Returns the slope in
+    KiB / iteration. A positive slope
     means RSS grows over time; a value at or near zero means stable.
     """
     n = len(samples)
     if n < 2:
         return 0.0
-    mean_x = (n - 1) / 2.0
-    mean_y = sum(samples) / n
-    num = sum((i - mean_x) * (samples[i] - mean_y) for i in range(n))
-    den = sum((i - mean_x) ** 2 for i in range(n))
+    mean_x = sum(point[0] for point in samples) / n
+    mean_y = sum(point[1] for point in samples) / n
+    num = sum((iteration - mean_x) * (rss - mean_y) for iteration, rss in samples)
+    den = sum((iteration - mean_x) ** 2 for iteration, _ in samples)
     if den == 0:
         return 0.0
     return num / den
@@ -151,20 +157,20 @@ def _run_one(name: str, op: Callable[[], None], iters: int,
     tracemalloc.start(10)
     baseline_snap = tracemalloc.take_snapshot()
     baseline_rss = _rss_kib()
-    samples: list[int] = []
+    samples: list[tuple[int, int]] = [(0, baseline_rss)]
 
     for i in range(iters):
         op()
         if (i + 1) % sample_every == 0:
-            samples.append(_rss_kib())
+            samples.append((i + 1, _rss_kib()))
 
     gc.collect()
     end_snap = tracemalloc.take_snapshot()
     end_rss = _rss_kib()
     tracemalloc.stop()
 
-    if not samples:
-        samples = [baseline_rss, end_rss]
+    if samples[-1][0] != iters:
+        samples.append((iters, end_rss))
 
     slope = _slope_kib_per_iter(samples)
     top_diffs = end_snap.compare_to(baseline_snap, "lineno")[:5]

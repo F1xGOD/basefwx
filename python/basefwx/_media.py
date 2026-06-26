@@ -6,6 +6,8 @@
 
 from __future__ import annotations
 
+import warnings
+
 
 class _LazyEngine:
     """Resolve basefwx attributes after legacy finishes loading."""
@@ -194,7 +196,7 @@ class ImageCipher:
             header_len, _, _, material_override, _ = header
             if header_len != len(key_blob):
                 raise ValueError('Invalid JMG key trailer payload')
-            _warnings_module.warn('jMG no-archive payload detected; restored media may not be byte-identical to the original input.', UserWarning)
+            warnings.warn('jMG no-archive payload detected; restored media may not be byte-identical to the original input.', UserWarning)
         mask, rotations, perm, material = basefwx.ImageCipher._image_primitives(password, num_pixels, channels, material=material_override)
         inv_perm = basefwx.np.empty_like(perm)
         inv_perm[perm] = basefwx.np.arange(num_pixels, dtype=perm.dtype)
@@ -2282,7 +2284,7 @@ class MediaCipher:
             local_reporter = basefwx._ProgressReporter(1)
             created_reporter = True
         if not archive_original:
-            _warnings_module.warn('jMG archive_original=False omits embedded original payload; decrypted output may not be byte-identical to the input.', UserWarning)
+            warnings.warn('jMG archive_original=False omits embedded original payload; decrypted output may not be byte-identical to the input.', UserWarning)
         try:
             hw_plan: 'basefwx.typing.Optional[dict[str, basefwx.typing.Any]]' = None
 
@@ -2420,7 +2422,7 @@ class MediaCipher:
                         if trailer_key_info is not None:
                             base_key_from_trailer, trailer_profile = trailer_key_info
                     if base_key_from_trailer is not None:
-                        _warnings_module.warn('jMG no-archive payload detected; restored media may not be byte-identical to the original input.', UserWarning)
+                        warnings.warn('jMG no-archive payload detected; restored media may not be byte-identical to the original input.', UserWarning)
                     try:
                         info = basefwx.MediaCipher._probe_streams(path_obj)
                     except Exception:

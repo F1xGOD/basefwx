@@ -596,6 +596,12 @@ add_library(basefwxcpp
     src/crypto.cpp
     src/codec.cpp
     src/imagecipher.cpp
+    src/imagecipher_common.cpp
+    src/imagecipher_image.cpp
+    src/imagecipher_media.cpp
+    src/imagecipher_media_support.cpp
+    src/imagecipher_media_transform.cpp
+    src/imagecipher_trailer.cpp
     src/ec.cpp
     src/pb512.cpp
     src/fwxaes.cpp

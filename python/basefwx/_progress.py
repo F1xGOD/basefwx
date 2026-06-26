@@ -261,11 +261,11 @@ class _ProgressReporter:
         temp_avg = sum(temp_values) / len(temp_values) if temp_values else None
         parts: list[str] = []
         if cpu_pct is not None:
-            parts.append(f'{self._color_label('CPU')} {cpu_pct:.0f}%')
+            parts.append(f"{self._color_label('CPU')} {cpu_pct:.0f}%")
         if gpu_pct is not None and gpu_pct > 0.5:
-            parts.append(f'{self._color_label('GPU')} {gpu_pct:.0f}%')
+            parts.append(f"{self._color_label('GPU')} {gpu_pct:.0f}%")
         if ram_pct is not None:
-            parts.append(f'{self._color_label('RAM')} {ram_pct:.0f}%')
+            parts.append(f"{self._color_label('RAM')} {ram_pct:.0f}%")
         if temp_avg is not None:
             parts.append(self._color_temp(temp_avg))
         if not parts:
@@ -299,8 +299,8 @@ class _ProgressReporter:
         if filled >= width and fraction >= 1.0:
             bar = '❚' * width
             if self._has_colors:
-                return f'({self._green}{'❚' * width}{self._reset})'
-            return f'({'❚' * width})'
+                return f"({self._green}{'❚' * width}{self._reset})"
+            return f"({'❚' * width})"
         else:
             filled_part = '❚' * filled
             empty_part = ' ' * (width - filled)

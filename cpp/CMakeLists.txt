@@ -593,6 +593,8 @@ add_library(basefwxcpp
     src/cli_colors.cpp
     src/format.cpp
     src/basefwx.cpp
+    src/basefwx_kfm.cpp
+    src/basefwx_kfm_carriers.cpp
     src/crypto.cpp
     src/codec.cpp
     src/imagecipher.cpp

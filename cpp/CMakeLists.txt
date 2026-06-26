@@ -607,6 +607,8 @@ add_library(basefwxcpp
     src/metadata.cpp
     src/filecodec.cpp
     src/filecodec_impl.cpp
+    src/filecodec_b512.cpp
+    src/filecodec_pb512.cpp
     src/system_info.cpp
 )
 

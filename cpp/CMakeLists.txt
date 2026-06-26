@@ -696,11 +696,21 @@ endif()
 if(BASEFWX_BUILD_CLI)
     add_executable(basefwx_cpp
         src/main.cpp
+        src/cli/globals.cpp
+        src/cli/password.cpp
+        src/cli/output.cpp
+        src/cli/bench.cpp
+        src/cli/inspect.cpp
+        src/cli/telemetry.cpp
+        src/cli/options.cpp
     )
     add_dependencies(basefwx_cpp basefwx_cli_build_stamp)
     set_target_properties(basefwx_cpp PROPERTIES OUTPUT_NAME "basefwx")
     target_link_libraries(basefwx_cpp PRIVATE basefwxcpp)
-    target_include_directories(basefwx_cpp PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated")
+    target_include_directories(basefwx_cpp PRIVATE
+        "${CMAKE_CURRENT_BINARY_DIR}/generated"
+        "${CMAKE_CURRENT_SOURCE_DIR}/include"
+    )
 endif()
 
 # Optional JNI shared library that backs the Java FwxAESJNI implementation.

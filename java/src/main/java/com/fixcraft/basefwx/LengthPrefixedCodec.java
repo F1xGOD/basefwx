@@ -61,9 +61,9 @@ final class LengthPrefixedCodec {
 
         byte[] userBlob = new byte[0];
         if (pw.length > 0) {
-            int iters = FileCodecs.hardenPbkdf2Iterations(pw, kdfIterations);
+            int iters = FileCodecKdf.hardenPbkdf2Iterations(pw, kdfIterations);
             byte[] salt = Crypto.randomBytes(Constants.USER_KDF_SALT_SIZE);
-            String label = FileCodecs.resolveKdfLabel(kdfLabel);
+            String label = FileCodecKdf.resolveKdfLabel(kdfLabel);
             if (!"pbkdf2".equals(label)) {
                 throw new UnsupportedKdfException(label, "Unsupported KDF label: " + label);
             }
@@ -115,7 +115,7 @@ final class LengthPrefixedCodec {
         boolean fastObf = "fast".equalsIgnoreCase(obfHint);
         String kdfHint = FileCodecs.metaValue(metadataBlob, "ENC-KDF");
         if (kdfHint.isEmpty()) {
-            kdfHint = FileCodecs.resolveUserKdfLabel();
+            kdfHint = FileCodecKdf.resolveUserKdfLabel();
         }
         int kdfIterHint = FileCodecs.parseMetadataInt(FileCodecs.metaValue(metadataBlob, "ENC-KDF-ITER"), Constants.USER_KDF_ITERATIONS);
 
@@ -139,11 +139,11 @@ final class LengthPrefixedCodec {
             }
             byte[] salt = Arrays.copyOfRange(userBlob, 0, Constants.USER_KDF_SALT_SIZE);
             byte[] wrapped = Arrays.copyOfRange(userBlob, Constants.USER_KDF_SALT_SIZE, userBlob.length);
-            String label = FileCodecs.resolveKdfLabel(kdfHint);
+            String label = FileCodecKdf.resolveKdfLabel(kdfHint);
             if (!"pbkdf2".equals(label)) {
                 throw new IllegalArgumentException("Unsupported KDF label: " + label);
             }
-            int iters = FileCodecs.hardenPbkdf2Iterations(pw, kdfIterHint);
+            int iters = FileCodecKdf.hardenPbkdf2Iterations(pw, kdfIterHint);
             byte[] userKey = Crypto.pbkdf2HmacSha256(pw, salt, iters, 32);
             ephemeralKey = Crypto.aesGcmDecrypt(userKey, wrapped, metadataBytes);
         } else {

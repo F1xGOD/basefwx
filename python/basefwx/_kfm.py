@@ -6,6 +6,8 @@
 
 from __future__ import annotations
 
+import warnings
+
 
 class _LazyEngine:
     """Resolve basefwx attributes after legacy finishes loading."""
@@ -100,7 +102,7 @@ def _kfm_is_image_ext(ext: str) -> bool:
 
 
 def _kfm_warn(message: str) -> None:
-    _warnings_module.warn(message, RuntimeWarning, stacklevel=3)
+    warnings.warn(message, RuntimeWarning, stacklevel=3)
 
 
 def _kfm_accel_mode() -> str:

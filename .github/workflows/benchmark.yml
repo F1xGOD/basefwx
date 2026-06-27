@@ -206,10 +206,6 @@ jobs:
           cp -f results/benchmarks-*.txt  website/results/
           cp -f results/java-backends-*.json website/results/ 2>/dev/null || true
 
-          python3 .github/scripts/prune_website_results.py \
-            --results-dir website/results \
-            --keep-tag "${BASEFWX_RELEASE_TAG:-}"
-
           # Maintain a small index of every benchmark snapshot the website knows
           # about, so the benchmark page can offer a history dropdown without
           # the user having to guess release tags.

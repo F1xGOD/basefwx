@@ -1,0 +1,194 @@
+{
+  "generated_at": "2026-03-19T08:28:38Z",
+  "release_tag": "v3.6.2",
+  "bench_iters": 3,
+  "bench_warmup": 1,
+  "bench_workers": 4,
+  "bench_parallel": "1",
+  "bench_all_cores": "1",
+  "bench_valid": "1",
+  "bench_fwxaes_mode": "par",
+  "bench_iters_profile": {
+    "light": 3,
+    "slow": 3,
+    "heavy": 3,
+    "file": 3
+  },
+  "bench_warmup_profile": {
+    "light": 5,
+    "heavy": 6,
+    "file": 1,
+    "file_java": 3
+  },
+  "baseline": "python",
+  "epsilon_ns": 1000000,
+  "bench_files": {
+    "bytes": "/home/runner/work/basefwx/basefwx/.tmp_basefwx_tests/orig/bench_bytes.bin",
+    "kfm": "/home/runner/work/basefwx/basefwx/.tmp_basefwx_tests/orig/kfm_payload.bin",
+    "text": "/home/runner/work/basefwx/basefwx/.tmp_basefwx_tests/orig/bench_text.txt",
+    "text_bytes": 2097152,
+    "text_slow_bytes": 524288,
+    "text_max_bytes": 2097152
+  },
+  "versions": {
+    "python": "",
+    "pypy": "",
+    "cpp": "",
+    "java": ""
+  },
+  "overall": {
+    "python": {
+      "time_ns": 54789550728,
+      "baseline_ns": 54789550728,
+      "count": 17
+    },
+    "cpp": {
+      "time_ns": 12812837533,
+      "baseline_ns": 54789550728,
+      "count": 17
+    },
+    "java": {
+      "time_ns": 22083089988,
+      "baseline_ns": 54789550728,
+      "count": 17
+    }
+  },
+  "tests": [
+    {
+      "label": "fwxAES-light",
+      "times": {
+        "python": 239775513,
+        "cpp": 139504601,
+        "java": 1894960745
+      }
+    },
+    {
+      "label": "fwxAES",
+      "times": {
+        "python": 644703153,
+        "cpp": 543973072,
+        "java": 2171885515
+      }
+    },
+    {
+      "label": "fwxAES-live",
+      "times": {
+        "python": 383232837,
+        "cpp": 721329079,
+        "java": 721673139
+      }
+    },
+    {
+      "label": "b256",
+      "times": {
+        "python": 1837418723,
+        "cpp": 233368435,
+        "java": 275171642
+      }
+    },
+    {
+      "label": "b512",
+      "times": {
+        "python": 3165320436,
+        "cpp": 888227838,
+        "java": 535962179
+      }
+    },
+    {
+      "label": "pb512",
+      "times": {
+        "python": 3206839864,
+        "cpp": 888746987,
+        "java": 538819667
+      }
+    },
+    {
+      "label": "b64",
+      "times": {
+        "python": 20583139,
+        "cpp": 9297480,
+        "java": 13116175
+      }
+    },
+    {
+      "label": "a512",
+      "times": {
+        "python": 2830878889,
+        "cpp": 238925719,
+        "java": 282892181
+      }
+    },
+    {
+      "label": "n10",
+      "times": {
+        "python": 4118582155,
+        "cpp": 44410842,
+        "java": 72064181
+      }
+    },
+    {
+      "label": "hash512",
+      "times": {
+        "python": 5905989,
+        "cpp": 5174883,
+        "java": 6354515
+      }
+    },
+    {
+      "label": "uhash513",
+      "times": {
+        "python": 7630186,
+        "cpp": 6559480,
+        "java": 8478100
+      }
+    },
+    {
+      "label": "bi512",
+      "times": {
+        "python": 270761773,
+        "cpp": 121508814,
+        "java": 158418202
+      }
+    },
+    {
+      "label": "b1024",
+      "times": {
+        "python": 24733891151,
+        "cpp": 2824010525,
+        "java": 4779269132
+      }
+    },
+    {
+      "label": "b512file",
+      "times": {
+        "python": 5995082730,
+        "cpp": 2701825271,
+        "java": 4666141020
+      }
+    },
+    {
+      "label": "pb512file",
+      "times": {
+        "python": 6432632419,
+        "cpp": 3376379834,
+        "java": 5050693039
+      }
+    },
+    {
+      "label": "kFMe",
+      "times": {
+        "python": 432867098,
+        "cpp": 22913468,
+        "java": 343612006
+      }
+    },
+    {
+      "label": "kFAe",
+      "times": {
+        "python": 463444673,
+        "cpp": 46681205,
+        "java": 563578550
+      }
+    }
+  ]
+}

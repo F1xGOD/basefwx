@@ -22,10 +22,128 @@ import javax.crypto.Cipher;
 import javax.crypto.spec.GCMParameterSpec;
 import javax.crypto.spec.SecretKeySpec;
 
+import com.fixcraft.basefwx.plugin.BasefwxPlugin;
+import com.fixcraft.basefwx.plugin.BasefwxPluginException;
+import com.fixcraft.basefwx.plugin.BasefwxPluginFactory;
+import com.fixcraft.basefwx.plugin.BasefwxPluginRegistry;
+
 final class FwxAesCodec {
     private FwxAesCodec() {}
 
     static final int STREAM_CHUNK = 1 << 20;
+
+    static final class PluginBinding {
+        final BasefwxPlugin plugin;
+        final int position;
+        final byte[] config;
+
+        PluginBinding(BasefwxPlugin plugin, int position, byte[] config) {
+            this.plugin = plugin;
+            this.position = position;
+            this.config = config == null ? new byte[0] : config;
+        }
+    }
+
+    private static final class ParsedPluginTag {
+        final byte[] pluginId;
+        final int position;
+        final byte[] config;
+        final int totalLen;
+
+        ParsedPluginTag(byte[] pluginId, int position, byte[] config, int totalLen) {
+            this.pluginId = pluginId;
+            this.position = position;
+            this.config = config;
+            this.totalLen = totalLen;
+        }
+    }
+
+    static byte[] serializePluginTag(byte[] pluginId, int position, byte[] config) {
+        if (pluginId == null || pluginId.length != Constants.FWXAES_PLUGIN_ID_LEN) {
+            throw new IllegalArgumentException("plugin id must be 16 bytes");
+        }
+        byte[] cfg = config == null ? new byte[0] : config;
+        if (cfg.length > Constants.FWXAES_PLUGIN_MAX_CONFIG_LEN) {
+            throw new IllegalArgumentException("plugin config exceeds maximum");
+        }
+        byte[] out = new byte[Constants.FWXAES_PLUGIN_TAG_FIXED_LEN + cfg.length];
+        System.arraycopy(pluginId, 0, out, 0, Constants.FWXAES_PLUGIN_ID_LEN);
+        out[Constants.FWXAES_PLUGIN_ID_LEN] = (byte) position;
+        out[Constants.FWXAES_PLUGIN_ID_LEN + 1] = (byte) ((cfg.length >> 8) & 0xFF);
+        out[Constants.FWXAES_PLUGIN_ID_LEN + 2] = (byte) (cfg.length & 0xFF);
+        if (cfg.length > 0) {
+            System.arraycopy(cfg, 0, out, Constants.FWXAES_PLUGIN_TAG_FIXED_LEN, cfg.length);
+        }
+        return out;
+    }
+
+    static ParsedPluginTag parsePluginTag(byte[] blob, int offset) {
+        if (blob.length < offset + Constants.FWXAES_PLUGIN_TAG_FIXED_LEN) {
+            throw new IllegalArgumentException("fwxAES plugin tag truncated");
+        }
+        byte[] pluginId = Arrays.copyOfRange(blob, offset, offset + Constants.FWXAES_PLUGIN_ID_LEN);
+        int position = blob[offset + Constants.FWXAES_PLUGIN_ID_LEN] & 0xFF;
+        int cfgLen = ((blob[offset + Constants.FWXAES_PLUGIN_ID_LEN + 1] & 0xFF) << 8)
+            | (blob[offset + Constants.FWXAES_PLUGIN_ID_LEN + 2] & 0xFF);
+        if (cfgLen > Constants.FWXAES_PLUGIN_MAX_CONFIG_LEN) {
+            throw new IllegalArgumentException("plugin config length exceeds maximum");
+        }
+        if (blob.length < offset + Constants.FWXAES_PLUGIN_TAG_FIXED_LEN + cfgLen) {
+            throw new IllegalArgumentException("fwxAES plugin tag truncated");
+        }
+        byte[] config = cfgLen == 0
+            ? new byte[0]
+            : Arrays.copyOfRange(blob, offset + Constants.FWXAES_PLUGIN_TAG_FIXED_LEN,
+                offset + Constants.FWXAES_PLUGIN_TAG_FIXED_LEN + cfgLen);
+        return new ParsedPluginTag(pluginId, position, config,
+            Constants.FWXAES_PLUGIN_TAG_FIXED_LEN + cfgLen);
+    }
+
+    static BasefwxPlugin loadPluginFromTag(ParsedPluginTag tag) {
+        BasefwxPluginRegistry.discover();
+        BasefwxPluginFactory factory = BasefwxPluginRegistry.factoryFor(tag.pluginId);
+        if (factory == null) {
+            throw new IllegalArgumentException("fwxAES plugin not available for blob tag");
+        }
+        return factory.create(tag.config);
+    }
+
+    static byte[] pluginTransform(BasefwxPlugin plugin, byte[] data, int position, boolean inverse)
+            throws BasefwxPluginException {
+        int cap = plugin.maxOutputForInput(data.length);
+        byte[] out = new byte[cap];
+        int written = inverse
+            ? plugin.inverse(data, 0, data.length, out, 0)
+            : plugin.forward(data, 0, data.length, out, 0);
+        return Arrays.copyOf(out, written);
+    }
+
+    static byte[] assembleRawBlob(int algo, int kdf, int saltLenField, int ivLen, int field0, int ctLen,
+                                  byte[] pluginTag, byte[] headerPayload, byte[] iv, byte[] ciphertext) {
+        int total = 16 + (pluginTag == null ? 0 : pluginTag.length)
+            + headerPayload.length + iv.length + ciphertext.length;
+        byte[] out = new byte[total];
+        System.arraycopy(Constants.FWXAES_MAGIC, 0, out, 0, Constants.FWXAES_MAGIC.length);
+        out[4] = (byte) algo;
+        out[5] = (byte) kdf;
+        out[6] = (byte) saltLenField;
+        out[7] = (byte) ivLen;
+        BaseFwxUtil.writeU32(out, 8, field0);
+        BaseFwxUtil.writeU32(out, 12, ctLen);
+        int offset = 16;
+        if (pluginTag != null && pluginTag.length > 0) {
+            System.arraycopy(pluginTag, 0, out, offset, pluginTag.length);
+            offset += pluginTag.length;
+        }
+        if (headerPayload.length > 0) {
+            System.arraycopy(headerPayload, 0, out, offset, headerPayload.length);
+            offset += headerPayload.length;
+        }
+        System.arraycopy(iv, 0, out, offset, iv.length);
+        offset += iv.length;
+        System.arraycopy(ciphertext, 0, out, offset, ciphertext.length);
+        return out;
+    }
 
     static byte[] fwxAesEncryptRaw(byte[] plaintext, String password, boolean useMaster) {
         if (plaintext == null) {
@@ -36,6 +154,11 @@ final class FwxAesCodec {
     }
 
     static byte[] fwxAesEncryptRawBytes(byte[] plaintext, byte[] passwordBytes, boolean useMaster) {
+        return fwxAesEncryptRawBytes(plaintext, passwordBytes, useMaster, null);
+    }
+
+    static byte[] fwxAesEncryptRawBytes(byte[] plaintext, byte[] passwordBytes, boolean useMaster,
+                                        PluginBinding binding) {
         if (plaintext == null) {
             throw new IllegalArgumentException("fwxAES_encrypt_raw expects bytes");
         }
@@ -43,6 +166,23 @@ final class FwxAesCodec {
         if (!useMaster && pw.length == 0) {
             throw new IllegalArgumentException("Password required when master key usage is disabled");
         }
+        boolean usePlugin = binding != null && binding.plugin != null;
+        byte[] workPlaintext = plaintext;
+        byte[] pluginTag = new byte[0];
+        if (usePlugin) {
+            if ((binding.plugin.supportedPositions() & binding.position) == 0) {
+                throw new IllegalArgumentException("plugin does not support requested position");
+            }
+            pluginTag = serializePluginTag(binding.plugin.pluginId(), binding.position, binding.config);
+            if (binding.position == BasefwxPlugin.Position.PRE_AEAD) {
+                try {
+                    workPlaintext = pluginTransform(binding.plugin, plaintext, binding.position, false);
+                } catch (BasefwxPluginException exc) {
+                    throw new IllegalStateException("plugin forward failed", exc);
+                }
+            }
+        }
+        int algo = usePlugin ? Constants.FWXAES_ALGO_PLUGIN : Constants.FWXAES_ALGO;
         boolean hasPassword = pw.length > 0;
         boolean useWrap = false;
         byte[] keyHeader = new byte[0];
@@ -75,39 +215,42 @@ final class FwxAesCodec {
         if (useWrap) {
             byte[] key = Crypto.hkdfSha256(maskKey, Constants.FWXAES_KEY_INFO, Constants.FWXAES_KEY_LEN);
             try {
-                int ctLen = plaintext.length + Constants.AEAD_TAG_LEN;
-                byte[] out = new byte[16 + keyHeader.length + iv.length + ctLen];
-                System.arraycopy(Constants.FWXAES_MAGIC, 0, out, 0, Constants.FWXAES_MAGIC.length);
-                out[4] = (byte) Constants.FWXAES_ALGO;
-                out[5] = (byte) Constants.FWXAES_KDF_WRAP;
-                out[6] = 0;
-                out[7] = (byte) Constants.FWXAES_IV_LEN;
-                BaseFwxUtil.writeU32(out, 8, keyHeader.length);
-                BaseFwxUtil.writeU32(out, 12, ctLen);
-                int offset = 16;
-                if (keyHeader.length > 0) {
-                    System.arraycopy(keyHeader, 0, out, offset, keyHeader.length);
-                    offset += keyHeader.length;
-                }
-                System.arraycopy(iv, 0, out, offset, iv.length);
-                offset += iv.length;
+                int ctLen = workPlaintext.length + Constants.AEAD_TAG_LEN;
+                byte[] ciphertext = new byte[ctLen];
                 int written = Crypto.aesGcmEncryptWithIvInto(
                     key,
                     iv,
-                    plaintext,
+                    workPlaintext,
                     0,
-                    plaintext.length,
-                    out,
-                    offset,
+                    workPlaintext.length,
+                    ciphertext,
+                    0,
                     Constants.FWXAES_AAD
                 );
                 if (written != ctLen) {
                     throw new IllegalStateException("fwxAES encrypt length mismatch");
                 }
-                return out;
+                if (usePlugin && binding.position == BasefwxPlugin.Position.POST_AEAD) {
+                    try {
+                        ciphertext = pluginTransform(binding.plugin, ciphertext, binding.position, false);
+                    } catch (BasefwxPluginException exc) {
+                        throw new IllegalStateException("plugin forward failed", exc);
+                    }
+                    ctLen = ciphertext.length;
+                }
+                return assembleRawBlob(
+                    algo,
+                    Constants.FWXAES_KDF_WRAP,
+                    0,
+                    Constants.FWXAES_IV_LEN,
+                    keyHeader.length,
+                    ctLen,
+                    pluginTag,
+                    keyHeader,
+                    iv,
+                    ciphertext
+                );
             } finally {
-                // Mirror C++'s SecretGuard discipline: wipe the AES key
-                // and the wrap mask before the buffers escape into GC.
                 Arrays.fill(key, (byte) 0);
                 if (maskKey.length > 0) {
                     Arrays.fill(maskKey, (byte) 0);
@@ -119,34 +262,41 @@ final class FwxAesCodec {
         int iters = fwxaesIterations(pw);
         byte[] key = Crypto.pbkdf2HmacSha256(pw, salt, iters, Constants.FWXAES_KEY_LEN);
         try {
-            int ctLen = plaintext.length + Constants.AEAD_TAG_LEN;
-            byte[] out = new byte[16 + salt.length + iv.length + ctLen];
-            System.arraycopy(Constants.FWXAES_MAGIC, 0, out, 0, Constants.FWXAES_MAGIC.length);
-            out[4] = (byte) Constants.FWXAES_ALGO;
-            out[5] = (byte) Constants.FWXAES_KDF_PBKDF2;
-            out[6] = (byte) Constants.FWXAES_SALT_LEN;
-            out[7] = (byte) Constants.FWXAES_IV_LEN;
-            BaseFwxUtil.writeU32(out, 8, iters);
-            BaseFwxUtil.writeU32(out, 12, ctLen);
-            int offset = 16;
-            System.arraycopy(salt, 0, out, offset, salt.length);
-            offset += salt.length;
-            System.arraycopy(iv, 0, out, offset, iv.length);
-            offset += iv.length;
+            int ctLen = workPlaintext.length + Constants.AEAD_TAG_LEN;
+            byte[] ciphertext = new byte[ctLen];
             int written = Crypto.aesGcmEncryptWithIvInto(
                 key,
                 iv,
-                plaintext,
+                workPlaintext,
                 0,
-                plaintext.length,
-                out,
-                offset,
+                workPlaintext.length,
+                ciphertext,
+                0,
                 Constants.FWXAES_AAD
             );
             if (written != ctLen) {
                 throw new IllegalStateException("fwxAES encrypt length mismatch");
             }
-            return out;
+            if (usePlugin && binding.position == BasefwxPlugin.Position.POST_AEAD) {
+                try {
+                    ciphertext = pluginTransform(binding.plugin, ciphertext, binding.position, false);
+                } catch (BasefwxPluginException exc) {
+                    throw new IllegalStateException("plugin forward failed", exc);
+                }
+                ctLen = ciphertext.length;
+            }
+            return assembleRawBlob(
+                algo,
+                Constants.FWXAES_KDF_PBKDF2,
+                Constants.FWXAES_SALT_LEN,
+                Constants.FWXAES_IV_LEN,
+                iters,
+                ctLen,
+                pluginTag,
+                salt,
+                iv,
+                ciphertext
+            );
         } finally {
             Arrays.fill(key, (byte) 0);
         }
@@ -180,13 +330,35 @@ final class FwxAesCodec {
         int kdf = blob[5] & 0xFF;
         int saltLen = blob[6] & 0xFF;
         int ivLen = blob[7] & 0xFF;
-        if (algo != Constants.FWXAES_ALGO
-            || (kdf != Constants.FWXAES_KDF_PBKDF2 && kdf != Constants.FWXAES_KDF_WRAP)) {
+        if (algo != Constants.FWXAES_ALGO && algo != Constants.FWXAES_ALGO_PLUGIN) {
+            throw new IllegalArgumentException("fwxAES unsupported algo/kdf");
+        }
+        if (kdf != Constants.FWXAES_KDF_PBKDF2 && kdf != Constants.FWXAES_KDF_WRAP) {
             throw new IllegalArgumentException("fwxAES unsupported algo/kdf");
         }
         int iters = BaseFwxUtil.readU32(blob, 8);
         int ctLen = BaseFwxUtil.readU32(blob, 12);
         int offset = 16;
+        BasefwxPlugin plugin = null;
+        int pluginPosition = 0;
+        if (algo == Constants.FWXAES_ALGO_PLUGIN) {
+            ParsedPluginTag tag = parsePluginTag(blob, offset);
+            offset += tag.totalLen;
+            plugin = loadPluginFromTag(tag);
+            pluginPosition = tag.position;
+        }
+
+        java.util.function.Function<byte[], byte[]> finishPlaintext = plain -> {
+            if (algo != Constants.FWXAES_ALGO_PLUGIN
+                || pluginPosition != BasefwxPlugin.Position.PRE_AEAD) {
+                return plain;
+            }
+            try {
+                return pluginTransform(plugin, plain, pluginPosition, true);
+            } catch (BasefwxPluginException exc) {
+                throw new IllegalStateException("plugin inverse failed", exc);
+            }
+        };
         if (kdf == Constants.FWXAES_KDF_WRAP) {
             int headerLen = iters;
             if (blob.length < offset + headerLen + ivLen + ctLen) {
@@ -196,6 +368,16 @@ final class FwxAesCodec {
             offset += headerLen;
             byte[] iv = Arrays.copyOfRange(blob, offset, offset + ivLen);
             offset += ivLen;
+            byte[] ciphertext = Arrays.copyOfRange(blob, offset, offset + ctLen);
+            if (algo == Constants.FWXAES_ALGO_PLUGIN
+                && pluginPosition == BasefwxPlugin.Position.POST_AEAD) {
+                try {
+                    ciphertext = pluginTransform(plugin, ciphertext, pluginPosition, true);
+                    ctLen = ciphertext.length;
+                } catch (BasefwxPluginException exc) {
+                    throw new IllegalStateException("plugin inverse failed", exc);
+                }
+            }
             List<byte[]> parts = Format.unpackLengthPrefixed(header, 2);
             byte[] maskKey = KeyWrap.recoverMaskKey(
                 parts.get(0),
@@ -215,17 +397,17 @@ final class FwxAesCodec {
                 int written = Crypto.aesGcmDecryptWithIvInto(
                     key,
                     iv,
-                    blob,
-                    offset,
+                    ciphertext,
+                    0,
                     ctLen,
                     plain,
                     0,
                     Constants.FWXAES_AAD
                 );
                 if (written != plain.length) {
-                    return Arrays.copyOf(plain, Math.max(0, written));
+                    return finishPlaintext.apply(Arrays.copyOf(plain, Math.max(0, written)));
                 }
-                return plain;
+                return finishPlaintext.apply(plain);
             } finally {
                 // Mirror C++ SecretGuard: wipe AES key and wrap mask
                 // before they escape into GC.
@@ -245,6 +427,16 @@ final class FwxAesCodec {
         if (pw.length == 0) {
             throw new IllegalArgumentException("fwxAES password required for PBKDF2 payload");
         }
+        byte[] ciphertext = Arrays.copyOfRange(blob, offset, offset + ctLen);
+        if (algo == Constants.FWXAES_ALGO_PLUGIN
+            && pluginPosition == BasefwxPlugin.Position.POST_AEAD) {
+            try {
+                ciphertext = pluginTransform(plugin, ciphertext, pluginPosition, true);
+                ctLen = ciphertext.length;
+            } catch (BasefwxPluginException exc) {
+                throw new IllegalStateException("plugin inverse failed", exc);
+            }
+        }
         byte[] key = Crypto.pbkdf2HmacSha256(pw, salt, iters, Constants.FWXAES_KEY_LEN);
         try {
             if (ctLen < Constants.AEAD_TAG_LEN) {
@@ -254,17 +446,17 @@ final class FwxAesCodec {
             int written = Crypto.aesGcmDecryptWithIvInto(
                 key,
                 iv,
-                blob,
-                offset,
+                ciphertext,
+                0,
                 ctLen,
                 plain,
                 0,
                 Constants.FWXAES_AAD
             );
             if (written != plain.length) {
-                return Arrays.copyOf(plain, Math.max(0, written));
+                return finishPlaintext.apply(Arrays.copyOf(plain, Math.max(0, written)));
             }
-            return plain;
+            return finishPlaintext.apply(plain);
         } finally {
             Arrays.fill(key, (byte) 0);
         }

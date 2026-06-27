@@ -27,6 +27,10 @@ struct Options {
     bool use_master = false;
     bool force_legacy_pbkdf2 = false;
     basefwx::pb512::KdfOptions user_kdf{};
+    std::string plugin_path;
+    std::string plugin_id_hex;
+    std::uint8_t plugin_position = 0;
+    std::vector<std::uint8_t> plugin_config;
 };
 
 struct NormalizeOptions {
@@ -42,6 +46,7 @@ struct PackOptions {
 
 Bytes EncryptRaw(const Bytes& plaintext, const std::string& password, const Options& options = {});
 Bytes DecryptRaw(const Bytes& blob, const std::string& password, bool use_master = false);
+Bytes DecryptRaw(const Bytes& blob, const std::string& password, const Options& options);
 std::uint64_t EncryptStream(std::istream& source,
                             std::ostream& dest,
                             const std::string& password,
@@ -66,5 +71,10 @@ void DecryptFile(const std::string& path_in,
                  const std::string& path_out,
                  const std::string& password,
                  bool use_master = false);
+
+void DecryptFile(const std::string& path_in,
+                 const std::string& path_out,
+                 const std::string& password,
+                 const Options& options);
 
 }  // namespace basefwx::fwxaes

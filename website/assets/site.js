@@ -569,8 +569,9 @@ const loadVirusTotal = async () => {
     vtHashes.clear();
     vtFlags.clear();
     const toGuiLink = (file) => {
-      if (file.sha256) {
-        return `https://www.virustotal.com/gui/file/${file.sha256}`;
+      const vtId = file.scanned_sha256 || file.sha256;
+      if (vtId) {
+        return `https://www.virustotal.com/gui/file/${vtId}`;
       }
       if (file.item_url) {
         const match = file.item_url.match(/\/files\/([^/?]+)/);
@@ -595,6 +596,19 @@ const loadVirusTotal = async () => {
       const malicious = Number(stats.malicious ?? maliciousRaw);
       const suspicious = Number(stats.suspicious ?? suspiciousRaw);
       const undetected = Number(stats.undetected ?? 0);
+      const policy = data.policy || {};
+      const blockMalMin = Number(policy.block_malicious_min ?? 8);
+      const blockMalRatio = Number(policy.block_malicious_ratio ?? 0.15);
+      const blockSusMin = Number(policy.block_suspicious_min ?? 12);
+      const blockSusRatio = Number(policy.block_suspicious_ratio ?? 0.20);
+      const harmless = Number(stats.harmless ?? 0);
+      const completed = malicious + suspicious + undetected + harmless;
+      const malRatio = completed > 0 ? malicious / completed : 0;
+      const susRatio = completed > 0 ? suspicious / completed : 0;
+      const policyBlocked = file.policy_decision?.block === true;
+      const consensusHighRisk =
+        (malicious >= blockMalMin && malRatio >= blockMalRatio) ||
+        (suspicious >= blockSusMin && susRatio >= blockSusRatio);
       const pending = vtStatus !== "completed" && malicious === 0 && suspicious === 0 && undetected === 0;
       const ok = malicious === 0 && suspicious === 0 && undetected > 0;
       const fpOnly = knownFalsePositives.length > 0 &&
@@ -619,10 +633,10 @@ const loadVirusTotal = async () => {
         statusIcon = VT_OK_ICON;
         statusClass = "vt-check ok";
         statusLabel = "Known false positives only";
-      } else if (malicious >= 4 || suspicious >= 7) {
+      } else if (policyBlocked || consensusHighRisk) {
         statusIcon = VT_BAD_ICON;
         statusClass = "vt-check bad";
-        statusLabel = "VirusTotal high risk";
+        statusLabel = "VirusTotal consensus concern";
       } else if (ok) {
         statusIcon = VT_OK_ICON;
         statusClass = "vt-check ok";

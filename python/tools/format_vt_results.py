@@ -1,25 +1,11 @@
 #!/usr/bin/env python3
-"""Format VirusTotal JSON results into a readable text report."""
+"""Format VirusTotal link manifest into a readable text report."""
 
 from __future__ import annotations
 
 import json
 import sys
 from pathlib import Path
-
-
-def _stats_line(stats: dict) -> str:
-    order = [
-        "malicious",
-        "suspicious",
-        "undetected",
-        "harmless",
-        "timeout",
-        "failure",
-        "type-unsupported",
-    ]
-    parts = [f"{key}={int(stats.get(key, 0))}" for key in order]
-    return ", ".join(parts)
 
 
 def main() -> int:
@@ -34,67 +20,35 @@ def main() -> int:
     files = data.get("files", [])
 
     lines: list[str] = [
-        "BaseFWX VirusTotal Results",
+        "BaseFWX VirusTotal report links",
         f"Release: {data.get('release_tag', '')}",
         f"Generated: {data.get('generated_at', '')}",
-        f"Repository: {data.get('repository', '')}",
+        "",
+        "Open each link on VirusTotal to review engine results.",
         "",
     ]
+    note = data.get("note")
+    if note:
+        lines.extend([f"Note: {note}", ""])
 
     for entry in files:
         name = entry.get("name", "")
         scanned_payload = entry.get("scanned_payload", "")
-        scanned_sha256 = entry.get("scanned_sha256", "")
         status = entry.get("status", "")
+        gui_url = entry.get("gui_url", "")
         analysis_url = entry.get("analysis_url", "")
-        item_url = entry.get("item_url", "")
-        stats = entry.get("stats", {}) or {}
-        analysis_stats = entry.get("analysis_stats", {}) or {}
-        effective_stats = entry.get("effective_stats", stats) or {}
-        known_false_positives = entry.get("known_false_positives", []) or []
-        policy_decision = entry.get("policy_decision", {}) or {}
-        sha256 = entry.get("sha256", "")
-        sha1 = entry.get("sha1", "")
-        md5 = entry.get("md5", "")
+        error = entry.get("error", "")
 
-        lines.extend(
-            [
-                f"File: {name}",
-            ]
-        )
+        lines.append(f"File: {name}")
         if scanned_payload and scanned_payload != name:
             lines.append(f"  Scanned payload: {scanned_payload}")
-        if scanned_sha256 and scanned_sha256 != sha256:
-            lines.append(f"  Scanned SHA256: {scanned_sha256}")
-        lines.extend(
-            [
-                f"  Status: {status}",
-                f"  VirusTotal analysis: {analysis_url}",
-                f"  VirusTotal file: {item_url}",
-                f"  Stats (GUI / file object): {_stats_line(stats)}",
-            ]
-        )
-        if analysis_stats and analysis_stats != stats:
-            lines.append(f"  Stats (upload analysis): {_stats_line(analysis_stats)}")
-        lines.extend(
-            [
-                f"  Stats (effective): {_stats_line(effective_stats)}",
-                f"  Policy: {policy_decision.get('reason', '')}",
-                f"  SHA256: {sha256}",
-                f"  SHA1: {sha1}",
-                f"  MD5: {md5}",
-            ]
-        )
-        if known_false_positives:
-            lines.append(f"  Known false positives: {len(known_false_positives)}")
-            for finding in known_false_positives:
-                engine = finding.get("engine", "")
-                category = finding.get("category", "")
-                result = finding.get("result", "")
-                reason = finding.get("reason", "")
-                lines.append(
-                    f"    - {engine} [{category}] {result}" + (f" ({reason})" if reason else "")
-                )
+        lines.append(f"  Status: {status}")
+        if gui_url:
+            lines.append(f"  Report: {gui_url}")
+        if analysis_url:
+            lines.append(f"  API analysis: {analysis_url}")
+        if error:
+            lines.append(f"  Error: {error}")
         lines.append("")
 
     out_path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")

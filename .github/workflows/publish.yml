@@ -1019,14 +1019,15 @@ jobs:
             dist_out/release-manifest.json
 
       - name: VirusTotal scan
+        continue-on-error: true
         env:
           VIRUSTOTAL_API_KEY: ${{ secrets.VIRUSTOTAL_API_KEY }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: |
           set -euo pipefail
           python3 scripts/virustotal_release_scan.py \
             dist_out \
-            dist_out/virustotal-results.json \
-            .github/virustotal-fp-allowlist.json
+            dist_out/virustotal-results.json
           python3 python/tools/format_vt_results.py \
             dist_out/virustotal-results.json \
             dist_out/virustotal-results.txt

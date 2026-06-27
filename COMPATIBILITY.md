@@ -50,6 +50,28 @@ Do not describe Android "heavy" as equivalent to desktop "heavy" until
 the constants are reconciled and the resulting auth latency / memory
 use is benchmarked on the Android device class being targeted.
 
+### fwxAES plugin tag (new in 3.7.0)
+
+Plugin use is opt-in at encrypt time. When present, byte 4 of the FWX1
+header is `0x03` (`FWXAES_ALGO_PLUGIN`) instead of `0x01` / `0x02`.
+Immediately after the 16-byte fixed header:
+
+```
+plugin_id   16 bytes
+position     1 byte  (PRE_AEAD=1, POST_AEAD=2)
+config_len   2 bytes big-endian (max 65535; host caps at 64 KiB)
+config       config_len bytes
+```
+
+Constants are synced across C++ (`constants.hpp`), Java
+(`Constants.java`), and Python (`legacy.py`). Decrypt requires the same
+`plugin_id` loaded (embedded registry or `--plugin` path). `POS_RAW`
+is refused unless the plugin declares `CAP_SAFE_RAW_MODE`.
+
+**Backward compatibility:** blobs encrypted with 3.6.4 (no plugin tag,
+`algo=0x01`) decrypt unchanged on 3.7.0. Plugin-tagged blobs do not
+decrypt on 3.6.4 peers (unknown algo — fail closed).
+
 ### Master-key wrap: Java is EC-only
 
 The C++ and Python runtimes accept two kinds of `master_blob` in a

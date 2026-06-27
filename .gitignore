@@ -12,7 +12,7 @@ venv/
 **/.gradle/
 .idea/
 *.iml
-
+.cache
 # AI tools — per-machine state, not for the repo
 .claude/
 .codex/

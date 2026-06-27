@@ -6,17 +6,17 @@
 
 Compare: <https://github.com/F1xGOD/basefwx/compare/v3.6.4...v3.7.0>
 
-> **Release status (2026-06-26):** the `v3.7.0` git tag was **withdrawn**.
-> Do **not** publish a GitHub Release until the fwxAES/CLI plugin loader
-> and wire-format plugin tag land — that integration is why this is 3.7.0
-> and not 3.6.5. See [`PLUGIN_3.7.0_HANDOFF.md`](PLUGIN_3.7.0_HANDOFF.md).
+> **Release status (2026-06-26):** fwxAES/CLI plugin loader and wire-format
+> plugin tag are implemented on `main`. Tag `v3.7.0` only after remote
+> `test_all.sh` passes — see [`PLUGIN_3.7.0_HANDOFF.md`](PLUGIN_3.7.0_HANDOFF.md).
 
 > The audit-driven hardening that briefly sat under `[v3.6.5]` in working
 > trees is rolled into 3.7.0 alongside the new **blackbox plugin** ABI.
 > 3.6.5 was never tagged or published.
 
 ### Added
-- **Java SPI + Python plugin module (Profile A).** `com.fixcraft.basefwx.plugin` (ServiceLoader) and `basefwx.plugin` (pure Python + ctypes for native `.so`) ship with example plugins and `scripts/plugin-smoke.sh`. CLI/fwxAES loader, wire-format plugin tags, JNI bridge, and Profile B Java/Python parity are scoped for 3.7.x.
+- **Java SPI + Python plugin module (Profile A).** `com.fixcraft.basefwx.plugin` (ServiceLoader) and `basefwx.plugin` (pure Python + ctypes for native `.so`) ship with example plugins and `scripts/plugin-smoke.sh`.
+- **fwxAES/CLI plugin loader (Profile A).** C++ host loader (`plugin_loader.cpp`): `Registry::Find` → `dlopen` → ABI check → `init` → cached `capabilities()` → PRE/POST AEAD dispatch. Wire-format plugin tag (`algo=0x03`) written at encrypt time; decrypt fails closed without matching plugin. CLI flags: `--plugin <path>`, `--plugin-id <hex>`, `--plugin-pos pre|post`, `--plugin-config <file>`. Java/Python fwxAES raw paths mirror the tag layout. JNI bridge, Profile B Java/Python SPI parity, and `basefwx-plugin-verify` remain 3.7.x follow-ups.
 - **Keyed plugin path (`forward_keyed` / `inverse_keyed`).** Plugins can opt into a per-call `tweak` (host-supplied randomness or self-derived from external entropy) and a `host_secret` (host-derived from the user's password) threaded through the transform. This binds the plugin's output to user-secret context, so extracting the plugin `.so` and its static config does not let an attacker reproduce the transform offline. New `BASEFWX_PLUGIN_DEFINE_KEYED(...)` macro in `plugin.hpp` and `Capabilities()` method on the plugin class. Backwards-compatible — v1 plugins (deterministic `forward`/`inverse` only) continue to load and run. See `examples/plugins/aead-wrapped-keyed/` for the canonical shape (HKDF + AES-CTR + HMAC-SHA256 with constant-time tag compare).
 - **Plugin raw-mode position (`BASEFWX_PLUGIN_POS_RAW`).** Plugin transforms run without an AEAD layer above or below. The host structurally refuses this position unless the plugin declares `BASEFWX_PLUGIN_CAP_SAFE_RAW_MODE` in `capabilities()`. Intended for client→server protocols where the server holds the secret and rejects tampered blobs (THREAT_MODEL.md TM-4).
 - **Plugin capability bits.** `BASEFWX_PLUGIN_CAP_KEYED`, `BASEFWX_PLUGIN_CAP_SAFE_RAW_MODE`, `BASEFWX_PLUGIN_CAP_REQUIRES_TWEAK`, `BASEFWX_PLUGIN_CAP_REQUIRES_HOST_KEY`, `BASEFWX_PLUGIN_CAP_NONDETERMINISTIC`. Plugins self-declare what they need; the host fails calls closed when requirements are unmet (e.g. `tweak_len == 0` when `REQUIRES_TWEAK` is set).
@@ -68,7 +68,7 @@ Compare: <https://github.com/F1xGOD/basefwx/compare/v3.6.4...v3.7.0>
 - PBKDF2-32k second-chance branch in `keywrap.cpp::RecoverMaskKey`.
 
 ### Notes
-- Wire format byte-identical to 3.6.4. All blobs encrypted with 3.6.4 (any algorithm, any tier) decrypt unchanged.
+- Wire format byte-identical to 3.6.4 for blobs **without** a plugin tag. Plugin-tagged blobs use `algo=0x03` and require 3.7.0+ with the matching plugin loaded.
 - See [RELEASE-NOTES-3.7.0.md](RELEASE-NOTES-3.7.0.md) for the upgrade walkthrough.
 
 ## [v3.6.3] - 2026-03-19

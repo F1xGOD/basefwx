@@ -13,8 +13,14 @@ public final class Constants {
 
     public static final byte[] FWXAES_MAGIC = "FWX1".getBytes(StandardCharsets.US_ASCII);
     public static final int FWXAES_ALGO = 0x01;
+    public static final int FWXAES_ALGO_PLUGIN = 0x03;
     public static final int FWXAES_KDF_PBKDF2 = 0x01;
     public static final int FWXAES_KDF_WRAP = 0x02;
+    public static final int FWXAES_PLUGIN_ID_LEN = 16;
+    public static final int FWXAES_PLUGIN_CONFIG_LEN_BYTES = 2;
+    public static final int FWXAES_PLUGIN_TAG_FIXED_LEN =
+        FWXAES_PLUGIN_ID_LEN + 1 + FWXAES_PLUGIN_CONFIG_LEN_BYTES;
+    public static final int FWXAES_PLUGIN_MAX_CONFIG_LEN = 64 * 1024;
     public static final int FWXAES_SALT_LEN = 16;
     public static final int FWXAES_IV_LEN = 12;
     public static final int FWXAES_KEY_LEN = 32;

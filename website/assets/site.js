@@ -2,28 +2,6 @@ const repo = "F1xGOD/basefwx";
 const releaseApi = `https://api.github.com/repos/${repo}/releases/latest`;
 let latestReleaseTag = "";
 let latestReleaseData = null;
-const vtHashes = new Map();
-const vtFlags = new Map();
-const VT_OK_ICON = `
-  <svg class="vt-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 -960 960 960" aria-hidden="true">
-    <path d="M382-240 154-468l57-57 171 171 367-367 57 57-424 424Z" />
-  </svg>
-`;
-const VT_WARN_ICON = `
-  <svg class="vt-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 -960 960 960" aria-hidden="true">
-    <path d="m40-120 440-760 440 760H40Zm138-80h604L480-720 178-200Zm302-40q17 0 28.5-11.5T520-280q0-17-11.5-28.5T480-320q-17 0-28.5 11.5T440-280q0 17 11.5 28.5T480-240Zm-40-120h80v-200h-80v200Zm40-100Z" />
-  </svg>
-`;
-const VT_BAD_ICON = `
-  <svg class="vt-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 -960 960 960" aria-hidden="true">
-    <path d="M330-120 120-330v-300l210-210h300l210 210v300L630-120H330Zm36-190 114-114 114 114 56-56-114-114 114-114-56-56-114 114-114-114-56 56 114 114-114 114 56 56Zm-2 110h232l164-164v-232L596-760H364L200-596v232l164 164Zm116-280Z" />
-  </svg>
-`;
-const VT_HASH_ICON = `
-  <svg class="vt-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 -960 960 960" aria-hidden="true">
-    <path d="m840-234-80-80v-446q0-17 11.5-28.5T800-800q17 0 28.5 11.5T840-760v526ZM360-714l-80-80v-6q0-17 11.5-28.5T320-840q17 0 28.5 11.5T360-800v86Zm160 160-80-80v-246q0-17 11.5-28.5T480-920q17 0 28.5 11.5T520-880v326Zm160 81h-80v-367q0-17 11.5-28.5T640-880q17 0 28.5 11.5T680-840v367Zm37 343L360-487v224L212-367l157 229q5 8 14 13t19 5h278q10 0 19.5-2.5T717-130ZM402-40q-30 0-56-13.5T303-92L48-465l24-23q19-19 45-22t47 12l116 81v-150L27-820l57-57L876-85l-57 57-44-44q-20 15-44 23.5T680-40H402Zm137-268Zm61-165Z" />
-  </svg>
-`;
 const assetMap = {
   "linux-amd64": {
     bin: "basefwx-linux-amd64",
@@ -185,34 +163,6 @@ const setHashText = (selector, value) => {
     el.style.cursor = "default";
     el.onclick = null;
   }
-};
-
-const applyVtHashes = () => {
-  Object.entries(assetMap).forEach(([key, values]) => {
-    const match = vtHashes.get(values.bin);
-    setHashText(`${key}.sha256`, match?.sha256 || "Hash not available");
-    setHashText(`${key}.md5`, match?.md5 || "Hash not available");
-  });
-};
-
-const applyDownloadFlags = () => {
-  Object.entries(assetMap).forEach(([key, values]) => {
-    const flags = vtFlags.get(values.bin);
-    if (flags?.hashIssue) {
-      const download = document.querySelector(`[data-download="${key}"]`);
-      const sig = document.querySelector(`[data-asset="${key}.sig"]`);
-      if (download) {
-        download.href = "#";
-        download.classList.add("disabled");
-        download.setAttribute("title", "Download disabled due to hash mismatch");
-      }
-      if (sig) {
-        sig.href = "#";
-        sig.classList.add("disabled");
-        sig.setAttribute("title", "Signature disabled due to hash mismatch");
-      }
-    }
-  });
 };
 
 const formatNs = (ns, epsilon) => {
@@ -450,8 +400,8 @@ const loadRelease = async () => {
       const sigAsset = assetLookup.get(values.sig);
       setLink(`[data-download="${key}"]`, binAsset ? binAsset.browser_download_url : null);
       setLink(`[data-asset="${key}.sig"]`, sigAsset ? sigAsset.browser_download_url : null);
-      setHashText(`${key}.sha256`, "Awaiting VirusTotal");
-      setHashText(`${key}.md5`, "Awaiting VirusTotal");
+      setHashText(`${key}.sha256`, "Loading...");
+      setHashText(`${key}.md5`, "Loading...");
     });
     applyAssetLinks(assetLookup);
   } catch (err) {
@@ -562,16 +512,17 @@ const loadVirusTotal = async () => {
     const data = await response.json();
     const files = data.files || [];
 
-    summary.textContent = `Report generated ${new Date(data.generated_at).toLocaleString()} for ${data.release_tag || "latest"}`;
+    summary.textContent = `Links generated ${new Date(data.generated_at).toLocaleString()} for ${data.release_tag || "latest"}. Review each report on VirusTotal.`;
     summary.className = "status-pill ok";
 
     tableBody.innerHTML = "";
-    vtHashes.clear();
-    vtFlags.clear();
-    const toGuiLink = (file) => {
-      const vtId = file.scanned_sha256 || file.sha256;
-      if (vtId) {
-        return `https://www.virustotal.com/gui/file/${vtId}`;
+    const reportLink = (file) => {
+      if (file.gui_url) {
+        return file.gui_url;
+      }
+      const sha = file.scanned_sha256 || file.sha256;
+      if (sha) {
+        return `https://www.virustotal.com/gui/file/${sha}`;
       }
       if (file.item_url) {
         const match = file.item_url.match(/\/files\/([^/?]+)/);
@@ -584,96 +535,23 @@ const loadVirusTotal = async () => {
 
     files.forEach((file) => {
       const row = document.createElement("tr");
-      const link = toGuiLink(file);
-      const rawStats = file.stats || {};
-      const stats = file.effective_stats || rawStats;
-      const knownFalsePositives = Array.isArray(file.known_false_positives)
-        ? file.known_false_positives
-        : [];
-      const vtStatus = String(file.status || "").toLowerCase();
-      const maliciousRaw = Number(rawStats.malicious ?? 0);
-      const suspiciousRaw = Number(rawStats.suspicious ?? 0);
-      const malicious = Number(stats.malicious ?? maliciousRaw);
-      const suspicious = Number(stats.suspicious ?? suspiciousRaw);
-      const undetected = Number(stats.undetected ?? 0);
-      const policy = data.policy || {};
-      const blockMalMin = Number(policy.block_malicious_min ?? 8);
-      const blockMalRatio = Number(policy.block_malicious_ratio ?? 0.15);
-      const blockSusMin = Number(policy.block_suspicious_min ?? 12);
-      const blockSusRatio = Number(policy.block_suspicious_ratio ?? 0.20);
-      const harmless = Number(stats.harmless ?? 0);
-      const completed = malicious + suspicious + undetected + harmless;
-      const malRatio = completed > 0 ? malicious / completed : 0;
-      const susRatio = completed > 0 ? suspicious / completed : 0;
-      const policyBlocked = file.policy_decision?.block === true;
-      const consensusHighRisk =
-        (malicious >= blockMalMin && malRatio >= blockMalRatio) ||
-        (suspicious >= blockSusMin && susRatio >= blockSusRatio);
-      const pending = vtStatus !== "completed" && malicious === 0 && suspicious === 0 && undetected === 0;
-      const ok = malicious === 0 && suspicious === 0 && undetected > 0;
-      const fpOnly = knownFalsePositives.length > 0 &&
-        malicious === 0 &&
-        suspicious === 0 &&
-        (maliciousRaw > 0 || suspiciousRaw > 0);
-      const validSha256 = typeof file.sha256 === "string" && /^[a-f0-9]{64}$/i.test(file.sha256);
-      const validMd5 = typeof file.md5 === "string" && /^[a-f0-9]{32}$/i.test(file.md5);
-      const hashIssue = !validSha256 || !validMd5;
-      let statusIcon = VT_WARN_ICON;
-      let statusClass = "vt-check warn";
-      let statusLabel = "VirusTotal caution";
-      if (hashIssue) {
-        statusIcon = VT_HASH_ICON;
-        statusClass = "vt-check hash";
-        statusLabel = "Hash or signature metadata issue";
-      } else if (pending) {
-        statusIcon = VT_WARN_ICON;
-        statusClass = "vt-check warn";
-        statusLabel = "VirusTotal analysis pending";
-      } else if (fpOnly) {
-        statusIcon = VT_OK_ICON;
-        statusClass = "vt-check ok";
-        statusLabel = "Known false positives only";
-      } else if (policyBlocked || consensusHighRisk) {
-        statusIcon = VT_BAD_ICON;
-        statusClass = "vt-check bad";
-        statusLabel = "VirusTotal consensus concern";
-      } else if (ok) {
-        statusIcon = VT_OK_ICON;
-        statusClass = "vt-check ok";
-        statusLabel = "VirusTotal pass";
-      }
-
-      vtHashes.set(file.name || "", {
-        sha256: file.sha256 || "",
-        md5: file.md5 || ""
-      });
-      vtFlags.set(file.name || "", { hashIssue });
-
-      const countTitle =
-        maliciousRaw !== malicious || suspiciousRaw !== suspicious
-          ? `Raw VT: malicious=${maliciousRaw}, suspicious=${suspiciousRaw}. Known false positives filtered=${knownFalsePositives.length}.`
-          : "";
-
+      const link = reportLink(file);
+      const label = file.name || "";
+      const pending = file.status && file.status !== "submitted" && file.status !== "completed";
       row.innerHTML = `
-        <td class="mono">
-          <div class="vt-file-cell">
-            <span class="${statusClass}" aria-label="${statusLabel}" title="${statusLabel}">${statusIcon}</span>
-            ${file.name || ""}
-          </div>
-        </td>
-        <td title="${countTitle}">${malicious}</td>
-        <td title="${countTitle}">${suspicious}</td>
-        <td>${undetected}</td>
-        <td><a class="vt-btn" href="${link}" target="_blank" rel="noopener">View report</a></td>
+        <td class="mono">${label}</td>
+        <td>${
+          link
+            ? `<a class="vt-btn" href="${link}" target="_blank" rel="noopener">View on VirusTotal</a>`
+            : `<span class="mono">${pending ? "Pending" : "Unavailable"}</span>`
+        }</td>
       `;
       tableBody.appendChild(row);
     });
-    applyVtHashes();
-    applyDownloadFlags();
   } catch (err) {
-    summary.textContent = "VirusTotal results not available yet.";
+    summary.textContent = "VirusTotal links not available yet.";
     summary.className = "status-pill warn";
-    tableBody.innerHTML = "<tr><td colspan=\"5\" class=\"mono\">No results found.</td></tr>";
+    tableBody.innerHTML = "<tr><td colspan=\"2\" class=\"mono\">No results found.</td></tr>";
   }
 };
 

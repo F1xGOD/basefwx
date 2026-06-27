@@ -1,26 +1,11 @@
 {
   "schema": 1,
-  "latest": "new3.7test",
+  "latest": "v3.7.0",
   "snapshots": [
     {
-      "tag": "v3.6.4",
-      "results": "benchmarks-v3.6.4.json",
-      "txt": "benchmarks-v3.6.4.txt"
-    },
-    {
-      "tag": "v3.6.3",
-      "results": "benchmarks-v3.6.3.json",
-      "txt": "benchmarks-v3.6.3.txt"
-    },
-    {
-      "tag": "v3.6.2",
-      "results": "benchmarks-v3.6.2.json",
-      "txt": "benchmarks-v3.6.2.txt"
-    },
-    {
-      "tag": "v3.6.1",
-      "results": "benchmarks-v3.6.1.json",
-      "txt": "benchmarks-v3.6.1.txt"
+      "tag": "v3.7.0",
+      "results": "benchmarks-v3.7.0.json",
+      "txt": "benchmarks-v3.7.0.txt"
     },
     {
       "tag": "test-pre-fix-slow",
@@ -66,77 +51,6 @@
       "tag": "manual-20260208-031803",
       "results": "benchmarks-manual-20260208-031803.json",
       "txt": "benchmarks-manual-20260208-031803.txt"
-    },
-    {
-      "tag": "manual-20260108-160704",
-      "results": "benchmarks-manual-20260108-160704.json",
-      "txt": "benchmarks-manual-20260108-160704.txt"
-    },
-    {
-      "tag": "manual-20260108-151920",
-      "results": "benchmarks-manual-20260108-151920.json",
-      "txt": "benchmarks-manual-20260108-151920.txt"
-    },
-    {
-      "tag": "manual-20260108-121213",
-      "results": "benchmarks-manual-20260108-121213.json",
-      "txt": "benchmarks-manual-20260108-121213.txt"
-    },
-    {
-      "tag": "manual-20260107-155928",
-      "results": "benchmarks-manual-20260107-155928.json",
-      "txt": "benchmarks-manual-20260107-155928.txt"
-    },
-    {
-      "tag": "manual-20260107-042135",
-      "results": "benchmarks-manual-20260107-042135.json",
-      "txt": "benchmarks-manual-20260107-042135.txt"
-    },
-    {
-      "tag": "manual-20260106-210204",
-      "results": "benchmarks-manual-20260106-210204.json",
-      "txt": "benchmarks-manual-20260106-210204.txt"
-    },
-    {
-      "tag": "manual-20260106-120524",
-      "results": "benchmarks-manual-20260106-120524.json",
-      "txt": "benchmarks-manual-20260106-120524.txt"
-    },
-    {
-      "tag": "manual-20260105-175808",
-      "results": "benchmarks-manual-20260105-175808.json",
-      "txt": "benchmarks-manual-20260105-175808.txt"
-    },
-    {
-      "tag": "manual-20260104-225812",
-      "results": "benchmarks-manual-20260104-225812.json",
-      "txt": "benchmarks-manual-20260104-225812.txt"
-    },
-    {
-      "tag": "manual-20260104-204946",
-      "results": "benchmarks-manual-20260104-204946.json",
-      "txt": "benchmarks-manual-20260104-204946.txt"
-    },
-    {
-      "tag": "manual-20260104-065149",
-      "results": "benchmarks-manual-20260104-065149.json",
-      "txt": "benchmarks-manual-20260104-065149.txt"
-    },
-    {
-      "tag": "manual-20260104-050425",
-      "results": "benchmarks-manual-20260104-050425.json",
-      "txt": "benchmarks-manual-20260104-050425.txt"
-    },
-    {
-      "tag": "improve-testing",
-      "results": "benchmarks-improve-testing.json",
-      "txt": "benchmarks-improve-testing.txt",
-      "java_backends": "java-backends-improve-testing.json"
-    },
-    {
-      "tag": "PRE_RELEASE-3.6.0",
-      "results": "benchmarks-PRE_RELEASE-3.6.0.json",
-      "txt": "benchmarks-PRE_RELEASE-3.6.0.txt"
     }
   ]
 }

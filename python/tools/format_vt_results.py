@@ -43,12 +43,16 @@ def main() -> int:
 
     for entry in files:
         name = entry.get("name", "")
+        scanned_payload = entry.get("scanned_payload", "")
+        scanned_sha256 = entry.get("scanned_sha256", "")
         status = entry.get("status", "")
         analysis_url = entry.get("analysis_url", "")
         item_url = entry.get("item_url", "")
         stats = entry.get("stats", {}) or {}
+        analysis_stats = entry.get("analysis_stats", {}) or {}
         effective_stats = entry.get("effective_stats", stats) or {}
         known_false_positives = entry.get("known_false_positives", []) or []
+        policy_decision = entry.get("policy_decision", {}) or {}
         sha256 = entry.get("sha256", "")
         sha1 = entry.get("sha1", "")
         md5 = entry.get("md5", "")
@@ -56,11 +60,26 @@ def main() -> int:
         lines.extend(
             [
                 f"File: {name}",
+            ]
+        )
+        if scanned_payload and scanned_payload != name:
+            lines.append(f"  Scanned payload: {scanned_payload}")
+        if scanned_sha256 and scanned_sha256 != sha256:
+            lines.append(f"  Scanned SHA256: {scanned_sha256}")
+        lines.extend(
+            [
                 f"  Status: {status}",
                 f"  VirusTotal analysis: {analysis_url}",
                 f"  VirusTotal file: {item_url}",
-                f"  Stats (raw): {_stats_line(stats)}",
+                f"  Stats (GUI / file object): {_stats_line(stats)}",
+            ]
+        )
+        if analysis_stats and analysis_stats != stats:
+            lines.append(f"  Stats (upload analysis): {_stats_line(analysis_stats)}")
+        lines.extend(
+            [
                 f"  Stats (effective): {_stats_line(effective_stats)}",
+                f"  Policy: {policy_decision.get('reason', '')}",
                 f"  SHA256: {sha256}",
                 f"  SHA1: {sha1}",
                 f"  MD5: {md5}",

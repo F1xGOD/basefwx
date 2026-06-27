@@ -880,12 +880,18 @@ jobs:
           mkdir -p website/results
           cp -f bench-results/benchmarks-*.json website/results/
           cp -f bench-results/benchmarks-*.txt website/results/
-          git add website/results/benchmarks-*.json website/results/benchmarks-*.txt
+          python3 .github/scripts/prune_website_results.py \
+            --results-dir website/results \
+            --keep-tag "${{ github.event.release.tag_name }}"
+          python3 .github/scripts/bench_history_index.py \
+            --results-dir website/results \
+            --output website/results/index.json
+          git add website/results/
           if git diff --cached --quiet; then
             echo "No benchmark updates to publish."
             exit 0
           fi
-          git commit -m "Add benchmark results for ${{ github.ref_name }}"
+          git commit -m "Add benchmark results for ${{ github.event.release.tag_name }}"
           git push origin HEAD:DEV
 
   sign-release:
@@ -1074,6 +1080,9 @@ jobs:
           for hash_file in "${hash_files[@]}"; do
             cp "dist_out/${hash_file}" "website/results/${hash_file}"
           done
+          python3 .github/scripts/prune_website_results.py \
+            --results-dir website/results \
+            --keep-tag "${tag}"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           key_id="$(gpg --list-secret-keys --with-colons | awk -F: '/^sec:/ {print $5; exit}')"

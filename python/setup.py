@@ -3,8 +3,9 @@ from setuptools import setup, find_packages
 
 
 def read_readme() -> str:
+    # python/README.md is a symlink to the repo-root README (PyPI + GitHub share one file).
     readme_path = Path(__file__).resolve().parent / "README.md"
-    return readme_path.read_text(encoding="utf-8") if readme_path.exists() else ""
+    return readme_path.read_text(encoding="utf-8") if readme_path.is_file() else ""
 
 
 def read_version() -> str:

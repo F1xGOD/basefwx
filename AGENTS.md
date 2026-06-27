@@ -136,6 +136,11 @@ Java, and Android trees. Read it before touching anything in
 
 ## The blackbox plugin contract (new in 3.7.0)
 
+> **Active work — read first:** [`PLUGIN_3.7.0_HANDOFF.md`](PLUGIN_3.7.0_HANDOFF.md).
+> The `v3.7.0` tag was withdrawn; **do not ship a GitHub Release** until
+> the fwxAES/CLI loader + wire-format plugin tag are done. ABI + smoke
+> alone is not the 3.7.0 product story.
+
 The contract has three layers; pick the one that matches your task.
 Required reading before writing any plugin code:
 `examples/plugins/THREAT_MODEL.md` — the five threat models the

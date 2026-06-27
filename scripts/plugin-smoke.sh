@@ -29,6 +29,8 @@
 # one-way and have no AEAD step; the plugin contract doesn't apply
 # to them. The smoke here therefore tests the plugin API surface
 # itself, not its (deferred) integration into specific crypto methods.
+# Since 3.7.0 the smoke also runs one fwxAES CLI round-trip with a
+# plugin (--plugin xor-rotate, PRE_AEAD) after the ABI steps.
 
 set -uo pipefail
 
@@ -482,6 +484,39 @@ PYEOF
     [[ "$cpp_hex" == "$py_hex" ]] || { echo "C++=${cpp_hex:0:32}... Py=${py_hex:0:32}..."; return 2; }
 }
 
+cpp_build_basefwx_cli() {
+    cmake -S cpp -B cpp/build -DCMAKE_EXPORT_COMPILE_COMMANDS=ON >/dev/null 2>&1 \
+        && cmake --build cpp/build --target basefwx_cpp -j2 >/dev/null 2>&1
+}
+
+fwxaes_plugin_roundtrip() {
+    local cli=cpp/build/basefwx
+    [[ -x "$cli" ]] || { echo "basefwx CLI missing"; return 1; }
+    local so=examples/plugins/xor-rotate/build/libbasefwx-xor-rotate.so
+    [[ -f "$so" ]] || { echo "xor-rotate .so missing"; return 1; }
+    local tmpdir
+    tmpdir=$(mktemp -d /tmp/basefwx-fwxaes-plugin.XXXXXX)
+    printf 'plugin-smoke fwxAES integration 3.7.0' > "$tmpdir/input.bin"
+    python3 - <<PY
+open("$tmpdir/xor-config.bin", "wb").write(bytes([0x42 ^ i for i in range(32)]))
+PY
+    BASEFWX_TESTING=1 BASEFWX_TEST_KDF_ITERS=1000 \
+        "$cli" fwxaes-enc "$tmpdir/input.bin" \
+            -p 'TestPass123456' --legacy-pbkdf2 --no-master --keep-input \
+            --plugin "$so" --plugin-pos pre --plugin-config "$tmpdir/xor-config.bin" \
+            -o "$tmpdir/out.fwx" >/dev/null 2>&1 \
+        || { rm -rf "$tmpdir"; echo "fwxaes-enc failed"; return 2; }
+    BASEFWX_TESTING=1 BASEFWX_TEST_KDF_ITERS=1000 \
+        "$cli" fwxaes-dec "$tmpdir/out.fwx" \
+            -p 'TestPass123456' --no-master \
+            --plugin "$so" \
+            -o "$tmpdir/plain.bin" >/dev/null 2>&1 \
+        || { rm -rf "$tmpdir"; echo "fwxaes-dec failed"; return 3; }
+    cmp -s "$tmpdir/input.bin" "$tmpdir/plain.bin" \
+        || { rm -rf "$tmpdir"; echo "round-trip mismatch"; return 4; }
+    rm -rf "$tmpdir"
+}
+
 # =====================================================================
 # Run order — each step takes a few hundred milliseconds.
 # =====================================================================
@@ -530,6 +565,10 @@ fi
 
 # Cross-runtime parity — proves the .so contract is byte-equivalent
 run_step "cross-runtime parity (C++ ↔ Python same .so)" cross_runtime_parity
+
+# fwxAES integration — plugin tag on wire + CLI --plugin round-trip
+run_step "build basefwx CLI (incremental)" cpp_build_basefwx_cli
+run_step "fwxAES enc/dec round-trip via --plugin xor-rotate" fwxaes_plugin_roundtrip
 
 total_ms=$(elapsed_ms $start_total)
 

@@ -1,16 +1,17 @@
 # BaseFWX 3.7.0 — Release Notes
 
-> **Release status:** **not shipped.** The `v3.7.0` tag was withdrawn (2026-06-26).
-> Finish the fwxAES/CLI plugin loader before tagging or publishing — see
+> **Release status:** loader + wire tag implemented on `main` (2026-06-26).
+> Tag and publish only after remote `test_all.sh` passes — see
 > [`PLUGIN_3.7.0_HANDOFF.md`](PLUGIN_3.7.0_HANDOFF.md).
 
 > **Headline (when shipped):** blackbox plugin **in production encrypt/decrypt**
-> plus audit-driven hardening from the 3.6.5 queue. Callers ship a `.so` /
-> `.dll` driver that wraps the AEAD payload — open-source crypto core,
-> closed-source obfuscation layer.
+> through `basefwx fwxaes-enc/dec --plugin …` plus audit-driven hardening
+> from the 3.6.5 queue. Callers ship a `.so` / `.dll` driver that wraps
+> the AEAD payload — open-source crypto core, closed-source obfuscation layer.
 
 > 3.6.x → 3.7.0 is **backwards-compatible on the wire** for blobs **without**
-> a plugin tag. Plugin-tagged blobs are new in 3.7.0 once the loader lands.
+> a plugin tag. Plugin-tagged blobs (`algo=0x03`) require 3.7.0+ and the
+> matching plugin loaded at decrypt time.
 
 ## Plugin (blackbox) core — what's in 3.7.0 vs queued
 
@@ -39,21 +40,48 @@ inside an AEAD layer (Profile A); a keyed plugin with `host_secret`
 cost of plugin extraction but does not provide cryptographic
 security on its own (Profile C).
 
-What is **in 3.7.0:** the ABI headers and macros above, the static-embed
-Registry, all five C++ examples plus `xor-rotate-java/` and
-`xor-rotate-py/`, the Java SPI (`com.fixcraft.basefwx.plugin`, Profile A),
-the Python SPI + ctypes bridge (`basefwx.plugin`, Profile A), and
-`scripts/plugin-smoke.sh` (15-step ABI smoke). You can build and
-unit-test plugins against the ABI today; the `static-embed/` example
-exercises the full keyed contract end-to-end without the deferred pieces.
+What is **in 3.7.0:** everything above **plus** the C++ host loader
+(`cpp/src/plugin_loader.cpp`), fwxAES PRE/POST AEAD integration in C++ /
+Java / Python, the wire-format plugin tag, CLI `--plugin` flags, and an
+fwxAES round-trip step in `scripts/plugin-smoke.sh`.
+
+Example (C++ CLI, xor-rotate plugin, PRE_AEAD):
+
+```bash
+# 32-byte plugin config (xor-rotate requires exactly 32 bytes)
+python3 -c 'open("xor.cfg","wb").write(bytes([0x42^i for i in range(32)]))'
+
+basefwx fwxaes-enc secret.txt -p 'your-password' \
+  --legacy-pbkdf2 --no-master \
+  --plugin /path/to/libbasefwx-xor-rotate.so \
+  --plugin-pos pre --plugin-config xor.cfg \
+  -o secret.fwx
+
+basefwx fwxaes-dec secret.fwx -p 'your-password' --no-master \
+  --plugin /path/to/libbasefwx-xor-rotate.so \
+  -o secret.plain
+```
 
 What is **NOT** in 3.7.0 and is scoped for 3.7.x point releases:
-the runtime loader inside the BaseFWX CLI / fwxAES pipeline, wire-format
-plugin-tag bytes, the JNI bridge for native `.so` from Java, Profile B
+plugin integration in b512file / pb512file / livecipher, streaming fwxAES
+with plugins, the JNI bridge for native `.so` from Java, Profile B
 parity on the Java/Python SPI, and the `basefwx-plugin-verify` tool.
 
-Wire format is unchanged in 3.7.0 — blobs without a plugin tag
-round-trip identically to 3.6.x.
+### fwxAES plugin wire tag (algo `0x03`)
+
+Immediately after the 16-byte FWX1 fixed header:
+
+| Offset | Size | Field |
+| --- | ---: | --- |
+| +0 | 16 | `plugin_id` |
+| +16 | 1 | `position` (`1` = PRE_AEAD, `2` = POST_AEAD) |
+| +17 | 2 | `config_len` (big-endian) |
+| +19 | `config_len` | opaque plugin config (passed to `init`) |
+
+Then the usual salt/key_header, IV, and AES-GCM ciphertext follow.
+Blobs with `algo=0x01` or `0x02` are unchanged from 3.6.4.
+
+Wire format without a plugin tag is unchanged from 3.6.x.
 
 ## TL;DR (security/hardening track)
 

@@ -32,6 +32,10 @@ struct FwxAesArgs {
     bool keep_meta = false;
     bool keep_input = false;
     bool archive_original = false;
+    std::string plugin_path;
+    std::string plugin_id_hex;
+    std::string plugin_pos;
+    std::string plugin_config_file;
 };
 
 struct ImageArgs {

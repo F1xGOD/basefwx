@@ -124,6 +124,16 @@ inline constexpr std::uint8_t kJmgSecurityProfileMax = 1;
 inline constexpr std::uint8_t kJmgSecurityProfileDefault = kJmgSecurityProfileMax;
 inline constexpr std::string_view kJmgMaskInfo = "basefwx.jmg.mask.v1";
 inline constexpr std::string_view kFwxAesAad = "fwxAES";
+inline constexpr std::uint8_t kFwxAesAlgo = 0x01;
+inline constexpr std::uint8_t kFwxAesAlgoStreamV2 = 0x02;
+inline constexpr std::uint8_t kFwxAesAlgoPlugin = 0x03;
+inline constexpr std::uint8_t kFwxAesKdfPbkdf2 = 0x01;
+inline constexpr std::uint8_t kFwxAesKdfWrap = 0x02;
+inline constexpr std::size_t kFwxAesPluginIdLen = 16;
+inline constexpr std::size_t kFwxAesPluginConfigLenBytes = 2;
+inline constexpr std::size_t kFwxAesPluginTagFixedLen =
+    kFwxAesPluginIdLen + 1 + kFwxAesPluginConfigLenBytes;
+inline constexpr std::size_t kFwxAesPluginMaxConfigLen = 64 * 1024;
 inline constexpr std::string_view kFwxAesMaskInfo = "basefwx.fwxaes.mask.v1";
 inline constexpr std::string_view kFwxAesKeyInfo = "basefwx.fwxaes.key.v1";
 inline constexpr std::string_view kFwxAesPayloadAeadInfo = "basefwx.fwxaes.payload.aead.v1";

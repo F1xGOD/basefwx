@@ -68,6 +68,7 @@
 #include "basefwx/cli/output.hpp"
 #include "basefwx/cli/password.hpp"
 #include "basefwx/cli/telemetry.hpp"
+#include "basefwx/plugin_loader.hpp"
 
 namespace {
 
@@ -112,6 +113,23 @@ std::string MoveOutputPath(const std::string& current_path, const std::string& r
     }
     return dst.string();
 }
+
+basefwx::fwxaes::Options BuildFwxAesOptions(const basefwx::cli::FwxAesArgs& opts) {
+    basefwx::fwxaes::Options out;
+    out.use_master = opts.use_master;
+    out.user_kdf = opts.kdf;
+    out.force_legacy_pbkdf2 = opts.force_legacy_pbkdf2;
+    out.plugin_path = opts.plugin_path;
+    out.plugin_id_hex = opts.plugin_id_hex;
+    if (!opts.plugin_pos.empty()) {
+        out.plugin_position = basefwx::plugin::ParsePluginPosition(opts.plugin_pos);
+    }
+    if (!opts.plugin_config_file.empty()) {
+        out.plugin_config = basefwx::ReadFile(opts.plugin_config_file);
+    }
+    return out;
+}
+
 bool LooksLikeMediaPath(const std::filesystem::path& path) {
     static const std::unordered_set<std::string> kImageExts = {
         ".png", ".jpg", ".jpeg", ".bmp", ".tga", ".gif", ".webp", ".tif", ".tiff",
@@ -1351,15 +1369,12 @@ int main(int argc, char** argv) {
                 if (!output) {
                     throw std::runtime_error("Failed to open output file: " + opts.output);
                 }
-                basefwx::fwxaes::Options stream_opts;
-                stream_opts.use_master = opts.use_master;
-                stream_opts.user_kdf = opts.kdf;
-                stream_opts.force_legacy_pbkdf2 = opts.force_legacy_pbkdf2;
+                basefwx::fwxaes::Options stream_opts = BuildFwxAesOptions(opts);
                 if (command == "fwxaes-stream-enc") {
                     basefwx::RequireStrongPasswordForEncryption(basefwx::ResolvePassword(opts.password), "fwxAES stream");
                     basefwx::fwxaes::EncryptStream(input, output, opts.password, stream_opts);
                 } else {
-                    basefwx::fwxaes::DecryptStream(input, output, opts.password, opts.use_master);
+                    basefwx::fwxaes::DecryptStream(input, output, opts.password, stream_opts.use_master);
                 }
                 complete_progress();
                 return 0;
@@ -1438,13 +1453,11 @@ int main(int argc, char** argv) {
                 norm.cover_phrase = opts.cover_phrase;
                 basefwx::fwxaes::PackOptions pack_opts;
                 pack_opts.compress = opts.compress;
-                basefwx::fwxaes::Options fwxaes_opts;
-                fwxaes_opts.use_master = opts.use_master;
-                fwxaes_opts.user_kdf = opts.kdf;
-                fwxaes_opts.force_legacy_pbkdf2 = opts.force_legacy_pbkdf2;
+                basefwx::fwxaes::Options fwxaes_opts = BuildFwxAesOptions(opts);
                 basefwx::fwxaes::EncryptFile(opts.input, opts.output, opts.password, fwxaes_opts, norm, pack_opts, opts.keep_input);
             } else {
-                basefwx::fwxaes::DecryptFile(opts.input, opts.output, opts.password, opts.use_master);
+                basefwx::fwxaes::Options fwxaes_opts = BuildFwxAesOptions(opts);
+                basefwx::fwxaes::DecryptFile(opts.input, opts.output, opts.password, fwxaes_opts);
             }
             complete_progress();
             return 0;

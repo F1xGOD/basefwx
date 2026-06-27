@@ -105,7 +105,23 @@ final class FwxAesCodec {
         if (factory == null) {
             throw new IllegalArgumentException("fwxAES plugin not available for blob tag");
         }
-        return factory.create(tag.config);
+        try {
+            return factory.create(tag.config);
+        } catch (BasefwxPluginException exc) {
+            throw new IllegalStateException("plugin init failed", exc);
+        }
+    }
+
+    static byte[] finishPluginPlaintext(int algo, BasefwxPlugin plugin, int pluginPosition, byte[] plain) {
+        if (algo != Constants.FWXAES_ALGO_PLUGIN
+            || pluginPosition != BasefwxPlugin.Position.PRE_AEAD) {
+            return plain;
+        }
+        try {
+            return pluginTransform(plugin, plain, pluginPosition, true);
+        } catch (BasefwxPluginException exc) {
+            throw new IllegalStateException("plugin inverse failed", exc);
+        }
     }
 
     static byte[] pluginTransform(BasefwxPlugin plugin, byte[] data, int position, boolean inverse)
@@ -348,17 +364,6 @@ final class FwxAesCodec {
             pluginPosition = tag.position;
         }
 
-        java.util.function.Function<byte[], byte[]> finishPlaintext = plain -> {
-            if (algo != Constants.FWXAES_ALGO_PLUGIN
-                || pluginPosition != BasefwxPlugin.Position.PRE_AEAD) {
-                return plain;
-            }
-            try {
-                return pluginTransform(plugin, plain, pluginPosition, true);
-            } catch (BasefwxPluginException exc) {
-                throw new IllegalStateException("plugin inverse failed", exc);
-            }
-        };
         if (kdf == Constants.FWXAES_KDF_WRAP) {
             int headerLen = iters;
             if (blob.length < offset + headerLen + ivLen + ctLen) {
@@ -405,9 +410,10 @@ final class FwxAesCodec {
                     Constants.FWXAES_AAD
                 );
                 if (written != plain.length) {
-                    return finishPlaintext.apply(Arrays.copyOf(plain, Math.max(0, written)));
+                    return finishPluginPlaintext(algo, plugin, pluginPosition,
+                        Arrays.copyOf(plain, Math.max(0, written)));
                 }
-                return finishPlaintext.apply(plain);
+                return finishPluginPlaintext(algo, plugin, pluginPosition, plain);
             } finally {
                 // Mirror C++ SecretGuard: wipe AES key and wrap mask
                 // before they escape into GC.
@@ -454,9 +460,10 @@ final class FwxAesCodec {
                 Constants.FWXAES_AAD
             );
             if (written != plain.length) {
-                return finishPlaintext.apply(Arrays.copyOf(plain, Math.max(0, written)));
+                return finishPluginPlaintext(algo, plugin, pluginPosition,
+                    Arrays.copyOf(plain, Math.max(0, written)));
             }
-            return finishPlaintext.apply(plain);
+            return finishPluginPlaintext(algo, plugin, pluginPosition, plain);
         } finally {
             Arrays.fill(key, (byte) 0);
         }

@@ -893,11 +893,23 @@ jobs:
     needs: [light-tests, build-cli-linux, linux-compat-smoke, build-cli-windows, build-cli-macos, build-java-jar]
     permissions:
       contents: write
+    env:
+      RELEASE_TAG: ${{ github.event.release.tag_name }}
     steps:
+      - name: Validate release tag
+        run: |
+          set -euo pipefail
+          if [ -z "${RELEASE_TAG}" ]; then
+            echo "github.event.release.tag_name is empty — publish a tagged release, not a branch-only draft." >&2
+            exit 1
+          fi
+          echo "Uploading assets for release tag: ${RELEASE_TAG}"
+
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          ref: main
+          ref: ${{ github.event.release.tag_name }}
+          fetch-depth: 0
 
       - name: Download artifacts
         uses: actions/download-artifact@v4
@@ -975,7 +987,7 @@ jobs:
 
       - name: Generate release manifest
         run: |
-          python3 scripts/release_manifest.py dist_out "${{ github.ref_name }}"
+          python3 scripts/release_manifest.py dist_out "${RELEASE_TAG}"
           cat dist_out/release-manifest.json
 
       - name: Verify signatures + hashes
@@ -999,8 +1011,9 @@ jobs:
           done
 
       - name: Upload release assets
-        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
+        uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ github.event.release.tag_name }}
           files: |
             dist_out/basefwx-*
             dist_out/release-manifest.json
@@ -1020,8 +1033,9 @@ jobs:
           cp dist_out/virustotal-results.txt dist_out/results.txt
 
       - name: Upload VirusTotal results
-        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
+        uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ github.event.release.tag_name }}
           files: |
             dist_out/virustotal-results.json
             dist_out/virustotal-results.txt
@@ -1032,7 +1046,7 @@ jobs:
         env:
           GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
         run: |
-          tag="${GITHUB_REF_NAME}"
+          tag="${RELEASE_TAG}"
           git fetch --no-tags origin DEV
           git checkout -B DEV origin/DEV
           mkdir -p website/results
@@ -1090,6 +1104,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name }}
 
       - name: Set up Python
         uses: actions/setup-python@v5

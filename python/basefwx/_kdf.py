@@ -53,14 +53,16 @@ def _kdf_pbkdf2_raw(password: bytes, salt: bytes, iters: int) -> bytes:
     return basefwx.hashlib.pbkdf2_hmac('sha256', password, salt, iters, dklen=basefwx.FWXAES_KEY_LEN)
 
 
-def _derive_user_key_argon2id(password: 'basefwx.typing.Union[str, bytes, bytearray, memoryview]', salt: 'basefwx.typing.Optional[bytes]'=None, *, length: int=32, time_cost: int=4, memory_cost: int=2 ** 16, parallelism: int | None=None) -> 'basefwx.typing.Tuple[bytes, bytes]':
+def _derive_user_key_argon2id(password: 'basefwx.typing.Union[str, bytes, bytearray, memoryview]', salt: 'basefwx.typing.Optional[bytes]'=None, *, length: int=32, time_cost: 'int | None'=None, memory_cost: 'int | None'=None, parallelism: 'int | None'=None) -> 'basefwx.typing.Tuple[bytes, bytes]':
     if salt is None:
         salt = basefwx.os.urandom(basefwx.USER_KDF_SALT_SIZE)
     if len(salt) < basefwx.USER_KDF_SALT_SIZE:
         raise ValueError('User key salt must be at least 16 bytes')
     if basefwx.hash_secret_raw is None:
         raise RuntimeError('Argon2 backend unavailable')
-    parallelism = parallelism or 4
+    time_cost = time_cost if time_cost is not None else basefwx.ARGON2_TIME_COST
+    memory_cost = memory_cost if memory_cost is not None else basefwx.ARGON2_MEMORY_COST
+    parallelism = parallelism if parallelism is not None else basefwx.ARGON2_PARALLELISM
     password_bytes = basefwx._coerce_password_bytes(password)
     required_memory_mb = memory_cost * 1024 // 1024
     try:
@@ -86,9 +88,9 @@ def _derive_user_key(password: 'basefwx.typing.Union[str, bytes, bytearray, memo
     if salt is None:
         salt = basefwx.os.urandom(basefwx.USER_KDF_SALT_SIZE)
     iterations = iterations or basefwx.USER_KDF_ITERATIONS
-    argon2_time_cost = argon2_time_cost or 4
-    argon2_memory_cost = argon2_memory_cost or 2 ** 16
-    argon2_parallelism = argon2_parallelism or 4
+    argon2_time_cost = argon2_time_cost if argon2_time_cost is not None else basefwx.ARGON2_TIME_COST
+    argon2_memory_cost = argon2_memory_cost if argon2_memory_cost is not None else basefwx.ARGON2_MEMORY_COST
+    argon2_parallelism = argon2_parallelism if argon2_parallelism is not None else basefwx.ARGON2_PARALLELISM
     iterations, argon2_time_cost, argon2_memory_cost, argon2_parallelism = basefwx._harden_kdf_params(password, iterations=iterations, argon2_time_cost=argon2_time_cost, argon2_memory_cost=argon2_memory_cost, argon2_parallelism=argon2_parallelism)
     requested_kdf = (kdf or basefwx.USER_KDF or basefwx.USER_KDF_DEFAULT).lower()
     if requested_kdf in {'argon2', 'argon2id'}:
@@ -151,7 +153,7 @@ def encryptAES(plaintext: str, user_key: 'basefwx.typing.Union[str, bytes, bytea
     ec_public = None
     if use_master and pq_public is None:
         try:
-            ec_public = basefwx._load_master_ec_public(create_if_missing=True)
+            ec_public = basefwx._load_master_ec_public()
         except Exception:
             ec_public = None
     use_master_effective = use_master and (pq_public is not None or ec_public is not None)

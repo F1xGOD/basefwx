@@ -46,6 +46,7 @@ public final class KeyWrap {
         if (useMasterEffective && kem != null) {
             result.masterBlob = kem.masterBlob;
             result.maskKey = Crypto.hkdfSha256(kem.shared, maskInfo, 32);
+            Arrays.fill(kem.shared, (byte) 0);
         } else {
             result.masterBlob = new byte[0];
             result.maskKey = Crypto.randomBytes(32);
@@ -101,7 +102,11 @@ public final class KeyWrap {
                 }
                 java.security.PrivateKey priv = EcKeys.loadMasterPrivate();
                 byte[] shared = EcKeys.kemDecrypt(masterBlob, priv);
-                return Crypto.hkdfSha256(shared, maskInfo, 32);
+                try {
+                    return Crypto.hkdfSha256(shared, maskInfo, 32);
+                } finally {
+                    Arrays.fill(shared, (byte) 0);
+                }
             } catch (RuntimeException exc) {
                 boolean canFallback = userBlob != null && userBlob.length > 0
                         && password != null && password.length > 0;
@@ -209,7 +214,7 @@ public final class KeyWrap {
             return "pbkdf2";
         }
         String normalized = label.toLowerCase();
-        // 3.6.5: Argon2id now supported on the Java side too (uses
+        // 3.7.0: Argon2id now supported on the Java side too (uses
         // BouncyCastle's Argon2BytesGenerator, which has been a
         // declared dep since the BC-PQ migration). Normalize both
         // "argon2" and "argon2id" to "argon2id" to match the C++ side.
@@ -255,7 +260,7 @@ public final class KeyWrap {
     public static final class KdfOptions {
         public String label = "pbkdf2";
         public int pbkdf2Iterations = Constants.USER_KDF_ITERATIONS;
-        // 3.6.5: Argon2id support — these defaults mirror the C++ side and
+        // 3.7.0: Argon2id support — these defaults mirror the C++ side and
         // are only consulted when {@link #label} resolves to "argon2id" /
         // "argon2". Wire-format compatibility relies on encoder and
         // decoder agreeing on these values (they are not stored in the

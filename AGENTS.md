@@ -130,7 +130,7 @@ Java, and Android trees. Read it before touching anything in
 3. Constants live in `constants.hpp` / `Constants.java` and must stay in sync.
 4. HKDF info strings and AEAD AAD are versioned (`yume-inner-v1`, `basefwx.fwxaes.payload.aead.v1`). Bumping semantics under the same label silently breaks every peer.
 5. Wire format is frozen at v1.x — changes require `kVersion` bump.
-6. Java `KeyWrap` supports Argon2id since 3.6.5 (via BC's `Argon2BytesGenerator`); the JNI bridge in 3.7.0 makes it ~5-10× faster via libargon2. The legacy "Java rejects Argon2" line is gone.
+6. Java `KeyWrap` supports Argon2id since 3.7.0 (via BC's `Argon2BytesGenerator`); the JNI bridge also in 3.7.0 makes it ~5-10× faster via libargon2. The legacy "Java rejects Argon2" line is gone.
 7. Embedded master PQ key is OFF by default — `BASEFWX_MASTER_PQ_PUB=<path>` (runtime) or `-DBASEFWX_MASTER_PQ_PUB_B64=…` (build time) are the supported configuration paths.
 8. **(3.7.0 new — Rule 13)** Argon2 parallelism is fixed at **4** across C++/Java/Python. The wire format doesn't carry the lane count; defaulting to `hardware_concurrency()` made blobs silently non-portable between machines with different core counts. Anyone "fixing" `DefaultArgon2Parallelism()` to go back to `hardware_concurrency()` is reintroducing the bug.
 
@@ -284,7 +284,7 @@ in the code, not here.
   3.7.0 deprecation in `basefwx.hpp` says exactly what to use
   instead. Match that pattern.
 - **Don't try to use `b1024` in tests.** It's gone. Look for the
-  comment "b1024 retired in 3.6.5" — there are tombstones in
+  comment "b1024 retired in 3.7.0" — there are tombstones in
   `scripts/test_all.sh` and `legacy.py` so an agent re-adding it
   by mistake hits them immediately.
 

@@ -313,6 +313,7 @@ final class FwxAesCodec {
         byte[] key;
         if (useWrap) {
             key = Crypto.hkdfSha256(maskKey, Constants.FWXAES_KEY_INFO, Constants.FWXAES_KEY_LEN);
+            Arrays.fill(maskKey, (byte) 0);
             header[5] = (byte) Constants.FWXAES_KDF_WRAP;
             header[6] = 0;
             header[7] = (byte) Constants.FWXAES_IV_LEN;
@@ -359,6 +360,8 @@ final class FwxAesCodec {
             }
         } catch (GeneralSecurityException exc) {
             throw new IllegalStateException("fwxAES encrypt failed", exc);
+        } finally {
+            Arrays.fill(key, (byte) 0);
         }
     }
 
@@ -395,6 +398,7 @@ final class FwxAesCodec {
         byte[] key;
         if (useWrap) {
             key = Crypto.hkdfSha256(maskKey, Constants.FWXAES_KEY_INFO, Constants.FWXAES_KEY_LEN);
+            Arrays.fill(maskKey, (byte) 0);
             header[5] = (byte) Constants.FWXAES_KDF_WRAP;
             header[6] = 0;
             header[7] = (byte) Constants.FWXAES_IV_LEN;
@@ -454,6 +458,8 @@ final class FwxAesCodec {
             return ctLen;
         } catch (GeneralSecurityException exc) {
             throw new IllegalStateException("fwxAES encrypt failed", exc);
+        } finally {
+            Arrays.fill(key, (byte) 0);
         }
     }
 
@@ -483,6 +489,7 @@ final class FwxAesCodec {
         }
         byte[] key;
         byte[] iv;
+        byte[] maskKey = null;
         byte[] pw = BaseFwx.resolvePasswordBytes(password, useMaster);
         if (kdf == Constants.FWXAES_KDF_WRAP) {
             int headerLen = iters;
@@ -493,7 +500,7 @@ final class FwxAesCodec {
             iv = new byte[ivLen];
             FileCodecs.readExactChannel(input, ByteBuffer.wrap(iv), ivLen, "fwxAES blob truncated");
             List<byte[]> parts = Format.unpackLengthPrefixed(keyHeader, 2);
-            byte[] maskKey = KeyWrap.recoverMaskKey(
+            maskKey = KeyWrap.recoverMaskKey(
                 parts.get(0),
                 parts.get(1),
                 pw,
@@ -503,6 +510,7 @@ final class FwxAesCodec {
                 new KeyWrap.KdfOptions("pbkdf2", Constants.USER_KDF_ITERATIONS)
             );
             key = Crypto.hkdfSha256(maskKey, Constants.FWXAES_KEY_INFO, Constants.FWXAES_KEY_LEN);
+            Arrays.fill(maskKey, (byte) 0);
         } else {
             byte[] salt = new byte[saltLen];
             FileCodecs.readExactChannel(input, ByteBuffer.wrap(salt), saltLen, "fwxAES blob truncated");
@@ -549,6 +557,8 @@ final class FwxAesCodec {
             }
         } catch (GeneralSecurityException exc) {
             throw new IllegalStateException("fwxAES decrypt failed", exc);
+        } finally {
+            Arrays.fill(key, (byte) 0);
         }
     }
 
@@ -613,6 +623,7 @@ final class FwxAesCodec {
         }
         byte[] key;
         byte[] iv;
+        byte[] maskKey = null;
         byte[] pw = BaseFwx.resolvePasswordBytes(password, useMaster);
         if (kdf == Constants.FWXAES_KDF_WRAP) {
             int headerLen = iters;
@@ -623,7 +634,7 @@ final class FwxAesCodec {
             iv = new byte[ivLen];
             FileCodecs.readExact(input, iv, ivLen, "fwxAES blob truncated");
             List<byte[]> parts = Format.unpackLengthPrefixed(keyHeader, 2);
-            byte[] maskKey = KeyWrap.recoverMaskKey(
+            maskKey = KeyWrap.recoverMaskKey(
                 parts.get(0),
                 parts.get(1),
                 pw,
@@ -633,6 +644,7 @@ final class FwxAesCodec {
                 new KeyWrap.KdfOptions("pbkdf2", Constants.USER_KDF_ITERATIONS)
             );
             key = Crypto.hkdfSha256(maskKey, Constants.FWXAES_KEY_INFO, Constants.FWXAES_KEY_LEN);
+            Arrays.fill(maskKey, (byte) 0);
         } else {
             byte[] salt = new byte[saltLen];
             FileCodecs.readExact(input, salt, saltLen, "fwxAES blob truncated");
@@ -679,6 +691,8 @@ final class FwxAesCodec {
             }
         } catch (GeneralSecurityException exc) {
             throw new IllegalStateException("fwxAES decrypt failed", exc);
+        } finally {
+            Arrays.fill(key, (byte) 0);
         }
     }
 

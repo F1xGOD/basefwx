@@ -496,7 +496,7 @@ int main(int argc, char** argv) {
                     return digest.size();
                 };
             } else {
-                // b1024 was a Bi512(A512(...)) alias — retired in 3.6.5.
+                // b1024 was a Bi512(A512(...)) alias — retired in 3.7.0.
                 // Chain the primitives in your own code if you need that
                 // composition.
                 throw std::runtime_error("Unsupported hash benchmark method: " + method);
@@ -1081,7 +1081,7 @@ int main(int argc, char** argv) {
             std::cout << basefwx::Bi512Encode(argv[2]) << "\n";
             return 0;
         }
-        // b1024-enc retired in 3.6.5; was an alias for `bi512-enc $(a512-enc text)`.
+        // b1024-enc retired in 3.7.0; was an alias for `bi512-enc $(a512-enc text)`.
         // b256 is retired since 3.7.0 — see basefwx.hpp / CHANGELOG.
         // The CLI keeps dispatching it so existing scripts keep working;
         // the runtime warning emits from inside the function. Suppress

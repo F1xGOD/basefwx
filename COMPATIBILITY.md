@@ -21,7 +21,7 @@ machine's CPU count:
 | :-- | :--: | :-- |
 | C++ | 4 | `kArgon2Parallelism` in `cpp/include/basefwx/constants.hpp` |
 | Java | 4 | `ARGON2_PARALLELISM` in `Constants.java` (`defaultArgon2Parallelism()` returns 4) |
-| Python | 4 | `_DEFAULT_ARGON2_PARALLELISM` in `python/basefwx/legacy.py` |
+| Python | 4 | `basefwx.ARGON2_PARALLELISM` in `python/basefwx/legacy.py` (added 3.7.0); used by `_kdf.py` |
 
 Pre-3.7.0 each runtime resolved the default from
 `std::thread::hardware_concurrency()` /
@@ -73,7 +73,7 @@ Practical impact:
   configured.
 - **PQ-master-wrapped blobs WITH a usable password** — Java's
   catch-handler at
-  [KeyWrap.java:105](basefwx/java/src/main/java/com/fixcraft/basefwx/KeyWrap.java#L105)
+  [KeyWrap.java:106](basefwx/java/src/main/java/com/fixcraft/basefwx/KeyWrap.java#L106)
   falls back to the user-key path and the decode succeeds. Visible
   consequence: the master-key recovery path is silently bypassed on
   Java even though the producer expected it to be available.
@@ -118,9 +118,9 @@ Release policy:
 ### Argon2id (Default KDF)
 - **Recommended**: 256 MiB+ free RAM
 - **Minimum**: 
-  - Standard: ~128 MiB for default parameters (memory_cost=2^15 KiB)
-  - Short passwords: ~256 MiB for enhanced security (memory_cost=2^16 KiB)
-  - Heavy operations: ~512 MiB (memory_cost=2^17 KiB)
+  - Standard: ~64 MiB for default parameters (memory_cost=2^16 KiB = 65536 KiB)
+  - Short passwords: ~128 MiB for enhanced security (memory_cost=2^17 KiB)
+  - Heavy operations: ~256 MiB (memory_cost=2^18 KiB)
 
 **Low Memory Fallback**: If you encounter "Insufficient memory for Argon2id" errors:
 ```bash
@@ -207,7 +207,7 @@ Release builds use:
 
 ### Development
 - `BASEFWX_OBFUSCATE`: Enable/disable obfuscation
-- `ALLOW_BAKED_PUB`: Allow using baked public key (testing only)
+- ~~`ALLOW_BAKED_PUB`~~: **Removed in 3.7.0.** The baked public key path has been removed; use `BASEFWX_MASTER_PQ_PUB` instead.
 - `BASEFWX_MASTER_PQ_PUB`: Path to master PQ public key
 
 ## Architecture Support

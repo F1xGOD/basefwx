@@ -24,4 +24,4 @@ jobs:
       - name: Validate main vs DEV parity
         run: |
           chmod +x scripts/check_branch_parity.sh
-          scripts/check_branch_parity.sh main DEV
+          scripts/check_branch_parity.sh origin/main origin/DEV

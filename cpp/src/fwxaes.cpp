@@ -79,6 +79,15 @@ std::uint32_t ResolveTestIters(std::uint32_t fallback) {
     }
 }
 
+bool ShouldRejectLowPbkdf2Iters(std::uint32_t iters) {
+    if (iters >= kMinPbkdf2Iters) {
+        return false;
+    }
+    // Mirror encrypt-side test hooks: low PBKDF2 costs are allowed only
+    // when BASEFWX_TEST_KDF_ITERS is set (plugin-smoke, test_all, etc.).
+    return basefwx::env::TestKdfIters().empty();
+}
+
 std::uint32_t HardenPbkdf2Iterations(const std::string& password, std::uint32_t iters) {
     if (password.empty()) {
         return iters;
@@ -650,7 +659,7 @@ Bytes DecryptRaw(const Bytes& blob, const std::string& password, const Options& 
         plaintext.resize(written);
         return finish_plaintext(plaintext);
     }
-    if (iters < kMinPbkdf2Iters) {
+    if (ShouldRejectLowPbkdf2Iters(iters)) {
         throw std::runtime_error("fwxAES PBKDF2 iteration count below minimum");
     }
     if (blob.size() < offset + salt_len + iv_len + ct_len) {
@@ -968,7 +977,7 @@ std::uint64_t DecryptStream(std::istream& source,
         basefwx::crypto::SecretGuard mask_guard;
         mask_guard.Add(mask_key);
     } else {
-        if (iters < kMinPbkdf2Iters) {
+        if (ShouldRejectLowPbkdf2Iters(iters)) {
             throw std::runtime_error("fwxAES PBKDF2 iteration count below minimum");
         }
         Bytes salt(salt_len);

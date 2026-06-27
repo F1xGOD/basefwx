@@ -7,18 +7,10 @@
 
 ## Situation (2026-06-26)
 
-- **Why 3.7.0 exists:** the minor bump from the unreleased 3.6.5 track is the
-  **blackbox plugin** — a user-visible, end-to-end feature, not ABI-only docs.
-- **What happened:** audit hardening + plugin **authoring** surface landed on
-  `main` (`f3f7dd8` and earlier). A `v3.7.0` tag and GitHub Release were created
-  prematurely; the **Release was canceled** and the **`v3.7.0` tag was deleted**
-  from GitHub because the headline feature (encrypt/decrypt **with** a plugin
-  through official APIs) is **not implemented**.
-- **Current `main` HEAD:** safe to keep — security fixes, secret wipes, doc
-  alignment, Python ctypes vtable fix, EC autogen removal are all valid 3.7.0
-  content. **Do not revert**; finish the loader on top.
-- **`VERSION` file:** still `3.7.0` — correct for in-tree development. **Do not
-  tag or `gh release create` until the Definition of Done below is met.**
+- **Loader + wire tag:** implemented on `main` — C++ `plugin_loader.cpp`, fwxAES
+  PRE/POST hooks, CLI `--plugin` flags, Java/Python raw-path parity,
+  `scripts/plugin-smoke.sh` fwxAES round-trip step. **Tag `v3.7.0` only after
+  remote `test_all.sh` passes.**
 
 ## Definition of Done — what must work before `v3.7.0` ships
 

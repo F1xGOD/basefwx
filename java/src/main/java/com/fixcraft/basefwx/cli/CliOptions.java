@@ -82,7 +82,7 @@ final class CliOptions {
         System.out.println("java: " + System.getProperty("java.version", "unknown"));
         System.out.println("gpg_fingerprint: " + VersionInfo.gpgFingerprint());
         System.out.println("gpg_signature: not checked (release signatures are detached)");
-        // 3.6.5: Argon2id is supported in the Java runtime via BouncyCastle's
+        // 3.7.0: Argon2id is supported in the Java runtime via BouncyCastle's
         // Argon2BytesGenerator (always available as a runtime dep), so the
         // feature flag flips on. OQS / LZMA remain OFF in Java; configure
         // them out-of-band on the C++ side if you need full coverage.

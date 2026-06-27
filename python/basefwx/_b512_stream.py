@@ -23,7 +23,7 @@ def _b512_encode_path(path: 'basefwx.pathlib.Path', password: str, reporter: 'ba
     size_hint: 'basefwx.typing.Optional[basefwx.typing.Tuple[int, int]]' = None
     if reporter:
         reporter.update(file_index, 0.05, 'prepare', display_path)
-    pubkey_bytes, master_available = basefwx._resolve_master_usage(use_master and (not strip_metadata), master_pubkey, create_if_missing=True)
+    pubkey_bytes, master_available = basefwx._resolve_master_usage(use_master and (not strip_metadata), master_pubkey)
     use_master_effective = (use_master and (not strip_metadata)) and master_available
     heavy_iters = basefwx.HEAVY_PBKDF2_ITERATIONS
     heavy_argon_time = basefwx.HEAVY_ARGON2_TIME_COST if basefwx.hash_secret_raw is not None else None
@@ -99,7 +99,7 @@ def _b512_encode_path_stream(path: 'basefwx.pathlib.Path', password: str, report
     if not basefwx.ENABLE_B512_AEAD:
         raise RuntimeError('Streaming b512 encode requires AEAD mode')
     chunk_size = basefwx.STREAM_CHUNK_SIZE
-    pubkey_bytes, master_available = basefwx._resolve_master_usage(use_master and (not strip_metadata), master_pubkey, create_if_missing=True)
+    pubkey_bytes, master_available = basefwx._resolve_master_usage(use_master and (not strip_metadata), master_pubkey)
     use_master_effective = (use_master and (not strip_metadata)) and master_available
     stream_salt = basefwx._StreamObfuscator.generate_salt()
     ext_bytes = (path.suffix or '').encode('utf-8')
@@ -515,7 +515,7 @@ def _aes_heavy_encode_path_stream(path: 'basefwx.pathlib.Path', password: str, r
     if reporter:
         reporter.update(file_index, 0.05, 'prepare', display_path)
     chunk_size = basefwx.STREAM_CHUNK_SIZE
-    pubkey_bytes, master_available = basefwx._resolve_master_usage(use_master and (not strip_metadata), master_pubkey, create_if_missing=True)
+    pubkey_bytes, master_available = basefwx._resolve_master_usage(use_master and (not strip_metadata), master_pubkey)
     use_master_effective = (use_master and (not strip_metadata)) and master_available
     kdf_used = (basefwx.USER_KDF or 'argon2id').lower()
     heavy_iters = basefwx.HEAVY_PBKDF2_ITERATIONS
@@ -650,7 +650,7 @@ def _aes_heavy_encode_path_stream(path: 'basefwx.pathlib.Path', password: str, r
 
 def b512file_encode(file: str, code: str, strip_metadata: bool=False, use_master: bool=True, keep_input: bool=False):
     try:
-        pubkey_bytes, master_available = basefwx._resolve_master_usage(use_master and (not strip_metadata), None, create_if_missing=True)
+        pubkey_bytes, master_available = basefwx._resolve_master_usage(use_master and (not strip_metadata), None)
         effective_use_master = (use_master and (not strip_metadata)) and master_available
         password = basefwx._resolve_password(code, use_master=effective_use_master)
         path = basefwx._normalize_path(file)
@@ -662,7 +662,7 @@ def b512file_encode(file: str, code: str, strip_metadata: bool=False, use_master
 
 def b512file(files: 'basefwx.typing.Union[str, basefwx.pathlib.Path, basefwx.typing.Iterable[basefwx.typing.Union[str, basefwx.pathlib.Path]]]', password: str, strip_metadata: bool=False, use_master: bool=True, master_pubkey: 'basefwx.typing.Optional[bytes]'=None, silent: bool=False, compress: bool=False, keep_input: bool=False):
     paths = basefwx._coerce_file_list(files)
-    pubkey_bytes, master_available = basefwx._resolve_master_usage(use_master and (not strip_metadata), master_pubkey, create_if_missing=True)
+    pubkey_bytes, master_available = basefwx._resolve_master_usage(use_master and (not strip_metadata), master_pubkey)
     encode_use_master = (use_master and (not strip_metadata)) and master_available
     decode_use_master = use_master and (not strip_metadata)
     try:

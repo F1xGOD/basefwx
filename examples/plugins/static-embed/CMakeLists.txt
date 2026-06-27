@@ -1,3 +1,8 @@
+# BaseFWX example plugin build file
+# Copyright (C) 2020-2026  FixCraft Inc.
+# Licensed under the GNU General Public License v3.0, with the
+# BaseFWX Plugin-Template Exception (see LICENCE clause 5).
+#
 # BaseFWX static-embed example — Profile C reference.
 #
 # Demonstrates the in-process Registry API. The plugin source is

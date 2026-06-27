@@ -2,25 +2,7 @@
 
 ## [Unreleased]
 
-### Changed
-- **`BaseFwx.java` no longer imports `java.awt.*` / `javax.imageio.ImageIO`.** The
-  image-carrier public API (`kFMe`, `kFMd`, `kFAe`, `kFAd`, `jmgEncryptFile`,
-  `jmgDecryptFile`) moved verbatim to a new **`BaseFwxImage.java`** class in
-  the same package, together with their private kfm* helpers and KFM_*
-  constants. The core `BaseFwx` class now compiles cleanly without the AWT
-  toolkit — that's what makes it syncable into the Android Gradle build
-  (which doesn't ship `java.awt`). `MediaCipher.java` still uses AWT and
-  stays desktop-only; the Android sync explicitly excludes it. **Source-level
-  breaking change for direct Java callers**: update
-  `BaseFwx.kFMe(...)` → `BaseFwxImage.kFMe(...)` (same for the other 5
-  methods). Existing kFM blobs / PNG / WAV carriers decode identically;
-  no wire-format change. Five shared utility helpers (`getExtension`,
-  `samePath`, `createPrivateTempFile`, `readFileBytes`, `writeFileBytes`,
-  plus the byte[] overloads of `writeU64` / `writeU32` / `readU32`) were
-  bumped from `private` to package-private in `BaseFwx` so `BaseFwxImage`
-  can call them; their behavior is unchanged.
-
-## [v3.7.0] - 2026-05-21
+## [v3.7.0] - 2026-06-26
 
 Compare: <https://github.com/F1xGOD/basefwx/compare/v3.6.4...v3.7.0>
 
@@ -29,7 +11,7 @@ Compare: <https://github.com/F1xGOD/basefwx/compare/v3.6.4...v3.7.0>
 > 3.6.5 was never tagged or published.
 
 ### Added
-- **Blackbox plugin core (public ABI).** `cpp/include/basefwx/plugin.h` declares the C ABI for caller-supplied `.so` / `.dll` drivers that pre-and-post wrap the AEAD payload with custom logic — letting deployments add closed-source obfuscation on top of an open-source crypto core. Position is caller-selectable (pre-AEAD, post-AEAD, or raw — see below). 3.7.0 ships the ABI header, the C++ helper layer (`plugin.hpp`), the static-embed registry (`plugin_static.hpp`), and **five example plugins** (`passthrough/`, `xor-rotate/`, `aead-wrapped-keyed/`, `time-tweak/`, `static-embed/`). Loader (`dlopen` + JNI bridge + Python ctypes), wire-format plugin-tag bytes, and the `basefwx-plugin-verify` tool are scoped for 3.7.x point releases. See `examples/plugins/README.md` and `examples/plugins/THREAT_MODEL.md`.
+- **Java SPI + Python plugin module (Profile A).** `com.fixcraft.basefwx.plugin` (ServiceLoader) and `basefwx.plugin` (pure Python + ctypes for native `.so`) ship with example plugins and `scripts/plugin-smoke.sh`. CLI/fwxAES loader, wire-format plugin tags, JNI bridge, and Profile B Java/Python parity are scoped for 3.7.x.
 - **Keyed plugin path (`forward_keyed` / `inverse_keyed`).** Plugins can opt into a per-call `tweak` (host-supplied randomness or self-derived from external entropy) and a `host_secret` (host-derived from the user's password) threaded through the transform. This binds the plugin's output to user-secret context, so extracting the plugin `.so` and its static config does not let an attacker reproduce the transform offline. New `BASEFWX_PLUGIN_DEFINE_KEYED(...)` macro in `plugin.hpp` and `Capabilities()` method on the plugin class. Backwards-compatible — v1 plugins (deterministic `forward`/`inverse` only) continue to load and run. See `examples/plugins/aead-wrapped-keyed/` for the canonical shape (HKDF + AES-CTR + HMAC-SHA256 with constant-time tag compare).
 - **Plugin raw-mode position (`BASEFWX_PLUGIN_POS_RAW`).** Plugin transforms run without an AEAD layer above or below. The host structurally refuses this position unless the plugin declares `BASEFWX_PLUGIN_CAP_SAFE_RAW_MODE` in `capabilities()`. Intended for client→server protocols where the server holds the secret and rejects tampered blobs (THREAT_MODEL.md TM-4).
 - **Plugin capability bits.** `BASEFWX_PLUGIN_CAP_KEYED`, `BASEFWX_PLUGIN_CAP_SAFE_RAW_MODE`, `BASEFWX_PLUGIN_CAP_REQUIRES_TWEAK`, `BASEFWX_PLUGIN_CAP_REQUIRES_HOST_KEY`, `BASEFWX_PLUGIN_CAP_NONDETERMINISTIC`. Plugins self-declare what they need; the host fails calls closed when requirements are unmet (e.g. `tweak_len == 0` when `REQUIRES_TWEAK` is set).
@@ -62,10 +44,14 @@ Compare: <https://github.com/F1xGOD/basefwx/compare/v3.6.4...v3.7.0>
 - **Refuse to wrap the LiveCipher sequence counter.** C++ `LiveEncryptor::Update` / `Finalize` and Java `LiveEncryptor.update` / `finish` now throw when the counter would advance past `2^64-1` / `Long.MAX_VALUE`, preventing AES-GCM nonce reuse under the same key.
 
 ### Changed
+- **`BaseFwxImage.java` split from `BaseFwx.java`.** The image-carrier public API (`kFMe`, `kFMd`, `kFAe`, `kFAd`, `jmgEncryptFile`, `jmgDecryptFile`) moved verbatim to a new **`BaseFwxImage.java`** class in the same package. The core `BaseFwx` class no longer imports `java.awt.*` / `javax.imageio.ImageIO` — enabling Android Gradle sync of the core class. **Source-level breaking change**: `BaseFwx.kFMe(...)` → `BaseFwxImage.kFMe(...)` (same for the other 5 methods). Wire format unchanged.
+- **Monolith decomposition** across C++ (filecodec, imagecipher, kfm, CLI), Java (BaseFwx codecs, CLI, MediaCipher), and Python (`legacy.py` → implementation modules). No wire-format or public API changes beyond the BaseFwxImage move.
 - **`fwxaes.cpp` wipes all key locals via `SecretGuard`.** 3.6.4 had zero `SecureClear` calls in this file vs nine in `keywrap.cpp`; every PBKDF2-derived AES key and HKDF mask key was leaked to the free-list. `SecretGuard` is now declared after the secrets it tracks so destruction order is correct (see code comments for the rationale — declaring it first is a use-after-free).
 - **Java `LiveEncryptor` and `LiveDecryptor` implement `AutoCloseable`** and zeroize `password`, `key`, `noncePrefix`, and the decrypt buffer on `close()`. The four in-package callers in `fwxAesLive{Encrypt,Decrypt}{Chunks,Stream}` now use try-with-resources.
-- **Java `KeyWrap` throws typed `UnsupportedKdfException`** (extends `IllegalArgumentException`, exposes `getKdfLabel()`) when asked to decode Argon2-wrapped blobs. Callers can route Argon2 blobs to a native helper without string-matching the exception message. The platform stance is unchanged — Java still rejects Argon2 by design (see SECURITY.md / COMPATIBILITY.md).
-- **Java `KeyWrap` wipes `userKey` and `wrapped`** in `prepareMaskKey` / `recoverMaskKey` via `Arrays.fill` in `finally` blocks.
+- **Java `KeyWrap` throws typed `UnsupportedKdfException`** (extends `IllegalArgumentException`, exposes `getKdfLabel()`) for truly unknown KDF labels. Argon2id is now supported; the exception is only raised for unrecognized label strings.
+- **Java `KeyWrap` / `FwxAesCodec` secret hygiene.** EC KEM shared secrets and stream/channel AES keys are zeroed via `Arrays.fill` after HKDF use (mirrors C++ `SecureBytes` / `SecureClear`).
+- **Python `BASEFWX_TEST_KDF_ITERS` gated** behind `BASEFWX_TESTING=1` (mirrors C++ `TestKdfIters()` / Java `Constants.TESTING_BUILD`).
+- **C++ `--allow-embedded-master` / `--master-autogen` CLI flags** no longer set removed env vars; they only opt into `useMaster=true` (with a deprecation notice for `--master-autogen`).
 
 ### Removed
 - **`b1024` retired in all three runtimes.** It was a one-line alias of `Bi512Encode(A512Encode(input))` — no new security, no new functionality, and a large chunk of the cross-runtime test-suite wall-clock. C++ `B1024Encode`, Java `BaseFwx.b1024Encode`, Python `basefwx.b1024encode`, the `b1024-enc` CLI subcommand (C++ + Java), and the `b1024` hash-bench method are all gone. Callers wanting the same output can chain `bi512(a512(input))` themselves. `scripts/test_all.sh` benchmarks and compare-blocks updated; docs cleaned.
@@ -78,7 +64,7 @@ Compare: <https://github.com/F1xGOD/basefwx/compare/v3.6.4...v3.7.0>
 
 ### Notes
 - Wire format byte-identical to 3.6.4. All blobs encrypted with 3.6.4 (any algorithm, any tier) decrypt unchanged.
-- See [RELEASE-NOTES-3.6.5.md](RELEASE-NOTES-3.6.5.md) for the upgrade walkthrough.
+- See [RELEASE-NOTES-3.7.0.md](RELEASE-NOTES-3.7.0.md) for the upgrade walkthrough.
 
 ## [v3.6.3] - 2026-03-19
 

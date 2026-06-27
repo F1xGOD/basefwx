@@ -238,7 +238,7 @@ std::optional<Bytes> LoadMasterPublicKey() {
 }
 
 Bytes LoadMasterPrivateKey() {
-    // 3.6.5: the previous Windows-specific `W:\master_pq.sk` hardcoded
+    // 3.7.0: the previous Windows-specific `W:\master_pq.sk` hardcoded
     // path is gone — it was a maintainer-machine artifact. Callers
     // configure their own location via BASEFWX_MASTER_PQ_SK, falling
     // back to ~/master_pq.sk.

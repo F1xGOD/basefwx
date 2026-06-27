@@ -1,8 +1,9 @@
 # `basefwx-plugin-verify` — design
 
-> Status: design + spec, implementation incoming in 3.7.0 alongside
-> the loaders. This document is the contract the tool will conform
-> to so reviewers can read what it'll do before it lands.
+> Status: design + spec only. Implementation scoped for 3.7.x point
+> releases alongside the CLI/fwxAES loader. This document is the
+> contract the tool will conform to so reviewers can read what it'll
+> do before it lands.
 
 ## Why
 

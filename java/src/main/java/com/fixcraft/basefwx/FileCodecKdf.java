@@ -46,7 +46,7 @@ static String resolveKdfLabel(String label) {
         }
         String normalized = label.toLowerCase();
         if (normalized.startsWith("argon2")) {
-            // 3.6.5: Java now supports Argon2id (via BouncyCastle); see KeyWrap.resolveKdfLabel.
+            // 3.7.0: Java now supports Argon2id (via BouncyCastle); see KeyWrap.resolveKdfLabel.
             return "argon2id";
         }
         if (!"pbkdf2".equals(normalized)) {

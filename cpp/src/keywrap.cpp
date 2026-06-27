@@ -161,7 +161,7 @@ MaskKeyResult PrepareMaskKey(const std::string& password,
     if (use_master) {
         pq_pub = basefwx::pq::LoadMasterPublicKey();
         if (!pq_pub.has_value() && !pq_only) {
-            // 3.6.5: the BASEFWX_MASTER_EC_CREATE_IF_MISSING env-driven
+            // 3.7.0: the BASEFWX_MASTER_EC_CREATE_IF_MISSING env-driven
             // auto-generation is removed. Silently minting a fresh EC
             // master keypair when the configured one is absent produced
             // ciphertext that looked recoverable on the encrypt host and
@@ -274,7 +274,7 @@ Bytes RecoverMaskKey(const Bytes& user_blob,
     Bytes wrapped(user_blob.begin() + header_len, user_blob.end());
     Bytes aad_bytes = ToBytes(aad);
 
-    // 3.6.5: auth failure is terminal. The pre-3.6.3 PBKDF2-32k second-chance
+    // 3.7.0: auth failure is terminal. The pre-3.6.3 PBKDF2-32k second-chance
     // path was removed — it silently downgraded the KDF cost 20x on any
     // exception (not just AEAD tag mismatch), which could mask non-auth
     // errors and produce a successful decrypt under a much weaker derivation.

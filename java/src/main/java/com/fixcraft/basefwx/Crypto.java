@@ -251,9 +251,9 @@ public final class Crypto {
      * primitive byte-for-byte: same Argon2 type (id), same v1.3 version,
      * same salt and password handling.
      *
-     * <p>Added in BaseFWX 3.6.5 — Java was previously documented as not
+     * <p>Added in BaseFWX 3.7.0 — Java was previously documented as not
      * supporting Argon2 in the user-KDF path (see SECURITY.md / COMPATIBILITY.md
-     * pre-3.6.5). BouncyCastle has shipped {@code Argon2BytesGenerator}
+     * pre-3.7.0). BouncyCastle has shipped {@code Argon2BytesGenerator}
      * for years, so the limitation was a policy choice in
      * {@link KeyWrap}, not a missing library.
      */

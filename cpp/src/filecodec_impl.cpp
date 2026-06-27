@@ -65,14 +65,13 @@ bool StrictPqOnly() {
         || basefwx::env::IsEnabled("BASEFWX_PQ_ONLY", false);
 }
 
-std::optional<Bytes> TryLoadEcPublic(bool create_if_missing) {
+std::optional<Bytes> TryLoadEcPublic(bool /*create_if_missing*/) {
     if (StrictPqOnly()) {
         return std::nullopt;
     }
     try {
-        const bool allow_create = create_if_missing
-            && basefwx::env::IsEnabled("BASEFWX_MASTER_EC_CREATE_IF_MISSING", false);
-        return basefwx::ec::LoadMasterPublicKey(allow_create);
+        // 3.7.0: silent EC autogeneration removed (mirrors keywrap.cpp).
+        return basefwx::ec::LoadMasterPublicKey(false);
     } catch (const std::exception&) {
         return std::nullopt;
     }

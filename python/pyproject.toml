@@ -37,6 +37,9 @@ dependencies = [
 [project.optional-dependencies]
 argon2 = []
 
+[project.entry-points."basefwx.plugins"]
+# Third-party plugins register a BasefwxPlugin subclass here, e.g.:
+# myplugin = "my_package.plugin:MyPlugin"
 
 [project.urls]
 Homepage = "https://github.com/F1xGOD/basefwx"

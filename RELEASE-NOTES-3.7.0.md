@@ -6,11 +6,11 @@
 > core, closed-source obfuscation layer. The 3.6.5 security fixes (8 High,
 > ~10 Medium audit findings) ride along.
 
-> 3.6.x → 3.7.0 is **backwards-compatible on the wire** for blobs that
-> don't opt into the plugin layer. Plugin-tagged blobs require a 3.7+
-> peer with the matching plugin ID loaded. (3.6.5 was tagged in working
-> trees but never released; the headline plugin work warrants the
-> minor bump.)
+> 3.6.x → 3.7.0 is **backwards-compatible on the wire** for standard
+> blobs. Official codecs do not emit plugin tags yet — plugin-tagged
+> production blobs cannot be created through the CLI until the 3.7.x
+> loader lands. (3.6.5 was tagged in working trees but never released;
+> the headline plugin work warrants the minor bump.)
 
 ## Plugin (blackbox) core — what's in 3.7.0 vs queued
 
@@ -39,13 +39,18 @@ inside an AEAD layer (Profile A); a keyed plugin with `host_secret`
 cost of plugin extraction but does not provide cryptographic
 security on its own (Profile C).
 
+What is **in 3.7.0:** the ABI headers and macros above, the static-embed
+Registry, all five C++ examples plus `xor-rotate-java/` and
+`xor-rotate-py/`, the Java SPI (`com.fixcraft.basefwx.plugin`, Profile A),
+the Python SPI + ctypes bridge (`basefwx.plugin`, Profile A), and
+`scripts/plugin-smoke.sh` (15-step ABI smoke). You can build and
+unit-test plugins against the ABI today; the `static-embed/` example
+exercises the full keyed contract end-to-end without the deferred pieces.
+
 What is **NOT** in 3.7.0 and is scoped for 3.7.x point releases:
-the runtime loader inside the BaseFWX CLI, the JNI bridge for
-`.jar` plugins, the Python `ctypes` shim, the wire-format
-plugin-tag bytes, and the `basefwx-plugin-verify` tool. You can
-build and unit-test plugins against the ABI today; the
-`static-embed/` example exercises the full contract end-to-end
-without any of the deferred pieces.
+the runtime loader inside the BaseFWX CLI / fwxAES pipeline, wire-format
+plugin-tag bytes, the JNI bridge for native `.so` from Java, Profile B
+parity on the Java/Python SPI, and the `basefwx-plugin-verify` tool.
 
 Wire format is unchanged in 3.7.0 — blobs without a plugin tag
 round-trip identically to 3.6.x.
@@ -64,18 +69,28 @@ round-trip identically to 3.6.x.
 | **Removed hardcoded Windows `W:\master_pq.sk` private-key path** in `pq.cpp`. Configure via `BASEFWX_MASTER_PQ_SK` or `~/master_pq.sk`. | Old maintainer-machine artifact. |
 | **fwxaes key locals are now wiped.** `SecretGuard` threaded through every `Bytes key` / `mask_key` local in `EncryptRaw`, `DecryptRaw`, `EncryptStream`, `DecryptStream`. | 3.6.4 had zero `SecureClear` calls in `fwxaes.cpp` — every PBKDF2-derived AES key sat in the free-list until allocator reuse. |
 | **Java `LiveEncryptor` / `LiveDecryptor` implement `AutoCloseable`** and zeroize `password`, `key`, `noncePrefix`, decrypt buffer. | Java mirror previously had no wipe at all. |
-| **Java `KeyWrap` throws `UnsupportedKdfException`** for Argon2-wrapped blobs, with `getKdfLabel()` to route to a native helper. | Was an opaque `IllegalArgumentException` with a hand-parsed message. |
+| **Java `KeyWrap` throws typed `UnsupportedKdfException`** for unknown KDF labels, with `getKdfLabel()` for routing. Argon2id is supported since 3.7.0; the exception is only for unrecognized label strings. | Was an opaque `IllegalArgumentException` with a hand-parsed message. |
+| **Java / Python KEM shared-secret and AES key wipes** in `KeyWrap`, `FwxAesCodec`, `livecipher.cpp`. | Mirrors C++ `SecureBytes` / `SecureClear` patterns from the audit pass. |
+| **Python `BASEFWX_TEST_KDF_ITERS` gated** behind `BASEFWX_TESTING=1`. | Prevents accidental low-cost ciphertext in production shells. |
 | **Format `UnpackLengthPrefixed` capped at 64 MiB total** (C++ matches the Java side that's had this cap since 3.4.x). | Previously a malformed blob declaring a 4 GiB part survived to the data.size() check — long enough for upstream pre-sizing code to OOM. |
 | **`pq.cpp::ReadFileBytes` caps key files at 4 MiB.** | A symlink under `BASEFWX_MASTER_PQ_PUB` pointing at `/dev/zero` no longer OOMs the process. |
 | **LiveCipher refuses to wrap the sequence counter** (C++ + Java). Throws when `sequence_` would advance past 2⁶⁴-1 (C++) / `Long.MAX_VALUE` (Java). | 2⁶⁴ frames is unreasonable, but the existing path silently wrapped → nonce reuse under the same key → breaks AES-GCM. |
 | **Java now supports Argon2id** in the user-KDF wrap path via BouncyCastle's `Argon2BytesGenerator` (already a runtime dep). Three-way Argon2id cross-runtime parity verified end-to-end. The COMPATIBILITY.md Java row flips `❌ → ✅`. Typed `UnsupportedKdfException` retained for truly unknown labels. |
-| **Argon2id parallelism default is hardcoded to 4** across C++, Java, and Python (`kArgon2Parallelism` / `ARGON2_PARALLELISM` / `_DEFAULT_ARGON2_PARALLELISM`). The wire format does not carry the lane count; pre-3.7.0 each runtime defaulted to `std::thread::hardware_concurrency()` / `Runtime.availableProcessors()` / `os.cpu_count()`, so a blob encrypted on a 16-core machine could not be decrypted on a 4-core machine. Callers who want host-tuned parallelism can still set `KdfOptions.argon2Parallelism` explicitly before encrypt — the default just stops varying. |
+| **Argon2id parallelism default is hardcoded to 4** across C++, Java, and Python (`kArgon2Parallelism` / `ARGON2_PARALLELISM` / `basefwx.ARGON2_PARALLELISM`). The wire format does not carry the lane count; pre-3.7.0 each runtime defaulted to `std::thread::hardware_concurrency()` / `Runtime.availableProcessors()` / `os.cpu_count()`, so a blob encrypted on a 16-core machine could not be decrypted on a 4-core machine. Callers who want host-tuned parallelism can still set `KdfOptions.argon2Parallelism` explicitly before encrypt — the default just stops varying. |
 | **`b1024` retired** in C++ / Java / Python. Was `Bi512Encode(A512Encode(input))` — no new behavior, ate cross-runtime test time. |
 | **🫡 `b256` retired** in C++ / Java / Python. b256 was the very first encoding method in BaseFWX, born in V1 when this was a proof of concept and not a project. Marked deprecated; emits a one-time retirement notice (with ❤️) on first call. Existing blobs still decode. Use base64 / `Hash512` for new code. |
 | **`uhash513` deprecated** in C++ / Java / Python. Non-standard chained hash with a SHA-1 hop and misleading "513" name (actual output is 256 bits). The SHA-1 step adds no security and uses a hash with known collision weaknesses. Use `Hash512` (SHA-512) or SHA3-512 for new code. Existing call sites continue to work. |
 | **Resource guards for bench / test runners.** `scripts/lib/resource_guards.sh` caps the runner's CPU to `nproc - 1` and bounds virtual memory to 75 % of system RAM by default. `scripts/test_all.sh` and `scripts/plugin-smoke.sh` source it automatically; opt out with `--no-guards` or `BASEFWX_NO_GUARDS=1`. Stops the laptop-OOM failure mode where a bench process accumulates pool memory across heavy methods until KDE / sddm freeze. |
 | **Memory-leak detection CI** (`.github/workflows/leak-detect.yml`). Three jobs that each fail the workflow on a leak: Python tracemalloc + RSS slope (`scripts/leak_detect.py`), C++ ASan/LSan probe (`scripts/leak_detect_cpp.sh`), Java heap-delta probe. Catches code-level leaks (missing free, unfreed JNI globalrefs); the resource guards above handle allocator-pool fragmentation at run time. |
 | **Benchmark heaviness chips on the website.** `website/results/heaviness.json` classifies each benchmark method by typical peak RSS + wall time (`low` / `medium` / `high` / `extreme`); the Detailed Results panel now renders a colored chip next to each method so visitors can see at a glance which methods can run on a laptop and which need a build box. |
+
+## Integrator / API changes
+
+| What | Why |
+| ---- | --- |
+| **`BaseFwxImage.java` split from `BaseFwx.java`.** kFM/jMG image-carrier APIs (`kFMe`, `kFMd`, `kFAe`, `kFAd`, `jmgEncryptFile`, `jmgDecryptFile`) moved to `BaseFwxImage`. Core `BaseFwx` no longer imports AWT — Android Gradle sync enabler. **Source breaking:** `BaseFwx.kFMe(...)` → `BaseFwxImage.kFMe(...)`. Wire unchanged. | Desktop-only `MediaCipher.java` still uses AWT; Android sync excludes it. |
+| **Monolith decomposition** (C++ filecodec/imagecipher/kfm/CLI; Java BaseFwx/CLI/MediaCipher; Python `legacy.py` modules). | Maintainability; no wire-format change. |
+| **`SecureBytes` RAII wrapper** in C++ KEM sites (post-3.6.4 commits). | Replaces raw `SecretGuard` pointer pattern in hot paths. |
 
 The full security-policy stance lives in [SECURITY.md](SECURITY.md);
 this document focuses on **what changed in 3.7.0 and what it costs**.
@@ -118,9 +133,10 @@ wire-format layer that callers can opt into, with a non-trivial
 public ABI (`basefwx/plugin.h`) that other people will compile
 against. That's the right thing to gate behind a minor bump.
 
-The ABI lands in 3.7.0; the runtime loader, verifier, and JNI/ctypes
-bridges land in 3.7.x point releases — held back deliberately so the
-header gets a review window before any code commits to it. Blobs
+The ABI lands in 3.7.0 along with Java SPI and Python ctypes (Profile A);
+the runtime loader inside CLI/fwxAES, wire-format plugin tags, verifier
+tool, and JNI bridge land in 3.7.x point releases — held back deliberately
+so the header gets a review window before any code commits to it. Blobs
 that don't opt into the plugin layer remain byte-identical to 3.6.4.
 
 ## 3. Provenance

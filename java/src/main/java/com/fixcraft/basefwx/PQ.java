@@ -56,7 +56,7 @@ public final class PQ {
     /**
      * Load the master ML-KEM-768 public key from configuration.
      *
-     * <p>3.6.5: the upstream baked key has been removed; sourced in order:
+     * <p>3.7.0: the upstream baked key has been removed; sourced in order:
      * <ol>
      *   <li>Runtime path via {@code BASEFWX_MASTER_PQ_PUB=<file>} (env).</li>
      *   <li>Build-time literal via {@code -Dbasefwx.master.pq.public.b64=<base64>}

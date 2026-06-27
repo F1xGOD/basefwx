@@ -47,7 +47,7 @@ static File pb512FileEncodeFileStream(File input,
         String kdfLabel = resolveUserKdfLabel();
         if (!"pbkdf2".equals(kdfLabel)) {
             throw new UnsupportedKdfException(kdfLabel,
-                "pb512file: Argon2 KDF is not yet implemented in Java; use pbkdf2");
+                "pb512file: Argon2 KDF for the heavy file-codec path is not yet wired in Java; use pbkdf2. Constants.HEAVY_ARGON2_* are defined — implementation tracked as a future minor release.");
         }
         int heavyIters = Constants.HEAVY_PBKDF2_ITERATIONS;
         boolean obfuscate = payloadObfuscationEnabled();
@@ -381,7 +381,7 @@ static byte[] pb512FileEncodeBytes(byte[] data,
         String kdfLabel = resolveUserKdfLabel();
         if (!"pbkdf2".equals(kdfLabel)) {
             throw new UnsupportedKdfException(kdfLabel,
-                "pb512file: Argon2 KDF is not yet implemented in Java; use pbkdf2");
+                "pb512file: Argon2 KDF for the heavy file-codec path is not yet wired in Java; use pbkdf2. Constants.HEAVY_ARGON2_* are defined — implementation tracked as a future minor release.");
         }
         boolean obfuscate = payloadObfuscationEnabled();
         int heavyIters = Constants.HEAVY_PBKDF2_ITERATIONS;

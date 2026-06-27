@@ -17,11 +17,77 @@ class _LazyEngine:
 
 basefwx = _LazyEngine()
 
-def fwxAES_encrypt_raw(plaintext: bytes, password: 'basefwx.typing.Union[str, bytes, bytearray, memoryview]', *, use_master: bool=True) -> bytes:
+
+def _serialize_plugin_tag(plugin_id: bytes, position: int, config: bytes) -> bytes:
+    if len(plugin_id) != basefwx.FWXAES_PLUGIN_ID_LEN:
+        raise ValueError('plugin id must be 16 bytes')
+    cfg = bytes(config or b'')
+    if len(cfg) > basefwx.FWXAES_PLUGIN_MAX_CONFIG_LEN:
+        raise ValueError('plugin config exceeds maximum')
+    return (
+        plugin_id
+        + bytes([position])
+        + basefwx.struct.pack('>H', len(cfg))
+        + cfg
+    )
+
+
+def _parse_plugin_tag(blob_bytes: bytes, offset: int):
+    fixed = basefwx.FWXAES_PLUGIN_TAG_FIXED_LEN
+    if len(blob_bytes) < offset + fixed:
+        raise ValueError('fwxAES plugin tag truncated')
+    plugin_id = blob_bytes[offset:offset + basefwx.FWXAES_PLUGIN_ID_LEN]
+    position = blob_bytes[offset + basefwx.FWXAES_PLUGIN_ID_LEN]
+    cfg_len = basefwx.struct.unpack(
+        '>H',
+        blob_bytes[offset + basefwx.FWXAES_PLUGIN_ID_LEN + 1:offset + fixed],
+    )[0]
+    if cfg_len > basefwx.FWXAES_PLUGIN_MAX_CONFIG_LEN:
+        raise ValueError('plugin config length exceeds maximum')
+    end = offset + fixed + cfg_len
+    if len(blob_bytes) < end:
+        raise ValueError('fwxAES plugin tag truncated')
+    config = blob_bytes[offset + fixed:end]
+    return plugin_id, position, config, end - offset
+
+
+def _load_plugin_from_tag(plugin_id: bytes, config: bytes):
+    from .plugin import factory_for
+
+    entry = factory_for(plugin_id)
+    if entry is not None:
+        return entry.factory(config), None
+    raise ValueError('fwxAES plugin not available for blob tag')
+
+
+def _assemble_raw_blob(algo, kdf, salt_len_field, iv_len, field0, ct_len, plugin_tag, header_payload, iv, ct):
+    header = bytearray()
+    header += basefwx.FWXAES_MAGIC
+    header += bytes([algo, kdf, salt_len_field, iv_len])
+    header += basefwx.struct.pack('>I', field0)
+    header += basefwx.struct.pack('>I', ct_len)
+    return bytes(header) + plugin_tag + header_payload + iv + ct
+
+
+def fwxAES_encrypt_raw(plaintext: bytes, password: 'basefwx.typing.Union[str, bytes, bytearray, memoryview]', *, use_master: bool=True, plugin=None, plugin_position=None, plugin_config: bytes=b'') -> bytes:
     if not isinstance(plaintext, (bytes, bytearray, memoryview)):
         raise TypeError('fwxAES_encrypt_raw expects bytes')
     password = basefwx._resolve_password(password, use_master=use_master)
     pw = basefwx._coerce_password_bytes(password)
+    use_plugin = plugin is not None and plugin_position is not None
+    work_plaintext = bytes(plaintext)
+    plugin_tag = b''
+    if use_plugin:
+        from .plugin import Position
+
+        pos_flag = int(plugin_position)
+        if (getattr(plugin, 'SUPPORTED_POSITIONS', 0) & pos_flag) == 0:
+            raise ValueError('plugin does not support requested position')
+        plugin_id = plugin.plugin_id() if hasattr(plugin, 'plugin_id') else plugin.PLUGIN_ID
+        plugin_tag = _serialize_plugin_tag(plugin_id, pos_flag, plugin_config)
+        if pos_flag == Position.PRE_AEAD:
+            work_plaintext = plugin.forward(work_plaintext)
+    algo = basefwx.FWXAES_ALGO_PLUGIN if use_plugin else basefwx.FWXAES_ALGO
     use_wrap = False
     key_header = b''
     mask_key = b''
@@ -46,21 +112,40 @@ def fwxAES_encrypt_raw(plaintext: bytes, password: 'basefwx.typing.Union[str, by
         iters = basefwx._fwxaes_iterations(pw)
         key = basefwx._kdf_pbkdf2_raw(pw, salt, iters)
     aesgcm = basefwx.AESGCM(key)
-    ct = aesgcm.encrypt(iv, bytes(plaintext), basefwx.FWXAES_AAD)
-    header = bytearray()
-    header += basefwx.FWXAES_MAGIC
+    ct = aesgcm.encrypt(iv, work_plaintext, basefwx.FWXAES_AAD)
+    if use_plugin:
+        from .plugin import Position
+
+        if int(plugin_position) == Position.POST_AEAD:
+            ct = plugin.forward(ct)
     if use_wrap:
-        header += bytes([basefwx.FWXAES_ALGO, basefwx.FWXAES_KDF_WRAP, 0, basefwx.FWXAES_IV_LEN])
-        header += basefwx.struct.pack('>I', header_len)
-        header += basefwx.struct.pack('>I', len(ct))
-        return bytes(header) + key_header + iv + ct
-    header += bytes([basefwx.FWXAES_ALGO, basefwx.FWXAES_KDF_PBKDF2, basefwx.FWXAES_SALT_LEN, basefwx.FWXAES_IV_LEN])
-    header += basefwx.struct.pack('>I', iters)
-    header += basefwx.struct.pack('>I', len(ct))
-    return bytes(header) + salt + iv + ct
+        return _assemble_raw_blob(
+            algo,
+            basefwx.FWXAES_KDF_WRAP,
+            0,
+            basefwx.FWXAES_IV_LEN,
+            header_len,
+            len(ct),
+            plugin_tag,
+            key_header,
+            iv,
+            ct,
+        )
+    return _assemble_raw_blob(
+        algo,
+        basefwx.FWXAES_KDF_PBKDF2,
+        basefwx.FWXAES_SALT_LEN,
+        basefwx.FWXAES_IV_LEN,
+        iters,
+        len(ct),
+        plugin_tag,
+        salt,
+        iv,
+        ct,
+    )
 
 
-def fwxAES_decrypt_raw(blob: bytes, password: 'basefwx.typing.Union[str, bytes, bytearray, memoryview]', *, use_master: bool=True) -> bytes:
+def fwxAES_decrypt_raw(blob: bytes, password: 'basefwx.typing.Union[str, bytes, bytearray, memoryview]', *, use_master: bool=True, plugin=None) -> bytes:
     if not isinstance(blob, (bytes, bytearray, memoryview)):
         raise TypeError('fwxAES_decrypt_raw expects bytes')
     password = basefwx._resolve_password(password, use_master=use_master)
@@ -71,11 +156,33 @@ def fwxAES_decrypt_raw(blob: bytes, password: 'basefwx.typing.Union[str, bytes, 
     if blob_bytes[:4] != basefwx.FWXAES_MAGIC:
         raise ValueError('fwxAES bad magic')
     algo, kdf, salt_len, iv_len = (blob_bytes[4], blob_bytes[5], blob_bytes[6], blob_bytes[7])
-    if algo != basefwx.FWXAES_ALGO or kdf not in (basefwx.FWXAES_KDF_PBKDF2, basefwx.FWXAES_KDF_WRAP):
+    if algo not in (basefwx.FWXAES_ALGO, basefwx.FWXAES_ALGO_PLUGIN) or kdf not in (basefwx.FWXAES_KDF_PBKDF2, basefwx.FWXAES_KDF_WRAP):
         raise ValueError('fwxAES unsupported algo/kdf')
     iters = basefwx.struct.unpack('>I', blob_bytes[8:12])[0]
     ct_len = basefwx.struct.unpack('>I', blob_bytes[12:16])[0]
     off = 16
+    plugin_obj = plugin
+    plugin_position = 0
+    if algo == basefwx.FWXAES_ALGO_PLUGIN:
+        plugin_id, plugin_position, plugin_config, tag_len = _parse_plugin_tag(blob_bytes, off)
+        off += tag_len
+        if plugin_obj is None:
+            plugin_obj, _ = _load_plugin_from_tag(plugin_id, plugin_config)
+        elif hasattr(plugin_obj, 'plugin_id'):
+            if plugin_obj.plugin_id() != plugin_id:
+                raise ValueError('loaded plugin id does not match blob tag')
+        elif getattr(plugin_obj, 'PLUGIN_ID', b'') != plugin_id:
+            raise ValueError('loaded plugin id does not match blob tag')
+
+    def _finish_plaintext(plain: bytes) -> bytes:
+        if algo != basefwx.FWXAES_ALGO_PLUGIN:
+            return plain
+        from .plugin import Position
+
+        if plugin_position == Position.PRE_AEAD:
+            return plugin_obj.inverse(plain)
+        return plain
+
     if kdf == basefwx.FWXAES_KDF_WRAP:
         header_len = iters
         if len(blob_bytes) < off + header_len + iv_len + ct_len:
@@ -85,11 +192,16 @@ def fwxAES_decrypt_raw(blob: bytes, password: 'basefwx.typing.Union[str, bytes, 
         iv = blob_bytes[off:off + iv_len]
         off += iv_len
         ct = blob_bytes[off:off + ct_len]
+        if algo == basefwx.FWXAES_ALGO_PLUGIN:
+            from .plugin import Position
+
+            if plugin_position == Position.POST_AEAD:
+                ct = plugin_obj.inverse(ct)
         user_blob, master_blob = basefwx._unpack_length_prefixed(header, 2)
         mask_key = basefwx._recover_mask_key_from_blob(user_blob, master_blob, password, use_master, mask_info=basefwx.FWXAES_MASK_INFO, aad=basefwx.FWXAES_AAD)
         key = basefwx._hkdf_sha256(mask_key, info=basefwx.FWXAES_KEY_INFO, length=basefwx.FWXAES_KEY_LEN)
         aesgcm = basefwx.AESGCM(key)
-        return aesgcm.decrypt(iv, ct, basefwx.FWXAES_AAD)
+        return _finish_plaintext(aesgcm.decrypt(iv, ct, basefwx.FWXAES_AAD))
     if len(blob_bytes) < off + salt_len + iv_len + ct_len:
         raise ValueError('fwxAES blob truncated')
     salt = blob_bytes[off:off + salt_len]
@@ -97,12 +209,17 @@ def fwxAES_decrypt_raw(blob: bytes, password: 'basefwx.typing.Union[str, bytes, 
     iv = blob_bytes[off:off + iv_len]
     off += iv_len
     ct = blob_bytes[off:off + ct_len]
+    if algo == basefwx.FWXAES_ALGO_PLUGIN:
+        from .plugin import Position
+
+        if plugin_position == Position.POST_AEAD:
+            ct = plugin_obj.inverse(ct)
     pw = basefwx._coerce_password_bytes(password)
     if not pw:
         raise ValueError('fwxAES password required for PBKDF2 payload')
     key = basefwx._kdf_pbkdf2_raw(pw, salt, iters)
     aesgcm = basefwx.AESGCM(key)
-    return aesgcm.decrypt(iv, ct, basefwx.FWXAES_AAD)
+    return _finish_plaintext(aesgcm.decrypt(iv, ct, basefwx.FWXAES_AAD))
 
 
 def fwxAES_encrypt_stream(source, dest, password: 'basefwx.typing.Union[str, bytes, bytearray, memoryview]', *, use_master: bool=True, chunk_size: int | None=None) -> int:

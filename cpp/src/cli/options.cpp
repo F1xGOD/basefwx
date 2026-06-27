@@ -280,6 +280,30 @@ FwxAesArgs ParseFwxAesArgs(int argc, char** argv, int start_index) {
         } else if (flag == "--no-archive") {
             opts.archive_original = false;
             idx += 1;
+        } else if (flag == "--plugin") {
+            if (idx + 1 >= argc) {
+                throw std::runtime_error("Missing plugin path");
+            }
+            opts.plugin_path = argv[idx + 1];
+            idx += 2;
+        } else if (flag == "--plugin-id") {
+            if (idx + 1 >= argc) {
+                throw std::runtime_error("Missing plugin id hex");
+            }
+            opts.plugin_id_hex = argv[idx + 1];
+            idx += 2;
+        } else if (flag == "--plugin-pos") {
+            if (idx + 1 >= argc) {
+                throw std::runtime_error("Missing plugin position");
+            }
+            opts.plugin_pos = argv[idx + 1];
+            idx += 2;
+        } else if (flag == "--plugin-config") {
+            if (idx + 1 >= argc) {
+                throw std::runtime_error("Missing plugin config path");
+            }
+            opts.plugin_config_file = argv[idx + 1];
+            idx += 2;
         } else {
             throw std::runtime_error("Unknown flag: " + flag);
         }

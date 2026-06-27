@@ -13,6 +13,7 @@
 #include "basefwx/env.hpp"
 #include "basefwx/format.hpp"
 #include "basefwx/keywrap.hpp"
+#include "basefwx/plugin_loader.hpp"
 
 #include <array>
 #include <chrono>
@@ -33,10 +34,11 @@ namespace basefwx::fwxaes {
 namespace {
 
 const std::uint8_t kMagic[4] = {'F', 'W', 'X', '1'};
-const std::uint8_t kAlgo = 0x01;
-const std::uint8_t kAlgoStreamV2 = 0x02;
-const std::uint8_t kKdfPbkdf2 = 0x01;
-const std::uint8_t kKdfWrap = 0x02;
+const std::uint8_t kAlgo = basefwx::constants::kFwxAesAlgo;
+const std::uint8_t kAlgoStreamV2 = basefwx::constants::kFwxAesAlgoStreamV2;
+const std::uint8_t kAlgoPlugin = basefwx::constants::kFwxAesAlgoPlugin;
+const std::uint8_t kKdfPbkdf2 = basefwx::constants::kFwxAesKdfPbkdf2;
+const std::uint8_t kKdfWrap = basefwx::constants::kFwxAesKdfWrap;
 const Bytes kAadVec(
     reinterpret_cast<const std::uint8_t*>(basefwx::constants::kFwxAesAad.data()),
     reinterpret_cast<const std::uint8_t*>(basefwx::constants::kFwxAesAad.data()) + basefwx::constants::kFwxAesAad.size()
@@ -317,6 +319,81 @@ void WriteText(const std::string& path, const std::string& text) {
     }
 }
 
+struct RawBlobParts {
+    std::uint8_t algo = kAlgo;
+    std::uint8_t kdf = kKdfPbkdf2;
+    std::uint8_t salt_len_field = 0;
+    std::uint8_t iv_len = 0;
+    std::uint32_t field0 = 0;
+    std::uint32_t ct_len = 0;
+    Bytes header_payload;
+    Bytes iv;
+    Bytes ciphertext;
+    Bytes plugin_tag;
+};
+
+Bytes AssembleRawBlob(const RawBlobParts& parts) {
+    std::size_t total = 16 + parts.plugin_tag.size() + parts.header_payload.size()
+                        + parts.iv.size() + parts.ciphertext.size();
+    Bytes blob(total);
+    std::uint8_t* out = blob.data();
+    std::memcpy(out, kMagic, 4);
+    out[4] = parts.algo;
+    out[5] = parts.kdf;
+    out[6] = parts.salt_len_field;
+    out[7] = parts.iv_len;
+    WriteU32Be(out + 8, parts.field0);
+    WriteU32Be(out + 12, parts.ct_len);
+    std::size_t offset = 16;
+    if (!parts.plugin_tag.empty()) {
+        std::memcpy(out + offset, parts.plugin_tag.data(), parts.plugin_tag.size());
+        offset += parts.plugin_tag.size();
+    }
+    if (!parts.header_payload.empty()) {
+        std::memcpy(out + offset, parts.header_payload.data(), parts.header_payload.size());
+        offset += parts.header_payload.size();
+    }
+    std::memcpy(out + offset, parts.iv.data(), parts.iv.size());
+    offset += parts.iv.size();
+    std::memcpy(out + offset, parts.ciphertext.data(), parts.ciphertext.size());
+    return blob;
+}
+
+basefwx::plugin::PluginHandle LoadPluginForEncrypt(const Options& options) {
+    if (options.plugin_position == 0) {
+        throw std::runtime_error("plugin position required (--plugin-pos pre|post)");
+    }
+    if (!options.plugin_path.empty()) {
+        return basefwx::plugin::LoadPluginByPath(options.plugin_path, options.plugin_config);
+    }
+    if (!options.plugin_id_hex.empty()) {
+        auto id = basefwx::plugin::ParsePluginIdHex(options.plugin_id_hex);
+        return basefwx::plugin::LoadPluginById(id.data(), {}, options.plugin_config);
+    }
+    throw std::runtime_error("plugin path or plugin id required");
+}
+
+basefwx::plugin::PluginTag BuildPluginTag(const basefwx::plugin::PluginHandle& plugin,
+                                          const Options& options) {
+    basefwx::plugin::PluginTag tag;
+    const std::uint8_t* id = plugin.plugin_id();
+    if (id == nullptr) {
+        throw std::runtime_error("plugin id unavailable");
+    }
+    std::memcpy(tag.plugin_id.data(), id, tag.plugin_id.size());
+    tag.position = options.plugin_position;
+    tag.config = options.plugin_config;
+    return tag;
+}
+
+void RejectPluginInStream(const Options& options) {
+    if (basefwx::plugin::PluginConfigured(options.plugin_path,
+                                          options.plugin_id_hex,
+                                          options.plugin_position)) {
+        throw std::runtime_error("fwxAES stream mode does not support plugins");
+    }
+}
+
 }  // namespace
 
 Bytes EncryptRaw(const Bytes& plaintext, const std::string& password, const Options& options) {
@@ -328,6 +405,24 @@ Bytes EncryptRaw(const Bytes& plaintext, const std::string& password, const Opti
     if (!effective.use_master && resolved.empty()) {
         throw std::runtime_error("Password required when master key usage is disabled");
     }
+
+    const bool use_plugin = basefwx::plugin::PluginConfigured(effective.plugin_path,
+                                                              effective.plugin_id_hex,
+                                                              effective.plugin_position);
+    basefwx::plugin::PluginHandle plugin;
+    Bytes plugin_tag;
+    if (use_plugin) {
+        plugin = LoadPluginForEncrypt(effective);
+        basefwx::plugin::ValidatePluginPosition(effective.plugin_position,
+                                                  plugin.supported_positions());
+        plugin_tag = basefwx::plugin::SerializePluginTag(BuildPluginTag(plugin, effective));
+    }
+
+    Bytes work_plaintext = plaintext;
+    if (use_plugin && effective.plugin_position == BASEFWX_PLUGIN_POS_PRE_AEAD) {
+        work_plaintext = plugin.TransformForward(plaintext, BASEFWX_PLUGIN_POS_PRE_AEAD);
+    }
+
     bool use_wrap = false;
     bool prefer_wrap = !effective.force_legacy_pbkdf2;
     basefwx::keywrap::MaskKeyResult mask_key;
@@ -352,95 +447,98 @@ Bytes EncryptRaw(const Bytes& plaintext, const std::string& password, const Opti
 
     Bytes iv = basefwx::crypto::RandomBytes(effective.iv_len);
     Bytes key;
-    // Declare the guard AFTER all the secrets it tracks — automatic-storage
-    // objects are destroyed in reverse construction order, so the guard
-    // (last constructed) runs SecureClear first, while the secrets are
-    // still alive. Reversing this order is a use-after-free.
     basefwx::crypto::SecretGuard guard;
     guard.Add(resolved);
     guard.Add(mask_key.mask_key);
     guard.Add(key);
+
+    RawBlobParts parts;
+    parts.algo = use_plugin ? kAlgoPlugin : kAlgo;
+    parts.plugin_tag = plugin_tag;
+    parts.iv = iv;
+    parts.iv_len = effective.iv_len;
+
     if (use_wrap) {
         key = basefwx::crypto::HkdfSha256(mask_key.mask_key, basefwx::constants::kFwxAesKeyInfo, 32);
-    } else {
-        Bytes salt = basefwx::crypto::RandomBytes(effective.salt_len);
-        key = basefwx::crypto::Pbkdf2HmacSha256(resolved, salt, effective.pbkdf2_iters, 32);
-        std::size_t ct_len = plaintext.size() + basefwx::constants::kAeadTagLen;
+        if (key_header.size() > std::numeric_limits<std::uint32_t>::max()) {
+            throw std::runtime_error("fwxAES key header too large");
+        }
+        std::size_t ct_len = work_plaintext.size() + basefwx::constants::kAeadTagLen;
         if (ct_len > std::numeric_limits<std::uint32_t>::max()) {
             throw std::runtime_error("fwxAES ciphertext too large");
         }
-        Bytes blob(16 + salt.size() + iv.size() + ct_len);
-        std::uint8_t* out = blob.data();
-        std::memcpy(out, kMagic, 4);
-        out[4] = kAlgo;
-        out[5] = kKdfPbkdf2;
-        out[6] = effective.salt_len;
-        out[7] = effective.iv_len;
-        WriteU32Be(out + 8, effective.pbkdf2_iters);
-        WriteU32Be(out + 12, static_cast<std::uint32_t>(ct_len));
-        std::size_t offset = 16;
-        std::memcpy(out + offset, salt.data(), salt.size());
-        offset += salt.size();
-        std::memcpy(out + offset, iv.data(), iv.size());
-        offset += iv.size();
+        Bytes ciphertext(ct_len);
         std::size_t written = basefwx::crypto::AesGcmEncryptWithIvInto(
             key,
             iv,
-            plaintext.data(),
-            plaintext.size(),
+            work_plaintext.data(),
+            work_plaintext.size(),
             kAadVec,
-            out + offset,
-            blob.size() - offset
+            ciphertext.data(),
+            ciphertext.size()
         );
         if (written != ct_len) {
             throw std::runtime_error("fwxAES encrypt length mismatch");
         }
-        return blob;
+        if (use_plugin && effective.plugin_position == BASEFWX_PLUGIN_POS_POST_AEAD) {
+            ciphertext = plugin.TransformForward(ciphertext, BASEFWX_PLUGIN_POS_POST_AEAD);
+            ct_len = ciphertext.size();
+            if (ct_len > std::numeric_limits<std::uint32_t>::max()) {
+                throw std::runtime_error("fwxAES ciphertext too large");
+            }
+        }
+        parts.kdf = kKdfWrap;
+        parts.salt_len_field = 0;
+        parts.field0 = static_cast<std::uint32_t>(key_header.size());
+        parts.ct_len = static_cast<std::uint32_t>(ct_len);
+        parts.header_payload = key_header;
+        parts.ciphertext = std::move(ciphertext);
+        return AssembleRawBlob(parts);
     }
 
-    if (key_header.size() > std::numeric_limits<std::uint32_t>::max()) {
-        throw std::runtime_error("fwxAES key header too large");
-    }
-    std::size_t ct_len = plaintext.size() + basefwx::constants::kAeadTagLen;
+    Bytes salt = basefwx::crypto::RandomBytes(effective.salt_len);
+    key = basefwx::crypto::Pbkdf2HmacSha256(resolved, salt, effective.pbkdf2_iters, 32);
+    std::size_t ct_len = work_plaintext.size() + basefwx::constants::kAeadTagLen;
     if (ct_len > std::numeric_limits<std::uint32_t>::max()) {
         throw std::runtime_error("fwxAES ciphertext too large");
     }
-    Bytes blob(16 + key_header.size() + iv.size() + ct_len);
-    std::uint8_t* out = blob.data();
-    std::memcpy(out, kMagic, 4);
-    out[4] = kAlgo;
-    out[5] = kKdfWrap;
-    out[6] = 0;
-    out[7] = effective.iv_len;
-    WriteU32Be(out + 8, static_cast<std::uint32_t>(key_header.size()));
-    WriteU32Be(out + 12, static_cast<std::uint32_t>(ct_len));
-    std::size_t offset = 16;
-    if (!key_header.empty()) {
-        std::memcpy(out + offset, key_header.data(), key_header.size());
-        offset += key_header.size();
-    }
-    std::memcpy(out + offset, iv.data(), iv.size());
-    offset += iv.size();
+    Bytes ciphertext(ct_len);
     std::size_t written = basefwx::crypto::AesGcmEncryptWithIvInto(
         key,
         iv,
-        plaintext.data(),
-        plaintext.size(),
+        work_plaintext.data(),
+        work_plaintext.size(),
         kAadVec,
-        out + offset,
-        blob.size() - offset
+        ciphertext.data(),
+        ciphertext.size()
     );
     if (written != ct_len) {
         throw std::runtime_error("fwxAES encrypt length mismatch");
     }
-    return blob;
+    if (use_plugin && effective.plugin_position == BASEFWX_PLUGIN_POS_POST_AEAD) {
+        ciphertext = plugin.TransformForward(ciphertext, BASEFWX_PLUGIN_POS_POST_AEAD);
+        ct_len = ciphertext.size();
+        if (ct_len > std::numeric_limits<std::uint32_t>::max()) {
+            throw std::runtime_error("fwxAES ciphertext too large");
+        }
+    }
+    parts.kdf = kKdfPbkdf2;
+    parts.salt_len_field = effective.salt_len;
+    parts.field0 = effective.pbkdf2_iters;
+    parts.ct_len = static_cast<std::uint32_t>(ct_len);
+    parts.header_payload = salt;
+    parts.ciphertext = std::move(ciphertext);
+    return AssembleRawBlob(parts);
 }
 
 Bytes DecryptRaw(const Bytes& blob, const std::string& password, bool use_master) {
+    Options opts;
+    opts.use_master = use_master;
+    return DecryptRaw(blob, password, opts);
+}
+
+Bytes DecryptRaw(const Bytes& blob, const std::string& password, const Options& options) {
     std::string resolved = basefwx::ResolvePassword(password);
-    // SecretGuard for `resolved` is declared at the bottom of each branch
-    // (after any branch-local secrets it needs to outlive) — see EncryptRaw
-    // for the rationale on construction-order vs destruction-order.
     const std::size_t header_len = 16;
     if (blob.size() < header_len) {
         throw std::runtime_error("fwxAES blob too short");
@@ -456,11 +554,14 @@ Bytes DecryptRaw(const Bytes& blob, const std::string& password, bool use_master
         std::string packed(reinterpret_cast<const char*>(blob.data()), blob.size());
         std::istringstream input(packed, std::ios::binary);
         std::ostringstream output(std::ios::binary);
-        DecryptStream(input, output, resolved, use_master);
+        DecryptStream(input, output, resolved, options.use_master);
         std::string plain = output.str();
         return Bytes(plain.begin(), plain.end());
     }
-    if (algo != kAlgo || (kdf != kKdfPbkdf2 && kdf != kKdfWrap)) {
+    if (algo != kAlgo && algo != kAlgoPlugin) {
+        throw std::runtime_error("fwxAES unsupported algo/kdf");
+    }
+    if (kdf != kKdfPbkdf2 && kdf != kKdfWrap) {
         throw std::runtime_error("fwxAES unsupported algo/kdf");
     }
     std::uint32_t iters = GetU32Be(&blob[8]);
@@ -470,6 +571,32 @@ Bytes DecryptRaw(const Bytes& blob, const std::string& password, bool use_master
     }
 
     std::size_t offset = header_len;
+    basefwx::plugin::PluginHandle plugin;
+    std::uint8_t plugin_position = 0;
+    if (algo == kAlgoPlugin) {
+        if (blob.size() < offset + basefwx::constants::kFwxAesPluginTagFixedLen) {
+            throw std::runtime_error("fwxAES plugin tag truncated");
+        }
+        basefwx::plugin::PluginTag tag = basefwx::plugin::ParsePluginTag(
+            blob.data() + offset,
+            blob.size() - offset
+        );
+        plugin = basefwx::plugin::LoadPluginForTag(
+            tag,
+            options.plugin_path,
+            options.plugin_id_hex
+        );
+        plugin_position = tag.position;
+        offset += basefwx::constants::kFwxAesPluginTagFixedLen + tag.config.size();
+    }
+
+    auto finish_plaintext = [&](Bytes plaintext) -> Bytes {
+        if (algo == kAlgoPlugin && plugin_position == BASEFWX_PLUGIN_POS_PRE_AEAD) {
+            return plugin.TransformInverse(plaintext, BASEFWX_PLUGIN_POS_PRE_AEAD);
+        }
+        return plaintext;
+    };
+
     if (kdf == kKdfWrap) {
         std::size_t header_len_wrap = static_cast<std::size_t>(iters);
         if (header_len_wrap > kMaxKeyHeaderLen) {
@@ -488,13 +615,19 @@ Bytes DecryptRaw(const Bytes& blob, const std::string& password, bool use_master
         Bytes iv(blob.begin() + static_cast<std::ptrdiff_t>(offset),
                  blob.begin() + static_cast<std::ptrdiff_t>(offset + iv_len));
         offset += iv_len;
+        Bytes ciphertext(blob.begin() + static_cast<std::ptrdiff_t>(offset),
+                         blob.begin() + static_cast<std::ptrdiff_t>(offset + ct_len));
+        if (algo == kAlgoPlugin && plugin_position == BASEFWX_PLUGIN_POS_POST_AEAD) {
+            ciphertext = plugin.TransformInverse(ciphertext, BASEFWX_PLUGIN_POS_POST_AEAD);
+            ct_len = static_cast<std::uint32_t>(ciphertext.size());
+        }
         auto parts = basefwx::format::UnpackLengthPrefixed(header, 2);
         basefwx::pb512::KdfOptions kdf_opts = ResolveWrapKdfOptionsForDecode();
         Bytes mask_key = basefwx::keywrap::RecoverMaskKey(
             parts[0],
             parts[1],
             resolved,
-            use_master,
+            options.use_master,
             basefwx::constants::kFwxAesMaskInfo,
             basefwx::constants::kFwxAesAad,
             kdf_opts
@@ -508,14 +641,14 @@ Bytes DecryptRaw(const Bytes& blob, const std::string& password, bool use_master
         std::size_t written = basefwx::crypto::AesGcmDecryptWithIvInto(
             key,
             iv,
-            blob.data() + offset,
+            ciphertext.data(),
             ct_len,
             kAadVec,
             plaintext.data(),
             plaintext.size()
         );
         plaintext.resize(written);
-        return plaintext;
+        return finish_plaintext(plaintext);
     }
     if (iters < kMinPbkdf2Iters) {
         throw std::runtime_error("fwxAES PBKDF2 iteration count below minimum");
@@ -530,6 +663,12 @@ Bytes DecryptRaw(const Bytes& blob, const std::string& password, bool use_master
     offset += salt_len;
     Bytes iv(blob.begin() + offset, blob.begin() + offset + iv_len);
     offset += iv_len;
+    Bytes ciphertext(blob.begin() + static_cast<std::ptrdiff_t>(offset),
+                     blob.begin() + static_cast<std::ptrdiff_t>(offset + ct_len));
+    if (algo == kAlgoPlugin && plugin_position == BASEFWX_PLUGIN_POS_POST_AEAD) {
+        ciphertext = plugin.TransformInverse(ciphertext, BASEFWX_PLUGIN_POS_POST_AEAD);
+        ct_len = static_cast<std::uint32_t>(ciphertext.size());
+    }
     Bytes key = basefwx::crypto::Pbkdf2HmacSha256(resolved, salt, iters, 32);
     Bytes plaintext(ct_len - basefwx::constants::kAeadTagLen);
     basefwx::crypto::SecretGuard guard;
@@ -538,14 +677,14 @@ Bytes DecryptRaw(const Bytes& blob, const std::string& password, bool use_master
     std::size_t written = basefwx::crypto::AesGcmDecryptWithIvInto(
         key,
         iv,
-        blob.data() + offset,
+        ciphertext.data(),
         ct_len,
         kAadVec,
         plaintext.data(),
         plaintext.size()
     );
     plaintext.resize(written);
-    return plaintext;
+    return finish_plaintext(plaintext);
 }
 
 std::uint64_t EncryptStream(std::istream& source,
@@ -565,6 +704,7 @@ std::uint64_t EncryptStream(std::istream& source,
     if (!effective.use_master && resolved.empty()) {
         throw std::runtime_error("Password required when master key usage is disabled");
     }
+    RejectPluginInStream(effective);
 
     auto encrypt_to_seekable = [&](std::ostream& output) -> std::uint64_t {
         bool stream_v2 = true;
@@ -1013,8 +1153,12 @@ void EncryptFile(const std::string& path_in,
     std::error_code ec;
 
     // Fast path for large files: stream encryption avoids full in-memory buffering.
+    // Plugin transforms are raw-blob only in v1 — skip streaming when configured.
     if (!normalize.enabled
         && !pack.compress
+        && !basefwx::plugin::PluginConfigured(options.plugin_path,
+                                                options.plugin_id_hex,
+                                                options.plugin_position)
         && std::filesystem::is_regular_file(input_path, ec)) {
         ec.clear();
         if (std::filesystem::exists(output_path, ec)
@@ -1073,14 +1217,28 @@ void DecryptFile(const std::string& path_in,
                  const std::string& path_out,
                  const std::string& password,
                  bool use_master) {
+    Options opts;
+    opts.use_master = use_master;
+    DecryptFile(path_in, path_out, password, opts);
+}
+
+void DecryptFile(const std::string& path_in,
+                 const std::string& path_out,
+                 const std::string& password,
+                 const Options& options) {
     Bytes data = basefwx::ReadFile(path_in);
     if (data.size() >= 16
         && std::equal(std::begin(kMagic), std::end(kMagic), data.begin())
         && data[4] == kAlgoStreamV2) {
+        if (basefwx::plugin::PluginConfigured(options.plugin_path,
+                                              options.plugin_id_hex,
+                                              options.plugin_position)) {
+            throw std::runtime_error("fwxAES stream mode does not support plugins");
+        }
         std::string packed(reinterpret_cast<const char*>(data.data()), data.size());
         std::istringstream input(packed, std::ios::binary);
         std::ostringstream output(std::ios::binary);
-        DecryptStream(input, output, password, use_master);
+        DecryptStream(input, output, password, options.use_master);
         std::string plain = output.str();
         WriteBinary(path_out, Bytes(plain.begin(), plain.end()));
         return;
@@ -1092,7 +1250,7 @@ void DecryptFile(const std::string& path_in,
         std::string text(data.begin(), data.end());
         blob = NormalizeUnwrap(text);
     }
-    Bytes plaintext = DecryptRaw(blob, password, use_master);
+    Bytes plaintext = DecryptRaw(blob, password, options);
     basefwx::archive::PackMode pack_mode = basefwx::archive::PackMode::None;
     Bytes payload;
     if (TryUnwrapPackHeader(plaintext, pack_mode, payload)) {

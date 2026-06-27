@@ -607,6 +607,7 @@ add_library(basefwxcpp
     src/ec.cpp
     src/pb512.cpp
     src/fwxaes.cpp
+    src/plugin_loader.cpp
     src/env.cpp
     src/pq.cpp
     src/keywrap.cpp
@@ -640,6 +641,12 @@ target_include_directories(basefwxcpp
         ${CMAKE_CURRENT_SOURCE_DIR}/third_party
 )
 target_link_libraries(basefwxcpp PUBLIC OpenSSL::Crypto ZLIB::ZLIB)
+
+if(UNIX AND NOT APPLE)
+    target_link_libraries(basefwxcpp PRIVATE ${CMAKE_DL_LIBS})
+elseif(WIN32)
+    # dlopen equivalent is in kernel32 via LoadLibrary — no extra link needed.
+endif()
 
 # GCC 8 and older keep std::filesystem in a separate support library.
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS 9)

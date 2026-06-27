@@ -1,16 +1,16 @@
 # BaseFWX 3.7.0 — Release Notes
 
-> **Headline:** the start of the "blackbox plugin" core **plus** the audit-driven
-> hardening that was queued for 3.6.5. Callers can now ship a `.so` / `.dll`
-> driver that wraps the AEAD payload with custom logic — open-source crypto
-> core, closed-source obfuscation layer. The 3.6.5 security fixes (8 High,
-> ~10 Medium audit findings) ride along.
+> **Release status:** **not shipped.** The `v3.7.0` tag was withdrawn (2026-06-26).
+> Finish the fwxAES/CLI plugin loader before tagging or publishing — see
+> [`PLUGIN_3.7.0_HANDOFF.md`](PLUGIN_3.7.0_HANDOFF.md).
 
-> 3.6.x → 3.7.0 is **backwards-compatible on the wire** for standard
-> blobs. Official codecs do not emit plugin tags yet — plugin-tagged
-> production blobs cannot be created through the CLI until the 3.7.x
-> loader lands. (3.6.5 was tagged in working trees but never released;
-> the headline plugin work warrants the minor bump.)
+> **Headline (when shipped):** blackbox plugin **in production encrypt/decrypt**
+> plus audit-driven hardening from the 3.6.5 queue. Callers ship a `.so` /
+> `.dll` driver that wraps the AEAD payload — open-source crypto core,
+> closed-source obfuscation layer.
+
+> 3.6.x → 3.7.0 is **backwards-compatible on the wire** for blobs **without**
+> a plugin tag. Plugin-tagged blobs are new in 3.7.0 once the loader lands.
 
 ## Plugin (blackbox) core — what's in 3.7.0 vs queued
 

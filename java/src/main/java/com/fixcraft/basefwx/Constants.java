@@ -18,7 +18,7 @@ public final class Constants {
     public static final int FWXAES_SALT_LEN = 16;
     public static final int FWXAES_IV_LEN = 12;
     public static final int FWXAES_KEY_LEN = 32;
-    // 3.6.5: BASEFWX_TEST_KDF_ITERS is honored ONLY when the JVM is
+    // 3.7.0: BASEFWX_TEST_KDF_ITERS is honored ONLY when the JVM is
     // launched with -Dbasefwx.testing=true (or the env var
     // BASEFWX_TESTING=1). The previous unconditional read meant a
     // production shell that happened to have BASEFWX_TEST_KDF_ITERS set
@@ -54,6 +54,11 @@ public final class Constants {
     // Short-password (<12 char) step-up to match C++ kShortArgon2*.
     public static final int SHORT_ARGON2_TIME_COST = 5;
     public static final int SHORT_ARGON2_MEMORY_KIB = 1 << 17;  // 128 MiB
+    // Heavy-mode Argon2id parameters — mirrors C++ kHeavyArgon2* constants.
+    // Used by Pb512FileCodec heavy path; not yet wired for user-KDF.
+    public static final int HEAVY_ARGON2_TIME_COST = 6;
+    public static final int HEAVY_ARGON2_MEMORY_KIB = 1 << 18;  // 256 MiB
+    public static final int HEAVY_ARGON2_PARALLELISM = 4;
 
     // 3.7.0: parallelism is fixed at 4 so blobs are portable across
     // hosts. The wire format does not carry the Argon2 parallelism lane
@@ -131,7 +136,7 @@ public final class Constants {
     public static final byte[] KEM_INFO = "basefwx.kem.v1".getBytes(StandardCharsets.US_ASCII);
 
     public static final String MASTER_PQ_ALG = "ml-kem-768";
-    // 3.6.5: the upstream baked ML-KEM-768 master public key has been
+    // 3.7.0: the upstream baked ML-KEM-768 master public key has been
     // removed from this constant. Deployments that want a baked key
     // override it via -Dbasefwx.master.pq.public.b64=<base64-blob> on
     // the JVM command line (analogous to the C++ -DBASEFWX_MASTER_PQ_PUB_B64
@@ -150,6 +155,11 @@ public final class Constants {
     private static final Integer HEAVY_PBKDF2_ENV = envInt("BASEFWX_HEAVY_PBKDF2_ITERS");
     public static final int HEAVY_PBKDF2_ITERATIONS = resolveHeavyPbkdf2Iterations();
 
+    // BASEFWX_FWXAES_PBKDF2_ITERS and BASEFWX_USER_KDF_ITERS are honored
+    // unconditionally because they are legitimate production-tuning knobs
+    // (e.g. lower-iteration deployments on IoT / embedded targets). They
+    // are NOT gated by TESTING_BUILD, unlike BASEFWX_TEST_KDF_ITERS which
+    // is a test-only bypass. This matches the C++ fwxaes.cpp design.
     private static int resolveFwxAesIters() {
         int fallback = 600000;
         Integer env = envInt("BASEFWX_FWXAES_PBKDF2_ITERS");

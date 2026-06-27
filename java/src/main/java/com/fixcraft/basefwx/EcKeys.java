@@ -37,10 +37,10 @@ public final class EcKeys {
     private EcKeys() {}
 
     public static boolean masterEcAutoCreateEnabled() {
-        // 3.6.5: silent EC master autogeneration removed (mirrors the C++
+        // 3.7.0: silent EC master autogeneration removed (mirrors the C++
         // change in keywrap.cpp). The env var stays referenced so anyone
         // setting it gets a deterministic "feature is gone" rather than
-        // surprising behavior — see basefwx CHANGELOG 3.6.5 for the
+        // surprising behavior — see basefwx CHANGELOG 3.7.0 for the
         // rationale. To provision a master EC key, do it explicitly
         // out-of-band and configure the resulting public-key path.
         return false;

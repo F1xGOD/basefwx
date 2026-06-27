@@ -768,7 +768,7 @@ def fwxAES_file(file: 'basefwx.typing.Union[str, basefwx.pathlib.Path]', passwor
     try:
         if heavy:
             _set_bytes_hw_plan()
-            pubkey_bytes, master_available = basefwx._resolve_master_usage(use_master, None, create_if_missing=True)
+            pubkey_bytes, master_available = basefwx._resolve_master_usage(use_master, None)
             encode_use_master = use_master and master_available
             decode_use_master = use_master
             password = basefwx._resolve_password(password, use_master=encode_use_master)

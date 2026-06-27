@@ -11,7 +11,6 @@
 #include <limits>
 #include <string>
 #include <string_view>
-#include <thread>
 
 #include "basefwx/env.hpp"
 
@@ -41,7 +40,7 @@ inline constexpr std::uint32_t kHeavyArgon2Parallelism = 4;
 inline std::uint32_t HeavyPbkdf2Iterations() {
     std::string raw = basefwx::env::Get("BASEFWX_HEAVY_PBKDF2_ITERS");
     if (raw.empty()) {
-        raw = basefwx::env::Get("BASEFWX_TEST_KDF_ITERS");
+        raw = basefwx::env::TestKdfIters();
     }
     if (raw.empty()) {
         return kHeavyPbkdf2Iterations;
@@ -101,7 +100,7 @@ inline constexpr std::string_view kEngineVersion = BASEFWX_VERSION_STRING;
 
 inline constexpr std::string_view kMasterPqAlg = "ml-kem-768";
 inline constexpr std::string_view kMasterPqAlgHigh = "ml-kem-1024";
-// 3.6.5: master public key is no longer baked into release artifacts. Each
+// 3.7.0: master public key is no longer baked into release artifacts. Each
 // deployment configures its own master key via BASEFWX_MASTER_PQ_PUB=<path>
 // (runtime) or, for fleet builds that want a baked-in key, the
 // BASEFWX_MASTER_PQ_PUB_B64 CMake option (build-time). Empty by default.
@@ -124,6 +123,7 @@ inline constexpr std::uint8_t kJmgSecurityProfileLegacy = 0;
 inline constexpr std::uint8_t kJmgSecurityProfileMax = 1;
 inline constexpr std::uint8_t kJmgSecurityProfileDefault = kJmgSecurityProfileMax;
 inline constexpr std::string_view kJmgMaskInfo = "basefwx.jmg.mask.v1";
+inline constexpr std::string_view kFwxAesAad = "fwxAES";
 inline constexpr std::string_view kFwxAesMaskInfo = "basefwx.fwxaes.mask.v1";
 inline constexpr std::string_view kFwxAesKeyInfo = "basefwx.fwxaes.key.v1";
 inline constexpr std::string_view kFwxAesPayloadAeadInfo = "basefwx.fwxaes.payload.aead.v1";

@@ -7,6 +7,7 @@
 #include "basefwx/cli/options.hpp"
 
 #include <cstdlib>
+#include <iostream>
 #include <stdexcept>
 #include <string>
 
@@ -26,11 +27,16 @@ void ApplyMasterPubPath(const std::string& path) {
 }
 
 void EnableMasterEcAutogen() {
-    SetCliEnvVar("BASEFWX_MASTER_EC_CREATE_IF_MISSING", "1");
+    // 3.7.0: silent EC master autogeneration removed. This flag only
+    // opts into useMaster=true; provision the EC keypair explicitly.
+    std::cerr << "basefwx: --master-autogen is deprecated and has no effect "
+                 "since 3.7.0; provision the EC master keypair manually.\n";
 }
 
-void EnableBakedMasterPub() {
-    SetCliEnvVar("BASEFWX_MASTER_PQ_ALLOW_BAKED", "1");
+void EnableEmbeddedMaster() {
+    // 3.7.0: build-time embedding via BASEFWX_MASTER_PQ_PUB_B64 is
+    // picked up automatically in pq.cpp; the old ALLOW_BAKED env-var
+    // opt-in path is gone. This flag only opts into useMaster=true.
 }
 
 }  // namespace
@@ -60,7 +66,7 @@ bool HandleMasterFlag(const std::string& flag,
         return true;
     }
     if (flag == "--allow-embedded-master") {
-        EnableBakedMasterPub();
+        EnableEmbeddedMaster();
         if (use_master) {
             *use_master = true;
         }

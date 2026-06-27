@@ -28,8 +28,10 @@ namespace {
 
 using basefwx::crypto::Bytes;
 
-constexpr std::uint8_t kAadBytes[] = {'f', 'w', 'x', 'A', 'E', 'S'};
-const Bytes kAadVec(kAadBytes, kAadBytes + sizeof(kAadBytes));
+const Bytes kAadVec(
+    reinterpret_cast<const std::uint8_t*>(basefwx::constants::kFwxAesAad.data()),
+    reinterpret_cast<const std::uint8_t*>(basefwx::constants::kFwxAesAad.data()) + basefwx::constants::kFwxAesAad.size()
+);
 
 std::uint32_t ResolveFwxAesIterations(std::uint32_t fallback) {
     std::string raw = basefwx::env::Get("BASEFWX_FWXAES_PBKDF2_ITERS");
@@ -200,7 +202,7 @@ Bytes LiveEncryptor::InitSession() {
                 true,
                 basefwx::constants::kFwxAesMaskInfo,
                 false,
-                std::string_view(reinterpret_cast<const char*>(kAadBytes), sizeof(kAadBytes)),
+                basefwx::constants::kFwxAesAad,
                 kdf
             );
             use_wrap = mask_key.used_master || !has_password;
@@ -209,6 +211,7 @@ Bytes LiveEncryptor::InitSession() {
                 std::vector<basefwx::format::Bytes> parts = {mask_key.user_blob, mask_key.master_blob};
                 key_header = basefwx::format::PackLengthPrefixed(parts);
                 key_ = basefwx::crypto::HkdfSha256(mask_key.mask_key, basefwx::constants::kFwxAesKeyInfo, 32);
+                basefwx::crypto::SecureClear(mask_key.mask_key);
             }
         } catch (const std::exception&) {
             if (!has_password) {
@@ -368,10 +371,11 @@ void LiveDecryptor::ParseHeader(const std::uint8_t* body, std::size_t body_len) 
             password_,
             use_master_,
             basefwx::constants::kFwxAesMaskInfo,
-            std::string_view(reinterpret_cast<const char*>(kAadBytes), sizeof(kAadBytes)),
+            basefwx::constants::kFwxAesAad,
             kdf
         );
         key_ = basefwx::crypto::HkdfSha256(mask_key, basefwx::constants::kFwxAesKeyInfo, 32);
+        basefwx::crypto::SecureClear(mask_key);
     } else if (key_mode == basefwx::constants::kLiveKeyModePbkdf2) {
         if (password_.empty()) {
             throw std::runtime_error("Password required for PBKDF2 live stream");

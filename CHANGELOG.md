@@ -6,6 +6,11 @@
 
 Compare: <https://github.com/F1xGOD/basefwx/compare/v3.6.4...v3.7.0>
 
+> **Release status (2026-06-26):** the `v3.7.0` git tag was **withdrawn**.
+> Do **not** publish a GitHub Release until the fwxAES/CLI plugin loader
+> and wire-format plugin tag land — that integration is why this is 3.7.0
+> and not 3.6.5. See [`PLUGIN_3.7.0_HANDOFF.md`](PLUGIN_3.7.0_HANDOFF.md).
+
 > The audit-driven hardening that briefly sat under `[v3.6.5]` in working
 > trees is rolled into 3.7.0 alongside the new **blackbox plugin** ABI.
 > 3.6.5 was never tagged or published.

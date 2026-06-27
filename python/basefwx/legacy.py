@@ -162,7 +162,6 @@ class basefwx:
         ".ico", ".heic", ".heif", ".ppm", ".pgm",
     })
     MASTER_PQ_ALG = "ml-kem-768"
-    MASTER_PQ_PUBLIC = b"eJwBoARf+/rkrYxhXn0CNFqTkzQUrIYloydzGrqpIuWXi+qnLO/XRnspzQBDwwTKLW3Ku6Zwii1AfriFM5t8PtugqMNFt/5HoHxIZLGkytTWKP3IKoP7EH2HFu14b5bagh+KIFTWoW12qZqLRNjJLBHZmzxasEIsN7AnsOiokMHxt4XwoLk5fscIhXSANBZpHUVEO+NkBhg5UnvzWkzAqPm6rEvCfE+CHxgFg1SjBJeFfVMyzpKpsUi6iCGXSl6nZuTkr10btfi8RHCEfxDrfhcJk0bsKMWEI6wVY23KQXXlmcJ4VydGZ/ZbjWhVbX6bo0DKqG5IlwpTDPJIwlumRpxbBog8JG10p8PTaRJEAKfiVo7jiD1Aki7hYqmyyBn2Q0RFy03Bm/Rpy1zlK3DahaaoMj1mJrJ5ff2FYYVsBQbrywcDUcdHUkIpUqwrrRyqdEIHq1T6AiKHmf2KHTXQnLuZpJ3Ih59bkH1GC2UzbEIWzFSImvQDkswCBW9cF0tFYCNnReiReb57XAjaW3smdOg1o9oyk2IbyptJtNe1teHoPsMJkBGin/ugUeFmEOa0f8lTEmK4u1/GxHrQxD65kxm2IHT4NPM8Z5oqQ9z0WthUE5MouNrZLK8EltZQzAcZJ/g7CesRi40qFecyD14hDPBcr6cEV6yqOXXrcDRQVCUhuYRyUNqrFe4JPks2kZlxXjABHMD1PHVzfJpsAtsTDJa2EdpoAkKRvfg2QOK6CpYix6zIyB1yGwdCG8L2QS9DQefDQntXDlwSIieqRrwmiWcba4mSgwfxsoH2SIbQPZKbtEA4XNGqen1CcldAw1w2mnO3otspreJEBZJjVSihGcoyVjWap9dWc0pLffeDC5mUyOTzWUQ3XBAxX817G9rIbFyMQ+4AdeP2zL/nk9s2wYuZT2MEbwTHW/6UJQXbRf+svg9Kq//ryl/YRiaxdK2xRkP7oaBBVbyyXxYUJEhXOD7cUar8HsGZlXmiDSxzCBZSJG+4ooAgOKfEx6liOvqHBQKrsG4ylg3JQqmKBUdXcf6cMImRqS4MFM23vQkSPqIckxGgkrJGDKLGg8DKsuOqUvkzexAWviAIJQZsJsqjUl2stBgnltsyysE2cdI5Poh7KgOFV27bfi4iCpFSXc46Aa2jjN0WFYAgfhcRXgvIanJ3L8/sPrR7QKvpTtPFSfdcBipqp8vRdYImF5HceU1TU+QwtOcmCKDmaDTBGtJLZDXYJ3/2VQAEr8Mhk1WxGQsWUikZBi9pHTTbh93gvl9gLaGlxlRCjwzSqcJVXF80UiVMA06hfDnzi9MFpIGZL0czax+1zwdLFsnnHLGLzm/YpgrUBIk0gTgMVhqiu0+JyagxwrXCsDmGbhj8PzJGUeR8xhoxzOtTMgtaFwekbEAss+JGzuZJeakDxhMJEvvbKabIFDeQLsImO4eaAslqXyNoSg7AtnDlHfzTTFvwk2/UppeXNmcEC9n1UyfyWNW6qAZRJe5zQkijzLfkGKWsR/ksjmUQwMHwOOWVQ8qqUapYxsmbZkosPBXRDNBhY6PNjfciD2hRoIqrd/pnkJ6cZd1FQyxge6FA3PMpHw=="
     MASTER_EC_MAGIC = b"EC1"
     MASTER_EC_CURVE_NAME = "secp521r1"
     MASTER_EC_PUBLIC_ENV = "BASEFWX_MASTER_EC_PUB"
@@ -218,6 +217,12 @@ class basefwx:
     PERM_FAST_MIN = 4 * 1024
     USER_KDF_SALT_SIZE = 16
     USER_KDF_ITERATIONS = 600_000
+    # Default Argon2id parameters for user-KDF (standard tier).
+    # Fixed at compile time so blobs are portable across hosts — the wire
+    # format does not carry the lane count.
+    ARGON2_TIME_COST = 4
+    ARGON2_MEMORY_COST = 2 ** 16   # 64 MiB
+    ARGON2_PARALLELISM = 4
     SHORT_PASSWORD_MIN = 12
     SHORT_PBKDF2_ITERATIONS = 1_000_000
     SHORT_ARGON2_TIME_COST = 5
@@ -250,7 +255,8 @@ class basefwx:
     # This maintains cross-language compatibility when explicitly using PBKDF2
     if not _ARGON2_AVAILABLE and os.getenv("BASEFWX_USER_KDF") is None:
         USER_KDF_ITERATIONS = 32_768
-    _TEST_KDF_ITERS = _prim._env_int("BASEFWX_TEST_KDF_ITERS")
+    _TESTING_BUILD = os.getenv("BASEFWX_TESTING") == "1"
+    _TEST_KDF_ITERS = _prim._env_int("BASEFWX_TEST_KDF_ITERS") if _TESTING_BUILD else None
     _USER_KDF_ITERS_ENV = _prim._env_int("BASEFWX_USER_KDF_ITERS")
     if _USER_KDF_ITERS_ENV is not None:
         USER_KDF_ITERATIONS = _USER_KDF_ITERS_ENV
@@ -857,7 +863,7 @@ class basefwx:
 
     a512decode = staticmethod(_codecs_str.a512decode)
 
-    # b1024encode retired in 3.6.5 — was bi512encode(a512encode(string)).
+    # b1024encode retired in 3.7.0 — was bi512encode(a512encode(string)).
     # Caller code that needs the same byte-for-byte output should compose
     # the two primitives directly. Removed for parity with the C++ and
     # Java runtimes and to trim a large chunk of cross-runtime test time

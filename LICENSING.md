@@ -116,9 +116,12 @@ if **all four** of these hold:
 4. **Dynamically linked.** Your plugin is dynamically linked, not
    statically linked, to any BaseFWX code.
 
-The two example plugins in `examples/plugins/` (`xor-rotate` for C++
-and `xor-rotate-java` for Java) satisfy all four. If yours does too,
-you're done — pick whatever license you want for your plugin code.
+The example plugins in `examples/plugins/` — five C++ profiles
+(`passthrough/`, `xor-rotate/`, `aead-wrapped-keyed/`, `time-tweak/`,
+`static-embed/`) plus `xor-rotate-java/` and `xor-rotate-py/` — satisfy
+all four when used as separate dynamically-loaded artifacts. If yours
+does too, you're done — pick whatever license you want for your plugin
+code.
 
 ## Plugin-Template Exception (LICENCE clause 5)
 

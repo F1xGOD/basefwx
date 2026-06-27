@@ -26,7 +26,7 @@ def _aes_light_encode_path(path: 'basefwx.pathlib.Path', password: str, reporter
     size_hint: 'basefwx.typing.Optional[basefwx.typing.Tuple[int, int]]' = None
     if reporter:
         reporter.update(file_index, 0.05, 'prepare', path)
-    pubkey_bytes, master_available = basefwx._resolve_master_usage(use_master and (not strip_metadata), master_pubkey, create_if_missing=True)
+    pubkey_bytes, master_available = basefwx._resolve_master_usage(use_master and (not strip_metadata), master_pubkey)
     use_master_effective = (use_master and (not strip_metadata)) and master_available
     obfuscate_payload = input_size <= basefwx.STREAM_THRESHOLD
     chunk_size = max(3, basefwx.STREAM_CHUNK_SIZE)
@@ -177,7 +177,7 @@ def _aes_heavy_encode_path(path: 'basefwx.pathlib.Path', password: str, reporter
     estimated_hint: 'basefwx.typing.Optional[basefwx.typing.Tuple[int, int]]' = None
     if reporter:
         reporter.update(file_index, 0.05, 'prepare', display_path)
-    pubkey_bytes, master_available = basefwx._resolve_master_usage(use_master and (not strip_metadata), master_pubkey, create_if_missing=True)
+    pubkey_bytes, master_available = basefwx._resolve_master_usage(use_master and (not strip_metadata), master_pubkey)
     use_master_effective = (use_master and (not strip_metadata)) and master_available
     heavy_iters = basefwx.HEAVY_PBKDF2_ITERATIONS
     heavy_argon_time = basefwx.HEAVY_ARGON2_TIME_COST if basefwx.hash_secret_raw is not None else None
@@ -545,7 +545,7 @@ def _aes_heavy_decode_path_stream(path: 'basefwx.pathlib.Path', password: str, r
 def AESfile(files: 'basefwx.typing.Union[str, basefwx.pathlib.Path, basefwx.typing.Iterable[basefwx.typing.Union[str, basefwx.pathlib.Path]]]', password: str='', light: bool=True, strip_metadata: bool=False, use_master: bool=True, master_pubkey: 'basefwx.typing.Optional[bytes]'=None, silent: bool=False, compress: bool=False, keep_input: bool=False):
     basefwx.sys.set_int_max_str_digits(2000000000)
     paths = basefwx._coerce_file_list(files)
-    pubkey_bytes, master_available = basefwx._resolve_master_usage(use_master and (not strip_metadata), master_pubkey, create_if_missing=True)
+    pubkey_bytes, master_available = basefwx._resolve_master_usage(use_master and (not strip_metadata), master_pubkey)
     encode_use_master = (use_master and (not strip_metadata)) and master_available
     decode_use_master = use_master and (not strip_metadata)
     try:

@@ -131,7 +131,7 @@ final class CodecCommands {
                 }
                 System.out.println(BaseFwx.bi512Encode(args[1]));
                 return 0;
-            // b1024-enc retired in 3.6.5; was `bi512-enc $(a512-enc text)`.
+            // b1024-enc retired in 3.7.0; was `bi512-enc $(a512-enc text)`.
             default:
                 return -1;
         }
@@ -183,7 +183,7 @@ final class CodecCommands {
                 return BaseFwx.uhash513(text);
             case "bi512":
                 return BaseFwx.bi512Encode(text);
-            // b1024 retired in 3.6.5; chain bi512(a512(text)) in caller code.
+            // b1024 retired in 3.7.0; chain bi512(a512(text)) in caller code.
             default:
                 throw new IllegalArgumentException("Unsupported hash method " + method);
         }

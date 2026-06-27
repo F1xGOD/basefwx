@@ -445,7 +445,7 @@ std::string ResolvePassword(const std::string& input) {
     if (input.empty()) {
         return input;
     }
-    // 3.6.5: bare passwords are ALWAYS literal. Filesystem read is opt-in
+    // 3.7.0: bare passwords are ALWAYS literal. Filesystem read is opt-in
     // via an explicit `file://` URI scheme. The old auto-detect behavior
     // (read input as a file if it happened to name an existing path)
     // could silently turn a user's password into a totally different
@@ -799,7 +799,7 @@ std::string A512Decode(const std::string& input) {
     }
 }
 
-// B1024Encode retired in 3.6.5 — was Bi512Encode(A512Encode(input));
+// B1024Encode retired in 3.7.0 — was Bi512Encode(A512Encode(input));
 // see basefwx.hpp for rationale.
 
 std::string B512Encode(const std::string& input, const std::string& password, bool use_master, const KdfOptions& kdf) {

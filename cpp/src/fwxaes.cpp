@@ -37,8 +37,10 @@ const std::uint8_t kAlgo = 0x01;
 const std::uint8_t kAlgoStreamV2 = 0x02;
 const std::uint8_t kKdfPbkdf2 = 0x01;
 const std::uint8_t kKdfWrap = 0x02;
-const std::uint8_t kAadBytes[] = {'f', 'w', 'x', 'A', 'E', 'S'};
-const Bytes kAadVec(kAadBytes, kAadBytes + sizeof(kAadBytes));
+const Bytes kAadVec(
+    reinterpret_cast<const std::uint8_t*>(basefwx::constants::kFwxAesAad.data()),
+    reinterpret_cast<const std::uint8_t*>(basefwx::constants::kFwxAesAad.data()) + basefwx::constants::kFwxAesAad.size()
+);
 const std::uint8_t kPackMagic[] = {'F', 'W', 'X', 'P', 'K', '1'};
 constexpr std::size_t kPackHeaderLen = sizeof(kPackMagic) + 1 + 8;
 
@@ -338,7 +340,7 @@ Bytes EncryptRaw(const Bytes& plaintext, const std::string& password, const Opti
             effective.use_master,
             basefwx::constants::kFwxAesMaskInfo,
             false,
-            std::string_view(reinterpret_cast<const char*>(kAadBytes), sizeof(kAadBytes)),
+            basefwx::constants::kFwxAesAad,
             kdf
         );
         use_wrap = mask_key.used_master || (prefer_wrap && !resolved.empty()) || resolved.empty();
@@ -494,7 +496,7 @@ Bytes DecryptRaw(const Bytes& blob, const std::string& password, bool use_master
             resolved,
             use_master,
             basefwx::constants::kFwxAesMaskInfo,
-            std::string_view(reinterpret_cast<const char*>(kAadBytes), sizeof(kAadBytes)),
+            basefwx::constants::kFwxAesAad,
             kdf_opts
         );
         Bytes key = basefwx::crypto::HkdfSha256(mask_key, basefwx::constants::kFwxAesKeyInfo, 32);
@@ -584,7 +586,7 @@ std::uint64_t EncryptStream(std::istream& source,
                 effective.use_master,
                 basefwx::constants::kFwxAesMaskInfo,
                 false,
-                std::string_view(reinterpret_cast<const char*>(kAadBytes), sizeof(kAadBytes)),
+                basefwx::constants::kFwxAesAad,
                 kdf
             );
             use_wrap = mask_key.used_master || (prefer_wrap && !resolved.empty()) || resolved.empty();
@@ -670,7 +672,7 @@ std::uint64_t EncryptStream(std::istream& source,
         }
         int out_len = 0;
         if (EVP_EncryptUpdate(ctx.get(), nullptr, &out_len,
-                              kAadBytes, static_cast<int>(sizeof(kAadBytes))) != 1) {
+                              reinterpret_cast<const std::uint8_t*>(basefwx::constants::kFwxAesAad.data()), static_cast<int>(basefwx::constants::kFwxAesAad.size())) != 1) {
             throw std::runtime_error("fwxAES encrypt aad failed");
         }
 
@@ -817,7 +819,7 @@ std::uint64_t DecryptStream(std::istream& source,
             resolved,
             use_master,
             basefwx::constants::kFwxAesMaskInfo,
-            std::string_view(reinterpret_cast<const char*>(kAadBytes), sizeof(kAadBytes)),
+            basefwx::constants::kFwxAesAad,
             ResolveWrapKdfOptionsForDecode()
         );
         key = basefwx::crypto::HkdfSha256(mask_key, basefwx::constants::kFwxAesKeyInfo, 32);
@@ -874,7 +876,7 @@ std::uint64_t DecryptStream(std::istream& source,
     }
     int out_len = 0;
     if (EVP_DecryptUpdate(ctx.get(), nullptr, &out_len,
-                          kAadBytes, static_cast<int>(sizeof(kAadBytes))) != 1) {
+                          reinterpret_cast<const std::uint8_t*>(basefwx::constants::kFwxAesAad.data()), static_cast<int>(basefwx::constants::kFwxAesAad.size())) != 1) {
         throw std::runtime_error("fwxAES decrypt aad failed");
     }
 

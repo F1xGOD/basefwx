@@ -1,3 +1,8 @@
+# BaseFWX example plugin build file
+# Copyright (C) 2020-2026  FixCraft Inc.
+# Licensed under the GNU General Public License v3.0, with the
+# BaseFWX Plugin-Template Exception (see LICENCE clause 5).
+#
 # BaseFWX aead-wrapped-keyed plugin — Profile B reference example.
 #
 # Demonstrates the keyed forward / inverse path with HKDF, AES-256-CTR,

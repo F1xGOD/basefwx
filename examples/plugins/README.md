@@ -27,16 +27,15 @@ This directory contains:
 | `xor-rotate-py/` | A | Python equivalent. |
 
 > **Status (3.7.0):** the C ABI (`plugin.h`), C++ helper layer
-> (`plugin.hpp`), static-embed Registry (`plugin_static.hpp`), and
-> all the example plugins above are committed. The runtime loader
-> inside the BaseFWX CLI, the Java SPI for `.jar` plugins, the Python
-> `ctypes` shim, the wire-format plugin tag, and the
-> `basefwx-plugin-verify` tool are scoped for the 3.7.x point
-> releases (separate files in the source tree, not separate version
-> bumps). You can build and unit-test plugins against the ABI today;
-> the `static-embed/` example is a self-contained host that
-> exercises the contract end-to-end without any of the deferred
-> pieces.
+> (`plugin.hpp`), static-embed Registry (`plugin_static.hpp`), all
+> example plugins above, the Java SPI (Profile A), and the Python SPI
+> + ctypes bridge (Profile A) are committed. `scripts/plugin-smoke.sh`
+> exercises the ABI end-to-end. **Deferred to 3.7.x:** the runtime
+> loader inside the BaseFWX CLI / fwxAES pipeline, wire-format plugin
+> tags, JNI bridge for native `.so` from Java, Profile B Java/Python
+> SPI parity, and the `basefwx-plugin-verify` tool. The
+> `static-embed/` example is a self-contained host that exercises the
+> keyed contract without any of the deferred pieces.
 
 ## The thirty-second pitch
 

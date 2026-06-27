@@ -1,3 +1,8 @@
+# BaseFWX example plugin build file
+# Copyright (C) 2020-2026  FixCraft Inc.
+# Licensed under the GNU General Public License v3.0, with the
+# BaseFWX Plugin-Template Exception (see LICENCE clause 5).
+#
 # BaseFWX passthrough plugin — minimal example.
 #
 # Stand-alone CMakeLists; does NOT live in the main basefwx build tree.

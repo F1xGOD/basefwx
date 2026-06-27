@@ -64,7 +64,7 @@ def n10encode_bytes(data):
     return basefwx.n10encode_bytes(data)
 
 
-# b1024encode retired in 3.6.5 — was bi512encode(a512encode(string)).
+# b1024encode retired in 3.7.0 — was bi512encode(a512encode(string)).
 
 
 def bi512encode(string: str):

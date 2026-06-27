@@ -86,12 +86,18 @@ class PluginErrorNotSupported(BasefwxPluginError):
     native_code = -5
 
 
+class PluginErrorCapMismatch(BasefwxPluginError):
+    """BASEFWX_PLUGIN_ERR_CAP_MISMATCH."""
+    native_code = -6
+
+
 _NATIVE_CODE_MAP: Dict[int, type] = {
     -1: PluginErrorGeneric,
     -2: PluginErrorOutputTooSmall,
     -3: PluginErrorBadInput,
     -4: PluginErrorBadState,
     -5: PluginErrorNotSupported,
+    -6: PluginErrorCapMismatch,
 }
 
 
@@ -323,10 +329,22 @@ class _NativeVtable(ctypes.Structure):
         ("max_output_for_input", ctypes.CFUNCTYPE(
             ctypes.c_size_t, ctypes.c_void_p, ctypes.c_size_t)),
         ("selftest", ctypes.CFUNCTYPE(ctypes.c_int, ctypes.c_void_p)),
+        ("capabilities", ctypes.CFUNCTYPE(ctypes.c_uint32, ctypes.c_void_p)),
+        ("forward_keyed", ctypes.CFUNCTYPE(
+            ctypes.c_int, ctypes.c_void_p,
+            ctypes.POINTER(ctypes.c_uint8), ctypes.c_size_t,
+            ctypes.POINTER(ctypes.c_uint8), ctypes.c_size_t,
+            ctypes.POINTER(ctypes.c_uint8), ctypes.c_size_t,
+            ctypes.POINTER(ctypes.c_uint8), ctypes.c_size_t,
+            ctypes.POINTER(ctypes.c_size_t))),
+        ("inverse_keyed", ctypes.CFUNCTYPE(
+            ctypes.c_int, ctypes.c_void_p,
+            ctypes.POINTER(ctypes.c_uint8), ctypes.c_size_t,
+            ctypes.POINTER(ctypes.c_uint8), ctypes.c_size_t,
+            ctypes.POINTER(ctypes.c_uint8), ctypes.c_size_t,
+            ctypes.POINTER(ctypes.c_uint8), ctypes.c_size_t,
+            ctypes.POINTER(ctypes.c_size_t))),
         ("reserved_1", ctypes.c_void_p),
-        ("reserved_2", ctypes.c_void_p),
-        ("reserved_3", ctypes.c_void_p),
-        ("reserved_4", ctypes.c_void_p),
     ]
 
 

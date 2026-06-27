@@ -62,14 +62,11 @@ def _load_master_pq_public() -> 'basefwx.typing.Optional[bytes]':
     env_path = basefwx.os.getenv('BASEFWX_MASTER_PQ_PUB')
     if env_path:
         return basefwx._resolve_master_pubkey_path(env_path)
-    allow_baked = basefwx.os.getenv('BASEFWX_MASTER_PQ_ALLOW_BAKED') or basefwx.os.getenv('ALLOW_BAKED_PUB')
-    if str(allow_baked).strip().lower() in {'1', 'true', 'yes', 'on'}:
-        return basefwx.zlib.decompress(basefwx.base64.b64decode(basefwx.MASTER_PQ_PUBLIC))
     return None
 
 
 def _load_master_pq_private() -> bytes:
-    candidates = (basefwx.pathlib.Path('~/master_pq.sk').expanduser(), basefwx.pathlib.Path('W:\\master_pq.sk'))
+    candidates = (basefwx.pathlib.Path('~/master_pq.sk').expanduser(),)
     for path in candidates:
         if path.exists():
             data = path.read_bytes()
@@ -84,17 +81,13 @@ def _load_master_pq_private() -> bytes:
     raise FileNotFoundError('No master_pq.sk private key found')
 
 
-def _load_master_ec_public(create_if_missing: bool=False) -> 'basefwx.typing.Optional[basefwx.ec.EllipticCurvePublicKey]':
+def _load_master_ec_public() -> 'basefwx.typing.Optional[basefwx.ec.EllipticCurvePublicKey]':
     env_pub = basefwx.os.getenv(basefwx.MASTER_EC_PUBLIC_ENV)
     env_priv = basefwx.os.getenv(basefwx.MASTER_EC_PRIVATE_ENV)
     if env_pub:
         pub_path = basefwx.pathlib.Path(env_pub).expanduser()
         if pub_path.exists():
             return basefwx._decode_ec_public_key(pub_path.read_bytes())
-        if create_if_missing:
-            priv_path = basefwx.pathlib.Path(env_priv).expanduser() if env_priv else basefwx._default_master_ec_private_path()
-            public_key, _ = basefwx._write_ec_keypair(pub_path, priv_path)
-            return public_key
         return None
     pub_path = basefwx._default_master_ec_public_path()
     priv_path = basefwx._default_master_ec_private_path()
@@ -110,9 +103,6 @@ def _load_master_ec_public(create_if_missing: bool=False) -> 'basefwx.typing.Opt
             except Exception:
                 pass
         return public_key
-    if create_if_missing:
-        public_key, _ = basefwx._write_ec_keypair(pub_path, priv_path)
-        return public_key
     return None
 
 
@@ -122,7 +112,6 @@ def _load_master_ec_private() -> 'basefwx.ec.EllipticCurvePrivateKey':
     if env_priv:
         candidates.append(basefwx.pathlib.Path(env_priv).expanduser())
     candidates.append(basefwx._default_master_ec_private_path())
-    candidates.append(basefwx.pathlib.Path('W:\\master_ec_private.pem'))
     for path in candidates:
         if path.exists():
             return basefwx._decode_ec_private_key(path.read_bytes())
@@ -177,7 +166,7 @@ def _ec_kem_dec(master_blob: bytes) -> bytes:
     return private_key.exchange(basefwx.ec.ECDH(), public_key)
 
 
-def _resolve_master_usage(use_master: bool, master_pubkey: 'basefwx.typing.Optional[bytes]', *, create_if_missing: bool=False) -> 'tuple[basefwx.typing.Optional[bytes], bool]':
+def _resolve_master_usage(use_master: bool, master_pubkey: 'basefwx.typing.Optional[bytes]') -> 'tuple[basefwx.typing.Optional[bytes], bool]':
     if not use_master:
         return (None, False)
     if master_pubkey is not None:
@@ -186,7 +175,7 @@ def _resolve_master_usage(use_master: bool, master_pubkey: 'basefwx.typing.Optio
     if pq_pub is not None:
         return (pq_pub, True)
     try:
-        ec_pub = basefwx._load_master_ec_public(create_if_missing=create_if_missing)
+        ec_pub = basefwx._load_master_ec_public()
     except Exception:
         ec_pub = None
     return (None, ec_pub is not None)
@@ -203,8 +192,7 @@ def _prepare_mask_key(password: 'basefwx.typing.Union[str, bytes, bytearray, mem
     ec_pub = None
     if use_master and pubkey is None:
         try:
-            create_ec_if_missing = str(basefwx.os.getenv('BASEFWX_MASTER_EC_CREATE_IF_MISSING', '')).strip().lower() in {'1', 'true', 'yes', 'on'}
-            ec_pub = basefwx._load_master_ec_public(create_if_missing=create_ec_if_missing)
+            ec_pub = basefwx._load_master_ec_public()
         except Exception:
             ec_pub = None
     use_master_effective = use_master and (pubkey is not None or ec_pub is not None)

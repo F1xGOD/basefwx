@@ -76,13 +76,13 @@ actually get is:
 | ------- | ------------------------------------------------------------- |
 | C++     | **Argon2id** if libargon2 was linked at build time (the release builds require it), else PBKDF2-HMAC-SHA256. |
 | Python  | **Argon2id** if `argon2-cffi` is importable **and** the host has ≥ 128 MiB free RAM; otherwise PBKDF2-HMAC-SHA256. |
-| Java    | **PBKDF2-HMAC-SHA256** (the Java KeyWrap path intentionally rejects Argon2 — see `KeyWrap.java`). |
+| Java    | **Argon2id** (via BouncyCastle's `Argon2BytesGenerator`, supported since 3.7.0) or **PBKDF2-HMAC-SHA256** — controlled by `BASEFWX_USER_KDF`. |
 
 `BASEFWX_USER_KDF` overrides the default per process (`argon2id` /
-`pbkdf2` / `auto`). When Argon2 is available, blobs interop across
-runtimes — the KDF label is encoded in the wrap header so a Python
-blob with Argon2 will be decoded by C++/Python and rejected with a
-clear error by Java.
+`pbkdf2` / `auto`). As of 3.7.0, all three runtimes support Argon2id
+and blobs interop across runtimes — the KDF label is encoded in the
+wrap header so blobs produced by any runtime can be decoded by any
+other. See `COMPATIBILITY.md` for the capability matrix.
 
 **This password-only default is already post-quantum-resistant.** AES-256
 under Grover is ≈ 128-bit-equivalent, the KDF salt is per-blob, and
@@ -116,11 +116,10 @@ Sources for the master public key, in priority order:
    deployments. You generate your own ML-KEM-768 keypair, keep the
    private key offline, and configure the public half via env or your
    own key-management tooling.
-2. **Baked-in fallback** — only used if
-   `BASEFWX_MASTER_PQ_ALLOW_BAKED=1` is set explicitly. This points
-   to a key whose private half is held by the original maintainers
-   (recovery escrow). Off by default precisely so a self-hosted
-   deployment never silently encrypts to a third-party key.
+2. ~~**Baked-in fallback**~~ — **removed in 3.7.0**. The baked-in
+   key literal, `BASEFWX_MASTER_PQ_ALLOW_BAKED`, and `ALLOW_BAKED_PUB`
+   have been removed from all three runtimes. Deployments must supply
+   their own key via option 1 above.
 3. **None** — without either of the above, `useMaster=true` falls
    back to the password-only path (above) or, if
    `BASEFWX_PQ_STRICT=1` / `BASEFWX_PQ_ONLY=1` is set, fails cleanly

@@ -7,16 +7,16 @@
 package com.fixcraft.basefwx;
 
 /**
- * Thrown when the Java runtime is asked to operate on a blob that was
- * produced under a KDF the Java side does not implement (currently:
- * Argon2id). This is a deliberate platform choice — see basefwx
- * {@code SECURITY.md} and the project compatibility matrix in
+ * Thrown when the Java runtime is asked to operate on a blob that uses
+ * an unrecognised KDF label. Note: Argon2id is supported since 3.7.0
+ * (via BouncyCastle's {@code Argon2BytesGenerator}); this exception is
+ * only raised for truly unknown labels, not for "argon2id" or "argon2".
+ * See {@code SECURITY.md} and the project compatibility matrix in
  * {@code COMPATIBILITY.md}.
  *
- * <p>Callers that need to handle the cross-platform-only case (e.g.
- * routing Argon2-wrapped blobs to a native helper, or surfacing a
- * specific UI message) should catch this exception type explicitly
- * rather than the more generic {@link IllegalArgumentException}.
+ * <p>Callers that need to route unrecognised labels to a native helper
+ * or surface a specific UI message should catch this exception type
+ * explicitly rather than the more generic {@link IllegalArgumentException}.
  */
 public class UnsupportedKdfException extends IllegalArgumentException {
     private static final long serialVersionUID = 1L;

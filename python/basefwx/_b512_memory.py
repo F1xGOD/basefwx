@@ -324,7 +324,7 @@ def b512file_encode_bytes(data: bytes, ext: str, code: str, strip_metadata: bool
     approx_b64_len = (len(data) + 2) // 3 * 4
     if approx_b64_len > basefwx.HKDF_MAX_LEN:
         raise ValueError('b512file_encode_bytes payload too large; use file-based streaming APIs')
-    pubkey_bytes, master_available = basefwx._resolve_master_usage(use_master and (not strip_metadata), None, create_if_missing=True)
+    pubkey_bytes, master_available = basefwx._resolve_master_usage(use_master and (not strip_metadata), None)
     use_master_effective = (use_master and (not strip_metadata)) and master_available
     password = basefwx._resolve_password(code, use_master=use_master_effective)
     b64_payload = basefwx.base64.b64encode(bytes(data)).decode('utf-8')

@@ -1,3 +1,8 @@
+# BaseFWX example plugin build file
+# Copyright (C) 2020-2026  FixCraft Inc.
+# Licensed under the GNU General Public License v3.0, with the
+# BaseFWX Plugin-Template Exception (see LICENCE clause 5).
+#
 # BaseFWX xor-rotate plugin — example C++ plugin using the helper header.
 #
 # Build:

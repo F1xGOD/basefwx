@@ -1,7 +1,12 @@
 {
   "schema": 1,
-  "latest": "new3.7test",
+  "latest": "v3.7.0",
   "snapshots": [
+    {
+      "tag": "v3.7.0",
+      "results": "benchmarks-v3.7.0.json",
+      "txt": "benchmarks-v3.7.0.txt"
+    },
     {
       "tag": "v3.6.4",
       "results": "benchmarks-v3.6.4.json",

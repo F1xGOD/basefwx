@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Changed
+- **License policy**: replace the old GPL-3.0 + Additional Terms model
+  with a file-level split — LGPL-3.0-or-later for core library/API/runtime
+  and plugin ABI/SPI, GPL-3.0-or-later for standalone
+  CLI/tools/benchmarks/scripts, and MIT OR Apache-2.0 for example plugin
+  templates. Canonical texts live in `LICENCE`, `LICENSES/`, and
+  `LICENSING.md`. Remaining tooling without headers was updated to match.
+
 ## [v3.7.0] - 2026-06-26
 
 Compare: <https://github.com/F1xGOD/basefwx/compare/v3.6.4...v3.7.0>

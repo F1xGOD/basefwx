@@ -27,6 +27,9 @@ License: GPL-3.0+
 Files: examples/plugins/*
 Copyright: 2020-2026 FixCraft Inc.
 License: MIT or Apache-2.0
+ The MIT license text is provided in LICENSES/MIT.txt.
+ .
+ The Apache License 2.0 text is provided in LICENSES/Apache-2.0.txt.
 
 Files: cpp/third_party/stb_image.h cpp/third_party/stb_image_write.h
 Copyright: 2017 Sean Barrett

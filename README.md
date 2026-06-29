@@ -144,9 +144,9 @@ Documentation
 License
 -------
 
-See https://basefwx.fixcraft.jp/LICENCE.
-
 BaseFWX uses a split license: core library/API/runtime and plugin ABI/SPI
 surfaces are LGPL-3.0-or-later, standalone CLI/tools/benchmarks/scripts are
 GPL-3.0-or-later, and example plugin templates are MIT OR Apache-2.0.
-See [LICENCE](LICENCE) and [LICENSING.md](LICENSING.md).
+The root [LICENCE](LICENCE) file contains the canonical LGPL-3.0 text for
+GitHub/license-scanner detection; see [LICENSING.md](LICENSING.md) for the
+full split policy and [LICENSES/](LICENSES/) for the other canonical texts.

@@ -1,3 +1,7 @@
+# BaseFWX - Cryptography Engine
+# Copyright (C) 2020-2026  FixCraft Inc.
+# SPDX-License-Identifier: LGPL-3.0-or-later AND GPL-3.0-or-later
+
 from pathlib import Path
 from setuptools import setup, find_packages
 
@@ -77,5 +81,5 @@ setup(
     description="The encryption you can trust, the performance you need, the security you deserve.",
     long_description=read_readme(),
     long_description_content_type="text/markdown",
-    license="GPL-3.0-or-later",
+    license="LGPL-3.0-or-later AND GPL-3.0-or-later",
 )

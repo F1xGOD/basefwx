@@ -1,3 +1,7 @@
+# BaseFWX - Cryptography Engine
+# Copyright (C) 2020-2026  FixCraft Inc.
+# SPDX-License-Identifier: LGPL-3.0-or-later AND GPL-3.0-or-later
+
 cmake_minimum_required(VERSION 3.16)
 
 file(READ "${CMAKE_CURRENT_SOURCE_DIR}/../VERSION" BASEFWX_PROJECT_VERSION)

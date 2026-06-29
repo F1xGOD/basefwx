@@ -1,16 +1,16 @@
 # Contributing to BaseFWX
 
 > Short version: open a PR; for non-trivial changes, expect to sign a
-> one-page CLA. The CLA exists because BaseFWX is dual-licensed and
-> the dual-license model only works if every contributor agrees that
-> their code can flow through both licenses.
+> one-page CLA. The CLA exists because BaseFWX uses a split license
+> policy and the project needs permission to keep contributions under
+> the correct license for each area.
 
 ## What contributions are welcome
 
 - Bug fixes against the current release (3.7.0 + `[Unreleased]`).
 - Cross-runtime parity fixes (C++ ↔ Java ↔ Python drift).
-- New plugins for `examples/plugins/` (they live outside the
-  GPL-licensed core, see [LICENSING.md](./LICENSING.md)).
+- New plugins for `examples/plugins/` (the templates are MIT OR
+  Apache-2.0; see [LICENSING.md](./LICENSING.md)).
 - Documentation improvements, including AI-agent docs
   (`AGENTS.md`).
 - Test-suite improvements in `scripts/test_all.sh` or its
@@ -47,10 +47,10 @@
 - C++: follow the existing pattern. `clang-format` config in
   `.clang-format` is the source of truth; format your patch before
   pushing.
-- Java: 4-space indent, `// SPDX-License-Identifier: GPL-3.0-or-later`
-  at the top of new files, javadoc on public methods.
-- Python: PEP 8, type hints on public functions, `# SPDX-License-Identifier:
-  GPL-3.0-or-later` on new files.
+- Java: 4-space indent, the correct source header for the file's
+  license area, javadoc on public methods.
+- Python: PEP 8, type hints on public functions, and the correct
+  source header for the file's license area.
 - Markdown: prose; one sentence per line in long files for clean
   diffs.
 
@@ -59,15 +59,15 @@
 By signing the CLA, you grant FixCraft Inc. the right to redistribute
 your contribution under both:
 
-1. The free track — GPL-3.0 plus the Additional Terms in `LICENCE`
-   (Plugin Exception, Attribution requirement).
-2. The commercial track — separate commercial licenses sold by
-   FixCraft Inc. to customers who need different terms.
+1. LGPL-3.0-or-later for core library/API/runtime and plugin ABI/SPI
+   contributions.
+2. GPL-3.0-or-later for standalone CLI/tool/benchmark/script
+   contributions.
+3. MIT OR Apache-2.0 for example plugin/template contributions.
 
 You keep your copyright. You give FixCraft Inc. the right to
-relicense your contribution as part of the dual-license model. This
-is the standard pattern used by every dual-licensed open-source
-project (Qt, MongoDB, MySQL, GitLab, etc.).
+relicense your contribution as part of the repository split-license
+model.
 
 If you don't want to sign the CLA, that's fine — but your patch will
 need to be small enough to be considered de minimis (i.e., not
@@ -83,10 +83,10 @@ fixes). For anything larger, the CLA is required.
 > royalty-free, irrevocable license to use, copy, modify, prepare
 > derivative works of, publicly display, publicly perform,
 > sublicense, and distribute my contribution and such derivative
-> works under (a) the terms of the GNU General Public License
-> version 3 plus the BaseFWX Additional Terms in `LICENCE`, and
-> (b) any other license terms FixCraft Inc. may apply to BaseFWX
-> as a whole, including commercial licenses. I retain all other
+> works under the repository's split license policy: LGPL-3.0-or-later
+> for core library/API/runtime and plugin ABI/SPI code,
+> GPL-3.0-or-later for standalone CLI/tool/benchmark/script code, and
+> MIT OR Apache-2.0 for example plugin/template code. I retain all other
 > rights, including the right to use my contribution under other
 > licenses.
 
@@ -119,4 +119,3 @@ substance.
 - About the code: open an issue, tag it `question`.
 - About licensing: `admin@fixcraft.jp` or open an issue tagged
   `licensing`.
-- About a commercial license: `admin@fixcraft.jp`.

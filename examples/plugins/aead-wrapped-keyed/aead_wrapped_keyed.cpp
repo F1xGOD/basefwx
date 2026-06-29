@@ -1,10 +1,8 @@
 /*
  * BaseFWX example plugin
  * Copyright (C) 2020-2026  FixCraft Inc.
- * Licensed under the GNU General Public License v3.0, with the
- * BaseFWX Plugin-Template Exception (see LICENCE clause 5).
- * You may use this file as a starting template for your own
- * Plugin under any license your Plugin chooses.
+ * SPDX-License-Identifier: MIT OR Apache-2.0
+ * This file is intentionally permissive so plugin authors can use it as a starting template.
  *
  * ----------------------------------------------------------------
  * Profile B reference: AEAD-wrapped, keyed, raw-mode safe.

@@ -1,7 +1,9 @@
 # BaseFWX licensing
 
 This document is the practical guide.
-[`LICENCE`](./LICENCE) is the repository-level license notice.
+[`LICENCE`](./LICENCE) contains the canonical LGPL-3.0 text so GitHub and
+other license scanners can identify the primary library license.
+Additional canonical license texts live under [`LICENSES/`](./LICENSES/).
 
 ## Policy
 
@@ -18,6 +20,11 @@ The license header at the top of each source file is the source of truth for
 that file.
 If a file has no header, treat it as a bug and fix the header before
 redistribution.
+
+The root `LICENCE` file is intentionally canonical LGPL text because BaseFWX is
+primarily a library.
+It does not mean every file in the repository is LGPL; the file headers and this
+matrix define the split.
 
 ## Library Users
 

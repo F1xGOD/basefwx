@@ -13,7 +13,7 @@ LEGACY = PKG / "legacy.py"
 
 HEADER = """# BaseFWX - Cryptography Engine
 # Copyright (C) 2020-2026  FixCraft Inc.
-# Licensed under the GNU General Public License v3.0.
+# Licensed under the GNU General Public License v3.0 or later.
 
 \"\"\"Extracted implementation cluster from legacy.py.\"\"\"
 

@@ -5,7 +5,28 @@ Source: https://fixcraft.org/basefwx
 
 Files: *
 Copyright: 2020-2026 FixCraft Inc.
+License: LGPL-3.0+
+
+Files:
+ cpp/src/main.cpp
+ cpp/src/cli/*
+ cpp/include/basefwx/cli/*
+ cpp/include/basefwx/cli_colors.hpp
+ cpp/src/cli_colors.cpp
+ java/src/main/java/com/fixcraft/basefwx/cli/*
+ java/src/main/java/com/fixcraft/basefwx/FwxAESBenchmark.java
+ python/basefwx/__main__.py
+ python/basefwx/_cli.py
+ python/scripts/*
+ scripts/*
+ python/tests/*
+ python/tools/*
+Copyright: 2020-2026 FixCraft Inc.
 License: GPL-3.0+
+
+Files: examples/plugins/*
+Copyright: 2020-2026 FixCraft Inc.
+License: MIT or Apache-2.0
 
 Files: cpp/third_party/stb_image.h cpp/third_party/stb_image_write.h
 Copyright: 2017 Sean Barrett
@@ -26,6 +47,20 @@ Comment:
 Files: debian/*
 Copyright: 2026 FixCraft Maintainers <debian@fixcraft.jp>
 License: GPL-3.0+
+
+License: LGPL-3.0+
+ This library is free software; you can redistribute it and/or modify
+ it under the terms of the GNU Lesser General Public License as published
+ by the Free Software Foundation, either version 3 of the License, or
+ (at your option) any later version.
+ .
+ This library is distributed in the hope that it will be useful,
+ but WITHOUT ANY WARRANTY; without even the implied warranty of
+ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ GNU Lesser General Public License for more details.
+ .
+ On Debian systems, the full text of the GNU Lesser General Public License
+ version 3 can be found in the file `/usr/share/common-licenses/LGPL-3'.
 
 License: GPL-3.0+
  This program is free software: you can redistribute it and/or modify

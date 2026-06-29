@@ -2,11 +2,12 @@
 
 A blackbox plugin is a `.so` / `.dll` / `.dylib` (or `.jar` on Java)
 that adds a custom byte-transform layer on top of the BaseFWX AEAD
-payload. The crypto core stays open-source under GPL/AGPL; your
-plugin code is **yours to license however you want** as long as
-it's shipped as a separate dynamically-loaded artifact and doesn't
-include any BaseFWX source beyond the public ABI headers. The
-exact safe-harbor rules are in [LICENSING.md](../../LICENSING.md).
+payload. The crypto core/API/runtime and plugin ABI are
+LGPL-3.0-or-later; the example plugin templates in this directory are
+MIT OR Apache-2.0. Your plugin code is yours to license however you
+want as long as you use the public ABI/SPI boundary and do not copy
+BaseFWX implementation files. The exact boundaries are in
+[LICENSING.md](../../LICENSING.md).
 
 **Required reading before you start: [THREAT_MODEL.md](THREAT_MODEL.md).**
 It tells you which attacks a plugin can and cannot defend against,
@@ -72,7 +73,7 @@ this matters and which threats it closes.
 | --- | --- | --- | --- |
 | **A — Traffic-shaping (AEAD-wrapped)** | You want DPI evasion, byte-distribution shaping, header mimicry. The plugin runs PRE or POST of AES-GCM, which provides confidentiality and integrity. A deterministic transform is fine. | `forward` / `inverse` | `xor-rotate/`, `passthrough/` |
 | **B — Authenticated keyed (raw-mode safe)** | The plugin's output is exposed without an AEAD layer above it, OR you want the plugin's transform to be cryptographically meaningful in its own right. Mandatory if a malicious client must not be able to forge blobs the server accepts. | `forward_keyed` / `inverse_keyed` + `capabilities()` returning `SAFE_RAW_MODE` | `aead-wrapped-keyed/` |
-| **C — Statically embedded** | You ship a single binary with no `.so` on disk. Combine with Profile A or B depending on the security goal — static embedding raises the cost of plugin extraction; it is NOT a cryptographic primitive on its own. Static-linking BaseFWX itself requires a commercial license (see [LICENSING.md](../../LICENSING.md)). | Same as A or B, plus `BASEFWX_PLUGIN_REGISTER_STATIC` from [`plugin_static.hpp`](../../cpp/include/basefwx/plugin_static.hpp) | `static-embed/` |
+| **C — Statically embedded** | You ship a single binary with no `.so` on disk. Combine with Profile A or B depending on the security goal — static embedding raises the cost of plugin extraction; it is NOT a cryptographic primitive on its own. Static linking or embedding BaseFWX itself follows LGPL-3.0-or-later requirements for the BaseFWX library files involved. | Same as A or B, plus `BASEFWX_PLUGIN_REGISTER_STATIC` from [`plugin_static.hpp`](../../cpp/include/basefwx/plugin_static.hpp) | `static-embed/` |
 
 ## Authoring contract
 
@@ -284,26 +285,16 @@ your README to deployments.
 
 ## Licensing your plugin (the safe-harbor rules)
 
-BaseFWX itself is **dual-licensed**: GPL-3.0 + Plugin Exception +
-Attribution requirement for free use, or a separate commercial
-license sold by FixCraft Inc. for users who need different terms.
-See [LICENCE](../../LICENCE) (legal text) and
-[LICENSING.md](../../LICENSING.md) (practical guide).
+BaseFWX uses a split license. The core library/API/runtime and plugin
+ABI/SPI are LGPL-3.0-or-later, standalone CLI/tools/benchmarks/scripts
+are GPL-3.0-or-later, and the example plugin templates in this
+directory are MIT OR Apache-2.0. See [LICENCE](../../LICENCE) and
+[LICENSING.md](../../LICENSING.md).
 
 Plugins compiled against the public ABI headers (`basefwx/plugin.h`,
 `basefwx/plugin.hpp`, `com.fixcraft.basefwx.plugin`, `basefwx.plugin`)
-and shipped as a separate dynamically-loaded artifact are NOT
-considered derivative works of BaseFWX. **You can license your plugin
-under any terms you want** — closed-source, commercial, MIT, GPL,
-proprietary, anything.
-
-The **attribution requirement** still applies to the *product that
-embeds BaseFWX*. Your plugin isn't BaseFWX, but if your end-product
-loads BaseFWX, that end-product must credit BaseFWX prominently
-(`Powered by BaseFWX — https://github.com/F1xGOD/basefwx` on a
-visible credits/about surface). See LICENSING.md for the exact
-"prominent" definition. If attribution conflicts with your product's
-branding, buy a commercial license: `admin@fixcraft.jp`.
+may choose their own license. Keep BaseFWX implementation code on the
+BaseFWX side of the ABI/SPI boundary.
 
 You are in the safe harbor if **all four** of these hold:
 
@@ -322,13 +313,9 @@ too, you're free to ship it under any license.
 
 ### Copying from `examples/plugins/` is explicitly allowed
 
-The example files (`passthrough/`, `xor-rotate/`, `xor-rotate-java/`,
-`xor-rotate-py/`) are GPL-3.0 like the rest of the project, BUT each
-of them carries a header that invokes LICENCE **clause 5 — the
-Plugin-Template Exception**:
-
-> You may use this file as a starting template for your own Plugin
-> under any license your Plugin chooses.
+The example files are MIT OR Apache-2.0 templates.
+Each source file keeps a short header saying it is intentionally
+permissive so plugin authors can use it as a starting point.
 
 That means you can literally:
 
@@ -336,18 +323,12 @@ That means you can literally:
 2. Rename it, edit it, replace the identity transform with your real one.
 3. Generate a fresh `plugin_id` (`uuidgen`).
 4. Ship the resulting `.so` / `.dll` / `.jar` under **any license you
-   want** — commercial, closed-source, MIT, MPL, anything — without
-   GPL contaminating your derivative.
+   want** — commercial, closed-source, MIT, MPL, anything.
 
 The catch is that the *result* must still qualify as a Plugin per the
 four safe-harbor rules (separate artifact, ABI-only headers, dynamic
 load, no static linking). Inside that envelope, you have full
 licensing freedom.
-
-The Attribution requirement on the end-product (the application that
-loads BaseFWX) is unaffected by clause 5 — your plugin isn't
-BaseFWX, but the host that loads it is, and that host has to credit
-BaseFWX.
 
 If unsure, read [LICENSING.md](../../LICENSING.md) — it has a
 worked-examples table — or open an issue.

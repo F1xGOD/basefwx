@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// Licensed under the GNU Lesser General Public License v3.0 or later.
 //
 // Java SPI for BaseFWX blackbox plugins. Implementing classes can be
 // shipped as a .jar that's added to the classpath (or via Java's

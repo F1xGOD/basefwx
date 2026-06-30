@@ -41,7 +41,7 @@ cost of plugin extraction but does not provide cryptographic
 security on its own (Profile C).
 
 What is **in 3.7.0:** everything above **plus** the C++ host loader
-(`cpp/src/plugin_loader.cpp`), fwxAES PRE/POST AEAD integration in C++ /
+(`cpp/src/plugin/plugin_loader.cpp`), fwxAES PRE/POST AEAD integration in C++ /
 Java / Python, the wire-format plugin tag, CLI `--plugin` flags, and an
 fwxAES round-trip step in `scripts/plugin-smoke.sh`.
 

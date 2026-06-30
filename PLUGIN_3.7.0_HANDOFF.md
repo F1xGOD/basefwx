@@ -60,9 +60,9 @@ A user (or `test_all.sh`) must be able to:
 
 | Gap | Where to implement | Notes |
 | --- | --- | --- |
-| **Host loader** | new `cpp/src/plugin_loader.cpp` + `cpp/include/basefwx/plugin_loader.hpp` (suggested) | Zero matches for `dlopen` / `Registry` in `cpp/src/` today |
-| **Wire-format plugin tag** | `constants.hpp`, `fwxaes.cpp`, `FwxAesCodec.java`, Python `_fwxaes.py` | AGENTS.md: **16-byte `plugin_id` + position bits** in the tag; exact byte layout must be **designed and documented** before coding (Rule 5 — wire bump if wrong). Start from fwxAES fixed header after magic; add opt-in extension, not breaking 3.6.4 blobs without tag. |
-| **fwxAES integration** | `cpp/src/fwxaes.cpp`, `java/.../FwxAesCodec.java`, `python/basefwx/_fwxaes.py` | Hook PRE/POST transform around AEAD; derive `host_secret` from password per THREAT_MODEL for keyed plugins |
+| **Host loader** | `cpp/src/plugin/plugin_loader.cpp` + `cpp/include/basefwx/plugin_loader.hpp` | Zero matches for `dlopen` / `Registry` in `cpp/src/` today |
+| **Wire-format plugin tag** | `constants.hpp`, `cpp/src/file/fwxaes.cpp`, `FwxAesCodec.java`, Python `crypto/_fwxaes.py` | AGENTS.md: **16-byte `plugin_id` + position bits** in the tag; exact byte layout must be **designed and documented** before coding (Rule 5 — wire bump if wrong). Start from fwxAES fixed header after magic; add opt-in extension, not breaking 3.6.4 blobs without tag. |
+| **fwxAES integration** | `cpp/src/file/fwxaes.cpp`, `java/.../FwxAesCodec.java`, `python/basefwx/crypto/_fwxaes.py` | Hook PRE/POST transform around AEAD; derive `host_secret` from password per THREAT_MODEL for keyed plugins |
 | **CLI flags** | `cpp/src/cli/options.cpp`, `main.cpp`, Java CLI, Python CLI | e.g. `--plugin <path>`, `--plugin-id <hex>`, `--plugin-pos pre\|post`, optional `--plugin-config <file>`; mirror env vars if existing pattern (`BASEFWX_PLUGIN_PATH`) |
 | **`fwxaes::Options` / Java/Python options** | `fwxaes.hpp`, callers | Thread plugin path, position, config blob through encrypt/decrypt |
 | **Integration tests** | `scripts/test_all.sh` (new block or extend plugin-smoke) | Must run on **remote build host** — ask user before `test_all.sh` on laptop |

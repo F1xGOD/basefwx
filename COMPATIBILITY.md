@@ -78,7 +78,7 @@ The C++ and Python runtimes accept two kinds of `master_blob` in a
 keywrap header — an EC-magic-prefixed blob (`EC1` + ECIES-wrapped
 key) decoded by `basefwx::ec::KemDecrypt`, and a magic-less PQ blob
 (raw Kyber/ML-KEM ciphertext) decoded by `basefwx::pq::KemDecrypt`
-([cpp/src/keywrap.cpp:186-189](basefwx/cpp/src/keywrap.cpp#L186)).
+([cpp/src/crypto/keywrap.cpp:186-189](basefwx/cpp/src/crypto/keywrap.cpp#L186)).
 The Java runtime currently accepts **only the EC variant** —
 [KeyWrap.java:99](basefwx/java/src/main/java/com/fixcraft/basefwx/KeyWrap.java#L99)
 hard-codes `startsWith(masterBlob, Constants.MASTER_EC_MAGIC)` and

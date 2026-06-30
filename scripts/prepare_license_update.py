@@ -77,8 +77,8 @@ def license_for(path: Path) -> str | None:
     if rel in {
         "cpp/include/basefwx/cli_colors.hpp",
         "cpp/src/main.cpp",
-        "cpp/src/cli_colors.cpp",
-        "python/basefwx/_cli.py",
+        "cpp/src/platform/cli_colors.cpp",
+        "python/basefwx/runtime/_cli.py",
         "python/basefwx/__main__.py",
         "java/src/main/java/com/fixcraft/basefwx/cli/BaseFwxCli.java",
         "java/src/main/java/com/fixcraft/basefwx/cli/BenchCommands.java",

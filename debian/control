@@ -10,10 +10,13 @@ Build-Depends:
  libssl-dev,
  zlib1g-dev,
  liblzma-dev,
- libargon2-dev
+ libargon2-dev,
+ liboqs-dev
 Standards-Version: 4.7.4.1
 Rules-Requires-Root: no
 Homepage: https://fixcraft.org/basefwx
+Vcs-Browser: https://github.com/F1xGOD/basefwx
+Vcs-Git: https://github.com/F1xGOD/basefwx.git
 
 Package: basefwx
 Section: utils
@@ -44,10 +47,8 @@ Description: BaseFWX C++ cryptographic codec library (runtime)
  ML-KEM-768 post-quantum key encapsulation.
  .
  This package contains the shared library required to run programs
- linked against libbasefwx. ML-KEM-768 support is enabled by the build;
- local builds may statically include liboqs until a Debian liboqs package
- is available. Debian archive builds should use a packaged liboqs
- dependency instead.
+ linked against libbasefwx. ML-KEM-768 support is enabled by the build
+ through the packaged liboqs dependency rather than a vendored static copy.
 
 Package: libbasefwx-dev
 Section: libdevel
@@ -57,6 +58,9 @@ Depends:
  libbasefwx3 (= ${binary:Version}),
  libssl-dev,
  zlib1g-dev,
+ liblzma-dev,
+ libargon2-dev,
+ liboqs-dev,
  ${misc:Depends}
 Description: BaseFWX C++ cryptographic codec library (development files)
  BaseFWX is a C++ library implementing the FixCraft cryptographic codec

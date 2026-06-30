@@ -49,7 +49,7 @@ TermsConditions = "https://www.fixcraft.org/terms-conditions"
 PrivacyPolicy = "https://www.fixcraft.org/privacy-policy"
 
 [tool.setuptools.dynamic]
-version = {attr = "basefwx._repo_version.__version__"}
+version = {attr = "basefwx.runtime._repo_version.__version__"}
 
 [tool.setuptools.packages.find]
-include = ["basefwx"]
+include = ["basefwx", "basefwx.*"]

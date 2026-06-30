@@ -12,13 +12,13 @@ from .legacy import basefwx
 
 
 def cli(*args, **kwargs):
-    from ._cli import cli as _cli
+    from .runtime._cli import cli as _cli
 
     return _cli(*args, **kwargs)
 
 
 def main(*args, **kwargs):
-    from ._cli import main as _main
+    from .runtime._cli import main as _main
 
     return _main(*args, **kwargs)
 

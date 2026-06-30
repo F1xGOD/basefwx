@@ -4,8 +4,10 @@ basefwx (3.6.4-1) unstable; urgency=medium
   * basefwx ships the command-line frontend; libbasefwx3 ships the runtime
     shared library; libbasefwx-dev ships headers, CMake config, and the
     pkg-config file.
-  * Local builds can use the YUME vendor/linux-x86_64 liboqs staging area
-    for ML-KEM-768. A Debian main upload must build against a separately
-    packaged liboqs development package instead.
+  * Debian archive builds use packaged liboqs-dev, libargon2-dev, and
+    liblzma-dev by default. Local vendor liboqs builds remain possible only
+    through explicit debian/rules environment overrides.
+  * Add Vcs metadata, uscan metadata, and superficial autopkgtests for the
+    CLI and development package.
 
  -- FixCraft Maintainers <debian@fixcraft.jp>  Sat, 09 May 2026 22:00:00 -0700

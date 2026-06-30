@@ -1,0 +1,45 @@
+#!/bin/sh
+set -eu
+
+if [ -n "${AUTOPKGTEST_TMP:-}" ]; then
+    workdir="$AUTOPKGTEST_TMP"
+else
+    workdir="$(mktemp -d)"
+    trap 'rm -rf "$workdir"' EXIT
+fi
+cd "$workdir"
+
+cat > check.cpp <<'EOF'
+#include <basefwx/basefwx.hpp>
+
+#include <iostream>
+#include <string>
+
+int main() {
+    const std::string value = "basefwx";
+    const auto encoded = basefwx::B64Encode(value);
+    const auto decoded = basefwx::B64Decode(encoded);
+    if (decoded != value) {
+        return 1;
+    }
+    std::cout << encoded << '\n';
+    return 0;
+}
+EOF
+
+c++ -std=c++17 $(pkg-config --cflags basefwx) check.cpp $(pkg-config --libs basefwx) -o check-pkg-config
+./check-pkg-config
+
+rm -rf cmake-check
+mkdir cmake-check
+cat > cmake-check/CMakeLists.txt <<'EOF'
+cmake_minimum_required(VERSION 3.16)
+project(basefwx_packaging_check LANGUAGES CXX)
+find_package(basefwx CONFIG REQUIRED)
+add_executable(check ../check.cpp)
+target_link_libraries(check PRIVATE basefwx::basefwxcpp)
+EOF
+
+cmake -S cmake-check -B cmake-check/build
+cmake --build cmake-check/build --target check -- -j1
+./cmake-check/build/check

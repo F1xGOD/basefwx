@@ -7,19 +7,25 @@ The packaging builds three binary packages:
 * libbasefwx3: runtime shared library
 * libbasefwx-dev: headers, CMake config, and pkg-config metadata
 
-For local YUME testing, debian/rules defaults to using the already-built
-YUME vendor staging directory at ../vendor/linux-x86_64 for liboqs. This
-keeps post-quantum ML-KEM-768 support enabled without copying vendor files
-into the BaseFWX repository. Argon2, OpenSSL, zlib, and liblzma still come
-from normal Debian development packages.
-
-That local mode is not Debian-main ready. A Debian main upload must not
-hide a vendored or prebuilt liboqs inside libbasefwx. Package liboqs as a
-normal Debian library first, add liboqs-dev to Build-Depends, and build
-BaseFWX with:
+The archive build defaults to packaged system dependencies only. OpenSSL,
+zlib, liblzma, libargon2, and liboqs are all declared in Build-Depends, and
+debian/rules builds with:
 
     BASEFWX_DEBIAN_USE_VENDOR_DEPS=OFF
     BASEFWX_DEBIAN_OQS_STATIC=OFF
+    BASEFWX_DEBIAN_REQUIRE_OQS=ON
+
+This is intentional: a Debian main upload must not hide a vendored or
+prebuilt liboqs inside libbasefwx. If liboqs is not available in the target
+suite, BaseFWX should wait for liboqs to be packaged there, or liboqs should
+be uploaded first.
+
+Local YUME development builds may still opt into the existing vendor staging
+directory when testing on a distro that does not yet provide liboqs-dev:
+
+    BASEFWX_DEBIAN_USE_VENDOR_DEPS=ON
+    BASEFWX_DEBIAN_OQS_STATIC=ON
+    BASEFWX_DEBIAN_VENDOR_DIR=../vendor/linux-x86_64
 
 Then YUME can Build-Depend on libbasefwx-dev and let dpkg-shlibdeps produce
 the runtime dependency on libbasefwx3 automatically.

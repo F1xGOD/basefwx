@@ -6,6 +6,8 @@
 
 package com.fixcraft.basefwx;
 
+import com.fixcraft.basefwx.runtime.NativeLibraryLoader;
+
 import java.nio.ByteBuffer;
 import java.security.GeneralSecurityException;
 import javax.crypto.AEADBadTagException;

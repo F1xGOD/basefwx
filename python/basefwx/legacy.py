@@ -1,6 +1,6 @@
 # BaseFWX - Cryptography Engine
 # Copyright (C) 2020-2026  FixCraft Inc.
-# Licensed under the GNU General Public License v3.0.
+# Licensed under the GNU Lesser General Public License v3.0 or later.
 
 # BASEFWX ENCRYPTION ENGINE ->
 
@@ -10,26 +10,26 @@ import sys as _sys_module
 import warnings as _warnings_module
 
 try:
-    from ._repo_version import __version__ as _BASEFWX_ENGINE_VERSION
+    from .runtime._repo_version import __version__ as _BASEFWX_ENGINE_VERSION
 except Exception:  # pragma: no cover - fallback for direct execution
     _BASEFWX_ENGINE_VERSION = "0.0.0"
 
 
-from . import _primitives as _prim
-from . import _codecs_str
-from . import _codecs_n10
-from . import _progress
-from . import _obf
-from . import _kdf
-from . import _file_ops
-from . import _an7
-from . import _fwxaes
-from . import _kfm
-from . import _master_key
-from . import _jmg
-from . import _b512file
-from . import _aes_file
-from . import _media
+from .crypto import _aes_file
+from .crypto import _an7
+from .crypto import _codecs_n10
+from .crypto import _codecs_str
+from .crypto import _fwxaes
+from .crypto import _jmg
+from .crypto import _kdf
+from .crypto import _kfm
+from .crypto import _master_key
+from .crypto import _obf
+from .crypto import _primitives as _prim
+from .file import _b512file
+from .file import _file_ops
+from .media import _media
+from .runtime import _progress
 
 
 class basefwx:

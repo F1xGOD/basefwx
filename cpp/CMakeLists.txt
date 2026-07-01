@@ -1,3 +1,7 @@
+# BaseFWX - Cryptography Engine
+# Copyright (C) 2020-2026  FixCraft Inc.
+# SPDX-License-Identifier: LGPL-3.0-or-later AND GPL-3.0-or-later
+
 cmake_minimum_required(VERSION 3.16)
 
 file(READ "${CMAKE_CURRENT_SOURCE_DIR}/../VERSION" BASEFWX_PROJECT_VERSION)
@@ -587,38 +591,38 @@ if(LZMA_FOUND)
 endif()
 
 add_library(basefwxcpp
-    src/archive.cpp
-    src/an7.cpp
-    src/base64.cpp
-    src/cli_colors.cpp
-    src/format.cpp
-    src/basefwx.cpp
-    src/basefwx_kfm.cpp
-    src/basefwx_kfm_carriers.cpp
-    src/crypto.cpp
-    src/codec.cpp
-    src/imagecipher.cpp
-    src/imagecipher_common.cpp
-    src/imagecipher_image.cpp
-    src/imagecipher_media.cpp
-    src/imagecipher_media_support.cpp
-    src/imagecipher_media_transform.cpp
-    src/imagecipher_trailer.cpp
-    src/ec.cpp
-    src/pb512.cpp
-    src/fwxaes.cpp
-    src/plugin_loader.cpp
-    src/env.cpp
-    src/pq.cpp
-    src/keywrap.cpp
-    src/livecipher.cpp
-    src/obfuscation.cpp
-    src/metadata.cpp
-    src/filecodec.cpp
-    src/filecodec_impl.cpp
-    src/filecodec_b512.cpp
-    src/filecodec_pb512.cpp
-    src/system_info.cpp
+    src/crypto/crypto.cpp
+    src/crypto/ec.cpp
+    src/crypto/keywrap.cpp
+    src/crypto/livecipher.cpp
+    src/crypto/pb512.cpp
+    src/crypto/pq.cpp
+    src/file/filecodec.cpp
+    src/file/filecodec_impl.cpp
+    src/file/filecodec_b512.cpp
+    src/file/filecodec_pb512.cpp
+    src/file/fwxaes.cpp
+    src/formats/an7.cpp
+    src/formats/archive.cpp
+    src/formats/base64.cpp
+    src/formats/basefwx.cpp
+    src/formats/basefwx_kfm.cpp
+    src/formats/basefwx_kfm_carriers.cpp
+    src/formats/codec.cpp
+    src/formats/format.cpp
+    src/formats/metadata.cpp
+    src/formats/obfuscation.cpp
+    src/media/imagecipher.cpp
+    src/media/imagecipher_common.cpp
+    src/media/imagecipher_image.cpp
+    src/media/imagecipher_media.cpp
+    src/media/imagecipher_media_support.cpp
+    src/media/imagecipher_media_transform.cpp
+    src/media/imagecipher_trailer.cpp
+    src/platform/cli_colors.cpp
+    src/platform/env.cpp
+    src/platform/system_info.cpp
+    src/plugin/plugin_loader.cpp
 )
 
 option(BASEFWX_INSTALL "Generate install rules for basefwxcpp (system packaging)" OFF)

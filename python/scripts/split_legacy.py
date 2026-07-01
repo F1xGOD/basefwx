@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Extract legacy.py clusters into _*.py modules and patch legacy.py delegations."""
+"""Extract legacy.py clusters into organized implementation packages."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ LEGACY = PKG / "legacy.py"
 
 HEADER = """# BaseFWX - Cryptography Engine
 # Copyright (C) 2020-2026  FixCraft Inc.
-# Licensed under the GNU General Public License v3.0.
+# Licensed under the GNU General Public License v3.0 or later.
 
 \"\"\"Extracted implementation cluster from legacy.py.\"\"\"
 
@@ -26,7 +26,7 @@ class _LazyEngine:
     \"\"\"Resolve basefwx attributes after legacy finishes loading.\"\"\"
 
     def __getattr__(self, name: str):
-        from .legacy import basefwx as _engine
+        from ..legacy import basefwx as _engine
         return getattr(_engine, name)
 
 
@@ -251,6 +251,24 @@ BATCH_MODULES: dict[str, list[str]] = {
     "_media": ["ImageCipher", "MediaCipher"],
 }
 
+MODULE_PACKAGES = {
+    "_aes_file": "crypto",
+    "_an7": "crypto",
+    "_codecs_n10": "crypto",
+    "_codecs_str": "crypto",
+    "_fwxaes": "crypto",
+    "_jmg": "crypto",
+    "_kdf": "crypto",
+    "_kfm": "crypto",
+    "_master_key": "crypto",
+    "_obf": "crypto",
+    "_primitives": "crypto",
+    "_b512file": "file",
+    "_file_ops": "file",
+    "_media": "media",
+    "_progress": "runtime",
+}
+
 # Class-body calls that must use _primitives directly after extraction.
 CLASS_BODY_PRIM_CALLS = {
     "_env_int": "_prim._env_int",
@@ -311,6 +329,20 @@ MODULE_IMPORT_ALIAS = {
 
 def module_ref(mod: str) -> str:
     return MODULE_IMPORT_ALIAS.get(mod, mod)
+
+
+def module_path(mod: str) -> Path:
+    package = MODULE_PACKAGES[mod]
+    target_dir = PKG / package
+    target_dir.mkdir(exist_ok=True)
+    (target_dir / "__init__.py").touch(exist_ok=True)
+    return target_dir / f"{mod}.py"
+
+
+def module_import_line(mod: str) -> str:
+    package = MODULE_PACKAGES[mod]
+    alias = " as _prim" if mod == "_primitives" else ""
+    return f"from .{package} import {mod}{alias}"
 
 
 def patch_legacy(source: str, delegations: dict[str, str]) -> str:
@@ -383,7 +415,7 @@ def patch_legacy(source: str, delegations: dict[str, str]) -> str:
 
 
 def add_imports(source: str, modules: list[str]) -> str:
-    import_block = "\n".join(f"from . import {m} as {m}" for m in modules)
+    import_block = "\n".join(module_import_line(m) for m in modules)
     # Insert after version import block
     marker = "_BASEFWX_ENGINE_VERSION = \"0.0.0\"\n\n\n"
     if marker in source:
@@ -419,12 +451,12 @@ def extract_cli(source: str) -> tuple[str, str]:
     head = source[:idx]
     tail = source[idx + 1 :]  # skip leading newline
     cli_mod = HEADER + "import os as _os_module\nimport sys as _sys_module\n\n"
-    cli_mod += "from .legacy import basefwx\n"
-    cli_mod += "from ._primitives import (\n"
+    cli_mod += "from ..crypto._primitives import (\n"
     cli_mod += "    _enable_large_int_string_conversion_for_cli,\n"
     cli_mod += "    _python_build_origin_label,\n"
     cli_mod += "    _runtime_arch_label,\n"
     cli_mod += ")\n\n"
+    cli_mod += "from ..legacy import basefwx\n\n"
     cli_mod += tail
     cli_mod = cli_mod.replace(
         "basefwx._warn_single_thread_api()",
@@ -435,7 +467,7 @@ def extract_cli(source: str) -> tuple[str, str]:
         "def cli(argv=None) -> int:\n    import argparse",
         "def cli(argv=None) -> int:\n    _enable_large_int_string_conversion_for_cli()\n    import argparse",
     )
-    head = head.rstrip() + "\n\nbasefwx._warn_single_thread_api()\n\nfrom ._cli import cli, main\n"
+    head = head.rstrip() + "\n\nbasefwx._warn_single_thread_api()\n\nfrom .runtime._cli import cli, main\n"
     # Remove import-time warn call
     head = re.sub(
         r"\n# Emit a one-time warning at import if single-thread override is forced\nbasefwx\._warn_single_thread_api\(\)\n\n",
@@ -518,7 +550,7 @@ _B32HEX_DECODE_LUT: bytes = bytes(
     lazy_helper = """
 
 def _lazy_b512encode(*args, **kwargs):
-    from .legacy import basefwx as _engine
+    from ..legacy import basefwx as _engine
     return _engine.b512encode(*args, **kwargs)
 
 """
@@ -587,9 +619,9 @@ def _enable_large_int_string_conversion_for_cli() -> None:
 
 """
             content = HEADER + rt + standalone_primitives_transform("\n\n".join(bodies))
-            (PKG / f"{mod}.py").write_text(content, encoding="utf-8")
+            module_path(mod).write_text(content, encoding="utf-8")
         else:
-            (PKG / f"{mod}.py").write_text("".join(parts) + "\n\n".join(bodies), encoding="utf-8")
+            module_path(mod).write_text("".join(parts) + "\n\n".join(bodies), encoding="utf-8")
         modules_written.append(mod)
         print(f"{mod}: {len(found)} ok, missing={missing}")
 
@@ -600,13 +632,7 @@ def _enable_large_int_string_conversion_for_cli() -> None:
         sub = {n: mod for n in names}
         patched = patch_legacy(patched, sub)
 
-    alias_imports = [f"{m} as _prim" if m == "_primitives" else m for m in modules_written]
-    # normalize: use _prim for primitives only
-    import_lines = ["from . import _primitives as _prim"]
-    for m in modules_written:
-        if m == "_primitives":
-            continue
-        import_lines.append(f"from . import {m}")
+    import_lines = [module_import_line(m) for m in modules_written]
     patched = patched.replace(
         "class basefwx:",
         "\n".join(import_lines) + "\n\n\nclass basefwx:",
@@ -627,9 +653,12 @@ def _enable_large_int_string_conversion_for_cli() -> None:
         count=1,
     )
     head, cli_mod = extract_cli(patched)
-    (PKG / "_cli.py").write_text(cli_mod, encoding="utf-8")
+    runtime_dir = PKG / "runtime"
+    runtime_dir.mkdir(exist_ok=True)
+    (runtime_dir / "__init__.py").touch(exist_ok=True)
+    (runtime_dir / "_cli.py").write_text(cli_mod, encoding="utf-8")
     LEGACY.write_text(head, encoding="utf-8")
-    print("Wrote _cli.py and patched legacy.py")
+    print("Wrote runtime/_cli.py and patched legacy.py")
     return 0
 
 

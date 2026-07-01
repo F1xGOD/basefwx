@@ -1,4 +1,6 @@
 # BaseFWX example Python plugin — xor-rotate-py.
+# SPDX-License-Identifier: MIT OR Apache-2.0
+# This file is intentionally permissive so plugin authors can use it as a starting template.
 #
 # Install:
 #   pip install -e examples/plugins/xor-rotate-py
@@ -15,7 +17,7 @@ name = "basefwx-xor-rotate-py"
 version = "1.0.0"
 description = "Example pure-Python BaseFWX blackbox plugin."
 readme = "README.md"
-license = "MIT"
+license = "MIT OR Apache-2.0"
 authors = [
     { name = "BaseFWX example author" },
 ]

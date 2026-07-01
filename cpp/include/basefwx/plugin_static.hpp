@@ -1,20 +1,17 @@
 /*
  * BaseFWX - Cryptography Engine
  * Copyright (C) 2020-2026  FixCraft Inc.
- * Licensed under the GNU General Public License v3.0.
+ * Licensed under the GNU Lesser General Public License v3.0 or later.
  *
- * --- Commercial-license-only API surface ----------------------------
+ * --- Static embedding license boundary ------------------------------
  *
- * Statically linking BaseFWX into a closed-source binary is OUTSIDE
- * the Plugin Exception (which requires a separately shipped .so/.dll
- * /.jar). See LICENSING.md. Using this header to register an
- * in-process plugin against a statically-linked BaseFWX requires a
- * commercial license from FixCraft Inc. (`admin@fixcraft.jp`).
+ * This header is part of the LGPL plugin ABI/SPI surface.
+ * Statically embedding a plugin is a deployment choice and does not
+ * change the plugin's own license.
  *
- * GPL-3.0 users with a dynamically-loaded BaseFWX library may still
- * call this header to register additional in-process plugins
- * alongside dlopen'd ones — that combination stays inside the free
- * track. The license boundary is on how BaseFWX itself is linked
+ * Static linking or embedding BaseFWX itself follows the
+ * LGPL-3.0-or-later requirements for the BaseFWX library files
+ * involved. The license boundary is on how BaseFWX itself is linked
  * into the host, not on whether plugins are registered statically.
  */
 

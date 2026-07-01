@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: GPL-3.0-or-later
+# Licensed under the GNU Lesser General Public License v3.0 or later.
 #
 # BaseFWX Python plugin SPI (3.7.0).
 #

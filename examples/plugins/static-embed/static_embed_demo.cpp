@@ -1,8 +1,8 @@
 /*
  * BaseFWX example — static-embedded plugin
  * Copyright (C) 2020-2026  FixCraft Inc.
- * Licensed under the GNU General Public License v3.0, with the
- * BaseFWX Plugin-Template Exception (see LICENCE clause 5).
+ * SPDX-License-Identifier: MIT OR Apache-2.0
+ * This file is intentionally permissive so plugin authors can use it as a starting template.
  *
  * ----------------------------------------------------------------
  * Demonstrates the plugin_static.hpp Registry API. The plugin
@@ -11,13 +11,10 @@
  * plugin by its 16-byte ID from the in-process Registry, NOT via
  * dlopen.
  *
- * License note: statically linking BaseFWX itself into a closed-
- * source binary requires a commercial license (see LICENSING.md).
- * The example here statically embeds ONLY the plugin source against
- * a header-only public ABI; it does not link the BaseFWX
- * implementation at all, so it stays inside the free track. Real
- * commercial deployments that want both the plugin AND the
- * BaseFWX library embedded need the commercial license.
+ * License note: this example statically embeds only the plugin
+ * source against the public ABI. Static linking or embedding
+ * BaseFWX itself follows LGPL-3.0-or-later requirements for the
+ * BaseFWX library files involved.
  *
  * Build:
  *     cmake -S examples/plugins/static-embed -B examples/plugins/static-embed/build

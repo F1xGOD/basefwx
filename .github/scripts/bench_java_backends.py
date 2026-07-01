@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# BaseFWX - Cryptography Engine
+# Copyright (C) 2020-2026  FixCraft Inc.
+# Licensed under the GNU General Public License v3.0 or later.
 """Append pure-Java + JNI FwxAESBenchmark numbers into a side-car JSON.
 
 Independent of the main benchmarks-<tag>.json so older snapshots keep working;

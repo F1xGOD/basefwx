@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# BaseFWX - Cryptography Engine
+# Copyright (C) 2020-2026  FixCraft Inc.
+# Licensed under the GNU General Public License v3.0 or later.
 """Emit website/results/index.json listing every benchmark snapshot the site
 should expose, so the benchmark page can offer a history dropdown."""
 from __future__ import annotations

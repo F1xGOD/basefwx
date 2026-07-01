@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# BaseFWX - Cryptography Engine
+# Copyright (C) 2020-2026  FixCraft Inc.
+# Licensed under the GNU General Public License v3.0 or later.
+
 from __future__ import annotations
 
 import json

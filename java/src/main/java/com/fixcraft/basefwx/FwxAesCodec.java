@@ -17,7 +17,6 @@ import java.nio.channels.FileChannel;
 import java.security.GeneralSecurityException;
 import java.util.Arrays;
 import java.util.List;
-import javax.crypto.AEADBadTagException;
 import javax.crypto.Cipher;
 import javax.crypto.spec.GCMParameterSpec;
 import javax.crypto.spec.SecretKeySpec;
@@ -31,6 +30,9 @@ final class FwxAesCodec {
     private FwxAesCodec() {}
 
     static final int STREAM_CHUNK = 1 << 20;
+    // Wrap-mode header carries two length-prefixed blobs. Mirror C++
+    // kMaxKeyHeaderLen in fwxaes.cpp — real headers are ~200-500 bytes.
+    private static final int MAX_KEY_HEADER_LEN = 64 * 1024;
 
     static final class PluginBinding {
         final BasefwxPlugin plugin;
@@ -109,6 +111,16 @@ final class FwxAesCodec {
             return factory.create(tag.config);
         } catch (BasefwxPluginException exc) {
             throw new IllegalStateException("plugin init failed", exc);
+        }
+    }
+
+    static void validateFwxAesPluginPosition(int position, BasefwxPlugin plugin) {
+        if (position != BasefwxPlugin.Position.PRE_AEAD
+                && position != BasefwxPlugin.Position.POST_AEAD) {
+            throw new IllegalArgumentException("unsupported plugin position");
+        }
+        if ((plugin.supportedPositions() & position) == 0) {
+            throw new IllegalArgumentException("plugin does not support requested position");
         }
     }
 
@@ -362,10 +374,12 @@ final class FwxAesCodec {
             offset += tag.totalLen;
             plugin = loadPluginFromTag(tag);
             pluginPosition = tag.position;
+            validateFwxAesPluginPosition(pluginPosition, plugin);
         }
 
         if (kdf == Constants.FWXAES_KDF_WRAP) {
             int headerLen = iters;
+            enforceWrapKeyHeaderLimit(headerLen);
             if (blob.length < offset + headerLen + ivLen + ctLen) {
                 throw new IllegalArgumentException("fwxAES blob truncated");
             }
@@ -692,6 +706,7 @@ final class FwxAesCodec {
         byte[] pw = BaseFwx.resolvePasswordBytes(password, useMaster);
         if (kdf == Constants.FWXAES_KDF_WRAP) {
             int headerLen = iters;
+            enforceWrapKeyHeaderLimit(headerLen);
             byte[] keyHeader = new byte[headerLen];
             if (headerLen > 0) {
                 FileCodecs.readExactChannel(input, ByteBuffer.wrap(keyHeader), headerLen, "fwxAES blob truncated");
@@ -722,40 +737,9 @@ final class FwxAesCodec {
         }
 
         try {
-            Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
-            GCMParameterSpec spec = new GCMParameterSpec(Constants.AEAD_TAG_LEN * 8, iv);
-            // lgtm[java/static-initialization-vector] - IV is read from ciphertext stream (lines 2870, 2887), not static
-            cipher.init(Cipher.DECRYPT_MODE, new SecretKeySpec(key, "AES"), spec);
-            cipher.updateAAD(Constants.FWXAES_AAD);
-
-            long remaining = (long) ctLen - Constants.AEAD_TAG_LEN;
-            ByteBuffer inBuf = ByteBuffer.allocateDirect(STREAM_CHUNK);
-            ByteBuffer outBuf = ByteBuffer.allocateDirect(STREAM_CHUNK);
-            while (remaining > 0) {
-                int toRead = (int) Math.min(inBuf.capacity(), remaining);
-                FileCodecs.readExactChannel(input, inBuf, toRead, "fwxAES blob truncated");
-                outBuf.clear();
-                int outLen = cipher.update(inBuf, outBuf);
-                if (outLen > 0) {
-                    outBuf.flip();
-                    FileCodecs.writeFully(output, outBuf);
-                }
-                remaining -= toRead;
-            }
-            ByteBuffer tagBuf = ByteBuffer.allocate(Constants.AEAD_TAG_LEN);
-            FileCodecs.readExactChannel(input, tagBuf, Constants.AEAD_TAG_LEN, "fwxAES blob truncated");
-            outBuf.clear();
-            try {
-                int finalLen = cipher.doFinal(tagBuf, outBuf);
-                if (finalLen > 0) {
-                    outBuf.flip();
-                    FileCodecs.writeFully(output, outBuf);
-                }
-            } catch (AEADBadTagException exc) {
-                throw new IllegalArgumentException("AES-GCM auth failed");
-            }
-        } catch (GeneralSecurityException exc) {
-            throw new IllegalStateException("fwxAES decrypt failed", exc);
+            enforceStreamPlaintextLimit(ctLen);
+            byte[] ciphertextWithTag = readCiphertextWithTagChannel(input, ctLen);
+            writeAuthenticatedFwxAesPlaintextChannel(key, iv, ciphertextWithTag, output);
         } finally {
             Arrays.fill(key, (byte) 0);
         }
@@ -796,6 +780,55 @@ final class FwxAesCodec {
         output.flush();
     }
 
+    private static void enforceWrapKeyHeaderLimit(int headerLen) {
+        if (headerLen < 0 || headerLen > MAX_KEY_HEADER_LEN) {
+            throw new IllegalArgumentException("fwxAES key header too large");
+        }
+    }
+
+    private static void enforceStreamPlaintextLimit(int ctLen) {
+        long plainLen = (long) ctLen - Constants.AEAD_TAG_LEN;
+        if (plainLen > Constants.STREAM_THRESHOLD) {
+            throw new IllegalArgumentException(
+                "fwxAES payload exceeds Java in-memory stream decrypt limit ("
+                    + Constants.STREAM_THRESHOLD
+                    + " bytes); use C++ or Python runtime for larger payloads");
+        }
+    }
+
+    private static byte[] readCiphertextWithTag(InputStream input, int ctLen) throws IOException {
+        byte[] ciphertextWithTag = new byte[ctLen];
+        FileCodecs.readExact(input, ciphertextWithTag, ctLen, "fwxAES blob truncated");
+        return ciphertextWithTag;
+    }
+
+    private static byte[] readCiphertextWithTagChannel(FileChannel input, int ctLen) throws IOException {
+        byte[] ciphertextWithTag = new byte[ctLen];
+        FileCodecs.readExactChannel(input, ByteBuffer.wrap(ciphertextWithTag), ctLen,
+            "fwxAES blob truncated");
+        return ciphertextWithTag;
+    }
+
+    private static long writeAuthenticatedFwxAesPlaintext(byte[] key,
+                                                          byte[] iv,
+                                                          byte[] ciphertextWithTag,
+                                                          OutputStream output) throws IOException {
+        byte[] plain = Crypto.aesGcmDecryptWithIv(
+            key, iv, ciphertextWithTag, Constants.FWXAES_AAD);
+        output.write(plain);
+        output.flush();
+        return plain.length;
+    }
+
+    private static void writeAuthenticatedFwxAesPlaintextChannel(byte[] key,
+                                                                 byte[] iv,
+                                                                 byte[] ciphertextWithTag,
+                                                                 FileChannel output) throws IOException {
+        byte[] plain = Crypto.aesGcmDecryptWithIv(
+            key, iv, ciphertextWithTag, Constants.FWXAES_AAD);
+        FileCodecs.writeFully(output, ByteBuffer.wrap(plain));
+    }
+
     static long fwxAesDecryptStreamPublic(InputStream input,
                                           OutputStream output,
                                           String password,
@@ -826,6 +859,7 @@ final class FwxAesCodec {
         byte[] pw = BaseFwx.resolvePasswordBytes(password, useMaster);
         if (kdf == Constants.FWXAES_KDF_WRAP) {
             int headerLen = iters;
+            enforceWrapKeyHeaderLimit(headerLen);
             byte[] keyHeader = new byte[headerLen];
             if (headerLen > 0) {
                 FileCodecs.readExact(input, keyHeader, headerLen, "fwxAES blob truncated");
@@ -856,40 +890,9 @@ final class FwxAesCodec {
         }
 
         try {
-            CryptoBackend backend = CryptoBackends.get();
-            try (CryptoBackend.AeadDecryptor dec = backend.newGcmDecryptor(key, iv, Constants.FWXAES_AAD)) {
-                long remaining = (long) ctLen - Constants.AEAD_TAG_LEN;
-                byte[] buf = new byte[STREAM_CHUNK];
-                // GCM decryption buffers all data until doFinal for tag verification
-                // So we need a buffer large enough for all plaintext
-                int plaintextLen = ctLen - Constants.AEAD_TAG_LEN;
-                byte[] outBuf = new byte[Math.max(STREAM_CHUNK, plaintextLen)];
-                long written = 0;
-                int outBufOffset = 0;
-                while (remaining > 0) {
-                    int toRead = (int) Math.min(buf.length, remaining);
-                    FileCodecs.readExact(input, buf, toRead, "fwxAES blob truncated");
-                    int outLen = dec.update(buf, 0, toRead, outBuf, outBufOffset);
-                    outBufOffset += outLen;
-                    remaining -= toRead;
-                }
-                byte[] tag = new byte[Constants.AEAD_TAG_LEN];
-                FileCodecs.readExact(input, tag, tag.length, "fwxAES blob truncated");
-                try {
-                    int finalLen = dec.doFinal(tag, 0, tag.length, outBuf, outBufOffset);
-                    int totalOut = outBufOffset + finalLen;
-                    if (totalOut > 0) {
-                        output.write(outBuf, 0, totalOut);
-                        written = totalOut;
-                    }
-                } catch (AEADBadTagException exc) {
-                    throw new IllegalArgumentException("AES-GCM auth failed");
-                }
-                output.flush();
-                return written;
-            }
-        } catch (GeneralSecurityException exc) {
-            throw new IllegalStateException("fwxAES decrypt failed", exc);
+            enforceStreamPlaintextLimit(ctLen);
+            byte[] ciphertextWithTag = readCiphertextWithTag(input, ctLen);
+            return writeAuthenticatedFwxAesPlaintext(key, iv, ciphertextWithTag, output);
         } finally {
             Arrays.fill(key, (byte) 0);
         }

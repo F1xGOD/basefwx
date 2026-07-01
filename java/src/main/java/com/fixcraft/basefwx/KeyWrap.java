@@ -25,16 +25,34 @@ public final class KeyWrap {
         }
         boolean hasPassword = password != null && password.length > 0;
         boolean useMasterEffective = false;
-        EcKeys.EcKemResult kem = null;
+        byte[] pqMasterBlob = null;
+        byte[] pqShared = null;
+        EcKeys.EcKemResult ecKem = null;
         if (useMaster) {
-            try {
-                java.security.PublicKey pub = EcKeys.loadMasterPublic(EcKeys.masterEcAutoCreateEnabled());
-                if (pub != null) {
-                    kem = EcKeys.kemEncrypt(pub);
+            if (PQ.isMasterPublicKeyConfigured()) {
+                try {
+                    byte[] pqPub = PQ.loadMasterPublicKey();
+                    PQ.KemResult kem = PQ.kemEncrypt(pqPub);
+                    pqMasterBlob = kem.ciphertext;
+                    pqShared = kem.shared;
                     useMasterEffective = true;
+                } catch (Exception exc) {
+                    if (exc instanceof RuntimeException) {
+                        throw (RuntimeException) exc;
+                    }
+                    throw new IllegalStateException("PQ master key wrap failed", exc);
                 }
-            } catch (Exception exc) {
-                useMasterEffective = false;
+            } else if (!PQ.strictPqOnly()) {
+                try {
+                    java.security.PublicKey pub =
+                            EcKeys.loadMasterPublic(EcKeys.masterEcAutoCreateEnabled());
+                    if (pub != null) {
+                        ecKem = EcKeys.kemEncrypt(pub);
+                        useMasterEffective = true;
+                    }
+                } catch (Exception exc) {
+                    useMasterEffective = false;
+                }
             }
         }
         if (!hasPassword && !useMasterEffective) {
@@ -43,10 +61,14 @@ public final class KeyWrap {
 
         MaskKeyResult result = new MaskKeyResult();
         result.usedMaster = useMasterEffective;
-        if (useMasterEffective && kem != null) {
-            result.masterBlob = kem.masterBlob;
-            result.maskKey = Crypto.hkdfSha256(kem.shared, maskInfo, 32);
-            Arrays.fill(kem.shared, (byte) 0);
+        if (useMasterEffective && pqShared != null) {
+            result.masterBlob = pqMasterBlob;
+            result.maskKey = Crypto.hkdfSha256(pqShared, maskInfo, 32);
+            Arrays.fill(pqShared, (byte) 0);
+        } else if (useMasterEffective && ecKem != null) {
+            result.masterBlob = ecKem.masterBlob;
+            result.maskKey = Crypto.hkdfSha256(ecKem.shared, maskInfo, 32);
+            Arrays.fill(ecKem.shared, (byte) 0);
         } else {
             result.masterBlob = new byte[0];
             result.maskKey = Crypto.randomBytes(32);
@@ -97,21 +119,35 @@ public final class KeyWrap {
                 throw new IllegalArgumentException("Master key required to decode this payload");
             }
             try {
-                if (!startsWith(masterBlob, Constants.MASTER_EC_MAGIC)) {
-                    throw new IllegalArgumentException("Invalid master key blob magic");
+                byte[] shared;
+                if (startsWith(masterBlob, Constants.MASTER_EC_MAGIC)) {
+                    if (PQ.strictPqOnly()) {
+                        throw new IllegalArgumentException(
+                                "EC master blobs are disabled in PQ strict mode");
+                    }
+                    java.security.PrivateKey priv = EcKeys.loadMasterPrivate();
+                    shared = EcKeys.kemDecrypt(masterBlob, priv);
+                } else {
+                    byte[] priv = PQ.loadMasterPrivateKey();
+                    try {
+                        shared = PQ.kemDecrypt(priv, masterBlob);
+                    } finally {
+                        Arrays.fill(priv, (byte) 0);
+                    }
                 }
-                java.security.PrivateKey priv = EcKeys.loadMasterPrivate();
-                byte[] shared = EcKeys.kemDecrypt(masterBlob, priv);
                 try {
                     return Crypto.hkdfSha256(shared, maskInfo, 32);
                 } finally {
                     Arrays.fill(shared, (byte) 0);
                 }
-            } catch (RuntimeException exc) {
+            } catch (Exception exc) {
                 boolean canFallback = userBlob != null && userBlob.length > 0
                         && password != null && password.length > 0;
                 if (!canFallback) {
-                    throw exc;
+                    if (exc instanceof RuntimeException) {
+                        throw (RuntimeException) exc;
+                    }
+                    throw new IllegalStateException("Master key recovery failed", exc);
                 }
             }
         }

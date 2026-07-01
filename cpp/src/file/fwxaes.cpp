@@ -596,6 +596,7 @@ Bytes DecryptRaw(const Bytes& blob, const std::string& password, const Options& 
             options.plugin_id_hex
         );
         plugin_position = tag.position;
+        basefwx::plugin::ValidatePluginPosition(plugin_position, plugin.supported_positions());
         offset += basefwx::constants::kFwxAesPluginTagFixedLen + tag.config.size();
     }
 

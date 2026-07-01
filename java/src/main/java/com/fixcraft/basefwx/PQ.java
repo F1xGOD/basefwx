@@ -18,6 +18,7 @@ import org.bouncycastle.pqc.jcajce.provider.BouncyCastlePQCProvider;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -25,13 +26,17 @@ import java.nio.file.Paths;
 import java.security.*;
 import java.util.Arrays;
 import java.util.Base64;
+import javax.security.auth.DestroyFailedException;
 import java.util.zip.InflaterInputStream;
+import java.util.zip.ZipException;
 
 /**
  * Post-Quantum cryptography support using ML-KEM-768 (Kyber).
  */
 public final class PQ {
     private PQ() {}
+
+    private static final int MAX_KEY_BYTES = 4 * 1024 * 1024;
 
     static {
         // Register Bouncy Castle providers
@@ -54,6 +59,61 @@ public final class PQ {
     }
 
     /**
+     * True when EC master blobs must be refused (PQ-only deployments).
+     * Mirrors C++ {@code StrictPqOnly()} in keywrap.cpp.
+     */
+    static boolean strictPqOnly() {
+        return envEnabled(Constants.PQ_STRICT_ENV) || envEnabled(Constants.PQ_ONLY_ENV);
+    }
+
+    private static boolean envEnabled(String name) {
+        String value = System.getenv(name);
+        if (value == null || value.isEmpty()) {
+            return false;
+        }
+        return "1".equals(value) || "true".equalsIgnoreCase(value)
+                || "yes".equalsIgnoreCase(value);
+    }
+
+    /**
+     * Load the master ML-KEM-768 private key from configuration.
+     * Mirrors C++ {@code basefwx::pq::LoadMasterPrivateKey}.
+     */
+    public static byte[] loadMasterPrivateKey() throws IOException {
+        String envPath = System.getenv(Constants.MASTER_PQ_PRIVATE_ENV);
+        if (envPath != null && !envPath.isEmpty()) {
+            Path path = expandUser(envPath);
+            if (!Files.exists(path)) {
+                throw new IOException("Master PQ private key not found at " + path);
+            }
+            return decodeKeyBytes(readKeyFileBytes(path));
+        }
+        String home = System.getProperty("user.home");
+        if (home != null && !home.isEmpty()) {
+            Path defaultPath = Paths.get(home, "master_pq.sk");
+            if (Files.exists(defaultPath)) {
+                return decodeKeyBytes(readKeyFileBytes(defaultPath));
+            }
+        }
+        throw new IOException("No master_pq.sk private key found (set "
+                + Constants.MASTER_PQ_PRIVATE_ENV + " or place at ~/master_pq.sk)");
+    }
+
+    /**
+     * True when an operator explicitly configured a PQ master public key
+     * (runtime env path or build-time baked literal). Mirrors C++ branches
+     * that distinguish configured vs absent keys in LoadMasterPublicKey.
+     */
+    static boolean isMasterPublicKeyConfigured() {
+        String envPath = System.getenv(Constants.MASTER_PQ_PUBLIC_ENV);
+        if (envPath != null && !envPath.isEmpty()) {
+            return true;
+        }
+        String baked = Constants.MASTER_PQ_PUBLIC_B64;
+        return baked != null && !baked.isEmpty();
+    }
+
+    /**
      * Load the master ML-KEM-768 public key from configuration.
      *
      * <p>3.7.0: the upstream baked key has been removed; sourced in order:
@@ -62,8 +122,7 @@ public final class PQ {
      *   <li>Build-time literal via {@code -Dbasefwx.master.pq.public.b64=<base64>}
      *       JVM system property — empty by default.</li>
      * </ol>
-     * The previous {@code BASEFWX_MASTER_PQ_ALLOW_BAKED} / {@code ALLOW_BAKED_PUB}
-     * env-var gate is no longer consulted; the decision is now build-time.
+     * Throws when a key source is configured but missing or invalid.
      */
     public static byte[] loadMasterPublicKey() throws Exception {
         String envPath = System.getenv(Constants.MASTER_PQ_PUBLIC_ENV);
@@ -72,7 +131,7 @@ public final class PQ {
             if (!Files.exists(path)) {
                 throw new IOException("Master PQ public key not found at " + path);
             }
-            byte[] raw = Files.readAllBytes(path);
+            byte[] raw = readKeyFileBytes(path);
             return decodeKeyBytes(raw);
         }
 
@@ -81,7 +140,7 @@ public final class PQ {
             return decodeKeyBytes(baked.getBytes(StandardCharsets.UTF_8));
         }
 
-        throw new IllegalStateException("Master PQ public key not available. Set "
+        throw new IllegalStateException("Master PQ public key not configured. Set "
                 + Constants.MASTER_PQ_PUBLIC_ENV + " or build with "
                 + "-Dbasefwx.master.pq.public.b64=<base64-key>.");
     }
@@ -92,6 +151,9 @@ public final class PQ {
     public static byte[] decodeKeyBytes(byte[] raw) throws IOException {
         if (raw == null || raw.length == 0) {
             return raw;
+        }
+        if (raw.length > MAX_KEY_BYTES) {
+            throw new IOException("Key material too large (>4 MiB)");
         }
 
         // Try trimming whitespace
@@ -128,18 +190,39 @@ public final class PQ {
         return Arrays.copyOfRange(data, start, end);
     }
 
-    private static byte[] tryZlibDecompress(byte[] input) {
-        try {
-            ByteArrayInputStream bais = new ByteArrayInputStream(input);
-            InflaterInputStream iis = new InflaterInputStream(bais);
-            ByteArrayOutputStream baos = new ByteArrayOutputStream();
+    private static byte[] readKeyFileBytes(Path path) throws IOException {
+        try (InputStream input = Files.newInputStream(path);
+             ByteArrayOutputStream output = new ByteArrayOutputStream()) {
             byte[] buffer = new byte[8192];
+            int total = 0;
+            int read;
+            while ((read = input.read(buffer)) != -1) {
+                if (read > MAX_KEY_BYTES - total) {
+                    throw new IOException("Key file too large (>4 MiB): " + path);
+                }
+                output.write(buffer, 0, read);
+                total += read;
+            }
+            return output.toByteArray();
+        }
+    }
+
+    private static byte[] tryZlibDecompress(byte[] input) throws IOException {
+        try (ByteArrayInputStream bais = new ByteArrayInputStream(input);
+             InflaterInputStream iis = new InflaterInputStream(bais);
+             ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
+            byte[] buffer = new byte[8192];
+            int total = 0;
             int len;
             while ((len = iis.read(buffer)) > 0) {
+                if (len > MAX_KEY_BYTES - total) {
+                    throw new IOException("Decoded key material too large (>4 MiB)");
+                }
                 baos.write(buffer, 0, len);
+                total += len;
             }
             return baos.toByteArray();
-        } catch (Exception e) {
+        } catch (ZipException e) {
             return null;
         }
     }
@@ -172,11 +255,18 @@ public final class PQ {
         
         KyberKEMGenerator kemGen = new KyberKEMGenerator(new SecureRandom());
         SecretWithEncapsulation secretEnc = kemGen.generateEncapsulated(pubKey);
-        
-        byte[] ciphertext = secretEnc.getEncapsulation();
-        byte[] sharedSecret = secretEnc.getSecret();
 
-        return new KemResult(ciphertext, sharedSecret);
+        try {
+            byte[] ciphertext = secretEnc.getEncapsulation();
+            byte[] sharedSecret = secretEnc.getSecret();
+            return new KemResult(ciphertext, sharedSecret);
+        } finally {
+            try {
+                secretEnc.destroy();
+            } catch (DestroyFailedException ignored) {
+                // The returned shared secret is wiped by KeyWrap after HKDF.
+            }
+        }
     }
 
     /**

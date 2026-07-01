@@ -1390,6 +1390,49 @@ class CryptographyIntegrationTests(unittest.TestCase):
         cipher_entropy = self._entropy(ct[12:])  # skip nonce
         self.assertGreater(cipher_entropy, 4.0)
 
+    def test_fwxaes_plugin_position_tamper_rejected(self):
+        from basefwx.plugin import BasefwxPlugin, Position as PluginPosition
+
+        class _XorTestPlugin(BasefwxPlugin):
+            PLUGIN_ID = b"\xab" * 16
+            NAME = "xor-test"
+            VERSION = "1.0"
+            SUPPORTED_POSITIONS = int(PluginPosition.PRE_AEAD) | int(
+                PluginPosition.POST_AEAD
+            )
+
+            def forward(self, data: bytes) -> bytes:
+                return bytes(b ^ 0x55 for b in data)
+
+            def inverse(self, data: bytes) -> bytes:
+                return bytes(b ^ 0x55 for b in data)
+
+        plugin = _XorTestPlugin()
+        with patch.dict(
+            os.environ,
+            {"BASEFWX_TESTING": "1", "BASEFWX_TEST_KDF_ITERS": "2"},
+            clear=False,
+        ):
+            blob = basefwx.fwxAES_encrypt_raw(
+                b"plugin-position-test",
+                b"test-password-12",
+                use_master=False,
+                plugin=plugin,
+                plugin_position=PluginPosition.PRE_AEAD,
+            )
+        self.assertEqual(blob[4], basefwx.FWXAES_ALGO_PLUGIN)
+        pos_offset = 16 + basefwx.FWXAES_PLUGIN_ID_LEN
+        for bad_pos in (0, 3, 4):
+            tampered = bytearray(blob)
+            tampered[pos_offset] = bad_pos
+            with self.assertRaises(ValueError, msg=f"position {bad_pos} should fail"):
+                basefwx.fwxAES_decrypt_raw(
+                    bytes(tampered),
+                    b"test-password-12",
+                    use_master=False,
+                    plugin=plugin,
+                )
+
 
 if __name__ == "__main__":
     unittest.main()

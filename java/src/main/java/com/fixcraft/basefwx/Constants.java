@@ -151,6 +151,9 @@ public final class Constants {
     public static final String MASTER_PQ_PUBLIC_B64 =
             System.getProperty("basefwx.master.pq.public.b64", "");
     public static final String MASTER_PQ_PUBLIC_ENV = "BASEFWX_MASTER_PQ_PUB";
+    public static final String MASTER_PQ_PRIVATE_ENV = "BASEFWX_MASTER_PQ_SK";
+    public static final String PQ_STRICT_ENV = "BASEFWX_PQ_STRICT";
+    public static final String PQ_ONLY_ENV = "BASEFWX_PQ_ONLY";
     // Retained as a string only so callers that print env-var names still
     // compile. The actual env-var is no longer consulted by PQ.java (the
     // baked-key opt-in was removed alongside the baked literal).

@@ -14,6 +14,7 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <cstddef>
 #include <filesystem>
 #include <fstream>
 #include <stdexcept>
@@ -47,6 +48,8 @@ void KemResult::wipe_shared() noexcept {
 
 namespace {
 
+constexpr std::size_t kMaxKeyBytes = 4u * 1024u * 1024u;
+
 std::string NormalizeAlg(std::string value) {
     std::transform(value.begin(), value.end(), value.begin(),
                    [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
@@ -58,7 +61,6 @@ Bytes ReadFileBytes(const std::filesystem::path& path) {
     // ~1.6 KiB / 3.2 KiB. Cap at 4 MiB so a malicious symlink (e.g.
     // BASEFWX_MASTER_PQ_PUB pointing at /dev/zero or a large file)
     // cannot OOM the process before the format check rejects the data.
-    constexpr std::streamoff kMaxKeyFileBytes = 4 * 1024 * 1024;
     std::ifstream input(path, std::ios::binary);
     if (!input) {
         throw std::runtime_error("Failed to open key file: " + path.string());
@@ -68,7 +70,7 @@ Bytes ReadFileBytes(const std::filesystem::path& path) {
     if (size < 0) {
         throw std::runtime_error("Failed to read key size: " + path.string());
     }
-    if (size > kMaxKeyFileBytes) {
+    if (size > static_cast<std::streamoff>(kMaxKeyBytes)) {
         throw std::runtime_error("Key file too large (>4 MiB): " + path.string());
     }
     input.seekg(0, std::ios::beg);
@@ -121,6 +123,10 @@ std::optional<Bytes> TryZlibDecompress(const Bytes& input) {
         }
         std::size_t produced = buffer.size() - zs.avail_out;
         if (produced > 0) {
+            if (produced > kMaxKeyBytes - out.size()) {
+                inflateEnd(&zs);
+                throw std::runtime_error("Decoded key material too large (>4 MiB)");
+            }
             out.insert(out.end(), buffer.begin(), buffer.begin() + static_cast<std::ptrdiff_t>(produced));
         }
     }

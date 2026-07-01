@@ -8,7 +8,7 @@
 | :-- | :--: | :--: | :--: | :--: | :-- |
 | C++ | ✅ | ✅ | ✅ | ✅ | Reference release runtime for performance and full native feature set. |
 | Python | ✅ with `basefwx[argon2]` | ✅ via `pqcrypto` | ✅ | ✅ | Feature-complete scripting/runtime path. |
-| Java | ✅ since 3.7.0 (BouncyCastle `Argon2BytesGenerator`; libargon2 JNI optional) | Partial | ❌ | ✅ | Argon2id user-KDF wrap supported. ML-KEM primitives exist via BouncyCastle (`PQ.kemEncrypt` / `PQ.kemDecrypt`), but Java keywrap still lacks the PQ master-blob dispatch path documented below. JNI bridge to libargon2 (`NativeCryptoBackend.argon2idHashRaw`) speeds Argon2 up ~5–10× on systems where the native lib is loadable; falls through to pure-Java BouncyCastle otherwise (byte-identical output, just slower). |
+| Java | ✅ since 3.7.0 (BouncyCastle `Argon2BytesGenerator`; libargon2 JNI optional) | ✅ keywrap (BouncyCastle ML-KEM-768; EC fallback only when PQ pub not configured) | ❌ | ✅ | Argon2id user-KDF wrap supported. PQ master-wrap parity with C++/Python via `KeyWrap` + `PQ.kemEncrypt` / `PQ.kemDecrypt`. JNI bridge to libargon2 (`NativeCryptoBackend.argon2idHashRaw`) speeds Argon2 up ~5–10× on systems where the native lib is loadable; falls through to pure-Java BouncyCastle otherwise (byte-identical output, just slower). |
 
 ### Argon2 parallelism portability
 
@@ -72,46 +72,20 @@ is refused unless the plugin declares `CAP_SAFE_RAW_MODE`.
 `algo=0x01`) decrypt unchanged on 3.7.0. Plugin-tagged blobs do not
 decrypt on 3.6.4 peers (unknown algo — fail closed).
 
-### Master-key wrap: Java is EC-only
+### Master-key wrap: cross-runtime parity
 
-The C++ and Python runtimes accept two kinds of `master_blob` in a
-keywrap header — an EC-magic-prefixed blob (`EC1` + ECIES-wrapped
-key) decoded by `basefwx::ec::KemDecrypt`, and a magic-less PQ blob
-(raw Kyber/ML-KEM ciphertext) decoded by `basefwx::pq::KemDecrypt`
-([cpp/src/crypto/keywrap.cpp:186-189](basefwx/cpp/src/crypto/keywrap.cpp#L186)).
-The Java runtime currently accepts **only the EC variant** —
-[KeyWrap.java:99](basefwx/java/src/main/java/com/fixcraft/basefwx/KeyWrap.java#L99)
-hard-codes `startsWith(masterBlob, Constants.MASTER_EC_MAGIC)` and
-rejects anything else.
+All three runtimes accept two kinds of `master_blob` in a keywrap header:
 
-Practical impact:
+- **EC-magic-prefixed** (`EC1` + ECIES-wrapped key) — decoded by `EcKeys` / `basefwx::ec::KemDecrypt` / `_ec_kem_dec`.
+- **PQ blob** (raw ML-KEM-768 ciphertext, no magic prefix) — decoded by `PQ.kemDecrypt` / `basefwx::pq::KemDecrypt` / `ml_kem_768.decrypt`.
 
-- **Password-only blobs** (no master key) — work everywhere (C++,
-  Python, Java).
-- **EC-master-wrapped blobs** — work everywhere.
-- **PQ-master-wrapped blobs without a usable password** — only
-  decode in C++/Python. Java throws "Invalid master key blob
-  magic" and there is no fallback because no password was
-  configured.
-- **PQ-master-wrapped blobs WITH a usable password** — Java's
-  catch-handler at
-  [KeyWrap.java:106](basefwx/java/src/main/java/com/fixcraft/basefwx/KeyWrap.java#L106)
-  falls back to the user-key path and the decode succeeds. Visible
-  consequence: the master-key recovery path is silently bypassed on
-  Java even though the producer expected it to be available.
+On encrypt, when `useMaster=true`, every runtime **prefers the PQ public key** (`BASEFWX_MASTER_PQ_PUB` or build-time baked literal) and falls back to EC only when PQ is unavailable and `BASEFWX_PQ_STRICT` / `BASEFWX_PQ_ONLY` is not set.
 
-This asymmetry is not caused by a missing primitive:
-`PQ.kemDecrypt(byte[] privateKeyBytes, byte[] ciphertext)` exists in
-the Java runtime. The blocker is `KeyWrap.recoverMaskKey(...)` itself:
-it treats every non-empty `masterBlob` as EC-only, hard-codes a
-`Constants.MASTER_EC_MAGIC` check, and has no non-EC/PQ branch that
-loads the PQ private key and dispatches to `PQ.kemDecrypt`. Tracked for
-a future basefwx minor release.
+On decrypt, `KeyWrap.recoverMaskKey` branches on `MASTER_EC_MAGIC`; non-EC blobs use `PQ.loadMasterPrivateKey()` (`BASEFWX_MASTER_PQ_SK` or `~/master_pq.sk`). Password fallback to the user blob remains when master recovery fails and a password was supplied.
 
-Until then: do not rely on master-key-only blobs round-tripping
-through the Java runtime. The Android client (which consumes the
-synced Java codec) inherits this limitation. The C++ CLI and the
-Python `basefwx` package are unaffected.
+**Strict PQ mode:** set `BASEFWX_PQ_STRICT=1` or `BASEFWX_PQ_ONLY=1` to refuse EC master blobs (matches C++ `StrictPqOnly()`).
+
+**Password-only blobs** (no master key) work everywhere. **EC-master** and **PQ-master** blobs round-trip across C++, Java, and Python when the matching master keys are configured.
 
 Release policy:
 

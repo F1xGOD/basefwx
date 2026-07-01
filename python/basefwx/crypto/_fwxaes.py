@@ -60,6 +60,18 @@ def _load_plugin_from_tag(plugin_id: bytes, config: bytes):
     raise ValueError('fwxAES plugin not available for blob tag')
 
 
+def _validate_fwxaes_plugin_position(position, plugin_obj):
+    from ..plugin import Position
+
+    if position not in (Position.PRE_AEAD, Position.POST_AEAD):
+        raise ValueError('unsupported plugin position')
+    supported = getattr(plugin_obj, 'SUPPORTED_POSITIONS', None)
+    if supported is None and hasattr(plugin_obj, 'supported_positions'):
+        supported = plugin_obj.supported_positions()
+    if supported is not None and (int(supported) & int(position)) == 0:
+        raise ValueError('plugin does not support requested position')
+
+
 def _assemble_raw_blob(algo, kdf, salt_len_field, iv_len, field0, ct_len, plugin_tag, header_payload, iv, ct):
     header = bytearray()
     header += basefwx.FWXAES_MAGIC
@@ -173,6 +185,7 @@ def fwxAES_decrypt_raw(blob: bytes, password: 'basefwx.typing.Union[str, bytes, 
                 raise ValueError('loaded plugin id does not match blob tag')
         elif getattr(plugin_obj, 'PLUGIN_ID', b'') != plugin_id:
             raise ValueError('loaded plugin id does not match blob tag')
+        _validate_fwxaes_plugin_position(plugin_position, plugin_obj)
 
     def _finish_plaintext(plain: bytes) -> bytes:
         if algo != basefwx.FWXAES_ALGO_PLUGIN:

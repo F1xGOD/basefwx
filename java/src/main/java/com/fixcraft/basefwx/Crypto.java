@@ -7,6 +7,10 @@
 package com.fixcraft.basefwx;
 
 import java.nio.ByteBuffer;
+import java.nio.CharBuffer;
+import java.nio.charset.CharacterCodingException;
+import java.nio.charset.CharsetDecoder;
+import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
 import java.security.GeneralSecurityException;
 import java.security.SecureRandom;
@@ -303,16 +307,28 @@ public final class Crypto {
         return out;
     }
 
+    private static char[] utf8PasswordToChars(byte[] password) {
+        CharsetDecoder decoder = StandardCharsets.UTF_8.newDecoder()
+                .onMalformedInput(CodingErrorAction.REPORT)
+                .onUnmappableCharacter(CodingErrorAction.REPORT);
+        try {
+            CharBuffer cb = decoder.decode(ByteBuffer.wrap(password));
+            char[] chars = new char[cb.remaining()];
+            cb.get(chars);
+            return chars;
+        } catch (CharacterCodingException exc) {
+            return null;
+        }
+    }
+
     private static byte[] pbkdf2HmacSha256Native(byte[] password, byte[] salt, int iterations, int length) {
         if (password == null) {
             return null;
         }
-        String pwStr = new String(password, StandardCharsets.UTF_8);
-        byte[] roundTrip = pwStr.getBytes(StandardCharsets.UTF_8);
-        if (!Arrays.equals(roundTrip, password)) {
+        char[] chars = utf8PasswordToChars(password);
+        if (chars == null) {
             return null;
         }
-        char[] chars = pwStr.toCharArray();
         try {
             PBEKeySpec spec = new PBEKeySpec(chars, salt, iterations, length * 8);
             SecretKeyFactory factory = PBKDF2_FACTORY.get();

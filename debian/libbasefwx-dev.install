@@ -1,4 +1,5 @@
 usr/include/basefwx/*.hpp
+usr/include/basefwx/*.h
 usr/lib/*/libbasefwx.so
 usr/lib/*/cmake/basefwx/*
 usr/lib/*/pkgconfig/*.pc

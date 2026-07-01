@@ -10,8 +10,10 @@ makes my data secret" — keep reading; it depends.
 
 ## Why this matters
 
-BaseFWX is open source under GPL-3.0 (with the Plugin Exception and
-Attribution requirement; see [LICENSING.md](../../LICENSING.md)).
+BaseFWX is open source under a split license: LGPL-3.0-or-later for
+core library/API/runtime and plugin ABI/SPI code, GPL-3.0-or-later for
+standalone tools, and MIT OR Apache-2.0 for example plugin templates
+(see [LICENSING.md](../../LICENSING.md)).
 An attacker can read every line of the core. The crypto stance is
 deliberately **public**: AES-256-GCM, Argon2id, HKDF-SHA256, ML-KEM-768.
 The security comes from the user's password and (optionally) a
@@ -223,7 +225,7 @@ malicious client to be unable to forge server-bound blobs.
 | - | - |
 | Distribution | Plugin source compiled into the host binary; no `.so`/`.dll` on disk |
 | Registration | `BASEFWX_PLUGIN_REGISTER_STATIC(basefwx_plugin_entry())` in [plugin_static.hpp](../../cpp/include/basefwx/plugin_static.hpp) |
-| License | Commercial-license-only if BaseFWX itself is also statically linked (see [LICENSING.md](../../LICENSING.md)); free-track if BaseFWX is dynamically linked but plugins are embedded |
+| License | Static linking or embedding BaseFWX itself follows LGPL-3.0-or-later requirements for the BaseFWX library files involved; the example plugin template remains MIT OR Apache-2.0 |
 | Security properties | Identical to whichever of Profile A or Profile B the plugin actually implements. Static embedding is a deployment choice, not a security primitive. |
 | Example | `static-embed/` |
 

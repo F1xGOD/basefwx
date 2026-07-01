@@ -1,0 +1,7 @@
+Tests: smoke
+Depends: basefwx, libbasefwx-dev, man-db, pkgconf, dpkg-dev
+Restrictions: superficial
+
+Tests: libbasefwx-dev
+Depends: libbasefwx-dev, cmake, g++, pkgconf, dpkg-dev
+Restrictions: superficial

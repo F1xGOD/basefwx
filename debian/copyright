@@ -2,10 +2,54 @@ Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
 Upstream-Name: basefwx
 Upstream-Contact: FixCraft <https://fixcraft.org/>
 Source: https://fixcraft.org/basefwx
+Files-Excluded:
+ .venv
+ .venv/*
+ vendor
+ vendor/*
+ cpp/build
+ cpp/build/*
+ java/build
+ java/build/*
+ java/.gradle
+ java/.gradle/*
+ python/dist
+ python/dist/*
+ python/basefwx.egg-info
+ python/basefwx.egg-info/*
+ .tmp_basefwx_tests
+ .tmp_basefwx_tests/*
+ website/.jekyll-cache
+ website/.jekyll-cache/*
+ *.pyc
 
 Files: *
 Copyright: 2020-2026 FixCraft Inc.
+License: LGPL-3.0+
+
+Files:
+ cpp/src/main.cpp
+ cpp/src/cli/*
+ cpp/include/basefwx/cli/*
+ cpp/include/basefwx/cli_colors.hpp
+ cpp/src/platform/cli_colors.cpp
+ java/src/main/java/com/fixcraft/basefwx/cli/*
+ java/src/main/java/com/fixcraft/basefwx/FwxAESBenchmark.java
+ python/basefwx/__main__.py
+ python/basefwx/runtime/_cli.py
+ python/scripts/*
+ scripts/*
+ python/tests/*
+ python/tools/*
+Copyright: 2020-2026 FixCraft Inc.
 License: GPL-3.0+
+
+Files: examples/plugins/*
+Copyright: 2020-2026 FixCraft Inc.
+License: MIT or Apache-2.0
+ The MIT license text is provided in LICENSES/MIT.txt.
+ .
+ The Apache License 2.0 text is provided in LICENSES/Apache-2.0.txt.
 
 Files: cpp/third_party/stb_image.h cpp/third_party/stb_image_write.h
 Copyright: 2017 Sean Barrett
@@ -13,19 +57,23 @@ License: MIT-or-public-domain
  stb_image and stb_image_write are dual-licensed under the MIT license
  and the public domain. See the headers themselves for the full text.
 
-Files: local-vendor-liboqs
-Copyright: 2016-2024 Open Quantum Safe project contributors
-License: MIT
-Comment:
- Local non-archive builds may statically link liboqs from the YUME
- ../vendor/linux-x86_64 staging directory to enable ML-KEM-768 before a
- Debian liboqs package is available. Debian archive builds should replace
- this with a normal liboqs-dev Build-Depends and dynamic/shared-library
- dependency.
-
 Files: debian/*
 Copyright: 2026 FixCraft Maintainers <debian@fixcraft.jp>
 License: GPL-3.0+
+
+License: LGPL-3.0+
+ This library is free software; you can redistribute it and/or modify
+ it under the terms of the GNU Lesser General Public License as published
+ by the Free Software Foundation, either version 3 of the License, or
+ (at your option) any later version.
+ .
+ This library is distributed in the hope that it will be useful,
+ but WITHOUT ANY WARRANTY; without even the implied warranty of
+ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ GNU Lesser General Public License for more details.
+ .
+ On Debian systems, the full text of the GNU Lesser General Public License
+ version 3 can be found in the file `/usr/share/common-licenses/LGPL-3'.
 
 License: GPL-3.0+
  This program is free software: you can redistribute it and/or modify

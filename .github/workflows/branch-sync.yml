@@ -63,6 +63,18 @@ jobs:
             return 1
           }
 
+          # git checkout <main> -- . updates paths present on main but does not
+          # delete tracked files that only exist on DEV; drop those orphans so
+          # parity does not fail after every main-side removal.
+          while IFS= read -r path; do
+            if matches_exclude "${path}"; then
+              continue
+            fi
+            if ! git cat-file -e "origin/${source_branch}:${path}" 2>/dev/null; then
+              git rm -f --ignore-unmatch "${path}" >/dev/null 2>&1 || true
+            fi
+          done < <(git ls-files)
+
           if (( ${#exclude_patterns[@]} > 0 )); then
             # Keep excluded tracked paths from target branch.
             while IFS= read -r path; do
@@ -97,4 +109,4 @@ jobs:
           set -euo pipefail
           git fetch --no-tags origin main DEV
           chmod +x scripts/check_branch_parity.sh
-          scripts/check_branch_parity.sh main DEV
+          scripts/check_branch_parity.sh origin/main origin/DEV

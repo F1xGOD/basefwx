@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Changed
+- **License policy**: replace the old GPL-3.0 + Additional Terms model
+  with a file-level split — LGPL-3.0-or-later for core library/API/runtime
+  and plugin ABI/SPI, GPL-3.0-or-later for standalone
+  CLI/tools/benchmarks/scripts, and MIT OR Apache-2.0 for example plugin
+  templates. Canonical texts live in `LICENCE`, `LICENSES/`, and
+  `LICENSING.md`. Remaining tooling without headers was updated to match.
+
 ## [v3.7.0] - 2026-06-26
 
 Compare: <https://github.com/F1xGOD/basefwx/compare/v3.6.4...v3.7.0>
@@ -21,7 +29,7 @@ Compare: <https://github.com/F1xGOD/basefwx/compare/v3.6.4...v3.7.0>
 - **Plugin raw-mode position (`BASEFWX_PLUGIN_POS_RAW`).** Plugin transforms run without an AEAD layer above or below. The host structurally refuses this position unless the plugin declares `BASEFWX_PLUGIN_CAP_SAFE_RAW_MODE` in `capabilities()`. Intended for client→server protocols where the server holds the secret and rejects tampered blobs (THREAT_MODEL.md TM-4).
 - **Plugin capability bits.** `BASEFWX_PLUGIN_CAP_KEYED`, `BASEFWX_PLUGIN_CAP_SAFE_RAW_MODE`, `BASEFWX_PLUGIN_CAP_REQUIRES_TWEAK`, `BASEFWX_PLUGIN_CAP_REQUIRES_HOST_KEY`, `BASEFWX_PLUGIN_CAP_NONDETERMINISTIC`. Plugins self-declare what they need; the host fails calls closed when requirements are unmet (e.g. `tweak_len == 0` when `REQUIRES_TWEAK` is set).
 - **Self-derived-tweak example (`time-tweak/`).** Demonstrates how a plugin can produce different output for the same input on every call (using unix-millisecond timestamps as the entropy source) while still being decodable from the wire bytes alone — the tweak is embedded at the head of the plugin's output, the decoder reads it back. Useful template for orgs that want non-deterministic obfuscation without a host-supplied tweak.
-- **Plugin static-embed Registry (`cpp/include/basefwx/plugin_static.hpp`).** In-process plugin registry. `basefwx::plugin::Registry::Register(vtable*)` registers a vtable compiled directly into the host binary; `Registry::Find(plugin_id)` resolves it without `dlopen`. The `BASEFWX_PLUGIN_REGISTER_STATIC(...)` macro wraps the at-startup registration. Header-only, thread-safe. The `static-embed/` example demonstrates an end-to-end host binary that registers + round-trips a plugin with no `.so` on disk. Statically linking BaseFWX itself remains commercial-license-only per LICENSING.md.
+- **Plugin static-embed Registry (`cpp/include/basefwx/plugin_static.hpp`).** In-process plugin registry. `basefwx::plugin::Registry::Register(vtable*)` registers a vtable compiled directly into the host binary; `Registry::Find(plugin_id)` resolves it without `dlopen`. The `BASEFWX_PLUGIN_REGISTER_STATIC(...)` macro wraps the at-startup registration. Header-only, thread-safe. The `static-embed/` example demonstrates an end-to-end host binary that registers + round-trips a plugin with no `.so` on disk. Static linking or embedding BaseFWX itself follows LGPL-3.0-or-later requirements for the BaseFWX library files involved.
 - **`examples/plugins/THREAT_MODEL.md`** — authoritative documentation of the five threat models the plugin contract addresses (TM-1 passive observer, TM-2 extracted plugin + config, TM-3 oracle attack, TM-4 malicious client forgery, TM-5 live debugger / out of scope), the three plugin profiles, and the rules in one screen.
 - **`BASEFWX_PLUGIN_ERR_CAP_MISMATCH` (-6).** Returned when the host invokes a function the plugin did not declare in `capabilities()` (e.g. `forward_keyed` on a v1 plugin that left the slot NULL).
 - **Argon2id user-KDF wrap on the Java runtime.** `KeyWrap.deriveUserKeyWithLabel` now routes the `argon2id` / `argon2` labels through BouncyCastle's `Argon2BytesGenerator` (already a runtime dep). `Crypto.argon2idHashRaw` is the new public primitive mirroring `basefwx::crypto::Argon2idHashRaw` byte-for-byte. The `KdfOptions` Java class grows `argon2TimeCost` / `argon2MemoryKib` / `argon2Parallelism` fields with defaults that mirror the C++ constants; **parallelism defaults to 4 across all three runtimes** (see "Argon2id parallelism portability" below). The `❌` row in COMPATIBILITY.md flips to `✅`. The `UnsupportedKdfException` typed exception is retained for truly unsupported labels.

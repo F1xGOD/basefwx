@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # BaseFWX - Cryptography Engine
 # Copyright (C) 2020-2026  FixCraft Inc.
-# Licensed under the GNU General Public License v3.0.
+# Licensed under the GNU General Public License v3.0 or later.
 #
 # Plugin smoke runner — exercises the 3.7.0 blackbox plugin contract
 # end-to-end across C++, Python, and Java. Compiles the example

@@ -1,10 +1,15 @@
+# BaseFWX - Cryptography Engine
+# Copyright (C) 2020-2026  FixCraft Inc.
+# SPDX-License-Identifier: LGPL-3.0-or-later AND GPL-3.0-or-later
+
 from pathlib import Path
 from setuptools import setup, find_packages
 
 
 def read_readme() -> str:
+    # python/README.md is a symlink to the repo-root README (PyPI + GitHub share one file).
     readme_path = Path(__file__).resolve().parent / "README.md"
-    return readme_path.read_text(encoding="utf-8") if readme_path.exists() else ""
+    return readme_path.read_text(encoding="utf-8") if readme_path.is_file() else ""
 
 
 def read_version() -> str:
@@ -76,5 +81,5 @@ setup(
     description="The encryption you can trust, the performance you need, the security you deserve.",
     long_description=read_readme(),
     long_description_content_type="text/markdown",
-    license="GPL-3.0-or-later",
+    license="LGPL-3.0-or-later AND GPL-3.0-or-later",
 )

@@ -1,10 +1,13 @@
 /*
  * BaseFWX - Cryptography Engine
  * Copyright (C) 2020-2026  FixCraft Inc.
- * Licensed under the GNU General Public License v3.0.
+ * Licensed under the GNU Lesser General Public License v3.0 or later.
  */
 
 package com.fixcraft.basefwx;
+
+import com.fixcraft.basefwx.media.FfmpegRunner;
+import com.fixcraft.basefwx.media.MediaCipherEngine;
 
 import java.io.File;
 import java.util.Locale;
@@ -14,7 +17,7 @@ public final class MediaCipher {
 
     private static final String ENABLE_JMG_VIDEO_ENV = "BASEFWX_ENABLE_JMG_VIDEO";
 
-    static boolean isJmgVideoEnabled() {
+    public static boolean isJmgVideoEnabled() {
         String raw = System.getenv(ENABLE_JMG_VIDEO_ENV);
         if (raw == null) {
             return false;

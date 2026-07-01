@@ -14,6 +14,7 @@ venv/
 *.iml
 .cache
 # AI tools — per-machine state, not for the repo
+AGENTS.md
 .claude/
 .codex/
 .aider*

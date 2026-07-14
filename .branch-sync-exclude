@@ -1,5 +1,4 @@
 # Paths that should remain branch-specific and must not be auto-synced.
-AI_gen/**
 diagnose.log
 test_output.txt
 *.log

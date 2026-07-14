@@ -16,7 +16,7 @@ Compare: <https://github.com/F1xGOD/basefwx/compare/v3.6.4...v3.7.0>
 
 > **Release status (2026-06-26):** fwxAES/CLI plugin loader and wire-format
 > plugin tag are implemented on `main`. Tag `v3.7.0` only after remote
-> `test_all.sh` passes — see [`[local-only release checklist removed]`]([local-only release checklist removed]).
+> `test_all.sh` passes.
 
 > The audit-driven hardening that briefly sat under `[v3.6.5]` in working
 > trees is rolled into 3.7.0 alongside the new **blackbox plugin** ABI.

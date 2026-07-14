@@ -1,8 +1,7 @@
 # BaseFWX 3.7.0 — Release Notes
 
 > **Release status:** loader + wire tag implemented on `main` (2026-06-26).
-> Tag and publish only after remote `test_all.sh` passes — see
-> [`[local-only release checklist removed]`]([local-only release checklist removed]).
+> Tag and publish only after remote `test_all.sh` passes.
 
 > **Headline (when shipped):** blackbox plugin **in production encrypt/decrypt**
 > through `basefwx fwxaes-enc/dec --plugin …` plus audit-driven hardening

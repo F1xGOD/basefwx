@@ -46,7 +46,7 @@ SKIP_DIR_NAMES = {
     "website",
     "debian",
     "docs",
-    "AI_gen",
+    ".private",
     ".venv",
     ".tmp_basefwx_tests",
 }

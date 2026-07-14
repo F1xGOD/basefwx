@@ -11,8 +11,7 @@
 - Cross-runtime parity fixes (C++ ↔ Java ↔ Python drift).
 - New plugins for `examples/plugins/` (the templates are MIT OR
   Apache-2.0; see [LICENSING.md](./LICENSING.md)).
-- Documentation improvements, including internal development notes
-  (`[local-only development file removed]`).
+- Documentation improvements to the public API and user guides.
 - Test-suite improvements in `scripts/test_all.sh` or its
   per-runtime equivalents.
 
@@ -36,8 +35,8 @@
    yourself bundling unrelated fixes, split them.
 4. **Run the per-runtime tests** for the runtime you're changing.
    The full `scripts/test_all.sh` cross-runtime suite is the
-   project's gold standard; CI runs it. Heavy local runs go on the
-   project's remote build box (see `[local-only development file removed]`).
+   project's gold standard; CI runs it. Use an appropriately provisioned
+   remote build host for heavy runs.
 5. **Update CHANGELOG.md** under `[Unreleased]` for any
    user-visible change.
 6. **Sign the CLA** (below) if it's your first non-trivial PR.

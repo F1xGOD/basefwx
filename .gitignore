@@ -14,13 +14,13 @@ venv/
 *.iml
 .cache
 # AI tools — per-machine state, not for the repo
-[local-only development file removed]
 .claude/
 .codex/
 .aider*
 .cursor/
 AI_gen/
 .copilot/
+.private/
 
 build/
 build-*/

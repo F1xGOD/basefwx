@@ -18,6 +18,13 @@ using Bytes = std::vector<std::uint8_t>;
 
 Bytes RandomBytes(std::size_t size);
 Bytes HkdfSha256(const Bytes& key_material, std::string_view info, std::size_t length);
+// RFC 5869 extract+expand with an explicit salt. New protocol designs should
+// use this overload so the transcript salt is part of the key schedule rather
+// than concatenated into the input key material by the caller.
+Bytes HkdfSha256(const Bytes& key_material,
+                 const Bytes& salt,
+                 std::string_view info,
+                 std::size_t length);
 Bytes HkdfSha256Stream(const Bytes& key_material, std::string_view info, std::size_t length);
 Bytes Pbkdf2HmacSha256(const std::string& password, const Bytes& salt, std::size_t iterations, std::size_t length);
 Bytes HmacSha256(const Bytes& key, const Bytes& data);

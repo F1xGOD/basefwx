@@ -17,6 +17,33 @@ namespace basefwx::pq {
 
 using Bytes = std::vector<std::uint8_t>;
 
+enum class KemAlgorithm {
+    MlKem768,
+    MlKem1024,
+};
+
+std::string_view KemAlgorithmName(KemAlgorithm algorithm);
+
+// Ephemeral ML-KEM keypair. The public key is wire data; the private key is
+// wiped on destruction and the container cannot be copied.
+struct KemKeyPair {
+    Bytes public_key;
+    Bytes private_key;
+
+    KemKeyPair() = default;
+    KemKeyPair(Bytes pub, Bytes priv) noexcept
+        : public_key(std::move(pub)), private_key(std::move(priv)) {}
+
+    KemKeyPair(const KemKeyPair&) = delete;
+    KemKeyPair& operator=(const KemKeyPair&) = delete;
+    KemKeyPair(KemKeyPair&& other) noexcept = default;
+    KemKeyPair& operator=(KemKeyPair&& other) noexcept;
+    ~KemKeyPair();
+
+private:
+    void wipe_private() noexcept;
+};
+
 // Move-only, self-wiping result of KemEncrypt(). `ciphertext` is
 // public-by-design — it's what gets sent on the wire and the receiver
 // uses it to recover the shared secret via KemDecrypt(). `shared` is
@@ -48,6 +75,11 @@ private:
 
 std::optional<Bytes> LoadMasterPublicKey();
 Bytes LoadMasterPrivateKey();
+KemKeyPair GenerateKeyPair(KemAlgorithm algorithm);
+KemResult KemEncrypt(KemAlgorithm algorithm, const Bytes& public_key);
+Bytes KemDecrypt(KemAlgorithm algorithm,
+                 const Bytes& private_key,
+                 const Bytes& ciphertext);
 KemResult KemEncrypt(const Bytes& public_key);
 Bytes KemDecrypt(const Bytes& private_key, const Bytes& ciphertext);
 std::string CurrentKemAlgorithm();

@@ -48,7 +48,10 @@ Bytes RandomBytes(std::size_t size) {
     return out;
 }
 
-Bytes HkdfSha256(const Bytes& key_material, std::string_view info, std::size_t length) {
+Bytes HkdfSha256(const Bytes& key_material,
+                 const Bytes& salt,
+                 std::string_view info,
+                 std::size_t length) {
     using detail::UniquePKEYCtx;
     UniquePKEYCtx pctx(EVP_PKEY_CTX_new_id(EVP_PKEY_HKDF, nullptr));
     if (!pctx) {
@@ -59,6 +62,11 @@ Bytes HkdfSha256(const Bytes& key_material, std::string_view info, std::size_t l
 
     Ensure(EVP_PKEY_derive_init(pctx.get()) == 1, "HKDF init failed");
     Ensure(EVP_PKEY_CTX_set_hkdf_md(pctx.get(), EVP_sha256()) == 1, "HKDF set md failed");
+    if (!salt.empty()) {
+        Ensure(EVP_PKEY_CTX_set1_hkdf_salt(
+                   pctx.get(), salt.data(), static_cast<int>(salt.size())) == 1,
+               "HKDF set salt failed");
+    }
     Ensure(EVP_PKEY_CTX_set1_hkdf_key(pctx.get(), key_material.data(), static_cast<int>(key_material.size())) == 1,
            "HKDF set key failed");
     if (!info.empty()) {
@@ -69,6 +77,10 @@ Bytes HkdfSha256(const Bytes& key_material, std::string_view info, std::size_t l
     Ensure(EVP_PKEY_derive(pctx.get(), out.data(), &out_len) == 1, "HKDF derive failed");
     out.resize(out_len);
     return out;
+}
+
+Bytes HkdfSha256(const Bytes& key_material, std::string_view info, std::size_t length) {
+    return HkdfSha256(key_material, {}, info, length);
 }
 
 #if OPENSSL_VERSION_NUMBER >= 0x30000000L

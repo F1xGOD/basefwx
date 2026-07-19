@@ -10,6 +10,15 @@
 | Python | ✅ with `basefwx[argon2]` | ✅ via `pqcrypto` | ✅ | ✅ | Feature-complete scripting/runtime path. |
 | Java | ✅ since 3.7.0 (BouncyCastle `Argon2BytesGenerator`; libargon2 JNI optional) | ✅ keywrap (BouncyCastle ML-KEM-768; EC fallback only when PQ pub not configured) | ❌ | ✅ | Argon2id user-KDF wrap supported. PQ master-wrap parity with C++/Python via `KeyWrap` + `PQ.kemEncrypt` / `PQ.kemDecrypt`. JNI bridge to libargon2 (`NativeCryptoBackend.argon2idHashRaw`) speeds Argon2 up ~5–10× on systems where the native lib is loadable; falls through to pure-Java BouncyCastle otherwise (byte-identical output, just slower). |
 
+### 3.8.0-dev1 protocol-building API parity
+
+The explicit-salt HKDF overload, explicit ML-KEM-768 / ML-KEM-1024
+selection with ephemeral key generation, and X25519 helpers introduced in
+3.8.0-dev1 are currently public **C++ APIs only**. They do not change the
+existing BaseFWX file formats or the cross-runtime ML-KEM-768 master-key wrap.
+Java and Python mirrors require provider-specific encoding decisions and
+cross-runtime known-answer tests before they can be advertised as equivalent.
+
 ### Argon2 parallelism portability
 
 The Argon2id parallelism parameter is not stored in the wrap header.

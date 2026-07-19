@@ -7,7 +7,7 @@
 
 ## What contributions are welcome
 
-- Bug fixes against the current release (3.7.0 + `[Unreleased]`).
+- Bug fixes against the current development line (3.8.0-dev1 + `[Unreleased]`).
 - Cross-runtime parity fixes (C++ ↔ Java ↔ Python drift).
 - New plugins for `examples/plugins/` (the templates are MIT OR
   Apache-2.0; see [LICENSING.md](./LICENSING.md)).

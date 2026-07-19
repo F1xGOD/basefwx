@@ -11,6 +11,7 @@ import java.io.InputStream;
 import java.util.Properties;
 
 public final class VersionInfo {
+    private static final String ENGINE_VERSION_FALLBACK = "3.8.0-dev1";
     private static final Properties PROPS = load();
 
     private VersionInfo() {}
@@ -36,7 +37,7 @@ public final class VersionInfo {
     }
 
     public static String engineVersion() {
-        return get("version", "0.0.0");
+        return get("version", get("version_fallback", ENGINE_VERSION_FALLBACK));
     }
 
     public static String buildUtc() {

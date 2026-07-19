@@ -17,6 +17,7 @@
 #include <cstddef>
 #include <filesystem>
 #include <fstream>
+#include <memory>
 #include <stdexcept>
 #include <utility>
 
@@ -27,6 +28,23 @@
 #endif
 
 namespace basefwx::pq {
+
+KemKeyPair& KemKeyPair::operator=(KemKeyPair&& other) noexcept {
+    if (this != &other) {
+        wipe_private();
+        public_key = std::move(other.public_key);
+        private_key = std::move(other.private_key);
+    }
+    return *this;
+}
+
+KemKeyPair::~KemKeyPair() {
+    wipe_private();
+}
+
+void KemKeyPair::wipe_private() noexcept {
+    basefwx::crypto::SecureClear(private_key);
+}
 
 KemResult& KemResult::operator=(KemResult&& other) noexcept {
     if (this != &other) {
@@ -149,7 +167,34 @@ std::filesystem::path ExpandUser(const std::string& path) {
     return std::filesystem::path(path);
 }
 
+#if defined(BASEFWX_HAS_OQS) && BASEFWX_HAS_OQS
+struct OqsKemDeleter {
+    void operator()(OQS_KEM* kem) const noexcept { OQS_KEM_free(kem); }
+};
+
+using OqsKemPtr = std::unique_ptr<OQS_KEM, OqsKemDeleter>;
+
+OqsKemPtr NewKem(KemAlgorithm algorithm) {
+    OqsKemPtr kem(OQS_KEM_new(std::string(KemAlgorithmName(algorithm)).c_str()));
+    if (!kem) {
+        throw std::runtime_error(
+            "Failed to initialize " + std::string(KemAlgorithmName(algorithm)));
+    }
+    return kem;
+}
+#endif
+
 }  // namespace
+
+std::string_view KemAlgorithmName(KemAlgorithm algorithm) {
+    switch (algorithm) {
+        case KemAlgorithm::MlKem768:
+            return constants::kMasterPqAlg;
+        case KemAlgorithm::MlKem1024:
+            return constants::kMasterPqAlgHigh;
+    }
+    throw std::runtime_error("Unknown ML-KEM algorithm");
+}
 
 bool IsSupportedKemAlgorithm(std::string_view algorithm) {
     return algorithm == constants::kMasterPqAlg || algorithm == constants::kMasterPqAlgHigh;
@@ -266,59 +311,86 @@ Bytes LoadMasterPrivateKey() {
     throw std::runtime_error("No master_pq.sk private key found (set BASEFWX_MASTER_PQ_SK or place at ~/master_pq.sk)");
 }
 
-KemResult KemEncrypt(const Bytes& public_key) {
+KemKeyPair GenerateKeyPair(KemAlgorithm algorithm) {
 #if defined(BASEFWX_HAS_OQS) && BASEFWX_HAS_OQS
-    const std::string kem_alg = CurrentKemAlgorithm();
-    OQS_KEM* kem = OQS_KEM_new(kem_alg.c_str());
-    if (!kem) {
-        throw std::runtime_error("Failed to initialize " + kem_alg);
+    auto kem = NewKem(algorithm);
+    KemKeyPair result;
+    result.public_key.resize(kem->length_public_key);
+    result.private_key.resize(kem->length_secret_key);
+    if (OQS_KEM_keypair(kem.get(), result.public_key.data(), result.private_key.data()) !=
+        OQS_SUCCESS) {
+        throw std::runtime_error(
+            std::string(KemAlgorithmName(algorithm)) + " key generation failed");
     }
+    return result;
+#else
+    (void)algorithm;
+    throw std::runtime_error("ML-KEM support is not enabled in this build");
+#endif
+}
+
+KemResult KemEncrypt(KemAlgorithm algorithm, const Bytes& public_key) {
+#if defined(BASEFWX_HAS_OQS) && BASEFWX_HAS_OQS
+    auto kem = NewKem(algorithm);
     KemResult result;
     if (public_key.size() != kem->length_public_key) {
-        OQS_KEM_free(kem);
         throw std::runtime_error("Invalid ML-KEM public key length");
     }
     result.ciphertext.resize(kem->length_ciphertext);
     result.shared.resize(kem->length_shared_secret);
-    if (OQS_KEM_encaps(kem, result.ciphertext.data(), result.shared.data(), public_key.data()) != OQS_SUCCESS) {
-        OQS_KEM_free(kem);
-        throw std::runtime_error(kem_alg + " encapsulation failed");
+    if (OQS_KEM_encaps(kem.get(), result.ciphertext.data(), result.shared.data(),
+                       public_key.data()) != OQS_SUCCESS) {
+        throw std::runtime_error(
+            std::string(KemAlgorithmName(algorithm)) + " encapsulation failed");
     }
-    OQS_KEM_free(kem);
     return result;
 #else
+    (void)algorithm;
     (void)public_key;
     throw std::runtime_error("ML-KEM support is not enabled in this build");
 #endif
 }
 
-Bytes KemDecrypt(const Bytes& private_key, const Bytes& ciphertext) {
+Bytes KemDecrypt(KemAlgorithm algorithm,
+                 const Bytes& private_key,
+                 const Bytes& ciphertext) {
 #if defined(BASEFWX_HAS_OQS) && BASEFWX_HAS_OQS
-    const std::string kem_alg = CurrentKemAlgorithm();
-    OQS_KEM* kem = OQS_KEM_new(kem_alg.c_str());
-    if (!kem) {
-        throw std::runtime_error("Failed to initialize " + kem_alg);
-    }
+    auto kem = NewKem(algorithm);
     if (private_key.size() != kem->length_secret_key) {
-        OQS_KEM_free(kem);
         throw std::runtime_error("Invalid ML-KEM private key length");
     }
     if (ciphertext.size() != kem->length_ciphertext) {
-        OQS_KEM_free(kem);
         throw std::runtime_error("Invalid ML-KEM ciphertext length");
     }
     Bytes shared(kem->length_shared_secret);
-    if (OQS_KEM_decaps(kem, shared.data(), ciphertext.data(), private_key.data()) != OQS_SUCCESS) {
-        OQS_KEM_free(kem);
-        throw std::runtime_error(kem_alg + " decapsulation failed");
+    if (OQS_KEM_decaps(kem.get(), shared.data(), ciphertext.data(),
+                       private_key.data()) != OQS_SUCCESS) {
+        throw std::runtime_error(
+            std::string(KemAlgorithmName(algorithm)) + " decapsulation failed");
     }
-    OQS_KEM_free(kem);
     return shared;
 #else
+    (void)algorithm;
     (void)private_key;
     (void)ciphertext;
     throw std::runtime_error("ML-KEM support is not enabled in this build");
 #endif
+}
+
+KemResult KemEncrypt(const Bytes& public_key) {
+    const KemAlgorithm algorithm =
+        CurrentKemAlgorithm() == constants::kMasterPqAlgHigh
+            ? KemAlgorithm::MlKem1024
+            : KemAlgorithm::MlKem768;
+    return KemEncrypt(algorithm, public_key);
+}
+
+Bytes KemDecrypt(const Bytes& private_key, const Bytes& ciphertext) {
+    const KemAlgorithm algorithm =
+        CurrentKemAlgorithm() == constants::kMasterPqAlgHigh
+            ? KemAlgorithm::MlKem1024
+            : KemAlgorithm::MlKem768;
+    return KemDecrypt(algorithm, private_key, ciphertext);
 }
 
 }  // namespace basefwx::pq

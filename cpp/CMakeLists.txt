@@ -9,8 +9,16 @@ string(STRIP "${BASEFWX_PROJECT_VERSION}" BASEFWX_PROJECT_VERSION)
 if(BASEFWX_PROJECT_VERSION STREQUAL "")
     message(FATAL_ERROR "Repository VERSION file is empty")
 endif()
+string(REGEX MATCH "^([0-9]+)\\.([0-9]+)\\.([0-9]+)" _basefwx_numeric_match
+       "${BASEFWX_PROJECT_VERSION}")
+if(NOT _basefwx_numeric_match)
+    message(FATAL_ERROR
+        "Repository VERSION must begin with MAJOR.MINOR.PATCH: ${BASEFWX_PROJECT_VERSION}")
+endif()
+set(BASEFWX_NUMERIC_VERSION
+    "${CMAKE_MATCH_1}.${CMAKE_MATCH_2}.${CMAKE_MATCH_3}")
 
-project(basefwx_cpp VERSION ${BASEFWX_PROJECT_VERSION} LANGUAGES CXX)
+project(basefwx_cpp VERSION ${BASEFWX_NUMERIC_VERSION} LANGUAGES CXX)
 
 option(BASEFWX_BUILD_CLI "Build BaseFWX CLI" ON)
 option(BASEFWX_BUILD_JNI "Build the basefwxcrypto JNI shared library for the Java bindings" OFF)
@@ -597,6 +605,7 @@ add_library(basefwxcpp
     src/crypto/livecipher.cpp
     src/crypto/pb512.cpp
     src/crypto/pq.cpp
+    src/crypto/x25519.cpp
     src/file/filecodec.cpp
     src/file/filecodec_impl.cpp
     src/file/filecodec_b512.cpp
@@ -819,7 +828,7 @@ set_target_properties(basefwxcpp PROPERTIES POSITION_INDEPENDENT_CODE ON)
 if(BUILD_SHARED_LIBS)
     set_target_properties(basefwxcpp PROPERTIES
         OUTPUT_NAME basefwx
-        VERSION ${BASEFWX_PROJECT_VERSION}
+        VERSION ${BASEFWX_NUMERIC_VERSION}
         SOVERSION 3
     )
 endif()
@@ -868,7 +877,7 @@ if(BASEFWX_INSTALL)
     )
     write_basic_package_version_file(
         "${CMAKE_CURRENT_BINARY_DIR}/basefwxConfigVersion.cmake"
-        VERSION ${BASEFWX_PROJECT_VERSION}
+        VERSION ${BASEFWX_NUMERIC_VERSION}
         COMPATIBILITY SameMajorVersion
     )
     install(FILES

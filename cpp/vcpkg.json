@@ -1,6 +1,6 @@
 {
   "name": "basefwx-cpp",
-  "version-string": "3.7.0",
+  "version-string": "3.8.0-dev1",
   "dependencies": [
     "openssl",
     "zlib",

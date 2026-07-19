@@ -10,6 +10,24 @@
   templates. Canonical texts live in `LICENCE`, `LICENSES/`, and
   `LICENSING.md`. Remaining tooling without headers was updated to match.
 
+## [v3.8.0-dev1] - 2026-07-19
+
+Compare: <https://github.com/F1xGOD/basefwx/compare/v3.7.0...main>
+
+### Added
+- **C++ protocol-building primitives.** The public C++ API now provides an
+  explicit-salt HKDF-SHA256 overload, move-only self-wiping ephemeral
+  ML-KEM keypairs with explicit ML-KEM-768 / ML-KEM-1024 selection, and
+  move-only self-wiping X25519 keypairs/shared-secret derivation with
+  all-zero shared-secret rejection.
+
+### Notes
+- These new primitives are **C++-only in 3.8.0-dev1**. Java and Python
+  mirrors remain pending and must not be claimed until their provider-specific
+  encodings and cross-runtime known-answer tests are implemented. Android is
+  outside this YUME desktop slice, but the parity gap is explicit rather than
+  silently skipped.
+
 ## [v3.7.0] - 2026-06-26
 
 Compare: <https://github.com/F1xGOD/basefwx/compare/v3.6.4...v3.7.0>

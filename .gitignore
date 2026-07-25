@@ -98,3 +98,5 @@ examples/plugins/*/bin/
 # build-asan-leak/ (matched by build-*/ above); the Java heap probe
 # writes into .leak-java/ when run locally outside the CI workflow.
 .leak-java/
+AGENTS.md
+AI_NOTES.md

@@ -69,8 +69,24 @@ namespace {
 constexpr std::size_t kMaxKeyBytes = 4u * 1024u * 1024u;
 
 std::string NormalizeAlg(std::string value) {
+    const auto first = std::find_if_not(
+        value.begin(), value.end(),
+        [](unsigned char ch) { return std::isspace(ch) != 0; });
+    const auto last = std::find_if_not(
+        value.rbegin(), value.rend(),
+        [](unsigned char ch) { return std::isspace(ch) != 0; }).base();
+    if (first >= last) {
+        return {};
+    }
+    value = std::string(first, last);
     std::transform(value.begin(), value.end(), value.begin(),
                    [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+    if (value == "kyber768" || value == "kyber-768") {
+        return std::string(constants::kMasterPqAlg);
+    }
+    if (value == "kyber1024" || value == "kyber-1024") {
+        return std::string(constants::kMasterPqAlgHigh);
+    }
     return value;
 }
 
@@ -182,6 +198,32 @@ OqsKemPtr NewKem(KemAlgorithm algorithm) {
     }
     return kem;
 }
+
+KemAlgorithm InferKemFromPublicKeySize(std::size_t public_key_size) {
+    for (const KemAlgorithm algorithm :
+         {KemAlgorithm::MlKem768, KemAlgorithm::MlKem1024}) {
+        auto kem = NewKem(algorithm);
+        if (public_key_size == kem->length_public_key) {
+            return algorithm;
+        }
+    }
+    throw std::runtime_error(
+        "Invalid ML-KEM public key length; expected ML-KEM-768 or ML-KEM-1024");
+}
+
+KemAlgorithm InferKemFromDecapsulationSizes(std::size_t private_key_size,
+                                            std::size_t ciphertext_size) {
+    for (const KemAlgorithm algorithm :
+         {KemAlgorithm::MlKem768, KemAlgorithm::MlKem1024}) {
+        auto kem = NewKem(algorithm);
+        if (private_key_size == kem->length_secret_key &&
+            ciphertext_size == kem->length_ciphertext) {
+            return algorithm;
+        }
+    }
+    throw std::runtime_error(
+        "Invalid or mismatched ML-KEM private-key/ciphertext lengths");
+}
 #endif
 
 }  // namespace
@@ -197,7 +239,9 @@ std::string_view KemAlgorithmName(KemAlgorithm algorithm) {
 }
 
 bool IsSupportedKemAlgorithm(std::string_view algorithm) {
-    return algorithm == constants::kMasterPqAlg || algorithm == constants::kMasterPqAlgHigh;
+    const std::string normalized = NormalizeAlg(std::string(algorithm));
+    return normalized == constants::kMasterPqAlg
+        || normalized == constants::kMasterPqAlgHigh;
 }
 
 std::string CurrentKemAlgorithm() {
@@ -209,16 +253,20 @@ std::string CurrentKemAlgorithm() {
         }
         return std::string(constants::kMasterPqAlg);
     }
-    if (configured == "kyber1024") {
-        return std::string(constants::kMasterPqAlgHigh);
-    }
-    if (configured == "kyber768") {
-        return std::string(constants::kMasterPqAlg);
-    }
     if (IsSupportedKemAlgorithm(configured)) {
         return configured;
     }
     throw std::runtime_error("Unsupported ML-KEM algorithm: " + configured);
+}
+
+KemAlgorithm InferKemAlgorithmFromPublicKey(const Bytes& public_key) {
+#if defined(BASEFWX_HAS_OQS) && BASEFWX_HAS_OQS
+    return InferKemFromPublicKeySize(public_key.size());
+#else
+    (void)public_key;
+    throw std::runtime_error(
+        "ML-KEM public-key inference requires an OQS-enabled build");
+#endif
 }
 
 Bytes DecodeKeyBytes(const Bytes& raw) {
@@ -296,7 +344,13 @@ Bytes LoadMasterPrivateKey() {
     std::vector<std::filesystem::path> candidates;
     std::string env_path = basefwx::env::Get("BASEFWX_MASTER_PQ_SK");
     if (!env_path.empty()) {
-        candidates.emplace_back(ExpandUser(env_path));
+        std::filesystem::path configured = ExpandUser(env_path);
+        if (!std::filesystem::exists(configured)) {
+            throw std::runtime_error(
+                "Configured BASEFWX_MASTER_PQ_SK does not exist: "
+                + configured.string());
+        }
+        return DecodeKeyBytes(ReadFileBytes(configured));
     }
     std::string home = basefwx::env::HomeDir();
     if (!home.empty()) {
@@ -362,13 +416,14 @@ Bytes KemDecrypt(KemAlgorithm algorithm,
     if (ciphertext.size() != kem->length_ciphertext) {
         throw std::runtime_error("Invalid ML-KEM ciphertext length");
     }
-    Bytes shared(kem->length_shared_secret);
+    basefwx::crypto::SecureBytes shared{
+        Bytes(kem->length_shared_secret)};
     if (OQS_KEM_decaps(kem.get(), shared.data(), ciphertext.data(),
                        private_key.data()) != OQS_SUCCESS) {
         throw std::runtime_error(
             std::string(KemAlgorithmName(algorithm)) + " decapsulation failed");
     }
-    return shared;
+    return shared.Release();
 #else
     (void)algorithm;
     (void)private_key;
@@ -378,19 +433,24 @@ Bytes KemDecrypt(KemAlgorithm algorithm,
 }
 
 KemResult KemEncrypt(const Bytes& public_key) {
-    const KemAlgorithm algorithm =
-        CurrentKemAlgorithm() == constants::kMasterPqAlgHigh
-            ? KemAlgorithm::MlKem1024
-            : KemAlgorithm::MlKem768;
-    return KemEncrypt(algorithm, public_key);
+#if defined(BASEFWX_HAS_OQS) && BASEFWX_HAS_OQS
+    return KemEncrypt(InferKemFromPublicKeySize(public_key.size()), public_key);
+#else
+    (void)public_key;
+    throw std::runtime_error("ML-KEM support is not enabled in this build");
+#endif
 }
 
 Bytes KemDecrypt(const Bytes& private_key, const Bytes& ciphertext) {
-    const KemAlgorithm algorithm =
-        CurrentKemAlgorithm() == constants::kMasterPqAlgHigh
-            ? KemAlgorithm::MlKem1024
-            : KemAlgorithm::MlKem768;
-    return KemDecrypt(algorithm, private_key, ciphertext);
+#if defined(BASEFWX_HAS_OQS) && BASEFWX_HAS_OQS
+    return KemDecrypt(
+        InferKemFromDecapsulationSizes(private_key.size(), ciphertext.size()),
+        private_key, ciphertext);
+#else
+    (void)private_key;
+    (void)ciphertext;
+    throw std::runtime_error("ML-KEM support is not enabled in this build");
+#endif
 }
 
 }  // namespace basefwx::pq

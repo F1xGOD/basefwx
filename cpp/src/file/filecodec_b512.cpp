@@ -21,6 +21,7 @@
 #include "basefwx/pb512.hpp"
 #include "basefwx/pq.hpp"
 #include "basefwx/runtime.hpp"
+#include "basefwx/secure_temp.hpp"
 
 #include <algorithm>
 #include <array>
@@ -53,8 +54,17 @@ std::string B512EncodeFileSimple(const std::filesystem::path& input,
             ec_pub = TryLoadEcPublic(true);
         }
     }
+    if (options.use_master && !options.strip_metadata
+        && StrictPqOnly() && !pq_pub.has_value()) {
+        throw std::runtime_error(
+            "PQ strict mode requires a configured ML-KEM master public key");
+    }
     bool use_master_effective = options.use_master && !options.strip_metadata
         && (pq_pub.has_value() || ec_pub.has_value());
+    const std::string master_kem =
+        MasterKemLabel(pq_pub, ec_pub, use_master_effective);
+    const basefwx::keywrap::MasterPublicKeys selected_master{
+        pq_pub, ec_pub};
     basefwx::pb512::KdfOptions kdf_opts = kdf;
     std::string kdf_label = ResolveKdfLabel(kdf_opts);
 
@@ -66,6 +76,7 @@ std::string B512EncodeFileSimple(const std::filesystem::path& input,
         "FWX512R",
         options.strip_metadata,
         use_master_effective,
+        master_kem,
         use_aead ? "AESGCM" : "NONE",
         kdf_label,
         {},
@@ -91,11 +102,16 @@ std::string B512EncodeFileSimple(const std::filesystem::path& input,
             constants::kB512FileMaskInfo,
             !use_master_effective,
             constants::kMaskAadB512File,
-            kdf_opts
+            kdf_opts,
+            &selected_master
         );
-        Bytes aead_key = basefwx::crypto::HkdfSha256(mask.mask_key, constants::kB512AeadInfo, 32);
-        Bytes ct = basefwx::crypto::AeadEncrypt(aead_key, payload_bytes, Bytes(constants::kB512AeadInfo.begin(),
-                                                                              constants::kB512AeadInfo.end()));
+        basefwx::crypto::SecureBytes aead_key{
+            basefwx::crypto::HkdfSha256(
+                mask.mask_key, constants::kB512AeadInfo, 32)};
+        Bytes ct = basefwx::crypto::AeadEncrypt(
+            aead_key.bytes(), payload_bytes,
+            Bytes(constants::kB512AeadInfo.begin(),
+                  constants::kB512AeadInfo.end()));
         std::vector<basefwx::format::Bytes> parts = {mask.user_blob, mask.master_blob, ct};
         output_bytes = basefwx::format::PackLengthPrefixed(parts);
     } else {
@@ -134,8 +150,17 @@ std::string B512EncodeFileStream(const std::filesystem::path& input,
             ec_pub = TryLoadEcPublic(true);
         }
     }
+    if (options.use_master && !options.strip_metadata
+        && StrictPqOnly() && !pq_pub.has_value()) {
+        throw std::runtime_error(
+            "PQ strict mode requires a configured ML-KEM master public key");
+    }
     bool use_master_effective = options.use_master && !options.strip_metadata
         && (pq_pub.has_value() || ec_pub.has_value());
+    const std::string master_kem =
+        MasterKemLabel(pq_pub, ec_pub, use_master_effective);
+    const basefwx::keywrap::MasterPublicKeys selected_master{
+        pq_pub, ec_pub};
     basefwx::pb512::KdfOptions kdf_opts = kdf;
     std::string kdf_label = ResolveKdfLabel(kdf_opts);
     bool fast_obf = !options.strip_metadata && UseFastObfuscation(input_size);
@@ -149,6 +174,7 @@ std::string B512EncodeFileStream(const std::filesystem::path& input,
         "FWX512R",
         options.strip_metadata,
         use_master_effective,
+        master_kem,
         "AESGCM",
         kdf_label,
         "STREAM",
@@ -186,9 +212,12 @@ std::string B512EncodeFileStream(const std::filesystem::path& input,
         constants::kB512FileMaskInfo,
         !use_master_effective,
         constants::kMaskAadB512File,
-        kdf_opts
+        kdf_opts,
+        &selected_master
     );
-    Bytes aead_key = basefwx::crypto::HkdfSha256(mask.mask_key, constants::kB512AeadInfo, 32);
+    basefwx::crypto::SecureBytes aead_key{
+        basefwx::crypto::HkdfSha256(
+            mask.mask_key, constants::kB512AeadInfo, 32)};
     Bytes nonce = basefwx::crypto::RandomBytes(constants::kAeadNonceLen);
 
     std::uint64_t payload_len = 4 + metadata_bytes.size() + nonce.size() + plaintext_len + constants::kAeadTagLen;
@@ -217,7 +246,7 @@ std::string B512EncodeFileStream(const std::filesystem::path& input,
     }
     output.write(reinterpret_cast<const char*>(nonce.data()), static_cast<std::streamsize>(nonce.size()));
 
-    AesGcmEncryptor encryptor(aead_key, nonce, metadata_bytes);
+    AesGcmEncryptor encryptor(aead_key.bytes(), nonce, metadata_bytes);
     if (!prefix_bytes.empty()) {
         Bytes ct = encryptor.Update(prefix_bytes);
         output.write(reinterpret_cast<const char*>(ct.data()), static_cast<std::streamsize>(ct.size()));
@@ -293,6 +322,12 @@ std::string B512DecodeFileStream(const std::filesystem::path& input,
 
     std::uint32_t len_user = 0;
     read_u32(len_user);
+    RequireAvailableLength(
+        input,
+        handle,
+        len_user,
+        constants::kLengthPrefixedMax,
+        "user key transport");
     Bytes user_blob(len_user);
     if (len_user > 0) {
         handle.read(reinterpret_cast<char*>(user_blob.data()), len_user);
@@ -302,6 +337,14 @@ std::string B512DecodeFileStream(const std::filesystem::path& input,
     }
     std::uint32_t len_master = 0;
     read_u32(len_master);
+    RequireHeaderLengthTotal(
+        static_cast<std::uint64_t>(len_user) + len_master);
+    RequireAvailableLength(
+        input,
+        handle,
+        len_master,
+        constants::kLengthPrefixedMax,
+        "master key transport");
     Bytes master_blob(len_master);
     if (len_master > 0) {
         handle.read(reinterpret_cast<char*>(master_blob.data()), len_master);
@@ -314,8 +357,28 @@ std::string B512DecodeFileStream(const std::filesystem::path& input,
     if (len_payload < 4 + constants::kAeadNonceLen + constants::kAeadTagLen) {
         throw std::runtime_error("Ciphertext payload truncated");
     }
+    RequireAvailableLength(
+        input,
+        handle,
+        len_payload,
+        std::numeric_limits<std::uint32_t>::max(),
+        "payload");
     std::uint32_t metadata_len = 0;
     read_u32(metadata_len);
+    if (metadata_len > len_payload - 4u) {
+        throw std::runtime_error(
+            "Ciphertext metadata length invalid");
+    }
+    RequireHeaderLengthTotal(
+        static_cast<std::uint64_t>(len_user)
+        + len_master
+        + metadata_len);
+    RequireAvailableLength(
+        input,
+        handle,
+        metadata_len,
+        constants::kMetadataMax,
+        "metadata");
     Bytes metadata_bytes(metadata_len);
     if (metadata_len > 0) {
         handle.read(reinterpret_cast<char*>(metadata_bytes.data()), metadata_len);
@@ -346,21 +409,27 @@ std::string B512DecodeFileStream(const std::filesystem::path& input,
     if (basefwx::metadata::GetValue(meta_preview, "ENC-MASTER") == "no") {
         use_master_effective = false;
     }
-    Bytes mask_key = basefwx::keywrap::RecoverMaskKey(
-        user_blob,
-        master_blob,
-        resolved,
-        use_master_effective,
-        constants::kB512FileMaskInfo,
-        constants::kMaskAadB512File,
-        kdf
-    );
-    Bytes aead_key = basefwx::crypto::HkdfSha256(mask_key, constants::kB512AeadInfo, 32);
+    basefwx::crypto::SecureBytes mask_key{
+        basefwx::keywrap::RecoverMaskKey(
+            user_blob,
+            master_blob,
+            resolved,
+            use_master_effective,
+            constants::kB512FileMaskInfo,
+            constants::kMaskAadB512File,
+            kdf,
+            constants::kB512AeadInfo
+        )};
+    basefwx::crypto::SecureBytes aead_key{
+        basefwx::crypto::HkdfSha256(
+            mask_key.bytes(), constants::kB512AeadInfo, 32)};
 
-    AesGcmDecryptor decryptor(aead_key, nonce, metadata_bytes);
-    std::filesystem::path temp_plain = input;
-    temp_plain += ".plain.tmp";
-    TempFileCleanup temp_plain_cleanup(temp_plain);
+    AesGcmDecryptor decryptor(aead_key.bytes(), nonce, metadata_bytes);
+    auto temp_plain_file =
+        basefwx::temp::SecureTempPath::CreateSibling(
+            input, "b512-plain");
+    const std::filesystem::path& temp_plain =
+        temp_plain_file.path();
     std::ofstream plain_out(temp_plain, std::ios::binary);
     if (!plain_out) {
         throw std::runtime_error("Failed to create temp file");
@@ -501,12 +570,6 @@ std::string B512DecodeFileStream(const std::filesystem::path& input,
         throw std::runtime_error("Failed to write output file");
     }
     plain_in.close();
-    std::error_code remove_ec;
-    std::filesystem::remove(temp_plain, remove_ec);
-    if (remove_ec) {
-        throw std::runtime_error("Failed to remove temp file: " + remove_ec.message());
-    }
-    temp_plain_cleanup.Dismiss();
     if (!options.keep_input) {
         std::filesystem::remove(input);
     }
@@ -533,12 +596,17 @@ std::string B512DecodeFileSimple(const std::filesystem::path& input,
         binary_mode = false;
     }
     if (binary_mode) {
-        Bytes mask_key = basefwx::keywrap::RecoverMaskKey(
-            parts[0], parts[1], resolved, use_master_effective,
-            constants::kB512FileMaskInfo, constants::kMaskAadB512File, kdf);
-        Bytes aead_key = basefwx::crypto::HkdfSha256(mask_key, constants::kB512AeadInfo, 32);
+        basefwx::crypto::SecureBytes mask_key{
+            basefwx::keywrap::RecoverMaskKey(
+                parts[0], parts[1], resolved, use_master_effective,
+                constants::kB512FileMaskInfo, constants::kMaskAadB512File,
+                kdf, constants::kB512AeadInfo)};
+        basefwx::crypto::SecureBytes aead_key{
+            basefwx::crypto::HkdfSha256(
+                mask_key.bytes(), constants::kB512AeadInfo, 32)};
         Bytes payload = basefwx::crypto::AeadDecrypt(
-            aead_key, parts[2], Bytes(constants::kB512AeadInfo.begin(), constants::kB512AeadInfo.end()));
+            aead_key.bytes(), parts[2],
+            Bytes(constants::kB512AeadInfo.begin(), constants::kB512AeadInfo.end()));
         content = ToString(payload);
     } else {
         content = ToString(raw);
@@ -641,6 +709,10 @@ std::string B512DecodeFile(const std::string& path,
             return B512DecodeFileStream(input, password, options, kdf);
         }
     }
+    if (FileSize(input) > constants::kLengthPrefixedMax) {
+        throw std::runtime_error(
+            "Non-stream b512file exceeds 64 MiB decode cap");
+    }
     return B512DecodeFileSimple(input, password, options, kdf);
 }
 
@@ -665,8 +737,17 @@ std::vector<std::uint8_t> B512EncodeBytes(const std::vector<std::uint8_t>& data,
             ec_pub = TryLoadEcPublic(true);
         }
     }
+    if (options.use_master && !options.strip_metadata
+        && StrictPqOnly() && !pq_pub.has_value()) {
+        throw std::runtime_error(
+            "PQ strict mode requires a configured ML-KEM master public key");
+    }
     bool use_master_effective = options.use_master && !options.strip_metadata
         && (pq_pub.has_value() || ec_pub.has_value());
+    const std::string master_kem =
+        MasterKemLabel(pq_pub, ec_pub, use_master_effective);
+    const basefwx::keywrap::MasterPublicKeys selected_master{
+        pq_pub, ec_pub};
     basefwx::pb512::KdfOptions kdf_opts = kdf;
     std::string kdf_label = ResolveKdfLabel(kdf_opts);
 
@@ -678,6 +759,7 @@ std::vector<std::uint8_t> B512EncodeBytes(const std::vector<std::uint8_t>& data,
         "FWX512R",
         options.strip_metadata,
         use_master_effective,
+        master_kem,
         use_aead ? "AESGCM" : "NONE",
         kdf_label,
         {},
@@ -704,11 +786,14 @@ std::vector<std::uint8_t> B512EncodeBytes(const std::vector<std::uint8_t>& data,
         constants::kB512FileMaskInfo,
         !use_master_effective,
         constants::kMaskAadB512File,
-        kdf_opts
+        kdf_opts,
+        &selected_master
     );
-    Bytes aead_key = basefwx::crypto::HkdfSha256(mask.mask_key, constants::kB512AeadInfo, 32);
+    basefwx::crypto::SecureBytes aead_key{
+        basefwx::crypto::HkdfSha256(
+            mask.mask_key, constants::kB512AeadInfo, 32)};
     Bytes ct = basefwx::crypto::AeadEncrypt(
-        aead_key, payload_bytes,
+        aead_key.bytes(), payload_bytes,
         Bytes(constants::kB512AeadInfo.begin(), constants::kB512AeadInfo.end()));
     std::vector<basefwx::format::Bytes> parts = {mask.user_blob, mask.master_blob, ct};
     return basefwx::format::PackLengthPrefixed(parts);
@@ -730,12 +815,16 @@ DecodedBytes B512DecodeBytes(const std::vector<std::uint8_t>& blob,
         binary_mode = false;
     }
     if (binary_mode) {
-        Bytes mask_key = basefwx::keywrap::RecoverMaskKey(
-            parts[0], parts[1], resolved, use_master_effective,
-            constants::kB512FileMaskInfo, constants::kMaskAadB512File, kdf);
-        Bytes aead_key = basefwx::crypto::HkdfSha256(mask_key, constants::kB512AeadInfo, 32);
+        basefwx::crypto::SecureBytes mask_key{
+            basefwx::keywrap::RecoverMaskKey(
+                parts[0], parts[1], resolved, use_master_effective,
+                constants::kB512FileMaskInfo, constants::kMaskAadB512File,
+                kdf, constants::kB512AeadInfo)};
+        basefwx::crypto::SecureBytes aead_key{
+            basefwx::crypto::HkdfSha256(
+                mask_key.bytes(), constants::kB512AeadInfo, 32)};
         Bytes payload = basefwx::crypto::AeadDecrypt(
-            aead_key, parts[2],
+            aead_key.bytes(), parts[2],
             Bytes(constants::kB512AeadInfo.begin(), constants::kB512AeadInfo.end()));
         content = ToString(payload);
     } else {

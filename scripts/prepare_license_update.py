@@ -72,7 +72,11 @@ def license_for(path: Path) -> str | None:
     if rel.startswith("examples/plugins/"):
         return BASEFWX_EXAMPLE_NEW
 
-    if rel.startswith("cpp/src/cli/") or rel.startswith("cpp/include/basefwx/cli/"):
+    if (
+        rel.startswith("cpp/src/cli/")
+        or rel.startswith("cpp/include/basefwx/cli/")
+        or rel.startswith("cpp/tools/")
+    ):
         return BASEFWX_GPL_NEW
     if rel in {
         "cpp/include/basefwx/cli_colors.hpp",
@@ -101,6 +105,8 @@ def license_for(path: Path) -> str | None:
     if rel.startswith("scripts/") or rel.startswith("python/scripts/"):
         return BASEFWX_GPL_NEW
     if rel.startswith("python/tools/") or rel.startswith("python/tests/"):
+        return BASEFWX_GPL_NEW
+    if rel.startswith("java/src/test/"):
         return BASEFWX_GPL_NEW
     if rel.startswith(".github/scripts/"):
         return BASEFWX_GPL_NEW

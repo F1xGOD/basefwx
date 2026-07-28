@@ -230,8 +230,14 @@ Bytes BuildJmgHeader(const Bytes& user_blob,
     std::vector<basefwx::format::Bytes> parts = {user_blob, master_blob};
     Bytes payload = basefwx::format::PackLengthPrefixed(parts);
     payload.insert(payload.begin(), profile_id);
+    const std::size_t header_min =
+        basefwx::constants::kJmgKeyMagic.size() + 1 + 4;
+    if (payload.size()
+        > basefwx::constants::kFwxAesMaxKeyHeaderLen - header_min) {
+        throw std::runtime_error("JMG key header too large");
+    }
     Bytes header;
-    header.reserve(basefwx::constants::kJmgKeyMagic.size() + 1 + 4 + payload.size());
+    header.reserve(header_min + payload.size());
     header.insert(header.end(),
                   basefwx::constants::kJmgKeyMagic.begin(),
                   basefwx::constants::kJmgKeyMagic.end());
@@ -268,6 +274,10 @@ bool ParseJmgHeader(const Bytes& blob,
                                 | (static_cast<std::uint32_t>(blob[basefwx::constants::kJmgKeyMagic.size() + 2]) << 16)
                                 | (static_cast<std::uint32_t>(blob[basefwx::constants::kJmgKeyMagic.size() + 3]) << 8)
                                 | static_cast<std::uint32_t>(blob[basefwx::constants::kJmgKeyMagic.size() + 4]);
+    if (payload_len
+        > basefwx::constants::kFwxAesMaxKeyHeaderLen - header_min) {
+        throw std::runtime_error("JMG key header too large");
+    }
     header_len = header_min + payload_len;
     if (blob.size() < header_len) {
         throw std::runtime_error("Truncated JMG key header");

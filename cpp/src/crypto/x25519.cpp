@@ -101,14 +101,14 @@ Bytes DeriveSharedSecret(const Bytes& private_key, const Bytes& peer_public_key)
     Require(EVP_PKEY_derive(context.get(), nullptr, &shared_len) == 1 &&
                 shared_len == kX25519KeyBytes,
             "X25519 shared-secret size query failed");
-    Bytes shared(shared_len);
+    basefwx::crypto::SecureBytes shared{Bytes(shared_len)};
     Require(EVP_PKEY_derive(context.get(), shared.data(), &shared_len) == 1 &&
                 shared_len == kX25519KeyBytes,
             "X25519 shared-secret derivation failed");
-    Require(std::any_of(shared.begin(), shared.end(),
+    Require(std::any_of(shared.bytes().begin(), shared.bytes().end(),
                         [](std::uint8_t byte) { return byte != 0; }),
             "X25519 peer produced the forbidden all-zero shared secret");
-    return shared;
+    return shared.Release();
 }
 
 }  // namespace basefwx::x25519

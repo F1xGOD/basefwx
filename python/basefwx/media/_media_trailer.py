@@ -33,6 +33,8 @@ class _MediaTrailerMixin:
 
     @staticmethod
     def _append_trailer(output_path: 'basefwx.pathlib.Path', password: 'basefwx.typing.Union[str, bytes, bytearray, memoryview]', original_bytes: bytes, *, archive_key: 'basefwx.typing.Optional[bytes]'=None, key_header: bytes=b'') -> None:
+        if len(key_header) > basefwx.FWXAES_MAX_KEY_HEADER_LEN:
+            raise ValueError('JMG key header too large')
         profile_id = basefwx.JMG_SECURITY_PROFILE_LEGACY
         if key_header:
             profile_id = basefwx._jmg_profile_from_key_header(key_header)
@@ -46,6 +48,8 @@ class _MediaTrailerMixin:
 
     @staticmethod
     def _append_trailer_stream(output_path: 'basefwx.pathlib.Path', password: 'basefwx.typing.Union[str, bytes, bytearray, memoryview]', original_path: 'basefwx.pathlib.Path', progress_cb: 'basefwx.typing.Optional[basefwx.typing.Callable[[float], None]]'=None, *, archive_key: 'basefwx.typing.Optional[bytes]'=None, key_header: bytes=b'') -> None:
+        if len(key_header) > basefwx.FWXAES_MAX_KEY_HEADER_LEN:
+            raise ValueError('JMG key header too large')
         profile_id = basefwx.JMG_SECURITY_PROFILE_LEGACY
         if key_header:
             profile_id = basefwx._jmg_profile_from_key_header(key_header)
@@ -87,6 +91,8 @@ class _MediaTrailerMixin:
     def _append_key_trailer(output_path: 'basefwx.pathlib.Path', key_header: bytes) -> None:
         if not key_header:
             raise ValueError('Missing JMG key header for no-archive mode')
+        if len(key_header) > basefwx.FWXAES_MAX_KEY_HEADER_LEN:
+            raise ValueError('JMG key header too large')
         basefwx._append_balanced_trailer(output_path, basefwx.IMAGECIPHER_KEY_TRAILER_MAGIC, key_header)
 
     @staticmethod
@@ -95,6 +101,8 @@ class _MediaTrailerMixin:
         if info is None:
             return None
         blob_start, blob_len, _ = info
+        if blob_len > basefwx.FWXAES_MAX_KEY_HEADER_LEN:
+            raise ValueError('JMG key trailer too large')
         with open(path, 'rb') as handle:
             handle.seek(blob_start)
             blob = handle.read(blob_len)
@@ -112,6 +120,8 @@ class _MediaTrailerMixin:
         if trailer is None:
             return None
         blob, _ = trailer
+        if len(blob) > basefwx.FWXAES_MAX_KEY_HEADER_LEN:
+            raise ValueError('JMG key trailer too large')
         header = basefwx._jmg_parse_key_header(blob, password, use_master=True)
         if header is None:
             raise ValueError('Invalid JMG key trailer')
@@ -184,6 +194,17 @@ class _MediaTrailerMixin:
                     if len(payload_len_bytes) != 4:
                         return False
                     payload_len = int.from_bytes(payload_len_bytes, 'big')
+                    required_after_header = (
+                        basefwx.AEAD_NONCE_LEN + basefwx.AEAD_TAG_LEN
+                    )
+                    if (
+                        payload_len
+                        > basefwx.FWXAES_MAX_KEY_HEADER_LEN - header_min
+                        or blob_len < header_min + required_after_header
+                        or payload_len
+                        > blob_len - header_min - required_after_header
+                    ):
+                        raise ValueError('Invalid JMG key header length')
                     header_len = header_min + payload_len
                     payload = handle.read(payload_len)
                     if len(payload) != payload_len:
@@ -216,22 +237,48 @@ class _MediaTrailerMixin:
                 decryptor = cipher.decryptor()
                 decryptor.authenticate_additional_data(archive_info)
                 chunk_size = 1024 * 1024
-                with open(output_path, 'wb') as out_handle:
-                    remaining = cipher_body_len
-                    processed = 0
-                    while remaining > 0:
-                        chunk = handle.read(min(chunk_size, remaining))
-                        if not chunk:
+                output_path = basefwx.pathlib.Path(output_path)
+                output_path.parent.mkdir(parents=True, exist_ok=True)
+                temp_path = None
+                try:
+                    with basefwx.tempfile.NamedTemporaryFile(
+                        mode='w+b',
+                        prefix='.basefwx-media-auth-',
+                        suffix='.tmp',
+                        dir=str(output_path.parent),
+                        delete=False,
+                    ) as out_handle:
+                        temp_path = basefwx.pathlib.Path(out_handle.name)
+                        remaining = cipher_body_len
+                        processed = 0
+                        while remaining > 0:
+                            chunk = handle.read(
+                                min(chunk_size, remaining)
+                            )
+                            if not chunk:
+                                return False
+                            out_handle.write(decryptor.update(chunk))
+                            remaining -= len(chunk)
+                            processed += len(chunk)
+                            if progress_cb and cipher_body_len:
+                                progress_cb(min(
+                                    1.0,
+                                    processed / cipher_body_len,
+                                ))
+                        tag = handle.read(basefwx.AEAD_TAG_LEN)
+                        if len(tag) != basefwx.AEAD_TAG_LEN:
                             return False
-                        out_handle.write(decryptor.update(chunk))
-                        remaining -= len(chunk)
-                        processed += len(chunk)
-                        if progress_cb and cipher_body_len:
-                            progress_cb(min(1.0, processed / cipher_body_len))
-                    tag = handle.read(basefwx.AEAD_TAG_LEN)
-                    if len(tag) != basefwx.AEAD_TAG_LEN:
-                        return False
-                    decryptor.finalize_with_tag(tag)
+                        decryptor.finalize_with_tag(tag)
+                        out_handle.flush()
+                        basefwx.os.fsync(out_handle.fileno())
+                    basefwx.os.replace(temp_path, output_path)
+                    temp_path = None
+                finally:
+                    if temp_path is not None:
+                        with basefwx.contextlib.suppress(
+                            FileNotFoundError
+                        ):
+                            temp_path.unlink()
             return True
         except Exception:
             if header_seen:

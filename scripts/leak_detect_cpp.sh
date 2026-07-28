@@ -40,25 +40,9 @@ while (( $# > 0 )); do
     esac
 done
 
-# basefwx/include/basefwx/constants.hpp has a hard #error if
-# BASEFWX_VERSION_STRING isn't defined by the build system. The main
-# CMake build reads it from the VERSION file (cpp/CMakeLists.txt line
-# 665); the standalone probe compile bypasses that path, so we read
-# the same file here and pass the macro through ourselves.
-#
-# The macro must expand to a C++ string literal, so the gcc argv item
-# needs literal " characters around the version. Single-quote the
-# pieces that contain " so bash passes the quotes through unchanged.
-VERSION_RAW="$(head -n 1 "$ROOT/VERSION" 2>/dev/null | tr -d '[:space:]')"
-if [[ -z "$VERSION_RAW" ]]; then
-    echo "could not read $ROOT/VERSION — abort" >&2
-    exit 2
-fi
-BASEFWX_VERSION_DEFINE='-DBASEFWX_VERSION_STRING="'"${VERSION_RAW}"'"'
-
 BUILD_DIR="$ROOT/build-asan-leak"
 PROBE_SRC="$BUILD_DIR/leak_probe.cpp"
-PROBE_BIN="$BUILD_DIR/leak_probe"
+PROBE_BIN="$BUILD_DIR/basefwx_leak_probe"
 
 rm -rf "$BUILD_DIR"
 mkdir -p "$BUILD_DIR"
@@ -145,10 +129,16 @@ EOF
 
 echo "[leak_detect_cpp] Configuring ASan/LSan build (iters=${ITERS})..."
 
-# Configure / build basefwx with ASan flags. We rebuild only the static
-# library + this probe — the CLI is not needed for the leak check.
+# Configure / build BaseFWX and the generated probe with ASan flags.
+# The opt-in CMake target links against basefwxcpp so it inherits the
+# exact dependency set and compile definitions selected for the library,
+# including mandatory or discovered OQS/Argon2/LZMA dependencies.
 cmake -S cpp -B "$BUILD_DIR" \
       -DCMAKE_BUILD_TYPE=Debug \
+      -DBASEFWX_BUILD_CLI=OFF \
+      -DBASEFWX_BUILD_TESTS=OFF \
+      -DBUILD_TESTING=OFF \
+      -DBASEFWX_LEAK_PROBE_SOURCE="$PROBE_SRC" \
       -DCMAKE_CXX_FLAGS="-fsanitize=address,leak -fno-omit-frame-pointer -g -O1" \
       -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,leak" \
       -DCMAKE_SHARED_LINKER_FLAGS="-fsanitize=address,leak" \
@@ -158,35 +148,9 @@ cmake -S cpp -B "$BUILD_DIR" \
     exit 1
 }
 
-cmake --build "$BUILD_DIR" --target basefwxcpp >"$BUILD_DIR/build.log" 2>&1 || {
-    echo "basefwxcpp library build failed; see $BUILD_DIR/build.log" >&2
+cmake --build "$BUILD_DIR" --target basefwx_leak_probe >"$BUILD_DIR/build.log" 2>&1 || {
+    echo "BaseFWX leak probe build failed; see $BUILD_DIR/build.log" >&2
     tail -40 "$BUILD_DIR/build.log" >&2
-    exit 1
-}
-
-# Compile the probe directly against the built lib + ASan runtime.
-# Pick up include dirs from the configured tree, link against the
-# instrumented static lib, then any deps the CMake build pulled in.
-#
-#   -DBASEFWX_VERSION_STRING — required by constants.hpp; the lib build
-#     gets this via cpp/CMakeLists.txt, we mirror it here for the
-#     standalone probe.
-#   -Wno-deprecated-declarations — the probe DELIBERATELY exercises
-#     deprecated methods (uhash513, b256) so leak coverage stays
-#     uniform across active and retired paths. Matches the
-#     -Wno-deprecated-declarations the main CMake build uses on the
-#     library translation units for the same reason.
-c++ -std=c++17 -O1 -g -fno-omit-frame-pointer -fsanitize=address,leak \
-    -Wno-deprecated-declarations \
-    "$BASEFWX_VERSION_DEFINE" \
-    -I"$ROOT/cpp/include" \
-    "$PROBE_SRC" \
-    "$BUILD_DIR/libbasefwxcpp.a" \
-    -lcrypto -lssl -lz -llzma -largon2 \
-    -o "$PROBE_BIN" \
-    2>"$BUILD_DIR/probe.log" || {
-    echo "probe link failed; see $BUILD_DIR/probe.log" >&2
-    tail -40 "$BUILD_DIR/probe.log" >&2
     exit 1
 }
 

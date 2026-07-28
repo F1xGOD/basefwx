@@ -13,6 +13,7 @@
 #include <chrono>
 #include <ctime>
 #include <sstream>
+#include <stdexcept>
 #include <vector>
 
 namespace basefwx::metadata {
@@ -52,6 +53,7 @@ std::string EscapeJson(std::string_view input) {
 std::string Build(const std::string& method,
                   bool strip,
                   bool use_master,
+                  std::string_view master_kem,
                   std::string_view aead,
                   std::string_view kdf_label,
                   std::string_view mode,
@@ -62,15 +64,32 @@ std::string Build(const std::string& method,
                   std::optional<std::uint32_t> argon2_par,
                   std::string_view pack,
                   std::string_view key_separation) {
+    if (kdf_label != "pbkdf2"
+        && kdf_label != "argon2"
+        && kdf_label != "argon2id") {
+        throw std::runtime_error(
+            "Unsupported producer KDF label: " + std::string(kdf_label));
+    }
     if (strip) {
         return {};
+    }
+    if (use_master) {
+        if (master_kem != constants::kMasterPqAlg
+            && master_kem != constants::kMasterPqAlgHigh
+            && master_kem != "EC") {
+            throw std::runtime_error(
+                "Master-enabled metadata requires an explicit selected KEM");
+        }
+    } else if (master_kem != "none") {
+        throw std::runtime_error(
+            "Master-disabled metadata must use ENC-KEM=none");
     }
     std::vector<std::pair<std::string, std::string>> fields;
     fields.emplace_back("ENC-TIME", UtcTimestamp());
     fields.emplace_back("ENC-VERSION", std::string(constants::kEngineVersion));
     fields.emplace_back("ENC-METHOD", method);
     fields.emplace_back("ENC-MASTER", use_master ? "yes" : "no");
-    fields.emplace_back("ENC-KEM", use_master ? basefwx::pq::CurrentKemAlgorithm() : "none");
+    fields.emplace_back("ENC-KEM", std::string(master_kem));
     fields.emplace_back("ENC-AEAD", std::string(aead));
     fields.emplace_back("ENC-KDF", std::string(kdf_label));
     if (!mode.empty()) {
@@ -114,7 +133,11 @@ std::string Build(const std::string& method,
     json.push_back('}');
 
     std::vector<std::uint8_t> json_bytes(json.begin(), json.end());
-    return basefwx::base64::Encode(json_bytes);
+    std::string encoded = basefwx::base64::Encode(json_bytes);
+    if (encoded.size() > constants::kMetadataMax) {
+        throw std::runtime_error("Payload metadata exceeds 1 MiB cap");
+    }
+    return encoded;
 }
 
 MetadataMap Decode(const std::string& blob) {

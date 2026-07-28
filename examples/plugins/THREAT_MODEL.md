@@ -346,9 +346,15 @@ visible at code-review time. Specifically:
 - The host **refuses** `BASEFWX_PLUGIN_POS_RAW` for plugins that
   do not set `CAP_SAFE_RAW_MODE`. No warning, no override, no
   config flag. The dangerous default is impossible.
-- The host **refuses** `forward_keyed` calls where the plugin set
-  `CAP_REQUIRES_TWEAK` but the host passed `tweak_len == 0`.
-  Likewise for `CAP_REQUIRES_HOST_KEY`.
+- **Keyed CAP enforcement (contract vs host status):** plugins that
+  set `CAP_REQUIRES_TWEAK` / `CAP_REQUIRES_HOST_KEY` must see
+  non-zero `tweak_len` / `host_secret_len` when `forward_keyed` /
+  `inverse_keyed` runs. Helper macros and Profile B examples follow
+  that rule. The **current BaseFWX fwxAES/CLI host loader does not
+  yet call the keyed entry points or supply those secrets** — it
+  only runs deterministic `forward`/`inverse` at PRE/POST. Treat
+  keyed host guarantees as a contract for custom hosts and for the
+  upcoming host wiring, not as behavior of today's stock CLI path.
 - The plugin **must** wipe key material via `SecretBuffer`.
 - The plugin **must** sign its transform with a stable 16-byte ID;
   the host carries that ID in the wire blob's plugin tag so the

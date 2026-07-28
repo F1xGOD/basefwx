@@ -23,6 +23,8 @@ source "$ROOT/scripts/lib/resource_guards.sh"
 bench_guards_parse_args "$@"
 set -- "${BASEFWX_GUARDS_REMAINING_ARGS[@]}"
 bench_guards_apply
+# shellcheck source=lib/java_bench_flags.sh
+source "$ROOT/scripts/lib/java_bench_flags.sh"
 
 USE_VENV="${USE_VENV:-1}"
 VENV_DIR="${VENV_DIR:-$ROOT/.venv}"
@@ -848,6 +850,7 @@ case_tag() {
 calc_total_steps() {
     local b512_count="${#B512FILE_CASES[@]}"
     local pb512_count="${#PB512FILE_CASES[@]}"
+    local pb512_ksep_count="${#PB512_KSEP_CASES[@]}"
     local jmg_count="${#JMG_CASES[@]}"
     local nopass_count="${#TEXT_NOPASS_METHODS[@]}"
     local pass_count="${#TEXT_PASS_METHODS[@]}"
@@ -910,6 +913,7 @@ calc_total_steps() {
         if [[ "$RUN_PY_TESTS" == "1" && "$RUN_CPP_TESTS" == "1" && "$CPP_AVAILABLE" == "1" ]]; then
             STEP_TOTAL=$((STEP_TOTAL + 2 * reversible_count + 2))
             STEP_TOTAL=$((STEP_TOTAL + 2 * b512_count + 2 * pb512_count))
+            STEP_TOTAL=$((STEP_TOTAL + 4 * pb512_ksep_count))
             if (( jmg_count > 0 )); then
                 STEP_TOTAL=$((STEP_TOTAL + 2 * jmg_count))
             fi
@@ -917,12 +921,14 @@ calc_total_steps() {
         fi
         if [[ "$RUN_PY_TESTS" == "1" && "$RUN_JAVA_TESTS" == "1" && "$JAVA_AVAILABLE" == "1" ]]; then
             STEP_TOTAL=$((STEP_TOTAL + 2 * reversible_count + 2))
+            STEP_TOTAL=$((STEP_TOTAL + 4 * pb512_ksep_count))
             if (( jmg_count > 0 )); then
                 STEP_TOTAL=$((STEP_TOTAL + 2 * jmg_count))
             fi
             STEP_TOTAL=$((STEP_TOTAL + 4))
         fi
         if [[ "$RUN_CPP_TESTS" == "1" && "$CPP_AVAILABLE" == "1" && "$RUN_JAVA_TESTS" == "1" && "$JAVA_AVAILABLE" == "1" ]]; then
+            STEP_TOTAL=$((STEP_TOTAL + 4 * pb512_ksep_count))
             STEP_TOTAL=$((STEP_TOTAL + 4))
         fi
     fi
@@ -1007,6 +1013,7 @@ ensure_cpp() {
     fi
     time_cmd_no_fail "cpp_configure" cmake -S "$ROOT/cpp" -B "$build_dir" \
         -DCMAKE_BUILD_TYPE=Release \
+        -DBASEFWX_BUILD_TESTS=ON \
         -DBASEFWX_REQUIRE_ARGON2="$CPP_REQUIRE_ARGON2" \
         -DBASEFWX_REQUIRE_OQS="$CPP_REQUIRE_OQS" \
         -DBASEFWX_REQUIRE_LZMA="$CPP_REQUIRE_LZMA" \
@@ -1014,6 +1021,11 @@ ensure_cpp() {
     if [[ ! -d "$build_dir" ]]; then
         log "CMake configure failed; build dir missing"
     fi
+    # The executable target is named basefwx_cpp (its output file is
+    # `basefwx`). Building the default ALL target here includes that real
+    # target plus the policy executables. For a focused manual CLI rebuild,
+    # use `cmake --build cpp/build --target basefwx_cpp`; `--target basefwx`
+    # does not name this executable and can leave a stale output binary.
     time_cmd_no_fail "cpp_build" cmake --build "$build_dir" --config Release
     if [[ -x "$CPP_BIN" ]] && cpp_has_file_cli; then
         return 0
@@ -1849,8 +1861,8 @@ cpp_jmg_roundtrip_no_archive() {
 cpp_jmg_enc() {
     local input="$1"
     local enc="$2"
-    log "STEP: $CPP_BIN jmge $input"
-    "$CPP_BIN" jmge "$input" -p "$PW" --out "$enc"
+    log "STEP: $CPP_BIN jmge $input --archive"
+    "$CPP_BIN" jmge "$input" -p "$PW" --archive --out "$enc"
 }
 
 cpp_jmg_dec() {
@@ -2458,19 +2470,180 @@ b512file_cpp_enc_py_dec() {
 pb512file_py_enc_cpp_dec() {
     local input="$1"
     local enc="$2"
+    local obf_case="${3:-yes}"
+    local producer_obf=1
+    if [[ "$obf_case" == "no" ]]; then
+        producer_obf=0
+    fi
     log "STEP: python -m basefwx cryptin pb512 $input"
-    "$PYTHON_BIN" -m basefwx cryptin pb512 "$input" -p "$PW" --no-master || return $?
+    env BASEFWX_OBFUSCATE="$producer_obf" \
+        "$PYTHON_BIN" -m basefwx cryptin pb512 \
+        "$input" -p "$PW" --no-master || return $?
+    assert_file_ksep_v1 "$enc" "$obf_case" || return $?
     log "STEP: $CPP_BIN pb512file-dec $enc"
-    "$CPP_BIN" pb512file-dec "$enc" -p "$PW" --no-master --kdf pbkdf2 --pbkdf2-iters "$PBKDF2_ITERS"
+    env BASEFWX_OBFUSCATE=1 \
+        "$CPP_BIN" pb512file-dec "$enc" -p "$PW" --no-master \
+        --kdf pbkdf2 --pbkdf2-iters "$PBKDF2_ITERS"
 }
 
 pb512file_cpp_enc_py_dec() {
     local input="$1"
     local enc="$2"
+    local obf_case="${3:-yes}"
+    local producer_obf=1
+    if [[ "$obf_case" == "no" ]]; then
+        producer_obf=0
+    fi
     log "STEP: $CPP_BIN pb512file-enc $input"
-    "$CPP_BIN" pb512file-enc "$input" -p "$PW" --no-master --kdf pbkdf2 --pbkdf2-iters "$PBKDF2_ITERS" || return $?
+    env BASEFWX_OBFUSCATE="$producer_obf" \
+        "$CPP_BIN" pb512file-enc "$input" -p "$PW" --no-master \
+        --kdf pbkdf2 --pbkdf2-iters "$PBKDF2_ITERS" || return $?
+    assert_file_ksep_v1 "$enc" "$obf_case" || return $?
     log "STEP: python -m basefwx cryptin pb512 $enc"
-    "$PYTHON_BIN" -m basefwx cryptin pb512 "$enc" -p "$PW" --no-master
+    env BASEFWX_OBFUSCATE=1 \
+        "$PYTHON_BIN" -m basefwx cryptin pb512 \
+        "$enc" -p "$PW" --no-master
+}
+
+assert_file_ksep_v1() {
+    local encrypted="$1"
+    local expected_obf="${2:-yes}"
+    "$PYTHON_BIN" - "$encrypted" "$expected_obf" <<'PY'
+import base64
+import json
+import struct
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+expected_obf = sys.argv[2]
+file_size = path.stat().st_size
+
+def read_u32(handle, label):
+    raw = handle.read(4)
+    if len(raw) != 4:
+        raise SystemExit(f"truncated PB512 {label} length")
+    return struct.unpack(">I", raw)[0]
+
+def skip_part(handle, length, label):
+    remaining = file_size - handle.tell()
+    if length > remaining:
+        raise SystemExit(f"truncated PB512 {label}")
+    handle.seek(length, 1)
+
+with path.open("rb") as handle:
+    user_length = read_u32(handle, "user transport")
+    skip_part(handle, user_length, "user transport")
+    master_length = read_u32(handle, "master transport")
+    skip_part(handle, master_length, "master transport")
+    payload_length = read_u32(handle, "payload")
+    if payload_length != file_size - handle.tell():
+        raise SystemExit("PB512 payload length does not match file size")
+    if payload_length < 4:
+        raise SystemExit("truncated PB512 payload metadata header")
+    metadata_length = read_u32(handle, "metadata")
+    if metadata_length > payload_length - 4:
+        raise SystemExit("truncated PB512 payload metadata")
+    if metadata_length > (1 << 20):
+        raise SystemExit("PB512 payload metadata exceeds 1 MiB")
+    metadata_bytes = handle.read(metadata_length)
+    if len(metadata_bytes) != metadata_length:
+        raise SystemExit("truncated PB512 payload metadata")
+try:
+    metadata = json.loads(
+        base64.b64decode(metadata_bytes, validate=True).decode("utf-8")
+    )
+except Exception as exc:
+    raise SystemExit(f"invalid PB512 metadata: {exc}") from exc
+if metadata.get("ENC-KSEP") != "v1":
+    raise SystemExit("PB512 producer did not emit ENC-KSEP=v1")
+actual_obf = metadata.get("ENC-OBF")
+if expected_obf == "no":
+    if actual_obf != "no":
+        raise SystemExit(
+            f"PB512 producer emitted ENC-OBF={actual_obf!r}, expected 'no'"
+        )
+elif actual_obf not in ("yes", "fast"):
+    raise SystemExit(
+        f"PB512 producer emitted ENC-OBF={actual_obf!r}, expected enabled"
+    )
+PY
+}
+
+pb512file_py_enc_java_dec() {
+    local input="$1"
+    local enc="$2"
+    local obf_case="${3:-yes}"
+    local producer_obf=1
+    if [[ "$obf_case" == "no" ]]; then
+        producer_obf=0
+    fi
+    log "STEP: python -m basefwx cryptin pb512 $input"
+    env BASEFWX_OBFUSCATE="$producer_obf" \
+        "$PYTHON_BIN" -m basefwx cryptin pb512 \
+        "$input" -p "$PW" --no-master || return $?
+    assert_file_ksep_v1 "$enc" "$obf_case" || return $?
+    log "STEP: java pb512file-dec $enc"
+    env BASEFWX_OBFUSCATE=1 \
+        "$JAVA_BIN" -jar "$JAVA_JAR" pb512file-dec \
+        "$enc" "$input" "$PW" --no-master
+}
+
+pb512file_java_enc_py_dec() {
+    local input="$1"
+    local enc="$2"
+    local obf_case="${3:-yes}"
+    local producer_obf=1
+    if [[ "$obf_case" == "no" ]]; then
+        producer_obf=0
+    fi
+    log "STEP: java pb512file-enc $input"
+    env BASEFWX_OBFUSCATE="$producer_obf" \
+        "$JAVA_BIN" -jar "$JAVA_JAR" pb512file-enc \
+        "$input" "$enc" "$PW" --no-master || return $?
+    assert_file_ksep_v1 "$enc" "$obf_case" || return $?
+    log "STEP: python -m basefwx cryptin pb512 $enc"
+    env BASEFWX_OBFUSCATE=1 \
+        "$PYTHON_BIN" -m basefwx cryptin pb512 \
+        "$enc" -p "$PW" --no-master
+}
+
+pb512file_cpp_enc_java_dec() {
+    local input="$1"
+    local enc="$2"
+    local obf_case="${3:-yes}"
+    local producer_obf=1
+    if [[ "$obf_case" == "no" ]]; then
+        producer_obf=0
+    fi
+    log "STEP: $CPP_BIN pb512file-enc $input"
+    env BASEFWX_OBFUSCATE="$producer_obf" \
+        "$CPP_BIN" pb512file-enc "$input" -p "$PW" --no-master \
+        --kdf pbkdf2 --pbkdf2-iters "$PBKDF2_ITERS" || return $?
+    assert_file_ksep_v1 "$enc" "$obf_case" || return $?
+    log "STEP: java pb512file-dec $enc"
+    env BASEFWX_OBFUSCATE=1 \
+        "$JAVA_BIN" -jar "$JAVA_JAR" pb512file-dec \
+        "$enc" "$input" "$PW" --no-master
+}
+
+pb512file_java_enc_cpp_dec() {
+    local input="$1"
+    local enc="$2"
+    local obf_case="${3:-yes}"
+    local producer_obf=1
+    if [[ "$obf_case" == "no" ]]; then
+        producer_obf=0
+    fi
+    log "STEP: java pb512file-enc $input"
+    env BASEFWX_OBFUSCATE="$producer_obf" \
+        "$JAVA_BIN" -jar "$JAVA_JAR" pb512file-enc \
+        "$input" "$enc" "$PW" --no-master || return $?
+    assert_file_ksep_v1 "$enc" "$obf_case" || return $?
+    log "STEP: $CPP_BIN pb512file-dec $enc"
+    env BASEFWX_OBFUSCATE=1 \
+        "$CPP_BIN" pb512file-dec "$enc" -p "$PW" --no-master \
+        --kdf pbkdf2 --pbkdf2-iters "$PBKDF2_ITERS"
 }
 
 jmg_py_enc_cpp_dec() {
@@ -2527,6 +2700,29 @@ if [[ -z "$PYTHON_BIN" || ! -x "$PYTHON_BIN" ]]; then
     done
     printf "See diagnose.log for details.\n"
     exit 1
+fi
+
+phase "PHASE1.1: fast security policy gates"
+if [[ "$RUN_PY_TESTS" == "1" ]]; then
+    if ! PYTHONPATH="$ROOT/python${PYTHONPATH:+:$PYTHONPATH}" \
+         "$PYTHON_BIN" -m unittest \
+         python.tests.test_peer_kdf_policy \
+         python.tests.test_master_key_policy \
+         python.tests.test_password_policy \
+         python.tests.test_kdf_default_policy \
+         python.tests.test_fwxaes_auth_publication \
+         python.tests.test_media_auth_publication \
+         python.tests.test_payload_key_separation \
+         python.tests.test_protocol_kats >>"$LOG" 2>&1; then
+        FAILURES+=("python_security_policy_tests")
+    fi
+fi
+if ! "$ROOT/scripts/test_make_debian_orig.sh" >>"$LOG" 2>&1; then
+    FAILURES+=("make_debian_orig_privacy")
+fi
+if ! "$PYTHON_BIN" "$ROOT/scripts/gen_protocol_kats.py" \
+     --check-copies >>"$LOG" 2>&1; then
+    FAILURES+=("protocol_kat_copy_check")
 fi
 
 log "Python: $("$PYTHON_BIN" --version 2>&1)"
@@ -2706,6 +2902,14 @@ def write_large(path: Path, size: int, seed: int) -> None:
                 data = os.urandom(take)
             handle.write(data)
             remaining -= take
+
+# Dedicated PB512 key-separation interoperability fixture. It is always
+# above the streaming threshold and above 3 MiB, even in fast mode.
+write_large(
+    root / "pb512_ksep_stream_3m.bin",
+    3 * 1024 * 1024 + 29,
+    seed=314159,
+)
 
 if mode in ("fast", "quickest"):
     payload = os.urandom(max(1, big_bytes))
@@ -4448,6 +4652,14 @@ if [[ "$RUN_CPP_TESTS_ORIG" == "1" ]]; then
         log "C++ binary unavailable; C++ tests will be skipped"
         CPP_AVAILABLE=0
         RUN_CPP_TESTS_ORIG=0
+    elif ! ctest --test-dir "$ROOT/cpp/build" \
+             --output-on-failure \
+             -R '^(peer_kdf_policy_test|bench_memory_policy_test|base64_compatibility_test)$' \
+             >>"$LOG" 2>&1; then
+        FAILURES+=("cpp_internal_policy_tests")
+    elif ! "$ROOT/scripts/test_cmake_subdirectory.sh" \
+             >>"$LOG" 2>&1; then
+        FAILURES+=("cpp_add_subdirectory_smoke")
     fi
 else
     CPP_AVAILABLE=0
@@ -4473,6 +4685,7 @@ fi
 
 FWXAES_FILE="tiny.txt"
 KFM_FILE="kfm_payload.bin"
+PB512_KSEP_CASES=("tiny.txt" "pb512_ksep_stream_3m.bin")
 if [[ "$TEST_MODE" == "fast" || "$TEST_MODE" == "quickest" ]]; then
     B512FILE_CASES=("sample_payload.bin" "sample_payload_copy.bin")
     PB512FILE_CASES=("sample_payload.bin" "sample_payload_copy.bin")
@@ -4743,6 +4956,29 @@ if [[ "$SKIP_CROSS" != "1" ]]; then
             add_verify "$ORIG_DIR/$file_name" "$pb512file_cpyp_input"
         done
 
+        # Explicit ENC-KSEP=v1 producer -> consumer coverage for both the
+        # simple path and a deterministic >3 MiB streaming path.
+        for file_name in "${PB512_KSEP_CASES[@]}"; do
+            for obf_case in yes no; do
+                tag="$(case_tag "$file_name")_obf_${obf_case}"
+                pb512file_ksep_pycc_input="$(copy_input "pb512file_ksep_pycc_${tag}" "$file_name")"
+                pb512file_ksep_pycc_enc="$(with_suffix "$pb512file_ksep_pycc_input" ".fwx")"
+                time_cmd "pb512file_ksep_py_enc_cpp_dec_${tag}" \
+                    pb512file_py_enc_cpp_dec \
+                    "$pb512file_ksep_pycc_input" \
+                    "$pb512file_ksep_pycc_enc" "$obf_case"
+                add_verify "$ORIG_DIR/$file_name" "$pb512file_ksep_pycc_input"
+
+                pb512file_ksep_cpyp_input="$(copy_input "pb512file_ksep_cpyp_${tag}" "$file_name")"
+                pb512file_ksep_cpyp_enc="$(with_suffix "$pb512file_ksep_cpyp_input" ".fwx")"
+                time_cmd "pb512file_ksep_cpp_enc_py_dec_${tag}" \
+                    pb512file_cpp_enc_py_dec \
+                    "$pb512file_ksep_cpyp_input" \
+                    "$pb512file_ksep_cpyp_enc" "$obf_case"
+                add_verify "$ORIG_DIR/$file_name" "$pb512file_ksep_cpyp_input"
+            done
+        done
+
         if (( ${#JMG_CASES[@]} > 0 )); then
             for file_name in "${JMG_CASES[@]}"; do
                 tag="$(case_tag "$file_name")"
@@ -4788,6 +5024,27 @@ if [[ "$SKIP_CROSS" != "1" ]]; then
         time_cmd "fwxaes_live_java_enc_py_dec" fwxaes_live_java_enc_py_dec \
             "$fwxaes_live_jp_input" "$fwxaes_live_jp_enc" "$fwxaes_live_jp_dec"
         add_verify "$ORIG_DIR/$FWXAES_FILE" "$fwxaes_live_jp_dec"
+
+        for file_name in "${PB512_KSEP_CASES[@]}"; do
+            for obf_case in yes no; do
+                tag="$(case_tag "$file_name")_obf_${obf_case}"
+                pb512file_ksep_pyj_input="$(copy_input "pb512file_ksep_pyj_${tag}" "$file_name")"
+                pb512file_ksep_pyj_enc="$(with_suffix "$pb512file_ksep_pyj_input" ".fwx")"
+                time_cmd "pb512file_ksep_py_enc_java_dec_${tag}" \
+                    pb512file_py_enc_java_dec \
+                    "$pb512file_ksep_pyj_input" \
+                    "$pb512file_ksep_pyj_enc" "$obf_case"
+                add_verify "$ORIG_DIR/$file_name" "$pb512file_ksep_pyj_input"
+
+                pb512file_ksep_jp_input="$(copy_input "pb512file_ksep_jp_${tag}" "$file_name")"
+                pb512file_ksep_jp_enc="$(with_suffix "$pb512file_ksep_jp_input" ".fwx")"
+                time_cmd "pb512file_ksep_java_enc_py_dec_${tag}" \
+                    pb512file_java_enc_py_dec \
+                    "$pb512file_ksep_jp_input" \
+                    "$pb512file_ksep_jp_enc" "$obf_case"
+                add_verify "$ORIG_DIR/$file_name" "$pb512file_ksep_jp_input"
+            done
+        done
 
         # kFM/kFA cross-compat (Python <-> Java)
         kfme_pyj_input="$(copy_input "kfme_pyj" "$KFM_FILE")"
@@ -4862,6 +5119,27 @@ if [[ "$SKIP_CROSS" != "1" ]]; then
         time_cmd "fwxaes_live_java_enc_cpp_dec" fwxaes_live_java_enc_cpp_dec \
             "$fwxaes_live_jcpp_input" "$fwxaes_live_jcpp_enc" "$fwxaes_live_jcpp_dec"
         add_verify "$ORIG_DIR/$FWXAES_FILE" "$fwxaes_live_jcpp_dec"
+
+        for file_name in "${PB512_KSEP_CASES[@]}"; do
+            for obf_case in yes no; do
+                tag="$(case_tag "$file_name")_obf_${obf_case}"
+                pb512file_ksep_cppj_input="$(copy_input "pb512file_ksep_cppj_${tag}" "$file_name")"
+                pb512file_ksep_cppj_enc="$(with_suffix "$pb512file_ksep_cppj_input" ".fwx")"
+                time_cmd "pb512file_ksep_cpp_enc_java_dec_${tag}" \
+                    pb512file_cpp_enc_java_dec \
+                    "$pb512file_ksep_cppj_input" \
+                    "$pb512file_ksep_cppj_enc" "$obf_case"
+                add_verify "$ORIG_DIR/$file_name" "$pb512file_ksep_cppj_input"
+
+                pb512file_ksep_jcpp_input="$(copy_input "pb512file_ksep_jcpp_${tag}" "$file_name")"
+                pb512file_ksep_jcpp_enc="$(with_suffix "$pb512file_ksep_jcpp_input" ".fwx")"
+                time_cmd "pb512file_ksep_java_enc_cpp_dec_${tag}" \
+                    pb512file_java_enc_cpp_dec \
+                    "$pb512file_ksep_jcpp_input" \
+                    "$pb512file_ksep_jcpp_enc" "$obf_case"
+                add_verify "$ORIG_DIR/$file_name" "$pb512file_ksep_jcpp_input"
+            done
+        done
 
         # kFM/kFA cross-compat (C++ <-> Java)
         kfme_cppj_input="$(copy_input "kfme_cppj" "$KFM_FILE")"
@@ -5186,15 +5464,19 @@ if [[ ! "$BENCH_ITERS_FILE" =~ ^[0-9]+$ || "$BENCH_ITERS_FILE" -lt 1 ]]; then
     BENCH_ITERS_FILE=1
 fi
 
-JAVA_BENCH_FLAGS_DEFAULT="-server -XX:+UseG1GC -XX:+TieredCompilation -XX:CompileThreshold=1000 -XX:+UseStringDeduplication -XX:MaxGCPauseMillis=200 -XX:InitialRAMPercentage=20 -XX:MaxRAMPercentage=75 -XX:+UseAES -XX:+UnlockDiagnosticVMOptions -XX:+UseAESIntrinsics -XX:+UseAESCTRIntrinsics -XX:+UseGHASHIntrinsics"
-JAVA_BENCH_FLAGS="${JAVA_BENCH_FLAGS:-$JAVA_BENCH_FLAGS_DEFAULT}"
+if [[ -n "${JAVA_BENCH_FLAGS+x}" ]]; then
+    read -r -a JAVA_BENCH_FLAGS_ARR <<<"$JAVA_BENCH_FLAGS"
+else
+    basefwx_java_select_default_bench_flags "$JAVA_BIN"
+    JAVA_BENCH_FLAGS_ARR=("${BASEFWX_JAVA_BENCH_FLAGS[@]}")
+fi
 # 3.7.0: the Java fwxAES-light bench passes BASEFWX_TEST_KDF_ITERS so its
 # wall-clock matches Python's 32k-iter PBKDF2 setup. Constants.java gates
 # that env-var read behind the `basefwx.testing` sysprop so a stray env
 # can't weaken KDF cost in production builds. Pass the sysprop here so the
 # bench's intent is honored. Without this Java ignores the test-only env
 # and runs at full 600k iters, producing the +1451% "regression" we saw.
-JAVA_BENCH_FLAGS="$JAVA_BENCH_FLAGS -Dbasefwx.testing=true"
+JAVA_BENCH_FLAGS_ARR+=("-Dbasefwx.testing=true")
 
 # 3.7.0: if the JNI shared library is present, light the bench up with the
 # native backend. Without -Dbasefwx.useJNI=true the static BaseFwx.fwxAes*
@@ -5217,13 +5499,14 @@ for cand in "${JAVA_JNI_LIB_DIR_CANDIDATES[@]}"; do
     fi
 done
 if [[ -n "$JAVA_JNI_LIB_DIR" ]]; then
-    JAVA_BENCH_FLAGS="$JAVA_BENCH_FLAGS -Dbasefwx.useJNI=true -Djava.library.path=$JAVA_JNI_LIB_DIR"
+    JAVA_BENCH_FLAGS_ARR+=(
+        "-Dbasefwx.useJNI=true"
+        "-Djava.library.path=$JAVA_JNI_LIB_DIR"
+    )
     log "Java bench: JNI backend enabled (lib dir: $JAVA_JNI_LIB_DIR)"
 else
     log "Java bench: JNI backend NOT found — main bench will run pure-Java (slow path)"
 fi
-
-read -r -a JAVA_BENCH_FLAGS_ARR <<<"$JAVA_BENCH_FLAGS"
 
 BENCH_FWXAES_MODE="${BENCH_FWXAES_MODE:-par}"
 case "$BENCH_FWXAES_MODE" in

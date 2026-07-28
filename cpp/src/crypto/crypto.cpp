@@ -379,8 +379,10 @@ Bytes AesGcmDecrypt(const Bytes& key, const Bytes& blob, const Bytes& aad) {
     Ensure(EVP_CIPHER_CTX_ctrl(ctx.get(), EVP_CTRL_GCM_SET_TAG, constants::kAeadTagLen,
                                const_cast<std::uint8_t*>(tag_ptr)) == 1,
            "AES-GCM set tag failed");
-    Ensure(EVP_DecryptFinal_ex(ctx.get(), plaintext.data() + total_len, &out_len) == 1,
-           "AES-GCM auth failed");
+    if (EVP_DecryptFinal_ex(
+            ctx.get(), plaintext.data() + total_len, &out_len) != 1) {
+        throw AuthenticationError("AES-GCM auth failed");
+    }
     total_len += out_len;
 
     plaintext.resize(static_cast<std::size_t>(total_len));
@@ -514,8 +516,9 @@ std::size_t AesGcmDecryptWithIvInto(const Bytes& key,
                                static_cast<int>(constants::kAeadTagLen),
                                const_cast<unsigned char*>(tag)) == 1,
            "AES-GCM set tag failed");
-    Ensure(EVP_DecryptFinal_ex(ctx.get(), out + total_len, &out_len_int) == 1,
-           "AES-GCM auth failed");
+    if (EVP_DecryptFinal_ex(ctx.get(), out + total_len, &out_len_int) != 1) {
+        throw AuthenticationError("AES-GCM auth failed");
+    }
     total_len += out_len_int;
     
     return static_cast<std::size_t>(total_len);

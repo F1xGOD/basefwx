@@ -91,12 +91,46 @@ static void writeFully(FileChannel channel, ByteBuffer buffer) throws IOExceptio
     }
 
 static byte[] readExactBytes(InputStream input, int length, String error) throws IOException {
-        if (length <= 0) {
+        if (length < 0) {
+            throw new IllegalArgumentException(error + " (negative length)");
+        }
+        if (length == 0) {
             return new byte[0];
         }
         byte[] buf = new byte[length];
         readExact(input, buf, length, error);
         return buf;
+    }
+
+static void requireBoundedFileLength(File input,
+                                     long consumed,
+                                     int length,
+                                     int maximum,
+                                     String field) {
+        if (length < 0) {
+            throw new IllegalArgumentException(
+                    "Ciphertext " + field + " length has high bit set");
+        }
+        if (length > maximum) {
+            throw new IllegalArgumentException(
+                    "Ciphertext " + field + " length exceeds cap");
+        }
+        long fileSize = input.length();
+        if (consumed < 0 || consumed > fileSize
+                || (long) length > fileSize - consumed) {
+            throw new IllegalArgumentException(
+                    "Ciphertext " + field + " length exceeds remaining file");
+        }
+    }
+
+static void requireHeaderLengthTotal(long total) {
+        final long threeLengthPrefixes = 3L * 4L;
+        if (total < 0
+                || total > Constants.LENGTH_PREFIXED_MAX
+                        - threeLengthPrefixes) {
+            throw new IllegalArgumentException(
+                    "Ciphertext length-prefixed header exceeds 64 MiB cap");
+        }
     }
 
 static void skipFully(InputStream input, int length, String error) throws IOException {
@@ -198,15 +232,4 @@ static byte[] concat(byte[]... parts) {
         return out;
     }
 
-static boolean startsWith(byte[] data, byte[] prefix) {
-        if (data.length < prefix.length) {
-            return false;
-        }
-        for (int i = 0; i < prefix.length; i++) {
-            if (data[i] != prefix[i]) {
-                return false;
-            }
-        }
-        return true;
-    }
 }

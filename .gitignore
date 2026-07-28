@@ -6,6 +6,7 @@ __pycache__/
 .venv/
 venv/
 .env
+.env.*
 .envrc
 .vscode
 .gradle/
@@ -22,6 +23,17 @@ AI_gen/
 .copilot/
 .private/
 
+# Agent / AI instruction files (keep private; use .private/ for local copies)
+AGENTS.md
+agents.md
+CLAUDE.md
+RULE.md
+**/AGENTS.md
+**/agents.md
+**/CLAUDE.md
+**/RULE.md
+.cursorrules
+
 build/
 build-*/
 java/build/
@@ -29,6 +41,8 @@ java/bin/
 java/out/
 *.class
 cpp/build/
+cpp/build-kats/
+
 dist/
 *.egg-info/
 cpp/CMakeCache.txt

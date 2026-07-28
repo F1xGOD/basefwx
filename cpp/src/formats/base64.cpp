@@ -28,6 +28,8 @@ const std::array<std::uint8_t, 256> kDecTable = [] {
     for (std::size_t i = 0; i < 64; ++i) {
         table[static_cast<std::uint8_t>(kEncTable[i])] = static_cast<std::uint8_t>(i);
     }
+    table[static_cast<std::uint8_t>('-')] = 62;
+    table[static_cast<std::uint8_t>('_')] = 63;
     return table;
 }();
 
@@ -155,15 +157,28 @@ bool DecodeOpenSslNoWhitespace(std::string_view input, std::vector<std::uint8_t>
     if (input.size() > static_cast<std::size_t>(std::numeric_limits<int>::max())) {
         return false;
     }
+    std::string canonical;
+    std::string_view prepared = input;
+    if (input.find_first_of("-_") != std::string_view::npos) {
+        canonical.assign(input.begin(), input.end());
+        for (char& ch : canonical) {
+            if (ch == '-') {
+                ch = '+';
+            } else if (ch == '_') {
+                ch = '/';
+            }
+        }
+        prepared = canonical;
+    }
     std::size_t pad_count = 0;
-    if (!ValidateBase64NoWhitespace(input, pad_count)) {
+    if (!ValidateBase64NoWhitespace(prepared, pad_count)) {
         return false;
     }
-    std::size_t out_len = (input.size() / 4u) * 3u;
+    std::size_t out_len = (prepared.size() / 4u) * 3u;
     out.assign(out_len, 0);
     int written = EVP_DecodeBlock(out.data(),
-                                  reinterpret_cast<const unsigned char*>(input.data()),
-                                  static_cast<int>(input.size()));
+                                  reinterpret_cast<const unsigned char*>(prepared.data()),
+                                  static_cast<int>(prepared.size()));
     if (written < 0) {
         out.clear();
         return false;
@@ -186,15 +201,28 @@ bool DecodeOpenSslNoWhitespace(std::string_view input, std::string& out) {
     if (input.size() > static_cast<std::size_t>(std::numeric_limits<int>::max())) {
         return false;
     }
+    std::string canonical;
+    std::string_view prepared = input;
+    if (input.find_first_of("-_") != std::string_view::npos) {
+        canonical.assign(input.begin(), input.end());
+        for (char& ch : canonical) {
+            if (ch == '-') {
+                ch = '+';
+            } else if (ch == '_') {
+                ch = '/';
+            }
+        }
+        prepared = canonical;
+    }
     std::size_t pad_count = 0;
-    if (!ValidateBase64NoWhitespace(input, pad_count)) {
+    if (!ValidateBase64NoWhitespace(prepared, pad_count)) {
         return false;
     }
-    std::size_t out_len = (input.size() / 4u) * 3u;
+    std::size_t out_len = (prepared.size() / 4u) * 3u;
     out.assign(out_len, '\0');
     int written = EVP_DecodeBlock(reinterpret_cast<unsigned char*>(&out[0]),
-                                  reinterpret_cast<const unsigned char*>(input.data()),
-                                  static_cast<int>(input.size()));
+                                  reinterpret_cast<const unsigned char*>(prepared.data()),
+                                  static_cast<int>(prepared.size()));
     if (written < 0) {
         out.clear();
         return false;

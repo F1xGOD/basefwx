@@ -24,8 +24,11 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
+#include <exception>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <optional>
 #include <stdexcept>
 #include <string_view>
@@ -69,12 +72,9 @@ std::optional<Bytes> TryLoadEcPublic(bool /*create_if_missing*/) {
     if (StrictPqOnly()) {
         return std::nullopt;
     }
-    try {
-        // 3.7.0: silent EC autogeneration removed (mirrors keywrap.cpp).
-        return basefwx::ec::LoadMasterPublicKey(false);
-    } catch (const std::exception&) {
-        return std::nullopt;
-    }
+    // A configured path is authoritative: malformed, oversized, or missing
+    // key material must not silently downgrade a requested master wrap.
+    return basefwx::ec::LoadMasterPublicKey(false);
 }
 
 PayloadKeys DerivePayloadKeys(const Bytes& root_key) {
@@ -82,6 +82,19 @@ PayloadKeys DerivePayloadKeys(const Bytes& root_key) {
     keys.aead = basefwx::crypto::HkdfSha256(root_key, constants::kFwxAesPayloadAeadInfo, 32);
     keys.obf = basefwx::crypto::HkdfSha256(root_key, constants::kFwxAesPayloadObfInfo, 32);
     return keys;
+}
+
+bool UsesDerivedPayloadKeys(const basefwx::metadata::MetadataMap& meta) {
+    const std::string key_separation =
+        basefwx::metadata::GetValue(meta, "ENC-KSEP");
+    if (key_separation.empty()) {
+        return false;
+    }
+    if (key_separation != "v1") {
+        throw std::runtime_error(
+            "Unsupported payload key-separation version");
+    }
+    return true;
 }
 
 Bytes ReadFileBytes(const std::filesystem::path& path) {
@@ -145,11 +158,58 @@ std::optional<std::uint32_t> ParseUint32(const std::string& value) {
     if (value.empty()) {
         return std::nullopt;
     }
-    try {
-        return static_cast<std::uint32_t>(std::stoul(value));
-    } catch (...) {
-        return std::nullopt;
+    constexpr std::size_t kUint32DecimalLength = 10;
+    if (value.size() > kUint32DecimalLength) {
+        throw std::runtime_error(
+            "Peer KDF parameter exceeds uint32 range");
     }
+    if (value.size() > 1 && value.front() == '0') {
+        throw std::runtime_error(
+            "Peer KDF parameter must not contain leading zeros");
+    }
+    std::uint32_t parsed = 0;
+    for (const unsigned char ch : value) {
+        if (ch < static_cast<unsigned char>('0')
+            || ch > static_cast<unsigned char>('9')) {
+            throw std::runtime_error("Peer KDF parameter must be an unsigned decimal integer");
+        }
+        const std::uint32_t digit =
+            static_cast<std::uint32_t>(ch - static_cast<unsigned char>('0'));
+        if (parsed > (std::numeric_limits<std::uint32_t>::max() - digit) / 10u) {
+            throw std::runtime_error("Peer KDF parameter exceeds uint32 range");
+        }
+        parsed = parsed * 10u + digit;
+    }
+    if (parsed == 0) {
+        throw std::runtime_error("Peer KDF parameter must be positive");
+    }
+    return parsed;
+}
+
+std::optional<std::uint32_t> ParsePeerPbkdf2Iterations(const std::string& value) {
+    auto parsed = ParseUint32(value);
+    if (parsed.has_value()) {
+        basefwx::keywrap::RequirePeerPbkdf2WithinLimits(parsed.value());
+    }
+    return parsed;
+}
+
+std::string MasterKemLabel(const std::optional<Bytes>& pq_public_key,
+                           const std::optional<Bytes>& ec_public_key,
+                           bool use_master) {
+    if (!use_master) {
+        return "none";
+    }
+    if (pq_public_key.has_value()) {
+        return std::string(basefwx::pq::KemAlgorithmName(
+            basefwx::pq::InferKemAlgorithmFromPublicKey(
+                pq_public_key.value())));
+    }
+    if (ec_public_key.has_value()) {
+        return "EC";
+    }
+    throw std::runtime_error(
+        "Effective master encryption has no selected public key");
 }
 
 std::pair<std::string, std::string> SplitMetadata(const std::string& payload) {
@@ -240,6 +300,38 @@ std::uint64_t TellPosOrThrow(std::istream& stream) {
     return static_cast<std::uint64_t>(pos);
 }
 
+std::uint64_t RemainingFileBytes(const std::filesystem::path& input,
+                                 std::istream& stream) {
+    const std::uint64_t position = TellPosOrThrow(stream);
+    const std::uint64_t file_size = FileSize(input);
+    if (position > file_size) {
+        throw std::runtime_error("Ciphertext payload truncated");
+    }
+    return file_size - position;
+}
+
+void RequireAvailableLength(const std::filesystem::path& input,
+                            std::istream& stream,
+                            std::uint32_t length,
+                            std::uint64_t maximum,
+                            std::string_view field) {
+    if (static_cast<std::uint64_t>(length) > maximum
+        || static_cast<std::uint64_t>(length)
+            > RemainingFileBytes(input, stream)) {
+        throw std::runtime_error(
+            "Ciphertext " + std::string(field) + " length invalid");
+    }
+}
+
+void RequireHeaderLengthTotal(std::uint64_t total) {
+    constexpr std::uint64_t kThreeLengthPrefixes = 3u * 4u;
+    if (total
+        > constants::kLengthPrefixedMax - kThreeLengthPrefixes) {
+        throw std::runtime_error(
+            "Ciphertext length-prefixed header exceeds 64 MiB cap");
+    }
+}
+
 StreamCipherLayout ResolveStreamCipherLayout(const std::filesystem::path& input,
                                              std::istream& stream,
                                              std::uint32_t encoded_payload_len,
@@ -265,9 +357,99 @@ StreamCipherLayout ResolveStreamCipherLayout(const std::filesystem::path& input,
     return layout;
 }
 
+Bytes RecoverPayloadKey(const Bytes& user_blob,
+                        const Bytes& master_blob,
+                        const std::string& password,
+                        bool use_master,
+                        const Bytes& metadata_bytes,
+                        const std::string& kdf_label,
+                        std::optional<std::uint32_t> kdf_iterations,
+                        std::optional<std::uint32_t> argon2_time,
+                        std::optional<std::uint32_t> argon2_mem,
+                        std::optional<std::uint32_t> argon2_par,
+                        const basefwx::pb512::KdfOptions& kdf) {
+    std::exception_ptr master_failure;
+    if (!master_blob.empty() && use_master) {
+        try {
+            if (basefwx::ec::IsEcMasterBlob(master_blob)) {
+                if (StrictPqOnly()) {
+                    throw std::runtime_error(
+                        "EC master blobs are disabled in PQ strict mode");
+                }
+                basefwx::crypto::SecureBytes private_key{
+                    basefwx::ec::LoadMasterPrivateKey()};
+                basefwx::crypto::SecureBytes shared{
+                    basefwx::ec::KemDecrypt(private_key.bytes(), master_blob)};
+                return basefwx::crypto::HkdfSha256(
+                    shared.bytes(), constants::kKemInfo, 32);
+            }
+            basefwx::crypto::SecureBytes private_key{
+                basefwx::pq::LoadMasterPrivateKey()};
+            basefwx::crypto::SecureBytes shared{
+                basefwx::pq::KemDecrypt(private_key.bytes(), master_blob)};
+            return basefwx::crypto::HkdfSha256(
+                shared.bytes(), constants::kKemInfo, 32);
+        } catch (...) {
+            master_failure = std::current_exception();
+        }
+    }
+
+    if (user_blob.empty()) {
+        if (master_failure) {
+            std::rethrow_exception(master_failure);
+        }
+        if (!master_blob.empty() && !use_master) {
+            throw std::runtime_error("Master key required to decrypt this payload");
+        }
+        throw std::runtime_error("Ciphertext missing key transport data");
+    }
+    if (password.empty()) {
+        if (master_failure) {
+            std::rethrow_exception(master_failure);
+        }
+        throw std::runtime_error("User password required to decrypt this payload");
+    }
+    if (user_blob.size()
+        < constants::kUserKdfSaltSize + constants::kAeadNonceLen
+            + constants::kAeadTagLen) {
+        throw std::runtime_error(
+            "Corrupted user key blob: missing salt or AEAD data");
+    }
+
+    Bytes salt(
+        user_blob.begin(),
+        user_blob.begin()
+            + static_cast<std::ptrdiff_t>(constants::kUserKdfSaltSize));
+    Bytes wrapped(
+        user_blob.begin()
+            + static_cast<std::ptrdiff_t>(constants::kUserKdfSaltSize),
+        user_blob.end());
+    basefwx::pb512::KdfOptions kdf_opts = kdf;
+    kdf_opts.label = kdf_label;
+    kdf_opts.pbkdf2_iterations = kdf_iterations.value_or(
+        kdf.pbkdf2_iterations);
+    if (argon2_time.has_value()) {
+        kdf_opts.argon2_time_cost = argon2_time.value();
+    }
+    if (argon2_mem.has_value()) {
+        kdf_opts.argon2_memory_cost = argon2_mem.value();
+    }
+    if (argon2_par.has_value()) {
+        kdf_opts.argon2_parallelism = argon2_par.value();
+    }
+    kdf_opts = HardenKdfOptionsForPassword(password, kdf_opts);
+    basefwx::crypto::SecureBytes user_key{
+        basefwx::keywrap::DeriveUserKeyWithLabel(
+            password, salt, kdf_label, kdf_opts)};
+    return basefwx::crypto::AeadDecrypt(
+        user_key.bytes(), wrapped, metadata_bytes);
+}
+
 Bytes EncryptAesPayload(const std::string& plaintext,
                         const std::string& password,
                         bool use_master,
+                        const std::optional<Bytes>& pq_public_key,
+                        const std::optional<Bytes>& ec_public_key,
                         const std::string& metadata_blob,
                         const basefwx::pb512::KdfOptions& kdf,
                         std::uint32_t kdf_iterations,
@@ -278,17 +460,19 @@ Bytes EncryptAesPayload(const std::string& plaintext,
                         bool fast_obf) {
     std::string resolved = basefwx::ResolvePassword(password);
     Bytes metadata_bytes = ToBytes(metadata_blob);
+    if (metadata_bytes.size() > constants::kMetadataMax) {
+        throw std::runtime_error("Payload metadata exceeds 1 MiB cap");
+    }
+    const std::string resolved_kdf_label =
+        basefwx::keywrap::ResolveKdfLabel(kdf.label);
     Bytes aad = metadata_bytes;
 
-    std::optional<Bytes> pq_pub;
-    std::optional<Bytes> ec_pub;
-    if (use_master) {
-        pq_pub = basefwx::pq::LoadMasterPublicKey();
-        if (!pq_pub.has_value()) {
-            ec_pub = TryLoadEcPublic(true);
-        }
+    if (use_master && StrictPqOnly() && !pq_public_key.has_value()) {
+        throw std::runtime_error(
+            "PQ strict mode requires a configured ML-KEM master public key");
     }
-    bool use_master_effective = use_master && (pq_pub.has_value() || ec_pub.has_value());
+    bool use_master_effective = use_master
+        && (pq_public_key.has_value() || ec_public_key.has_value());
     if (resolved.empty() && !use_master_effective) {
         throw std::runtime_error("Password required when no usable master key is available");
     }
@@ -302,16 +486,22 @@ Bytes EncryptAesPayload(const std::string& plaintext,
     secrets.Add(payload_keys.aead);
     secrets.Add(payload_keys.obf);
     if (use_master_effective) {
-        if (pq_pub.has_value()) {
-            basefwx::pq::KemResult kem = basefwx::pq::KemEncrypt(*pq_pub);
+        if (pq_public_key.has_value()) {
+            basefwx::pq::KemResult kem =
+                basefwx::pq::KemEncrypt(*pq_public_key);
             master_payload = kem.ciphertext;
-            ephemeral_key = basefwx::crypto::HkdfSha256(kem.shared, constants::kKemInfo, 32);
-            basefwx::crypto::SecureClear(kem.shared);
-        } else if (ec_pub.has_value()) {
-            basefwx::ec::KemResult kem = basefwx::ec::KemEncrypt(*ec_pub);
+            basefwx::crypto::SecureBytes shared{
+                std::move(kem.shared)};
+            ephemeral_key = basefwx::crypto::HkdfSha256(
+                shared.bytes(), constants::kKemInfo, 32);
+        } else if (ec_public_key.has_value()) {
+            basefwx::ec::KemResult kem =
+                basefwx::ec::KemEncrypt(*ec_public_key);
             master_payload = kem.blob;
-            ephemeral_key = basefwx::crypto::HkdfSha256(kem.shared, constants::kKemInfo, 32);
-            basefwx::crypto::SecureClear(kem.shared);
+            basefwx::crypto::SecureBytes shared{
+                std::move(kem.shared)};
+            ephemeral_key = basefwx::crypto::HkdfSha256(
+                shared.bytes(), constants::kKemInfo, 32);
         } else {
             ephemeral_key = basefwx::crypto::RandomBytes(constants::kEphemeralKeyLen);
         }
@@ -333,24 +523,33 @@ Bytes EncryptAesPayload(const std::string& plaintext,
             kdf_opts.argon2_parallelism = argon2_par.value();
         }
         kdf_opts = HardenKdfOptionsForPassword(resolved, kdf_opts);
-        std::string label = basefwx::keywrap::ResolveKdfLabel(kdf_opts.label);
         Bytes salt = basefwx::crypto::RandomBytes(constants::kUserKdfSaltSize);
-        Bytes user_key = basefwx::keywrap::DeriveUserKeyWithLabel(resolved, salt, label, kdf_opts);
-        Bytes wrapped = basefwx::crypto::AeadEncrypt(user_key, ephemeral_key, aad);
-        basefwx::crypto::SecureClear(user_key);
+        basefwx::crypto::SecureBytes user_key{
+            basefwx::keywrap::DeriveUserKeyWithLabel(
+                resolved, salt, resolved_kdf_label, kdf_opts)};
+        Bytes wrapped = basefwx::crypto::AeadEncrypt(
+            user_key.bytes(), ephemeral_key, aad);
         user_blob.reserve(salt.size() + wrapped.size());
         user_blob.insert(user_blob.end(), salt.begin(), salt.end());
         user_blob.insert(user_blob.end(), wrapped.begin(), wrapped.end());
     }
 
-    payload_keys = DerivePayloadKeys(ephemeral_key);
+    const bool use_derived_keys = UsesDerivedPayloadKeys(
+        basefwx::metadata::Decode(metadata_blob));
+    Bytes* aead_key = &ephemeral_key;
+    Bytes* obf_key = &ephemeral_key;
+    if (use_derived_keys) {
+        payload_keys = DerivePayloadKeys(ephemeral_key);
+        aead_key = &payload_keys.aead;
+        obf_key = &payload_keys.obf;
+    }
     Bytes payload_bytes = ToBytes(plaintext);
     if (obfuscate) {
-        payload_bytes = basefwx::obf::ObfuscateBytes(payload_bytes, payload_keys.obf, fast_obf);
+        payload_bytes = basefwx::obf::ObfuscateBytes(payload_bytes, *obf_key, fast_obf);
     }
 
     Bytes nonce = basefwx::crypto::RandomBytes(constants::kAeadNonceLen);
-    Bytes ct = basefwx::crypto::AesGcmEncryptWithIv(payload_keys.aead, nonce, payload_bytes, aad);
+    Bytes ct = basefwx::crypto::AesGcmEncryptWithIv(*aead_key, nonce, payload_bytes, aad);
     Bytes ciphertext;
     ciphertext.reserve(nonce.size() + ct.size());
     ciphertext.insert(ciphertext.end(), nonce.begin(), nonce.end());
@@ -371,7 +570,6 @@ std::string DecryptAesPayload(const Bytes& blob,
                               const std::string& password,
                               bool use_master,
                               const basefwx::pb512::KdfOptions& kdf,
-                              bool obfuscate,
                               std::string* metadata_out) {
     std::string resolved = basefwx::ResolvePassword(password);
     std::vector<basefwx::format::Bytes> parts = basefwx::format::UnpackLengthPrefixed(blob, 3);
@@ -386,6 +584,9 @@ std::string DecryptAesPayload(const Bytes& blob,
                              | (static_cast<std::uint32_t>(payload_blob[1]) << 16)
                              | (static_cast<std::uint32_t>(payload_blob[2]) << 8)
                              | static_cast<std::uint32_t>(payload_blob[3]);
+    if (meta_len > constants::kMetadataMax) {
+        throw std::runtime_error("Payload metadata exceeds 1 MiB cap");
+    }
     std::size_t meta_end = 4 + meta_len;
     if (meta_end > payload_blob.size()) {
         throw std::runtime_error("Malformed payload metadata header");
@@ -396,17 +597,18 @@ std::string DecryptAesPayload(const Bytes& blob,
         *metadata_out = metadata_blob;
     }
     auto meta = basefwx::metadata::Decode(metadata_blob);
-    std::string obf_hint = basefwx::metadata::GetValue(meta, "ENC-OBF");
-    if (obf_hint.empty()) {
-        obf_hint = "yes";
-    }
-    bool should_deobfuscate = obfuscate && obf_hint != "no";
+    const std::string obf_hint = RequirePayloadObfuscationMode(
+        basefwx::metadata::GetValue(meta, "ENC-OBF"));
+    bool should_deobfuscate = obf_hint != "no";
     bool fast_obf = should_deobfuscate && obf_hint == "fast";
-    bool use_derived_keys = basefwx::metadata::GetValue(meta, "ENC-KSEP") == "v1";
+    bool use_derived_keys = UsesDerivedPayloadKeys(meta);
 
     std::string kdf_label = basefwx::metadata::GetValue(meta, "ENC-KDF");
-    kdf_label = basefwx::keywrap::ResolveKdfLabel(kdf_label.empty() ? kdf.label : kdf_label);
-    auto kdf_iter = ParseUint32(basefwx::metadata::GetValue(meta, "ENC-KDF-ITER"));
+    kdf_label = kdf_label.empty()
+        ? basefwx::keywrap::ResolveKdfLabel(kdf.label)
+        : basefwx::keywrap::ResolvePeerKdfLabel(kdf_label);
+    auto kdf_iter = ParsePeerPbkdf2Iterations(
+        basefwx::metadata::GetValue(meta, "ENC-KDF-ITER"));
     auto argon2_time = ParseUint32(basefwx::metadata::GetValue(meta, "ENC-ARGON2-TC"));
     auto argon2_mem = ParseUint32(basefwx::metadata::GetValue(meta, "ENC-ARGON2-MEM"));
     auto argon2_par = ParseUint32(basefwx::metadata::GetValue(meta, "ENC-ARGON2-PAR"));
@@ -423,56 +625,9 @@ std::string DecryptAesPayload(const Bytes& blob,
     secrets.Add(ephemeral_key);
     secrets.Add(payload_keys.aead);
     secrets.Add(payload_keys.obf);
-    if (!master_blob.empty()) {
-        if (!use_master) {
-            throw std::runtime_error("Master key required to decrypt this payload");
-        }
-        if (basefwx::ec::IsEcMasterBlob(master_blob)) {
-            if (StrictPqOnly()) {
-                throw std::runtime_error("EC master blobs are disabled in PQ strict mode");
-            }
-            basefwx::crypto::SecureBytes private_key{basefwx::ec::LoadMasterPrivateKey()};
-            basefwx::crypto::SecureBytes shared{
-                basefwx::ec::KemDecrypt(private_key.bytes(), master_blob)};
-            ephemeral_key = basefwx::crypto::HkdfSha256(shared.bytes(), constants::kKemInfo, 32);
-        } else {
-            basefwx::crypto::SecureBytes private_key{basefwx::pq::LoadMasterPrivateKey()};
-            basefwx::crypto::SecureBytes shared{
-                basefwx::pq::KemDecrypt(private_key.bytes(), master_blob)};
-            ephemeral_key = basefwx::crypto::HkdfSha256(shared.bytes(), constants::kKemInfo, 32);
-        }
-    } else if (!user_blob.empty()) {
-        if (resolved.empty()) {
-            throw std::runtime_error("User password required to decrypt this payload");
-        }
-        if (user_blob.size() < constants::kUserKdfSaltSize + constants::kAeadNonceLen + constants::kAeadTagLen) {
-            throw std::runtime_error("Corrupted user key blob: missing salt or AEAD data");
-        }
-        Bytes salt(user_blob.begin(), user_blob.begin() + static_cast<std::ptrdiff_t>(constants::kUserKdfSaltSize));
-        Bytes wrapped(user_blob.begin() + static_cast<std::ptrdiff_t>(constants::kUserKdfSaltSize), user_blob.end());
-        basefwx::pb512::KdfOptions kdf_opts = kdf;
-        kdf_opts.label = kdf_label;
-        if (kdf_iter.has_value()) {
-            kdf_opts.pbkdf2_iterations = kdf_iter.value();
-        } else {
-            kdf_opts.pbkdf2_iterations = basefwx::constants::kUserKdfIterations;
-        }
-        if (argon2_time.has_value()) {
-            kdf_opts.argon2_time_cost = argon2_time.value();
-        }
-        if (argon2_mem.has_value()) {
-            kdf_opts.argon2_memory_cost = argon2_mem.value();
-        }
-        if (argon2_par.has_value()) {
-            kdf_opts.argon2_parallelism = argon2_par.value();
-        }
-        kdf_opts = HardenKdfOptionsForPassword(resolved, kdf_opts);
-        Bytes user_key = basefwx::keywrap::DeriveUserKeyWithLabel(resolved, salt, kdf_label, kdf_opts);
-        ephemeral_key = basefwx::crypto::AeadDecrypt(user_key, wrapped, metadata_bytes);
-        basefwx::crypto::SecureClear(user_key);
-    } else {
-        throw std::runtime_error("Ciphertext missing key transport data");
-    }
+    ephemeral_key = RecoverPayloadKey(
+        user_blob, master_blob, resolved, use_master, metadata_bytes,
+        kdf_label, kdf_iter, argon2_time, argon2_mem, argon2_par, kdf);
 
     Bytes* aead_key = &ephemeral_key;
     Bytes* obf_key = &ephemeral_key;
@@ -519,6 +674,24 @@ std::string ObfMode(bool obfuscate, bool fast) {
     return fast ? "fast" : "yes";
 }
 
+std::string RequirePayloadObfuscationMode(std::string_view mode) {
+    std::string normalized(mode.empty() ? "yes" : mode);
+    std::transform(
+        normalized.begin(),
+        normalized.end(),
+        normalized.begin(),
+        [](unsigned char value) {
+            return static_cast<char>(std::tolower(value));
+        });
+    if (normalized != "yes"
+        && normalized != "no"
+        && normalized != "fast") {
+        throw std::runtime_error(
+            "Unsupported payload obfuscation mode");
+    }
+    return normalized;
+}
+
 std::optional<std::string> PeekMetadataBlob(const std::filesystem::path& input) {
     std::ifstream preview(input, std::ios::binary);
     if (!preview) {
@@ -541,12 +714,32 @@ std::optional<std::string> PeekMetadataBlob(const std::filesystem::path& input) 
     if (!read_u32(len_user)) {
         return std::nullopt;
     }
+    RequireAvailableLength(
+        input,
+        preview,
+        len_user,
+        constants::kLengthPrefixedMax,
+        "user key transport");
     preview.seekg(len_user, std::ios::cur);
+    if (!preview) {
+        throw std::runtime_error("Ciphertext payload truncated");
+    }
     std::uint32_t len_master = 0;
     if (!read_u32(len_master)) {
         return std::nullopt;
     }
+    RequireHeaderLengthTotal(
+        static_cast<std::uint64_t>(len_user) + len_master);
+    RequireAvailableLength(
+        input,
+        preview,
+        len_master,
+        constants::kLengthPrefixedMax,
+        "master key transport");
     preview.seekg(len_master, std::ios::cur);
+    if (!preview) {
+        throw std::runtime_error("Ciphertext payload truncated");
+    }
     std::uint32_t len_payload = 0;
     if (!read_u32(len_payload)) {
         return std::nullopt;
@@ -554,10 +747,30 @@ std::optional<std::string> PeekMetadataBlob(const std::filesystem::path& input) 
     if (len_payload < 4) {
         return std::nullopt;
     }
+    RequireAvailableLength(
+        input,
+        preview,
+        len_payload,
+        std::numeric_limits<std::uint32_t>::max(),
+        "payload");
     std::uint32_t metadata_len = 0;
     if (!read_u32(metadata_len)) {
         return std::nullopt;
     }
+    if (metadata_len > len_payload - 4u) {
+        throw std::runtime_error(
+            "Ciphertext metadata length invalid");
+    }
+    RequireHeaderLengthTotal(
+        static_cast<std::uint64_t>(len_user)
+        + len_master
+        + metadata_len);
+    RequireAvailableLength(
+        input,
+        preview,
+        metadata_len,
+        constants::kMetadataMax,
+        "metadata");
     Bytes metadata_bytes(metadata_len);
     if (metadata_len > 0) {
         preview.read(reinterpret_cast<char*>(metadata_bytes.data()), metadata_len);

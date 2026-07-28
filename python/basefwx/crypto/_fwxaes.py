@@ -17,6 +17,13 @@ class _LazyEngine:
 
 basefwx = _LazyEngine()
 
+def _enforce_wrap_key_header_limit(header_len: int) -> None:
+    if (
+        header_len < 0
+        or header_len > basefwx.FWXAES_MAX_KEY_HEADER_LEN
+    ):
+        raise ValueError('fwxAES key header too large')
+
 
 def _serialize_plugin_tag(plugin_id: bytes, position: int, config: bytes) -> bytes:
     if len(plugin_id) != basefwx.FWXAES_PLUGIN_ID_LEN:
@@ -81,10 +88,11 @@ def _assemble_raw_blob(algo, kdf, salt_len_field, iv_len, field0, ct_len, plugin
     return bytes(header) + plugin_tag + header_payload + iv + ct
 
 
-def fwxAES_encrypt_raw(plaintext: bytes, password: 'basefwx.typing.Union[str, bytes, bytearray, memoryview]', *, use_master: bool=True, plugin=None, plugin_position=None, plugin_config: bytes=b'') -> bytes:
+def fwxAES_encrypt_raw(plaintext: bytes, password: 'basefwx.typing.Union[str, bytes, bytearray, memoryview]', *, use_master: bool=False, plugin=None, plugin_position=None, plugin_config: bytes=b'') -> bytes:
     if not isinstance(plaintext, (bytes, bytearray, memoryview)):
         raise TypeError('fwxAES_encrypt_raw expects bytes')
     password = basefwx._resolve_password(password, use_master=use_master)
+    basefwx._require_strong_password_for_encryption(password, 'Encryption')
     pw = basefwx._coerce_password_bytes(password)
     use_plugin = plugin is not None and plugin_position is not None
     work_plaintext = bytes(plaintext)
@@ -110,14 +118,14 @@ def fwxAES_encrypt_raw(plaintext: bytes, password: 'basefwx.typing.Union[str, by
             if use_wrap:
                 key_header = basefwx._pack_length_prefixed(user_blob, master_blob)
         except Exception:
-            if not pw:
+            if not pw or basefwx._strict_pq_only():
                 raise
             use_wrap = False
+    if use_wrap:
+        _enforce_wrap_key_header_limit(len(key_header))
     iv = basefwx.os.urandom(basefwx.FWXAES_IV_LEN)
     if use_wrap:
         header_len = len(key_header)
-        if header_len > 4294967295:
-            raise ValueError('fwxAES key header too large')
         key = basefwx._hkdf_sha256(mask_key, info=basefwx.FWXAES_KEY_INFO, length=basefwx.FWXAES_KEY_LEN)
     else:
         salt = basefwx.os.urandom(basefwx.FWXAES_SALT_LEN)
@@ -157,7 +165,7 @@ def fwxAES_encrypt_raw(plaintext: bytes, password: 'basefwx.typing.Union[str, by
     )
 
 
-def fwxAES_decrypt_raw(blob: bytes, password: 'basefwx.typing.Union[str, bytes, bytearray, memoryview]', *, use_master: bool=True, plugin=None) -> bytes:
+def fwxAES_decrypt_raw(blob: bytes, password: 'basefwx.typing.Union[str, bytes, bytearray, memoryview]', *, use_master: bool=False, plugin=None) -> bytes:
     if not isinstance(blob, (bytes, bytearray, memoryview)):
         raise TypeError('fwxAES_decrypt_raw expects bytes')
     password = basefwx._resolve_password(password, use_master=use_master)
@@ -172,6 +180,8 @@ def fwxAES_decrypt_raw(blob: bytes, password: 'basefwx.typing.Union[str, bytes, 
         raise ValueError('fwxAES unsupported algo/kdf')
     iters = basefwx.struct.unpack('>I', blob_bytes[8:12])[0]
     ct_len = basefwx.struct.unpack('>I', blob_bytes[12:16])[0]
+    if kdf == basefwx.FWXAES_KDF_WRAP:
+        _enforce_wrap_key_header_limit(iters)
     off = 16
     plugin_obj = plugin
     plugin_position = 0
@@ -215,6 +225,7 @@ def fwxAES_decrypt_raw(blob: bytes, password: 'basefwx.typing.Union[str, bytes, 
         key = basefwx._hkdf_sha256(mask_key, info=basefwx.FWXAES_KEY_INFO, length=basefwx.FWXAES_KEY_LEN)
         aesgcm = basefwx.AESGCM(key)
         return _finish_plaintext(aesgcm.decrypt(iv, ct, basefwx.FWXAES_AAD))
+    basefwx._require_peer_pbkdf2_within_limits(iters)
     if len(blob_bytes) < off + salt_len + iv_len + ct_len:
         raise ValueError('fwxAES blob truncated')
     salt = blob_bytes[off:off + salt_len]
@@ -235,8 +246,9 @@ def fwxAES_decrypt_raw(blob: bytes, password: 'basefwx.typing.Union[str, bytes, 
     return _finish_plaintext(aesgcm.decrypt(iv, ct, basefwx.FWXAES_AAD))
 
 
-def fwxAES_encrypt_stream(source, dest, password: 'basefwx.typing.Union[str, bytes, bytearray, memoryview]', *, use_master: bool=True, chunk_size: int | None=None) -> int:
+def fwxAES_encrypt_stream(source, dest, password: 'basefwx.typing.Union[str, bytes, bytearray, memoryview]', *, use_master: bool=False, chunk_size: int | None=None) -> int:
     password = basefwx._resolve_password(password, use_master=use_master)
+    basefwx._require_strong_password_for_encryption(password, 'fwxAES stream')
     pw = basefwx._coerce_password_bytes(password)
     chunk = basefwx.STREAM_CHUNK_SIZE if chunk_size is None else max(1, int(chunk_size))
 
@@ -251,17 +263,17 @@ def fwxAES_encrypt_stream(source, dest, password: 'basefwx.typing.Union[str, byt
                 if use_wrap:
                     key_header = basefwx._pack_length_prefixed(user_blob, master_blob)
             except Exception:
-                if not pw:
+                if not pw or basefwx._strict_pq_only():
                     raise
                 use_wrap = False
+        if use_wrap:
+            _enforce_wrap_key_header_limit(len(key_header))
         iv = basefwx.os.urandom(basefwx.FWXAES_IV_LEN)
         header = bytearray()
         header += basefwx.FWXAES_MAGIC
         ct_len = 0
         if use_wrap:
             header_len = len(key_header)
-            if header_len > 4294967295:
-                raise ValueError('fwxAES key header too large')
             key = basefwx._hkdf_sha256(mask_key, info=basefwx.FWXAES_KEY_INFO, length=basefwx.FWXAES_KEY_LEN)
             header += bytes([basefwx.FWXAES_ALGO, basefwx.FWXAES_KDF_WRAP, 0, basefwx.FWXAES_IV_LEN])
             header += basefwx.struct.pack('>I', header_len)
@@ -318,7 +330,7 @@ def fwxAES_encrypt_stream(source, dest, password: 'basefwx.typing.Union[str, byt
             pass
 
 
-def fwxAES_decrypt_stream(source, dest, password: 'basefwx.typing.Union[str, bytes, bytearray, memoryview]', *, use_master: bool=True, chunk_size: int | None=None) -> int:
+def fwxAES_decrypt_stream(source, dest, password: 'basefwx.typing.Union[str, bytes, bytearray, memoryview]', *, use_master: bool=False, chunk_size: int | None=None) -> int:
     password = basefwx._resolve_password(password, use_master=use_master)
     chunk = basefwx.STREAM_CHUNK_SIZE if chunk_size is None else max(1, int(chunk_size))
 
@@ -333,6 +345,8 @@ def fwxAES_decrypt_stream(source, dest, password: 'basefwx.typing.Union[str, byt
             raise ValueError('fwxAES unsupported algo/kdf')
         iters = basefwx.struct.unpack('>I', header[8:12])[0]
         ct_len = basefwx.struct.unpack('>I', header[12:16])[0]
+        if kdf == basefwx.FWXAES_KDF_WRAP:
+            _enforce_wrap_key_header_limit(iters)
         if ct_len < basefwx.AEAD_TAG_LEN:
             raise ValueError('fwxAES ciphertext too short')
         if kdf == basefwx.FWXAES_KDF_WRAP:
@@ -347,6 +361,7 @@ def fwxAES_decrypt_stream(source, dest, password: 'basefwx.typing.Union[str, byt
             mask_key = basefwx._recover_mask_key_from_blob(user_blob, master_blob, password, use_master, mask_info=basefwx.FWXAES_MASK_INFO, aad=basefwx.FWXAES_AAD)
             key = basefwx._hkdf_sha256(mask_key, info=basefwx.FWXAES_KEY_INFO, length=basefwx.FWXAES_KEY_LEN)
         else:
+            basefwx._require_peer_pbkdf2_within_limits(iters)
             salt = handle.read(salt_len)
             if len(salt) != salt_len:
                 raise ValueError('fwxAES blob truncated')
@@ -368,22 +383,30 @@ def fwxAES_decrypt_stream(source, dest, password: 'basefwx.typing.Union[str, byt
         handle.seek(ct_start)
         remaining = ct_len - basefwx.AEAD_TAG_LEN
         written = 0
-        while remaining > 0:
-            buf = handle.read(min(chunk, remaining))
-            if not buf:
-                raise ValueError('fwxAES blob truncated')
-            remaining -= len(buf)
-            plain = decryptor.update(buf)
-            if plain:
-                dest.write(plain)
-                written += len(plain)
-        try:
-            tail = decryptor.finalize()
-        except Exception as exc:
-            raise ValueError('AES-GCM auth failed') from exc
-        if tail:
-            dest.write(tail)
-            written += len(tail)
+        with basefwx.tempfile.SpooledTemporaryFile(
+            max_size=8 * 1024 * 1024,
+            mode='w+b',
+        ) as authenticated_plain:
+            while remaining > 0:
+                buf = handle.read(min(chunk, remaining))
+                if not buf:
+                    raise ValueError('fwxAES blob truncated')
+                remaining -= len(buf)
+                plain = decryptor.update(buf)
+                if plain:
+                    authenticated_plain.write(plain)
+                    written += len(plain)
+            try:
+                tail = decryptor.finalize()
+            except Exception as exc:
+                raise ValueError('AES-GCM auth failed') from exc
+            if tail:
+                authenticated_plain.write(tail)
+                written += len(tail)
+            authenticated_plain.seek(0)
+            basefwx.shutil.copyfileobj(
+                authenticated_plain, dest, length=chunk
+            )
         return written
     if basefwx._is_seekable(source):
         return _decrypt_from(source)
@@ -425,8 +448,11 @@ def _live_pack_frame(frame_type: int, sequence: int, body: bytes) -> bytes:
 class LiveEncryptor:
     """Packetized live AEAD encryptor for arbitrary byte streams."""
 
-    def __init__(self, password: 'basefwx.typing.Union[str, bytes, bytearray, memoryview]', *, use_master: bool=True) -> None:
+    def __init__(self, password: 'basefwx.typing.Union[str, bytes, bytearray, memoryview]', *, use_master: bool=False) -> None:
         self._password = basefwx._resolve_password(password, use_master=use_master)
+        basefwx._require_strong_password_for_encryption(
+            self._password, 'fwxAES live'
+        )
         self._use_master = bool(use_master)
         self._started = False
         self._finalized = False
@@ -450,7 +476,7 @@ class LiveEncryptor:
                 if use_wrap:
                     key_header = basefwx._pack_length_prefixed(user_blob, master_blob)
             except Exception:
-                if not pw:
+                if not pw or basefwx._strict_pq_only():
                     raise
                 use_wrap = False
         if use_wrap:
@@ -464,6 +490,7 @@ class LiveEncryptor:
             self._key = basefwx._kdf_pbkdf2_raw(pw, salt, iters)
         self._aead = basefwx.AESGCM(self._key)
         self._nonce_prefix = basefwx.os.urandom(basefwx.LIVE_NONCE_PREFIX_LEN)
+        _enforce_wrap_key_header_limit(len(key_header))
         body = basefwx.LIVE_HEADER_STRUCT.pack(key_mode, len(salt), len(self._nonce_prefix), 0, len(key_header), iters) + key_header + salt + self._nonce_prefix
         return basefwx._live_pack_frame(basefwx.LIVE_FRAME_TYPE_HEADER, 0, body)
 
@@ -514,7 +541,7 @@ class LiveEncryptor:
 class LiveDecryptor:
     """Incremental parser/decryptor for packetized live AEAD frames."""
 
-    def __init__(self, password: 'basefwx.typing.Union[str, bytes, bytearray, memoryview]', *, use_master: bool=True) -> None:
+    def __init__(self, password: 'basefwx.typing.Union[str, bytes, bytearray, memoryview]', *, use_master: bool=False) -> None:
         self._password = basefwx._resolve_password(password, use_master=use_master)
         self._use_master = bool(use_master)
         self._buffer = bytearray()
@@ -531,6 +558,7 @@ class LiveDecryptor:
         if body_len < fixed_len:
             raise ValueError('Truncated live stream header')
         key_mode, salt_len, nonce_len, _reserved, key_header_len, iters = basefwx.LIVE_HEADER_STRUCT.unpack_from(data, body_off)
+        _enforce_wrap_key_header_limit(key_header_len)
         offset = body_off + fixed_len
         need = fixed_len + key_header_len + salt_len + nonce_len
         if body_len != need:
@@ -549,13 +577,12 @@ class LiveDecryptor:
             mask_key = basefwx._recover_mask_key_from_blob(user_blob, master_blob, self._password, self._use_master, mask_info=basefwx.FWXAES_MASK_INFO, aad=basefwx.FWXAES_AAD)
             key = basefwx._hkdf_sha256(mask_key, info=basefwx.FWXAES_KEY_INFO, length=basefwx.FWXAES_KEY_LEN)
         elif key_mode == basefwx.LIVE_KEYMODE_PBKDF2:
+            basefwx._require_peer_pbkdf2_within_limits(iters)
             pw = basefwx._coerce_password_bytes(self._password)
             if not pw:
                 raise ValueError('Password required for PBKDF2 live stream')
             if not salt:
                 raise ValueError('Missing live stream PBKDF2 salt')
-            if iters <= 0:
-                raise ValueError('Invalid live stream PBKDF2 iterations')
             key = basefwx._kdf_pbkdf2_raw(pw, salt, iters)
         else:
             raise ValueError('Unsupported live key mode')
@@ -564,6 +591,32 @@ class LiveDecryptor:
         self._nonce_prefix = nonce_prefix
         self._started = True
         self._expected_sequence = 1
+
+    def _validate_initial_outer_header(self) -> None:
+        header_len = basefwx.LIVE_FRAME_HEADER_STRUCT.size
+        unread = len(self._buffer) - self._buffer_offset
+        if self._started or unread < header_len:
+            return
+        (
+            magic,
+            version,
+            frame_type,
+            sequence,
+            body_len,
+        ) = basefwx.LIVE_FRAME_HEADER_STRUCT.unpack_from(
+            self._buffer, self._buffer_offset
+        )
+        if magic != basefwx.LIVE_FRAME_MAGIC:
+            raise ValueError('Invalid live frame magic')
+        if version != basefwx.LIVE_FRAME_VERSION:
+            raise ValueError('Unsupported live frame version')
+        if (
+            frame_type != basefwx.LIVE_FRAME_TYPE_HEADER
+            or sequence != 0
+        ):
+            raise ValueError('Live stream must start with header frame')
+        if body_len > basefwx.LIVE_MAX_HEADER_BODY:
+            raise ValueError('fwxAES key header too large')
 
     def _decrypt_data_frame(self, sequence: int, data: bytearray, body_off: int, body_len: int) -> bytes:
         if body_len < 4 + basefwx.AEAD_TAG_LEN:
@@ -603,10 +656,19 @@ class LiveDecryptor:
     def update(self, data: bytes) -> 'list[bytes]':
         if self._finished and data:
             raise ValueError('Live stream already finalized')
-        if data:
-            self._buffer.extend(data)
-        outputs: 'list[bytes]' = []
+        incoming = memoryview(data) if data else memoryview(b'')
         header_len = basefwx.LIVE_FRAME_HEADER_STRUCT.size
+        unread = len(self._buffer) - self._buffer_offset
+        if not self._started and unread < header_len and incoming:
+            take = min(header_len - unread, len(incoming))
+            self._buffer.extend(incoming[:take])
+            incoming = incoming[take:]
+            self._validate_initial_outer_header()
+        else:
+            self._validate_initial_outer_header()
+        if incoming:
+            self._buffer.extend(incoming)
+        outputs: 'list[bytes]' = []
         buf = self._buffer
         buf_len = len(buf)
         offset = self._buffer_offset
@@ -658,7 +720,7 @@ class LiveDecryptor:
             raise ValueError('Trailing bytes after live stream FIN')
 
 
-def fwxAES_live_encrypt_chunks(chunks: 'basefwx.typing.Iterable[bytes]', password: 'basefwx.typing.Union[str, bytes, bytearray, memoryview]', *, use_master: bool=True) -> 'list[bytes]':
+def fwxAES_live_encrypt_chunks(chunks: 'basefwx.typing.Iterable[bytes]', password: 'basefwx.typing.Union[str, bytes, bytearray, memoryview]', *, use_master: bool=False) -> 'list[bytes]':
     encryptor = basefwx.LiveEncryptor(password, use_master=use_master)
     out: 'list[bytes]' = [encryptor.start()]
     for chunk in chunks:
@@ -669,7 +731,7 @@ def fwxAES_live_encrypt_chunks(chunks: 'basefwx.typing.Iterable[bytes]', passwor
     return out
 
 
-def fwxAES_live_decrypt_chunks(chunks: 'basefwx.typing.Iterable[bytes]', password: 'basefwx.typing.Union[str, bytes, bytearray, memoryview]', *, use_master: bool=True) -> 'list[bytes]':
+def fwxAES_live_decrypt_chunks(chunks: 'basefwx.typing.Iterable[bytes]', password: 'basefwx.typing.Union[str, bytes, bytearray, memoryview]', *, use_master: bool=False) -> 'list[bytes]':
     decryptor = basefwx.LiveDecryptor(password, use_master=use_master)
     out: 'list[bytes]' = []
     for chunk in chunks:
@@ -678,7 +740,7 @@ def fwxAES_live_decrypt_chunks(chunks: 'basefwx.typing.Iterable[bytes]', passwor
     return out
 
 
-def fwxAES_live_encrypt_stream(source, dest, password: 'basefwx.typing.Union[str, bytes, bytearray, memoryview]', *, use_master: bool=True, chunk_size: int | None=None) -> int:
+def fwxAES_live_encrypt_stream(source, dest, password: 'basefwx.typing.Union[str, bytes, bytearray, memoryview]', *, use_master: bool=False, chunk_size: int | None=None) -> int:
     encryptor = basefwx.LiveEncryptor(password, use_master=use_master)
     total = 0
     first = encryptor.start()
@@ -716,7 +778,7 @@ def fwxAES_live_encrypt_stream(source, dest, password: 'basefwx.typing.Union[str
     return total
 
 
-def fwxAES_live_decrypt_stream(source, dest, password: 'basefwx.typing.Union[str, bytes, bytearray, memoryview]', *, use_master: bool=True, chunk_size: int | None=None) -> int:
+def fwxAES_live_decrypt_stream(source, dest, password: 'basefwx.typing.Union[str, bytes, bytearray, memoryview]', *, use_master: bool=False, chunk_size: int | None=None) -> int:
     decryptor = basefwx.LiveDecryptor(password, use_master=use_master)
     chunk = basefwx.LIVE_STREAM_CHUNK_SIZE if chunk_size is None else max(1, int(chunk_size))
     written = 0
@@ -747,7 +809,7 @@ def fwxAES_live_decrypt_stream(source, dest, password: 'basefwx.typing.Union[str
     return written
 
 
-def fwxAES_live_encrypt_ffmpeg(source_cmd: 'basefwx.typing.Sequence[str]', encrypted_dest, password: 'basefwx.typing.Union[str, bytes, bytearray, memoryview]', *, use_master: bool=True, chunk_size: int | None=None) -> int:
+def fwxAES_live_encrypt_ffmpeg(source_cmd: 'basefwx.typing.Sequence[str]', encrypted_dest, password: 'basefwx.typing.Union[str, bytes, bytearray, memoryview]', *, use_master: bool=False, chunk_size: int | None=None) -> int:
     if not source_cmd:
         raise ValueError('source_cmd must not be empty')
     cmd = [str(part) for part in source_cmd]
@@ -806,7 +868,7 @@ def fwxAES_live_encrypt_ffmpeg(source_cmd: 'basefwx.typing.Sequence[str]', encry
                 dest_handle.close()
 
 
-def fwxAES_live_decrypt_ffmpeg(encrypted_source, sink_cmd: 'basefwx.typing.Sequence[str]', password: 'basefwx.typing.Union[str, bytes, bytearray, memoryview]', *, use_master: bool=True, chunk_size: int | None=None) -> int:
+def fwxAES_live_decrypt_ffmpeg(encrypted_source, sink_cmd: 'basefwx.typing.Sequence[str]', password: 'basefwx.typing.Union[str, bytes, bytearray, memoryview]', *, use_master: bool=False, chunk_size: int | None=None) -> int:
     if not sink_cmd:
         raise ValueError('sink_cmd must not be empty')
     cmd = [str(part) for part in sink_cmd]
@@ -865,7 +927,7 @@ def fwxAES_live_decrypt_ffmpeg(encrypted_source, sink_cmd: 'basefwx.typing.Seque
                 source_handle.close()
 
 
-def fwxAES_file(file: 'basefwx.typing.Union[str, basefwx.pathlib.Path]', password: 'basefwx.typing.Union[str, bytes, bytearray, memoryview]', *, use_master: bool=True, output: 'basefwx.typing.Optional[str]'=None, heavy: bool=False, strip_metadata: bool=False, normalize: bool=False, normalize_threshold: 'basefwx.typing.Optional[int]'=None, cover_phrase: str='low taper fade', compress: bool=False, ignore_media: bool=False, keep_meta: bool=False, archive_original: bool=False, keep_input: bool=False) -> str:
+def fwxAES_file(file: 'basefwx.typing.Union[str, basefwx.pathlib.Path]', password: 'basefwx.typing.Union[str, bytes, bytearray, memoryview]', *, use_master: bool=False, output: 'basefwx.typing.Optional[str]'=None, heavy: bool=False, strip_metadata: bool=False, normalize: bool=False, normalize_threshold: 'basefwx.typing.Optional[int]'=None, cover_phrase: str='low taper fade', compress: bool=False, ignore_media: bool=False, keep_meta: bool=False, archive_original: bool=False, keep_input: bool=False) -> str:
     password = basefwx._resolve_password(password, use_master=use_master)
     path = basefwx._normalize_path(file)
     display_path = path
@@ -914,6 +976,9 @@ def fwxAES_file(file: 'basefwx.typing.Union[str, basefwx.pathlib.Path]', passwor
                     basefwx.shutil.move(str(target), str(target_out))
                     target = target_out
                 return str(target)
+            basefwx._require_strong_password_for_encryption(
+                password, 'fwxAES heavy file'
+            )
             pack_ctx = basefwx._pack_input_to_archive(path, compress, local_reporter, 0)
             pack_flag = pack_ctx[1] if pack_ctx else ''
             pack_temp = pack_ctx[2] if pack_ctx else None
@@ -969,6 +1034,7 @@ def fwxAES_file(file: 'basefwx.typing.Union[str, basefwx.pathlib.Path]', passwor
             if local_reporter:
                 local_reporter.update(0, 1.0, 'done', display_path)
             return str(out_path)
+        basefwx._require_strong_password_for_encryption(password, 'fwxAES file')
         if not ignore_media:
             try:
                 media_ext = path.suffix.lower()

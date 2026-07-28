@@ -15,11 +15,10 @@ from ._b512_obfuscation import (
 
 def pb512encode(t, p, use_master: bool=True):
     """
-        Password-based reversible encoding with URL-safe base64.
-        
-        Output is URL-safe (no + or /) when BASEFWX_OBFUSCATE_CODECS=0.
-        With obfuscation enabled (default), output may contain special characters
-        but provides additional security through character substitution.
+        Password-based reversible encoding with canonical standard base64.
+
+        Decoders continue accepting the URL-safe alphabet emitted by older
+        Python releases.
         
         Confidentiality comes from AEAD layers, not this routine.
         """
@@ -32,7 +31,7 @@ def pb512encode(t, p, use_master: bool=True):
     payload[1:5] = len(plain_bytes).to_bytes(4, 'big')
     payload[5:] = masked
     blob = basefwx._pack_length_prefixed(user_blob, master_blob, bytes(payload))
-    result = basefwx.base64.urlsafe_b64encode(blob).decode('utf-8')
+    result = basefwx.base64.b64encode(blob).decode('utf-8')
     result = basefwx._maybe_obfuscate_codecs(result)
     basefwx._del('mask_key')
     basefwx._del('plain_bytes')
@@ -45,15 +44,13 @@ def pb512decode(digs, key, use_master: bool=True):
         raise ValueError('Password required when PQ master key wrapping is disabled')
     try:
         digs = basefwx._maybe_deobfuscate_codecs(digs)
-        raw = basefwx.base64.urlsafe_b64decode(digs)
+        raw = basefwx.base64.b64decode(
+            digs, altchars=b'-_', validate=True)
     except Exception as exc:
-        try:
-            raw = basefwx.base64.b64decode(digs)
-        except Exception:
-            if basefwx.os.getenv('BASEFWX_ALLOW_LEGACY_CODECS') == '1':
-                print('⚠️  Falling back to legacy pb512 decoder (BASEFWX_ALLOW_LEGACY_CODECS=1).')
-                return basefwx._pb512decode_legacy(digs, key, use_master)
-            raise ValueError('Invalid pb512 payload encoding') from exc
+        if basefwx.os.getenv('BASEFWX_ALLOW_LEGACY_CODECS') == '1':
+            print('⚠️  Falling back to legacy pb512 decoder (BASEFWX_ALLOW_LEGACY_CODECS=1).')
+            return basefwx._pb512decode_legacy(digs, key, use_master)
+        raise ValueError('Invalid pb512 payload encoding') from exc
     try:
         user_blob, master_blob, payload = basefwx._unpack_length_prefixed(raw, 3)
     except ValueError:
@@ -153,7 +150,7 @@ def _pb512decode_legacy(digs, key, use_master: bool=True) -> str:
         return ''.join(chars)
     if master_blob_present:
         private_key = basefwx._load_master_pq_private()
-        kem_shared = basefwx.ml_kem_768.decrypt(private_key, ecm)
+        kem_shared = basefwx._kem_decrypt(private_key, ecm)
         code = basefwx._kem_shared_to_digits(kem_shared, 16)
     else:
         min_len = basefwx.USER_KDF_SALT_SIZE + 16
@@ -294,7 +291,7 @@ def _b512decode_legacy(enc, key='', use_master: bool=True) -> str:
         return ''.join(chars)
     if master_blob_present:
         private_key = basefwx._load_master_pq_private()
-        kem_shared = basefwx.ml_kem_768.decrypt(private_key, epm)
+        kem_shared = basefwx._kem_decrypt(private_key, epm)
         ep_str = basefwx._kem_shared_to_digits(kem_shared, 16)
         ep = ep_str.encode('utf-8')
     else:
@@ -324,21 +321,23 @@ def b512file_encode_bytes(data: bytes, ext: str, code: str, strip_metadata: bool
     approx_b64_len = (len(data) + 2) // 3 * 4
     if approx_b64_len > basefwx.HKDF_MAX_LEN:
         raise ValueError('b512file_encode_bytes payload too large; use file-based streaming APIs')
-    pubkey_bytes, master_available = basefwx._resolve_master_usage(use_master and (not strip_metadata), None)
-    use_master_effective = (use_master and (not strip_metadata)) and master_available
+    master_selection = basefwx._select_master_key(
+        use_master and (not strip_metadata)
+    )
+    use_master_effective = master_selection.used_master
     password = basefwx._resolve_password(code, use_master=use_master_effective)
     b64_payload = basefwx.base64.b64encode(bytes(data)).decode('utf-8')
     ext_token = basefwx.b512encode(ext or '', password, use_master=use_master_effective)
     data_token = basefwx.b512encode(b64_payload, password, use_master=use_master_effective)
-    kdf_used = (basefwx.USER_KDF or 'argon2id').lower()
+    kdf_used = basefwx._resolve_kdf_label(None)
     use_aead = basefwx.ENABLE_B512_AEAD if enable_aead is None else bool(enable_aead)
-    metadata_blob = basefwx._build_metadata('FWX512R', strip_metadata, use_master_effective, aead='AESGCM' if use_aead else 'NONE', kdf=kdf_used)
+    metadata_blob = basefwx._build_metadata('FWX512R', strip_metadata, use_master_effective, master_kem=master_selection.kem_label, aead='AESGCM' if use_aead else 'NONE', kdf=kdf_used)
     body = f'{ext_token}{basefwx.FWX_DELIM}{data_token}'
     payload = f'{metadata_blob}{basefwx.META_DELIM}{body}' if metadata_blob else body
     payload_bytes = payload.encode('utf-8')
     if not use_aead:
         return payload_bytes
-    mask_key, user_blob, master_blob, _ = basefwx._prepare_mask_key(password, use_master_effective, mask_info=basefwx.B512_FILE_MASK_INFO, require_password=not use_master_effective, aad=b'b512file')
+    mask_key, user_blob, master_blob, _ = basefwx._prepare_mask_key(password, use_master_effective, mask_info=basefwx.B512_FILE_MASK_INFO, require_password=not use_master_effective, aad=b'b512file', master_selection=master_selection)
     aead_key = basefwx._hkdf_sha256(mask_key, info=basefwx.B512_AEAD_INFO)
     ct_blob = basefwx._aead_encrypt(aead_key, payload_bytes, basefwx.B512_AEAD_INFO)
     return basefwx._pack_length_prefixed(user_blob, master_blob, ct_blob)
@@ -360,7 +359,7 @@ def b512file_decode_bytes(blob: bytes, code: str, strip_metadata: bool=False, us
         except ValueError:
             binary_mode = False
     if binary_mode:
-        mask_key = basefwx._recover_mask_key_from_blob(user_blob, master_blob, password, use_master_effective, mask_info=basefwx.B512_FILE_MASK_INFO, aad=b'b512file')
+        mask_key = basefwx._recover_mask_key_from_blob(user_blob, master_blob, password, use_master_effective, mask_info=basefwx.B512_FILE_MASK_INFO, aad=b'b512file', legacy_user_aad=basefwx.B512_AEAD_INFO)
         aead_key = basefwx._hkdf_sha256(mask_key, info=basefwx.B512_AEAD_INFO)
         payload_bytes = basefwx._aead_decrypt(aead_key, ct_blob, basefwx.B512_AEAD_INFO)
         content = payload_bytes.decode('utf-8')
@@ -380,25 +379,29 @@ def b512file_decode_bytes(blob: bytes, code: str, strip_metadata: bool=False, us
 def pb512file_encode_bytes(data: bytes, ext: str, code: str, strip_metadata: bool=False, use_master: bool=True) -> bytes:
     if not isinstance(data, (bytes, bytearray, memoryview)):
         raise TypeError('pb512file_encode_bytes expects bytes')
+    heavy_iters = basefwx.HEAVY_PBKDF2_ITERATIONS
+    basefwx._require_peer_pbkdf2_within_limits(heavy_iters)
     approx_b64_len = (len(data) + 2) // 3 * 4
     if approx_b64_len > basefwx.HKDF_MAX_LEN:
         raise ValueError('pb512file_encode_bytes payload too large; use file-based streaming APIs')
-    use_master_effective = use_master and (not strip_metadata)
+    master_selection = basefwx._select_master_key(
+        use_master and (not strip_metadata)
+    )
+    use_master_effective = master_selection.used_master
     password = basefwx._resolve_password(code, use_master=use_master_effective)
     b64_payload = basefwx.base64.b64encode(bytes(data)).decode('utf-8')
     ext_token = basefwx.pb512encode(ext or '', password, use_master=use_master_effective)
     data_token = basefwx.pb512encode(b64_payload, password, use_master=use_master_effective)
-    kdf_used = (basefwx.USER_KDF or 'argon2id').lower()
-    heavy_iters = basefwx.HEAVY_PBKDF2_ITERATIONS
+    kdf_used = basefwx._resolve_kdf_label(None)
     heavy_argon_time = basefwx.HEAVY_ARGON2_TIME_COST if basefwx.hash_secret_raw is not None else None
     heavy_argon_mem = basefwx.HEAVY_ARGON2_MEMORY_COST if basefwx.hash_secret_raw is not None else None
     heavy_argon_par = basefwx.HEAVY_ARGON2_PARALLELISM if basefwx.hash_secret_raw is not None else None
     fast_obf = not strip_metadata and basefwx._use_fast_obfuscation(len(data))
     obf_mode = 'fast' if fast_obf else 'yes'
-    metadata_blob = basefwx._build_metadata('AES-HEAVY', strip_metadata, use_master_effective, kdf=kdf_used, obfuscation=obf_mode, kdf_iters=heavy_iters, argon2_time_cost=heavy_argon_time, argon2_memory_cost=heavy_argon_mem, argon2_parallelism=heavy_argon_par)
+    metadata_blob = basefwx._build_metadata('AES-HEAVY', strip_metadata, use_master_effective, master_kem=master_selection.kem_label, kdf=kdf_used, obfuscation=obf_mode, kdf_iters=heavy_iters, argon2_time_cost=heavy_argon_time, argon2_memory_cost=heavy_argon_mem, argon2_parallelism=heavy_argon_par)
     body = f'{ext_token}{basefwx.FWX_HEAVY_DELIM}{data_token}'
     plaintext = f'{metadata_blob}{basefwx.META_DELIM}{body}' if metadata_blob else body
-    ciphertext = basefwx.encryptAES(plaintext, password, use_master=use_master_effective, metadata_blob=metadata_blob, kdf=kdf_used, obfuscate=True, kdf_iterations=heavy_iters, argon2_time_cost=heavy_argon_time, argon2_memory_cost=heavy_argon_mem, argon2_parallelism=heavy_argon_par, fast_obfuscation=fast_obf)
+    ciphertext = basefwx.encryptAES(plaintext, password, use_master=use_master_effective, metadata_blob=metadata_blob, master_selection=master_selection, kdf=kdf_used, obfuscate=True, kdf_iterations=heavy_iters, argon2_time_cost=heavy_argon_time, argon2_memory_cost=heavy_argon_mem, argon2_parallelism=heavy_argon_par, fast_obfuscation=fast_obf)
     return ciphertext
 
 def pb512file_decode_bytes(blob: bytes, code: str, strip_metadata: bool=False, use_master: bool=True) -> 'basefwx.typing.Tuple[bytes, str]':

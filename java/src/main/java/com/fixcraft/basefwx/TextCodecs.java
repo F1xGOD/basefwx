@@ -33,12 +33,17 @@ final class TextCodecs {
     static byte[] encodeMaskedPayloadBytes(KeyWrap.MaskKeyResult mask,
                                                    byte[] plain,
                                                    byte[] streamInfo) {
-        byte[] masked = KeyWrap.maskPayload(mask.maskKey, plain, streamInfo);
-        byte[] payload = new byte[1 + 4 + masked.length];
-        payload[0] = 0x02;
-        BaseFwxUtil.writeU32(payload, 1, plain.length);
-        System.arraycopy(masked, 0, payload, 5, masked.length);
-        return Format.packLengthPrefixed(Arrays.asList(mask.userBlob, mask.masterBlob, payload));
+        try {
+            byte[] masked = KeyWrap.maskPayload(mask.maskKey, plain, streamInfo);
+            byte[] payload = new byte[1 + 4 + masked.length];
+            payload[0] = 0x02;
+            BaseFwxUtil.writeU32(payload, 1, plain.length);
+            System.arraycopy(masked, 0, payload, 5, masked.length);
+            return Format.packLengthPrefixed(
+                    Arrays.asList(mask.userBlob, mask.masterBlob, payload));
+        } finally {
+            mask.close();
+        }
     }
 
     static byte[] decodeMaskedPayloadBytesFromString(String input,
@@ -110,8 +115,6 @@ final class TextCodecs {
                                                             byte[] maskInfo,
                                                             byte[] aad,
                                                             byte[] streamInfo) {
-        byte[] maskKey = KeyWrap.recoverMaskKey(parts.get(0), parts.get(1), password, useMaster,
-            maskInfo, aad, new KeyWrap.KdfOptions("pbkdf2", Constants.USER_KDF_ITERATIONS));
         byte[] payload = parts.get(2);
         if (payload.length < 5 || payload[0] != 0x02) {
             throw new IllegalArgumentException("Unsupported payload format");
@@ -120,7 +123,21 @@ final class TextCodecs {
         if (expectedLen != payload.length - 5) {
             throw new IllegalArgumentException("Payload length mismatch");
         }
-        return KeyWrap.maskPayload(maskKey, payload, 5, expectedLen, streamInfo);
+        byte[] maskKey = KeyWrap.recoverMaskKey(
+                parts.get(0),
+                parts.get(1),
+                password,
+                useMaster,
+                maskInfo,
+                aad,
+                new KeyWrap.KdfOptions(
+                        "pbkdf2", Constants.USER_KDF_ITERATIONS));
+        try {
+            return KeyWrap.maskPayload(
+                    maskKey, payload, 5, expectedLen, streamInfo);
+        } finally {
+            Arrays.fill(maskKey, (byte) 0);
+        }
     }
 
     static String encodePayloadString(byte[] blob) {

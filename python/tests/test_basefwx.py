@@ -8,10 +8,13 @@ import json
 import math
 import os
 import random
+import re
 import shutil
 import site
+import stat
 import subprocess
 import sys
+import tarfile
 import tempfile
 import unittest
 import warnings
@@ -147,6 +150,21 @@ class BaseFWXUnitTests(unittest.TestCase):
         cipher = basefwx.pb512encode(original, "pw", use_master=False)
         plain = basefwx.pb512decode(cipher, "pw", use_master=False)
         self.assertEqual(plain, original)
+
+    def test_pb512_producer_uses_standard_base64_alphabet(self):
+        with (
+            patch.object(
+                basefwx,
+                "_prepare_mask_key",
+                return_value=(b"k" * 32, b"user", b"", None),
+            ),
+            patch.object(basefwx, "_mask_payload", return_value=b"masked"),
+            patch.object(basefwx, "_pack_length_prefixed", return_value=b"\xfb\xff"),
+            patch.object(basefwx, "_maybe_obfuscate_codecs", side_effect=lambda value: value),
+        ):
+            encoded = basefwx.pb512encode(
+                "payload", "strong-password", use_master=False)
+        self.assertEqual(encoded, "+/8=")
 
     def test_b512_roundtrip_without_master(self):
         original = "Reversible" * 2
@@ -485,21 +503,14 @@ class BaseFWXUnitTests(unittest.TestCase):
         }
         recorded_cmds: list[list[str]] = []
 
-        def fake_ffmpeg(cmd, fallback_cmd=None):
-            _ = fallback_cmd
-            recorded_cmds.append(list(cmd))
-            target = Path(cmd[-1])
+        def fake_scramble_video_stream(
+            decode_cmd, encode_cmd, *_args, **_kwargs
+        ):
+            recorded_cmds.append(list(decode_cmd))
+            recorded_cmds.append(list(encode_cmd))
+            target = Path(encode_cmd[-1])
             target.parent.mkdir(parents=True, exist_ok=True)
-            if target.suffix == ".raw":
-                if "video" in target.name:
-                    target.write_bytes(os.urandom(2 * 2 * 3))
-                else:
-                    target.write_bytes(b"")
-            else:
-                target.write_bytes(b"ok")
-
-        def fake_scramble_video_raw(raw_in, raw_out, *_args, **_kwargs):
-            raw_out.write_bytes(raw_in.read_bytes())
+            target.write_bytes(b"ok")
 
         plan = {
             "selected_accel": "nvenc",
@@ -510,10 +521,13 @@ class BaseFWXUnitTests(unittest.TestCase):
         }
 
         with patch.object(basefwx.MediaCipher, "_probe_streams", return_value=info), \
-                patch.object(basefwx.MediaCipher, "_run_ffmpeg", side_effect=fake_ffmpeg), \
                 patch.object(basefwx.MediaCipher, "_probe_metadata", return_value={}), \
                 patch.object(basefwx.MediaCipher, "_encrypt_metadata", return_value=[]), \
-                patch.object(basefwx.MediaCipher, "_scramble_video_raw", side_effect=fake_scramble_video_raw):
+                patch.object(
+                    basefwx.MediaCipher,
+                    "_scramble_video_stream",
+                    side_effect=fake_scramble_video_stream,
+                ):
             basefwx.MediaCipher._scramble_video(
                 src,
                 out,
@@ -905,6 +919,149 @@ class BaseFWXUnitTests(unittest.TestCase):
         recovered = basefwx.decryptAES(blob, "pw", use_master=False)
         self.assertEqual(recovered, original)
 
+    def test_cpp_ksep_v1_simple_payload_decodes(self):
+        password = "cpp-ksep-password"
+        root_key = bytes(range(32))
+        metadata = {
+            "ENC-METHOD": "AES-HEAVY",
+            "ENC-MASTER": "no",
+            "ENC-KEM": "none",
+            "ENC-AEAD": "AESGCM",
+            "ENC-KDF": "pbkdf2",
+            "ENC-KDF-ITER": "1000",
+            "ENC-OBF": "yes",
+            "ENC-KSEP": "v1",
+        }
+        metadata_blob = basefwx.base64.b64encode(
+            json.dumps(metadata, separators=(",", ":")).encode("utf-8")
+        ).decode("ascii")
+        metadata_bytes = metadata_blob.encode("ascii")
+        plaintext = f"{metadata_blob}{basefwx.META_DELIM}cpp-simple-ksep"
+        user_salt = bytes(range(basefwx.USER_KDF_SALT_SIZE))
+        user_key, _ = basefwx._derive_user_key(
+            password,
+            salt=user_salt,
+            iterations=1000,
+            kdf="pbkdf2",
+        )
+        user_blob = user_salt + basefwx._aead_encrypt(
+            user_key, root_key, metadata_bytes
+        )
+        aead_key = basefwx._hkdf_sha256(
+            root_key, info=basefwx.FWXAES_PAYLOAD_AEAD_INFO, length=32
+        )
+        obf_key = basefwx._hkdf_sha256(
+            root_key, info=basefwx.FWXAES_PAYLOAD_OBF_INFO, length=32
+        )
+        obfuscated = basefwx._obfuscate_bytes(
+            plaintext.encode("utf-8"), obf_key
+        )
+        ciphertext = basefwx._aead_encrypt(
+            aead_key, obfuscated, metadata_bytes
+        )
+        payload = (
+            len(metadata_bytes).to_bytes(4, "big")
+            + metadata_bytes
+            + ciphertext
+        )
+        blob = basefwx._pack_length_prefixed(user_blob, b"", payload)
+
+        recovered = basefwx.decryptAES(blob, password, use_master=False)
+
+        self.assertEqual(recovered, plaintext)
+
+    def test_unknown_payload_key_separation_is_rejected(self):
+        metadata = {"ENC-KSEP": "v999"}
+        metadata_blob = basefwx.base64.b64encode(
+            json.dumps(metadata, separators=(",", ":")).encode("utf-8")
+        )
+        payload = (
+            len(metadata_blob).to_bytes(4, "big")
+            + metadata_blob
+            + bytes(basefwx.AEAD_NONCE_LEN + basefwx.AEAD_TAG_LEN)
+        )
+        blob = basefwx._pack_length_prefixed(b"\x00", b"", payload)
+
+        with self.assertRaisesRegex(
+            ValueError, "Unsupported payload key-separation version"
+        ):
+            basefwx.decryptAES(
+                blob, "cpp-ksep-password", use_master=False
+            )
+
+    def test_cpp_ksep_v1_stream_payload_decodes(self):
+        password = "cpp-ksep-password"
+        root_key = bytes(reversed(range(32)))
+        raw = b"cpp-stream-ksep" * 257
+        metadata = {
+            "ENC-METHOD": "AES-HEAVY",
+            "ENC-MASTER": "no",
+            "ENC-KEM": "none",
+            "ENC-AEAD": "AESGCM",
+            "ENC-KDF": "pbkdf2",
+            "ENC-KDF-ITER": "1000",
+            "ENC-MODE": "STREAM",
+            "ENC-OBF": "yes",
+            "ENC-KSEP": "v1",
+        }
+        metadata_blob = basefwx.base64.b64encode(
+            json.dumps(metadata, separators=(",", ":")).encode("utf-8")
+        ).decode("ascii")
+        metadata_bytes = metadata_blob.encode("ascii")
+        user_salt = bytes(reversed(range(basefwx.USER_KDF_SALT_SIZE)))
+        user_key, _ = basefwx._derive_user_key(
+            password,
+            salt=user_salt,
+            iterations=1000,
+            kdf="pbkdf2",
+        )
+        user_blob = user_salt + basefwx._aead_encrypt(
+            user_key, root_key, metadata_bytes
+        )
+        aead_key = basefwx._hkdf_sha256(
+            root_key, info=basefwx.FWXAES_PAYLOAD_AEAD_INFO, length=32
+        )
+        obf_key = basefwx._hkdf_sha256(
+            root_key, info=basefwx.FWXAES_PAYLOAD_OBF_INFO, length=32
+        )
+        stream_salt = bytes(range(basefwx._StreamObfuscator._SALT_LEN))
+        encoder = basefwx._StreamObfuscator.for_key(
+            obf_key, stream_salt, fast=False
+        )
+        stream_header = (
+            basefwx.STREAM_MAGIC
+            + (4096).to_bytes(4, "big")
+            + len(raw).to_bytes(8, "big")
+            + stream_salt
+            + (4).to_bytes(2, "big")
+            + b".bin"
+        )
+        plaintext = (
+            metadata_bytes
+            + basefwx.META_DELIM.encode("utf-8")
+            + stream_header
+            + encoder.encode_chunk(raw)
+        )
+        ciphertext = basefwx._aead_encrypt(
+            aead_key, plaintext, metadata_bytes
+        )
+        payload = (
+            len(metadata_bytes).to_bytes(4, "big")
+            + metadata_bytes
+            + ciphertext
+        )
+        encoded_path = self.tmp_path / "cpp-stream.fwx"
+        encoded_path.write_bytes(
+            basefwx._pack_length_prefixed(user_blob, b"", payload)
+        )
+
+        decoded_path, decoded_len = basefwx._aes_heavy_decode_path(
+            encoded_path, password, strip_metadata=False, use_master=False
+        )
+
+        self.assertEqual(decoded_len, len(raw))
+        self.assertEqual(decoded_path.read_bytes(), raw)
+
     def test_aes_roundtrip_with_master(self):
         if ml_kem_768 is None:
             self.skipTest("pqcrypto unavailable")
@@ -923,10 +1080,12 @@ class BaseFWXUnitTests(unittest.TestCase):
         self.assertEqual(result, "SUCCESS!")
         encoded = src.with_suffix('.fwx')
         self.assertTrue(encoded.exists())
+        self.assertEqual(stat.S_IMODE(encoded.stat().st_mode), 0o600)
         result = basefwx.b512file(str(encoded), "pw", strip_metadata=True, use_master=False)
         self.assertEqual(result, "SUCCESS!")
         restored = src
         self.assertTrue(restored.exists())
+        self.assertEqual(stat.S_IMODE(restored.stat().st_mode), 0o600)
         self.assertEqual(restored.read_text(encoding="utf-8"), "classified")
 
     def test_aesfile_cycle_light(self):
@@ -936,10 +1095,90 @@ class BaseFWXUnitTests(unittest.TestCase):
         self.assertEqual(result, "SUCCESS!")
         encoded = src.with_suffix('.fwx')
         self.assertTrue(encoded.exists())
+        self.assertEqual(stat.S_IMODE(encoded.stat().st_mode), 0o600)
         result = basefwx.AESfile(str(encoded), "pw", light=True, strip_metadata=True, use_master=False)
         self.assertEqual(result, "SUCCESS!")
         restored = src
+        self.assertEqual(stat.S_IMODE(restored.stat().st_mode), 0o600)
         self.assertEqual(restored.read_bytes(), b"FWX\x00PQ")
+
+    def test_strip_attributes_make_files_owner_usable(self):
+        output = self.tmp_path / "output.bin"
+        output.write_bytes(b"owner-readable")
+        output.chmod(0o777)
+
+        basefwx._apply_strip_attributes(output)
+
+        self.assertEqual(stat.S_IMODE(output.stat().st_mode), 0o600)
+        self.assertEqual(output.read_bytes(), b"owner-readable")
+
+    def test_strip_attributes_make_unpacked_tree_owner_usable(self):
+        source_root = self.tmp_path / "archive-source"
+        nested = source_root / "bundle" / "nested"
+        nested.mkdir(parents=True)
+        payload = nested / "payload.bin"
+        payload.write_bytes(b"packed")
+        (source_root / "bundle").chmod(0o755)
+        nested.chmod(0o755)
+        payload.chmod(0o644)
+        archive = self.tmp_path / "payload.tar.gz"
+        with tarfile.open(archive, "w:gz") as handle:
+            handle.add(source_root / "bundle", arcname="bundle")
+        shutil.rmtree(source_root)
+
+        extracted = basefwx._maybe_unpack_output(
+            archive,
+            basefwx.PACK_TAR_GZ,
+            strip_metadata=True,
+        )
+
+        self.assertEqual(stat.S_IMODE(extracted.stat().st_mode), 0o700)
+        extracted_nested = extracted / "nested"
+        extracted_payload = extracted_nested / "payload.bin"
+        self.assertEqual(
+            stat.S_IMODE(extracted_nested.stat().st_mode), 0o700)
+        self.assertEqual(
+            stat.S_IMODE(extracted_payload.stat().st_mode), 0o600)
+        self.assertEqual(extracted_payload.read_bytes(), b"packed")
+
+    def test_production_sources_never_make_paths_mode_zero(self):
+        repository = Path(__file__).resolve().parents[2]
+        python_sources = list(
+            (repository / "python" / "basefwx").rglob("*.py"))
+        java_sources = list(
+            (repository / "java" / "src" / "main").rglob("*.java"))
+        cpp_sources = [
+            path for root_name in ("cpp", "scripts")
+            for path in (repository / root_name).rglob("*")
+            if path.is_file()
+            and path.suffix in {".cpp", ".cc", ".c", ".hpp", ".h", ".sh"}
+            and "build" not in path.parts
+        ]
+
+        python_mode_zero = re.compile(
+            r"(?:\bos\.chmod|\.chmod)\s*\("
+            r"[^,\n]+,\s*(?:0|0o0+)\s*\)")
+        cpp_mode_zero = re.compile(
+            r"\bchmod\s*\([^,\n]+,\s*0\s*\)")
+        java_clear_all = re.compile(
+            r"\.set(?:Readable|Writable|Executable)"
+            r"\s*\(\s*false\s*,\s*false\s*\)")
+
+        findings = []
+        for path in python_sources:
+            if python_mode_zero.search(path.read_text(encoding="utf-8")):
+                findings.append(str(path.relative_to(repository)))
+        for path in cpp_sources:
+            if cpp_mode_zero.search(
+                    path.read_text(encoding="utf-8", errors="replace")):
+                findings.append(str(path.relative_to(repository)))
+        for path in java_sources:
+            if java_clear_all.search(path.read_text(encoding="utf-8")):
+                findings.append(str(path.relative_to(repository)))
+
+        self.assertEqual(
+            findings, [],
+            "production code must not make paths mode/access-equivalent 000")
 
     def test_metadata_hint_message(self):
         meta = {"ENC-METHOD": "FWX512R", "ENC-VERSION": "2.9.0"}
@@ -1052,6 +1291,20 @@ class BaseFWXUnitTests(unittest.TestCase):
         self.assertEqual(decoded_path.read_bytes(), payload)
         self.assertEqual(decoded_path, self.tmp_path / "legacy.bin")
 
+    def test_aes_heavy_memory_strip_output_is_owner_usable(self):
+        src = self.tmp_path / "heavy-memory.bin"
+        src.write_bytes(b"memory-path" * 64)
+
+        encoded_path, _ = basefwx._aes_heavy_encode_path(
+            src,
+            "pw",
+            strip_metadata=True,
+            use_master=False,
+        )
+
+        self.assertEqual(
+            stat.S_IMODE(encoded_path.stat().st_mode), 0o600)
+
     def test_aes_heavy_streaming_roundtrip(self):
         src = self.tmp_path / "stream.bin"
         data = os.urandom(512 * 1024)
@@ -1102,6 +1355,20 @@ class BaseFWXUnitTests(unittest.TestCase):
 
         for temp_path in created_dirs:
             self.assertFalse(os.path.exists(temp_path))
+
+    def test_aes_heavy_stream_strip_output_is_owner_usable(self):
+        src = self.tmp_path / "heavy-stream.bin"
+        src.write_bytes(b"\0" * (basefwx.STREAM_THRESHOLD + 1))
+
+        encoded_path, _ = basefwx._aes_heavy_encode_path(
+            src,
+            "pw",
+            strip_metadata=True,
+            use_master=False,
+        )
+
+        self.assertEqual(
+            stat.S_IMODE(encoded_path.stat().st_mode), 0o600)
 
     def test_aes_light_large_no_obfuscation(self):
         src = self.tmp_path / "large.bin"
@@ -1176,6 +1443,20 @@ class BaseFWXUnitTests(unittest.TestCase):
         self.assertEqual(restored_len, len(data))
         self.assertEqual(decoded_path.read_bytes(), data)
         self.assertIn("deobfuscate", decode_reporter.phases)
+
+    def test_b512_stream_strip_output_is_owner_usable(self):
+        src = self.tmp_path / "b512-stream.bin"
+        src.write_bytes(b"\0" * (basefwx.STREAM_THRESHOLD + 1))
+
+        encoded_path, _ = basefwx._b512_encode_path(
+            src,
+            "pw",
+            strip_metadata=True,
+            use_master=False,
+        )
+
+        self.assertEqual(
+            stat.S_IMODE(encoded_path.stat().st_mode), 0o600)
 
 
 @unittest.skipIf(basefwx is None, f"dependency unavailable: {_IMPORT_ERROR}")
@@ -1255,7 +1536,13 @@ class CryptographyIntegrationTests(unittest.TestCase):
         public_key, private_key = ml_kem_768.generate_keypair()
         basefwx._set_master_pubkey_override(public_key)
         basefwx._load_master_pq_private = staticmethod(lambda: private_key)
-        metadata = basefwx._build_metadata("UNIT-MASTER", False, True, kdf="argon2id")
+        metadata = basefwx._build_metadata(
+            "UNIT-MASTER",
+            False,
+            True,
+            master_kem="ml-kem-768",
+            kdf="argon2id",
+        )
         plaintext = f"{metadata}{basefwx.META_DELIM}sensitive"
         blob = basefwx.encryptAES(plaintext, "", use_master=True, metadata_blob=metadata, master_public_key=public_key)
         recovered = basefwx.decryptAES(blob, "", use_master=True)
@@ -1346,7 +1633,10 @@ class CryptographyIntegrationTests(unittest.TestCase):
         basefwx.ENABLE_OBFUSCATION = False
         for length in [0, 5, 128, 2048]:
             text = "B" * length
-            metadata = basefwx._build_metadata("OBF-OFF", False, False)
+            metadata = basefwx._build_metadata(
+                "OBF-OFF", False, False, obfuscation=False)
+            self.assertEqual(
+                basefwx._decode_metadata(metadata).get("ENC-OBF"), "no")
             payload = f"{metadata}{basefwx.META_DELIM}{text}"
             blob = basefwx.encryptAES(payload, "passphrase", use_master=False, metadata_blob=metadata)
             restored = basefwx.decryptAES(blob, "passphrase", use_master=False)
@@ -1432,6 +1722,36 @@ class CryptographyIntegrationTests(unittest.TestCase):
                     use_master=False,
                     plugin=plugin,
                 )
+
+    def test_resolve_password_uri_schemes(self):
+        """Bare strings stay literal; file:// reads; password:// forces literal."""
+        secret = b"file-secret-contents\n"
+        with TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            pw_file = tmp_path / "pwfile.txt"
+            pw_file.write_bytes(secret)
+
+            # Bare string that happens to name an existing file must NOT be read.
+            bare = str(pw_file)
+            self.assertEqual(basefwx._resolve_password(bare, use_master=False), bare)
+
+            # Explicit file:// reads the file.
+            via_uri = basefwx._resolve_password(f"file://{pw_file}", use_master=False)
+            self.assertEqual(via_uri, secret)
+
+            # password:// strips the scheme even if the remainder looks like a path.
+            forced = basefwx._resolve_password(f"password://{pw_file}", use_master=False)
+            self.assertEqual(forced, bare)
+
+            # Missing file:// target fails closed.
+            missing = tmp_path / "no-such-pw"
+            with self.assertRaises(ValueError):
+                basefwx._resolve_password(f"file://{missing}", use_master=False)
+
+            # Explicit Path is an intentional filesystem reference.
+            self.assertEqual(
+                basefwx._resolve_password(pw_file, use_master=False), secret
+            )
 
 
 if __name__ == "__main__":

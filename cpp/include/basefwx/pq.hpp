@@ -23,6 +23,7 @@ enum class KemAlgorithm {
 };
 
 std::string_view KemAlgorithmName(KemAlgorithm algorithm);
+KemAlgorithm InferKemAlgorithmFromPublicKey(const Bytes& public_key);
 
 // Ephemeral ML-KEM keypair. The public key is wire data; the private key is
 // wiped on destruction and the container cannot be copied.
@@ -80,6 +81,8 @@ KemResult KemEncrypt(KemAlgorithm algorithm, const Bytes& public_key);
 Bytes KemDecrypt(KemAlgorithm algorithm,
                  const Bytes& private_key,
                  const Bytes& ciphertext);
+// The compatibility overloads infer 768 vs 1024 from the standardized key and
+// ciphertext sizes. Decryption therefore does not depend on process env state.
 KemResult KemEncrypt(const Bytes& public_key);
 Bytes KemDecrypt(const Bytes& private_key, const Bytes& ciphertext);
 std::string CurrentKemAlgorithm();

@@ -14,9 +14,11 @@
 #include "basefwx/format.hpp"
 #include "basefwx/keywrap.hpp"
 #include "basefwx/plugin_loader.hpp"
+#include "basefwx/secure_temp.hpp"
 
 #include <array>
 #include <chrono>
+#include <cstdio>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -50,8 +52,6 @@ constexpr std::size_t kPackHeaderLen = sizeof(kPackMagic) + 1 + 8;
 // Real wrap headers are ~200-500 bytes; cap at 64 KiB so a kdf-byte flip
 // can't reinterpret a PBKDF2 iteration count (typically 600k+) as a
 // valid wrap-header length.
-constexpr std::size_t kMaxKeyHeaderLen = 64 * 1024;
-
 // Reject PBKDF2 iteration counts below the floor — both a sanity check
 // against ancient blobs and a hard barrier against a kdf-byte flip
 // reinterpreting a small wrap-header length as a weak PBKDF2 cost.
@@ -411,6 +411,8 @@ Bytes EncryptRaw(const Bytes& plaintext, const std::string& password, const Opti
     Options effective = options;
     effective.pbkdf2_iters = ResolveTestIters(options.pbkdf2_iters);
     effective.pbkdf2_iters = HardenPbkdf2Iterations(resolved, effective.pbkdf2_iters);
+    basefwx::keywrap::RequirePeerPbkdf2WithinLimits(
+        effective.pbkdf2_iters);
     if (!effective.use_master && resolved.empty()) {
         throw std::runtime_error("Password required when master key usage is disabled");
     }
@@ -609,7 +611,8 @@ Bytes DecryptRaw(const Bytes& blob, const std::string& password, const Options& 
 
     if (kdf == kKdfWrap) {
         std::size_t header_len_wrap = static_cast<std::size_t>(iters);
-        if (header_len_wrap > kMaxKeyHeaderLen) {
+        if (header_len_wrap
+            > basefwx::constants::kFwxAesMaxKeyHeaderLen) {
             throw std::runtime_error("fwxAES key header too large");
         }
         if (header_len_wrap > blob.size() - offset) {
@@ -633,20 +636,21 @@ Bytes DecryptRaw(const Bytes& blob, const std::string& password, const Options& 
         }
         auto parts = basefwx::format::UnpackLengthPrefixed(header, 2);
         basefwx::pb512::KdfOptions kdf_opts = ResolveWrapKdfOptionsForDecode();
-        Bytes mask_key = basefwx::keywrap::RecoverMaskKey(
-            parts[0],
-            parts[1],
-            resolved,
-            options.use_master,
-            basefwx::constants::kFwxAesMaskInfo,
-            basefwx::constants::kFwxAesAad,
-            kdf_opts
-        );
-        Bytes key = basefwx::crypto::HkdfSha256(mask_key, basefwx::constants::kFwxAesKeyInfo, 32);
+        basefwx::crypto::SecureBytes mask_key{
+            basefwx::keywrap::RecoverMaskKey(
+                parts[0],
+                parts[1],
+                resolved,
+                options.use_master,
+                basefwx::constants::kFwxAesMaskInfo,
+                basefwx::constants::kFwxAesAad,
+                kdf_opts
+            )};
+        Bytes key = basefwx::crypto::HkdfSha256(
+            mask_key.bytes(), basefwx::constants::kFwxAesKeyInfo, 32);
         Bytes plaintext(ct_len - basefwx::constants::kAeadTagLen);
         basefwx::crypto::SecretGuard guard;
         guard.Add(resolved);
-        guard.Add(mask_key);
         guard.Add(key);
         std::size_t written = basefwx::crypto::AesGcmDecryptWithIvInto(
             key,
@@ -660,6 +664,7 @@ Bytes DecryptRaw(const Bytes& blob, const std::string& password, const Options& 
         plaintext.resize(written);
         return finish_plaintext(plaintext);
     }
+    basefwx::keywrap::RequirePeerPbkdf2WithinLimits(iters);
     if (ShouldRejectLowPbkdf2Iters(iters)) {
         throw std::runtime_error("fwxAES PBKDF2 iteration count below minimum");
     }
@@ -711,6 +716,8 @@ std::uint64_t EncryptStream(std::istream& source,
     Options effective = options;
     effective.pbkdf2_iters = ResolveTestIters(options.pbkdf2_iters);
     effective.pbkdf2_iters = HardenPbkdf2Iterations(resolved, effective.pbkdf2_iters);
+    basefwx::keywrap::RequirePeerPbkdf2WithinLimits(
+        effective.pbkdf2_iters);
     if (!effective.use_master && resolved.empty()) {
         throw std::runtime_error("Password required when master key usage is disabled");
     }
@@ -953,7 +960,8 @@ std::uint64_t DecryptStream(std::istream& source,
     Bytes key;
     if (kdf == kKdfWrap) {
         std::size_t header_len = iters;
-        if (header_len > kMaxKeyHeaderLen) {
+        if (header_len
+            > basefwx::constants::kFwxAesMaxKeyHeaderLen) {
             throw std::runtime_error("fwxAES key header too large");
         }
         Bytes key_header(header_len);
@@ -963,21 +971,20 @@ std::uint64_t DecryptStream(std::istream& source,
         iv.resize(iv_len);
         ReadExact(source, iv.data(), iv.size(), "fwxAES blob truncated");
         std::vector<basefwx::format::Bytes> parts = basefwx::format::UnpackLengthPrefixed(key_header, 2);
-        Bytes mask_key = basefwx::keywrap::RecoverMaskKey(
-            parts[0],
-            parts[1],
-            resolved,
-            use_master,
-            basefwx::constants::kFwxAesMaskInfo,
-            basefwx::constants::kFwxAesAad,
-            ResolveWrapKdfOptionsForDecode()
-        );
-        key = basefwx::crypto::HkdfSha256(mask_key, basefwx::constants::kFwxAesKeyInfo, 32);
-        // Inner guard for the branch-local mask_key. Declared AFTER
-        // mask_key so its dtor runs first (reverse construction order).
-        basefwx::crypto::SecretGuard mask_guard;
-        mask_guard.Add(mask_key);
+        basefwx::crypto::SecureBytes mask_key{
+            basefwx::keywrap::RecoverMaskKey(
+                parts[0],
+                parts[1],
+                resolved,
+                use_master,
+                basefwx::constants::kFwxAesMaskInfo,
+                basefwx::constants::kFwxAesAad,
+                ResolveWrapKdfOptionsForDecode()
+            )};
+        key = basefwx::crypto::HkdfSha256(
+            mask_key.bytes(), basefwx::constants::kFwxAesKeyInfo, 32);
     } else {
+        basefwx::keywrap::RequirePeerPbkdf2WithinLimits(iters);
         if (ShouldRejectLowPbkdf2Iters(iters)) {
             throw std::runtime_error("fwxAES PBKDF2 iteration count below minimum");
         }
@@ -1034,6 +1041,19 @@ std::uint64_t DecryptStream(std::istream& source,
     std::uint64_t remaining = cipher_len;
     Bytes in_buf(basefwx::constants::kStreamChunkSize);
     Bytes out_buf(basefwx::constants::kStreamChunkSize + 16);
+    struct FileCloser {
+        void operator()(std::FILE* file) const {
+            if (file != nullptr) {
+                std::fclose(file);
+            }
+        }
+    };
+    std::unique_ptr<std::FILE, FileCloser> authenticated_plain(
+        std::tmpfile());
+    if (!authenticated_plain) {
+        throw std::runtime_error(
+            "Failed to create private fwxaes plaintext spool");
+    }
     std::uint64_t written = 0;
     while (remaining > 0) {
         std::size_t take = static_cast<std::size_t>(
@@ -1044,8 +1064,14 @@ std::uint64_t DecryptStream(std::istream& source,
             throw std::runtime_error("fwxAES decrypt update failed");
         }
         if (out_len > 0) {
-            dest.write(reinterpret_cast<const char*>(out_buf.data()),
-                       static_cast<std::streamsize>(out_len));
+            const std::size_t produced =
+                static_cast<std::size_t>(out_len);
+            if (std::fwrite(
+                    out_buf.data(), 1, produced,
+                    authenticated_plain.get()) != produced) {
+                throw std::runtime_error(
+                    "Failed to write fwxaes plaintext spool");
+            }
             written += static_cast<std::uint64_t>(out_len);
         }
         remaining -= take;
@@ -1061,11 +1087,75 @@ std::uint64_t DecryptStream(std::istream& source,
         throw std::runtime_error("AES-GCM auth failed");
     }
     if (out_len > 0) {
-        dest.write(reinterpret_cast<const char*>(out_buf.data()),
-                   static_cast<std::streamsize>(out_len));
+        const std::size_t produced =
+            static_cast<std::size_t>(out_len);
+        if (std::fwrite(
+                out_buf.data(), 1, produced,
+                authenticated_plain.get()) != produced) {
+            throw std::runtime_error(
+                "Failed to write fwxaes plaintext spool");
+        }
         written += static_cast<std::uint64_t>(out_len);
     }
+    if (std::fflush(authenticated_plain.get()) != 0
+        || std::fseek(authenticated_plain.get(), 0, SEEK_SET) != 0) {
+        throw std::runtime_error(
+            "Failed to rewind fwxaes plaintext spool");
+    }
+    while (true) {
+        const std::size_t got = std::fread(
+            in_buf.data(), 1, in_buf.size(),
+            authenticated_plain.get());
+        if (got > 0) {
+            dest.write(
+                reinterpret_cast<const char*>(in_buf.data()),
+                static_cast<std::streamsize>(got));
+            if (!dest) {
+                throw std::runtime_error(
+                    "Failed to publish authenticated fwxaes plaintext");
+            }
+        }
+        if (got < in_buf.size()) {
+            if (std::ferror(authenticated_plain.get()) != 0) {
+                throw std::runtime_error(
+                    "Failed to read fwxaes plaintext spool");
+            }
+            break;
+        }
+    }
     dest.flush();
+    return written;
+}
+
+std::uint64_t DecryptStreamFile(
+    const std::filesystem::path& source,
+    const std::filesystem::path& destination,
+    const std::string& password,
+    bool use_master) {
+    std::ifstream input(source, std::ios::binary);
+    if (!input) {
+        throw std::runtime_error(
+            "Failed to open input file: " + source.string());
+    }
+    auto authenticated_temp =
+        basefwx::temp::SecureTempPath::CreateSibling(
+            destination, "fwxaes-auth");
+    std::ofstream output(
+        authenticated_temp.path(), std::ios::binary);
+    if (!output) {
+        throw std::runtime_error(
+            "Failed to open private fwxaes output temp");
+    }
+    const std::uint64_t written =
+        DecryptStream(
+            input, output, password, use_master);
+    output.flush();
+    if (!output) {
+        throw std::runtime_error(
+            "Failed to flush authenticated fwxaes output");
+    }
+    output.close();
+    authenticated_temp.CommitReplace(destination);
     return written;
 }
 

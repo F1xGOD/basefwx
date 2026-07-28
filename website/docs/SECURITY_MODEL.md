@@ -35,8 +35,14 @@ Two independent unlock paths are supported:
 
 If master wrapping is disabled, a password is required. If master wrapping is enabled and a public key is supplied, you can decrypt with the master private key even when the password is empty.
 
-For a post-quantum-only deployment, set `BASEFWX_PQ_STRICT=1` (or `BASEFWX_PQ_ONLY=1`) to disable the EC fallback path and reject EC master blobs during decrypt.
-Set `BASEFWX_MASTER_PQ_ALG=ml-kem-1024` (or `BASEFWX_PQ_MAX=1`) to use the larger ML-KEM parameter set in the C++ core when matching keys are provisioned.
+For a post-quantum-only deployment, set `BASEFWX_PQ_STRICT` (or
+`BASEFWX_PQ_ONLY`) to `1`, `true`, `yes`, or `on` (case-insensitive).
+A requested master-wrap encryption then fails unless ML-KEM is
+configured, and EC master recovery is rejected. An intact password
+wrap on an existing dual-wrapped payload remains an independent
+decrypt path when master recovery is disabled, missing, wrong,
+corrupt, or rejected by that policy.
+Set `BASEFWX_MASTER_PQ_ALG=ml-kem-1024` (or `BASEFWX_PQ_MAX=1`) to make key generation and default capability reporting use the larger parameter set on C++, Java, or Python. These variables alone never change a file: the provisioned public-key size selects 768 versus 1024 for wrapping and authenticated `ENC-KEM` metadata, while private-key/ciphertext sizes select the algorithm during recovery.
 
 ## Metadata
 

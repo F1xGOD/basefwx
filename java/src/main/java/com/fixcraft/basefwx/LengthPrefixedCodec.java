@@ -23,7 +23,8 @@ final class LengthPrefixedCodec {
                                             boolean fastObf) {
         byte[] payloadBytes = plaintext.getBytes(StandardCharsets.UTF_8);
         return encryptAesPayloadBytes(payloadBytes, password, useMaster, metadataBlob,
-            kdfLabel, kdfIterations, obfuscate, fastObf);
+            kdfLabel, kdfIterations, obfuscate, fastObf,
+            null, null, null, KeyWrap.selectMasterKey(useMaster));
     }
 
     static byte[] encryptAesPayloadBytes(byte[] payloadBytes,
@@ -34,56 +35,149 @@ final class LengthPrefixedCodec {
                                                  int kdfIterations,
                                                  boolean obfuscate,
                                                  boolean fastObf) {
+        return encryptAesPayloadBytes(payloadBytes, password, useMaster, metadataBlob,
+            kdfLabel, kdfIterations, obfuscate, fastObf, null, null, null,
+            KeyWrap.selectMasterKey(useMaster));
+    }
+
+    static byte[] encryptAesPayloadBytes(byte[] payloadBytes,
+                                                 String password,
+                                                 boolean useMaster,
+                                                 String metadataBlob,
+                                                 String kdfLabel,
+                                                 int kdfIterations,
+                                                 boolean obfuscate,
+                                                 boolean fastObf,
+                                                 Integer argonTime,
+                                                 Integer argonMem,
+                                                 Integer argonPar) {
+        return encryptAesPayloadBytes(
+                payloadBytes, password, useMaster, metadataBlob, kdfLabel,
+                kdfIterations, obfuscate, fastObf, argonTime, argonMem,
+                argonPar, KeyWrap.selectMasterKey(useMaster));
+    }
+
+    static byte[] encryptAesPayloadBytes(byte[] payloadBytes,
+                                                 String password,
+                                                 boolean useMaster,
+                                                 String metadataBlob,
+                                                 String kdfLabel,
+                                                 int kdfIterations,
+                                                 boolean obfuscate,
+                                                 boolean fastObf,
+                                                 Integer argonTime,
+                                                 Integer argonMem,
+                                                 Integer argonPar,
+                                                 KeyWrap.MasterKeySelection selectedMaster) {
+        String resolvedKdfLabel = FileCodecKdf.resolveKdfLabel(kdfLabel);
+        if ("pbkdf2".equals(resolvedKdfLabel)) {
+            FileCodecKdf.requirePeerPbkdf2WithinLimits(kdfIterations);
+        }
         byte[] pw = BaseFwx.resolvePasswordBytes(password, useMaster);
-        if (pw.length == 0 && !useMaster) {
+        PasswordPolicy.requireStrongPassword(pw, "Encryption");
+        boolean useMasterEffective =
+                useMaster && selectedMaster != null && selectedMaster.usedMaster();
+        if (pw.length == 0 && !useMasterEffective) {
             throw new IllegalArgumentException("Cannot encrypt without password or master key");
         }
+        if (useMaster && PQ.strictPqOnly()
+                && (!useMasterEffective || selectedMaster.pqPublicKey == null)) {
+            throw new IllegalStateException(
+                    "PQ strict mode requires an ML-KEM master public key "
+                    + "when master wrap is requested");
+        }
         byte[] metadataBytes = metadataBlob == null ? new byte[0] : metadataBlob.getBytes(StandardCharsets.UTF_8);
+        if (metadataBytes.length > Constants.METADATA_MAX) {
+            throw new IllegalArgumentException(
+                    "Payload metadata exceeds 1 MiB cap");
+        }
         byte[] aad = metadataBytes;
 
         byte[] masterBlob = new byte[0];
         byte[] ephemeralKey = null;
-        if (useMaster) {
-            try {
-                java.security.PublicKey pub = EcKeys.loadMasterPublic(EcKeys.masterEcAutoCreateEnabled());
-                if (pub != null) {
-                    EcKeys.EcKemResult kem = EcKeys.kemEncrypt(pub);
-                    masterBlob = kem.masterBlob;
-                    ephemeralKey = Crypto.hkdfSha256(kem.shared, Constants.KEM_INFO, 32);
+        PayloadKeySeparation.PayloadKeys payloadKeys = null;
+        try {
+            if (useMasterEffective) {
+                if (selectedMaster.pqPublicKey != null) {
+                    try {
+                        PQ.KemResult kem = PQ.kemEncrypt(selectedMaster.pqPublicKey);
+                        masterBlob = kem.ciphertext;
+                        ephemeralKey =
+                                FileCodecKdf.deriveKemKeyAndWipe(kem.shared, Constants.KEM_INFO);
+                    } catch (Exception exc) {
+                        if (exc instanceof RuntimeException) {
+                            throw (RuntimeException) exc;
+                        }
+                        throw new IllegalStateException("PQ master key wrap failed", exc);
+                    }
+                } else if (selectedMaster.ecPublicKey != null) {
+                    try {
+                        EcKeys.EcKemResult kem =
+                                EcKeys.kemEncrypt(selectedMaster.ecPublicKey);
+                        masterBlob = kem.masterBlob;
+                        ephemeralKey =
+                                FileCodecKdf.deriveKemKeyAndWipe(kem.shared, Constants.KEM_INFO);
+                    } catch (Exception exc) {
+                        throw new IllegalStateException(
+                                "EC master key wrap failed", exc);
+                    }
                 }
-            } catch (RuntimeException exc) {
-                ephemeralKey = null;
             }
-        }
-        if (ephemeralKey == null) {
-            ephemeralKey = Crypto.randomBytes(32);
-        }
-
-        byte[] userBlob = new byte[0];
-        if (pw.length > 0) {
-            int iters = FileCodecKdf.hardenPbkdf2Iterations(pw, kdfIterations);
-            byte[] salt = Crypto.randomBytes(Constants.USER_KDF_SALT_SIZE);
-            String label = FileCodecKdf.resolveKdfLabel(kdfLabel);
-            if (!"pbkdf2".equals(label)) {
-                throw new UnsupportedKdfException(label, "Unsupported KDF label: " + label);
+            if (ephemeralKey == null) {
+                ephemeralKey = Crypto.randomBytes(32);
             }
-            byte[] userKey = Crypto.pbkdf2HmacSha256(pw, salt, iters, 32);
-            byte[] wrapped = Crypto.aesGcmEncrypt(userKey, ephemeralKey, aad);
-            userBlob = new byte[salt.length + wrapped.length];
-            System.arraycopy(salt, 0, userBlob, 0, salt.length);
-            System.arraycopy(wrapped, 0, userBlob, salt.length, wrapped.length);
-        }
+            byte[] userBlob = new byte[0];
+            if (pw.length > 0) {
+                String label = resolvedKdfLabel;
+                byte[] salt = Crypto.randomBytes(Constants.USER_KDF_SALT_SIZE);
+                KeyWrap.KdfOptions opts = new KeyWrap.KdfOptions(label, kdfIterations);
+                if (argonTime != null) {
+                    opts.argon2TimeCost = argonTime;
+                }
+                if (argonMem != null) {
+                    opts.argon2MemoryKib = argonMem;
+                }
+                if (argonPar != null) {
+                    opts.argon2Parallelism = argonPar;
+                }
+                byte[] userKey = FileCodecKdf.deriveUserKey(pw, salt, label, opts);
+                try {
+                    byte[] wrapped = Crypto.aesGcmEncrypt(userKey, ephemeralKey, aad);
+                    userBlob = new byte[salt.length + wrapped.length];
+                    System.arraycopy(salt, 0, userBlob, 0, salt.length);
+                    System.arraycopy(wrapped, 0, userBlob, salt.length, wrapped.length);
+                } finally {
+                    Arrays.fill(userKey, (byte) 0);
+                }
+            }
 
-        if (obfuscate && FileCodecs.payloadObfuscationEnabled()) {
-            payloadBytes = FileCodecs.obfuscateBytes(payloadBytes, ephemeralKey, fastObf);
-        }
+            boolean useDerivedKeys =
+                    PayloadKeySeparation.usesDerivedKeys(metadataBlob);
+            byte[] aeadKey = ephemeralKey;
+            byte[] obfuscationKey = ephemeralKey;
+            if (useDerivedKeys) {
+                payloadKeys = PayloadKeySeparation.derive(ephemeralKey);
+                aeadKey = payloadKeys.aead;
+                obfuscationKey = payloadKeys.obfuscation;
+            }
+            if (obfuscate && FileCodecs.payloadObfuscationEnabled()) {
+                payloadBytes = FileCodecs.obfuscateBytes(
+                        payloadBytes, obfuscationKey, fastObf);
+            }
 
-        byte[] ciphertext = Crypto.aesGcmEncrypt(ephemeralKey, payloadBytes, aad);
-        byte[] payload = new byte[4 + metadataBytes.length + ciphertext.length];
-        BaseFwxUtil.writeU32(payload, 0, metadataBytes.length);
-        System.arraycopy(metadataBytes, 0, payload, 4, metadataBytes.length);
-        System.arraycopy(ciphertext, 0, payload, 4 + metadataBytes.length, ciphertext.length);
-        return Format.packLengthPrefixed(Arrays.asList(userBlob, masterBlob, payload));
+            byte[] ciphertext = Crypto.aesGcmEncrypt(
+                    aeadKey, payloadBytes, aad);
+            byte[] payload = new byte[4 + metadataBytes.length + ciphertext.length];
+            BaseFwxUtil.writeU32(payload, 0, metadataBytes.length);
+            System.arraycopy(metadataBytes, 0, payload, 4, metadataBytes.length);
+            System.arraycopy(ciphertext, 0, payload, 4 + metadataBytes.length, ciphertext.length);
+            return Format.packLengthPrefixed(Arrays.asList(userBlob, masterBlob, payload));
+        } finally {
+            if (payloadKeys != null) {
+                payloadKeys.close();
+            }
+            PayloadKeySeparation.wipe(ephemeralKey);
+        }
     }
 
     static String decryptAesPayload(byte[] blob, String password, boolean useMaster) {
@@ -101,61 +195,86 @@ final class LengthPrefixedCodec {
             throw new IllegalArgumentException("Ciphertext payload truncated");
         }
         int metadataLen = BaseFwxUtil.readU32(payloadBlob, 0);
-        int metadataEnd = 4 + metadataLen;
-        if (metadataEnd > payloadBlob.length) {
+        if (metadataLen < 0) {
+            throw new IllegalArgumentException(
+                    "Malformed payload metadata header (negative length)");
+        }
+        if (metadataLen > Constants.METADATA_MAX) {
+            throw new IllegalArgumentException(
+                    "Payload metadata exceeds 1 MiB cap");
+        }
+        if (metadataLen > payloadBlob.length - 4) {
             throw new IllegalArgumentException("Malformed payload metadata header");
         }
+        int metadataEnd = 4 + metadataLen;
         byte[] metadataBytes = Arrays.copyOfRange(payloadBlob, 4, metadataEnd);
         String metadataBlob = metadataBytes.length == 0
             ? ""
             : new String(metadataBytes, StandardCharsets.UTF_8);
 
-        String obfHint = FileCodecs.metaValue(metadataBlob, "ENC-OBF");
-        boolean shouldDeobfuscate = FileCodecs.payloadObfuscationEnabled() && !"no".equalsIgnoreCase(obfHint);
-        boolean fastObf = "fast".equalsIgnoreCase(obfHint);
+        String obfHint = FileCodecs.requirePayloadObfuscationMode(
+                FileCodecs.metaValue(metadataBlob, "ENC-OBF"));
+        boolean shouldDeobfuscate = !"no".equals(obfHint);
+        boolean fastObf = "fast".equals(obfHint);
         String kdfHint = FileCodecs.metaValue(metadataBlob, "ENC-KDF");
-        if (kdfHint.isEmpty()) {
-            kdfHint = FileCodecKdf.resolveUserKdfLabel();
-        }
-        int kdfIterHint = FileCodecs.parseMetadataInt(FileCodecs.metaValue(metadataBlob, "ENC-KDF-ITER"), Constants.USER_KDF_ITERATIONS);
+        String label = kdfHint.isEmpty()
+                ? FileCodecKdf.resolveUserKdfLabel()
+                : FileCodecKdf.resolvePeerKdfLabel(kdfHint);
+        int kdfIterHint = FileCodecs.parsePeerPbkdf2Iterations(
+                FileCodecs.metaValue(metadataBlob, "ENC-KDF-ITER"),
+                Constants.USER_KDF_ITERATIONS);
+        Integer argonTime = FileCodecs.parseMetadataIntOrNull(FileCodecs.metaValue(metadataBlob, "ENC-ARGON2-TC"));
+        Integer argonMem = FileCodecs.parseMetadataIntOrNull(FileCodecs.metaValue(metadataBlob, "ENC-ARGON2-MEM"));
+        Integer argonPar = FileCodecs.parseMetadataIntOrNull(FileCodecs.metaValue(metadataBlob, "ENC-ARGON2-PAR"));
+        FileCodecKdf.requirePeerArgon2WithinLimits(argonTime, argonMem, argonPar);
 
-        byte[] ephemeralKey;
-        if (masterBlob.length > 0) {
-            if (!useMaster) {
-                throw new IllegalArgumentException("Master key required to decrypt this payload");
-            }
-            if (!FileCodecs.startsWith(masterBlob, Constants.MASTER_EC_MAGIC)) {
-                throw new IllegalArgumentException("Invalid master key blob magic");
-            }
-            java.security.PrivateKey priv = EcKeys.loadMasterPrivate();
-            byte[] shared = EcKeys.kemDecrypt(masterBlob, priv);
-            ephemeralKey = Crypto.hkdfSha256(shared, Constants.KEM_INFO, 32);
-        } else if (userBlob.length > 0) {
-            if (pw.length == 0) {
-                throw new IllegalArgumentException("User password required to decrypt this payload");
-            }
-            if (userBlob.length < Constants.USER_KDF_SALT_SIZE + Constants.AEAD_NONCE_LEN + Constants.AEAD_TAG_LEN) {
-                throw new IllegalArgumentException("Corrupted user key blob: missing salt or AEAD data");
-            }
-            byte[] salt = Arrays.copyOfRange(userBlob, 0, Constants.USER_KDF_SALT_SIZE);
-            byte[] wrapped = Arrays.copyOfRange(userBlob, Constants.USER_KDF_SALT_SIZE, userBlob.length);
-            String label = FileCodecKdf.resolveKdfLabel(kdfHint);
-            if (!"pbkdf2".equals(label)) {
-                throw new IllegalArgumentException("Unsupported KDF label: " + label);
-            }
-            int iters = FileCodecKdf.hardenPbkdf2Iterations(pw, kdfIterHint);
-            byte[] userKey = Crypto.pbkdf2HmacSha256(pw, salt, iters, 32);
-            ephemeralKey = Crypto.aesGcmDecrypt(userKey, wrapped, metadataBytes);
-        } else {
-            throw new IllegalArgumentException("Ciphertext missing key transport data");
+        KeyWrap.KdfOptions opts = new KeyWrap.KdfOptions(label, kdfIterHint);
+        if (argonTime != null) {
+            opts.argon2TimeCost = argonTime;
+        }
+        if (argonMem != null) {
+            opts.argon2MemoryKib = argonMem;
+        }
+        if (argonPar != null) {
+            opts.argon2Parallelism = argonPar;
+        }
+        boolean useDerivedKeys =
+                PayloadKeySeparation.usesDerivedKeys(metadataBlob);
+        byte[] ephemeralKey = null;
+        PayloadKeySeparation.PayloadKeys payloadKeys = null;
+        try {
+            ephemeralKey = FileCodecKdf.recoverPayloadKey(
+                    userBlob, masterBlob, pw, useMaster, Constants.KEM_INFO,
+                    metadataBytes, label, opts);
+        } catch (RuntimeException exc) {
+            throw exc;
+        } catch (Exception exc) {
+            throw new IllegalStateException("Master key unwrap failed", exc);
         }
 
-        byte[] ciphertext = Arrays.copyOfRange(payloadBlob, metadataEnd, payloadBlob.length);
-        byte[] plain = Crypto.aesGcmDecrypt(ephemeralKey, ciphertext, metadataBytes);
-        if (shouldDeobfuscate) {
-            plain = FileCodecs.deobfuscateBytes(plain, ephemeralKey, fastObf);
+        try {
+            byte[] aeadKey = ephemeralKey;
+            byte[] obfuscationKey = ephemeralKey;
+            if (useDerivedKeys) {
+                payloadKeys = PayloadKeySeparation.derive(ephemeralKey);
+                aeadKey = payloadKeys.aead;
+                obfuscationKey = payloadKeys.obfuscation;
+            }
+            byte[] ciphertext = Arrays.copyOfRange(
+                    payloadBlob, metadataEnd, payloadBlob.length);
+            byte[] plain = Crypto.aesGcmDecrypt(
+                    aeadKey, ciphertext, metadataBytes);
+            if (shouldDeobfuscate) {
+                plain = FileCodecs.deobfuscateBytes(
+                        plain, obfuscationKey, fastObf);
+            }
+            return plain;
+        } finally {
+            if (payloadKeys != null) {
+                payloadKeys.close();
+            }
+            PayloadKeySeparation.wipe(ephemeralKey);
         }
-        return plain;
     }
 
 }

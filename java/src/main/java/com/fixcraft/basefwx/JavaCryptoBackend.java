@@ -6,16 +6,19 @@
 
 package com.fixcraft.basefwx;
 
-import java.nio.ByteBuffer;
 import java.security.GeneralSecurityException;
+import javax.crypto.AEADBadTagException;
 import javax.crypto.Cipher;
 import javax.crypto.spec.GCMParameterSpec;
 import javax.crypto.spec.SecretKeySpec;
+import org.bouncycastle.crypto.InvalidCipherTextException;
+import org.bouncycastle.crypto.engines.AESEngine;
+import org.bouncycastle.crypto.modes.GCMModeCipher;
+import org.bouncycastle.crypto.modes.GCMBlockCipher;
+import org.bouncycastle.crypto.params.AEADParameters;
+import org.bouncycastle.crypto.params.KeyParameter;
 
 public final class JavaCryptoBackend implements CryptoBackend {
-    // DirectByteBuffer pool for fast AES-GCM doFinal (~14x faster than byte[] arrays)
-    private static final int DIRECT_BUF_SIZE = 1 << 20; // 1 MiB (matches STREAM_CHUNK)
-
     @Override
     public boolean isNative() {
         return false;
@@ -60,52 +63,57 @@ public final class JavaCryptoBackend implements CryptoBackend {
     }
 
     private static final class JavaGcmDecryptor implements AeadDecryptor {
-        private final Cipher cipher;
-        private final byte[] tagBuffer;
-        private int tagLen;
+        private final GCMModeCipher cipher;
 
         private JavaGcmDecryptor(byte[] key, byte[] iv, byte[] aad) throws GeneralSecurityException {
-            cipher = Cipher.getInstance("AES/GCM/NoPadding");
-            GCMParameterSpec spec = new GCMParameterSpec(Constants.AEAD_TAG_LEN * 8, iv);
-            cipher.init(Cipher.DECRYPT_MODE, new SecretKeySpec(key, "AES"), spec);
-            if (aad != null && aad.length > 0) {
-                cipher.updateAAD(aad);
+            try {
+                cipher = GCMBlockCipher.newInstance(AESEngine.newInstance());
+                cipher.init(
+                        false,
+                        new AEADParameters(
+                                new KeyParameter(key),
+                                Constants.AEAD_TAG_LEN * 8,
+                                iv,
+                                aad == null ? new byte[0] : aad));
+            } catch (RuntimeException exc) {
+                throw new GeneralSecurityException("AES-GCM decrypt init failed", exc);
             }
-            // Pre-allocate tag buffer
-            tagBuffer = new byte[Constants.AEAD_TAG_LEN];
-            tagLen = 0;
         }
 
         @Override
         public int update(byte[] in, int inOff, int len, byte[] out, int outOff) throws GeneralSecurityException {
-            // For streaming, use byte[] - cipher.update works fine for decryption
-            return cipher.update(in, inOff, len, out, outOff);
+            try {
+                return cipher.processBytes(in, inOff, len, out, outOff);
+            } catch (RuntimeException exc) {
+                throw new GeneralSecurityException("AES-GCM decrypt update failed", exc);
+            }
         }
 
         @Override
         public int doFinal(byte[] tag, int tagOff, int tagLen, byte[] out, int outOff)
             throws GeneralSecurityException {
-            // Store tag for final processing
-            if (tagLen > tagBuffer.length) {
-                throw new IllegalArgumentException("Tag too large: " + tagLen);
+            if (tagLen != Constants.AEAD_TAG_LEN) {
+                throw new IllegalArgumentException(
+                        "Invalid AES-GCM tag length: " + tagLen);
             }
-            System.arraycopy(tag, tagOff, tagBuffer, 0, tagLen);
-            this.tagLen = tagLen;
-            
-            // In Java GCM, the tag must be appended to the ciphertext and processed via doFinal
-            // We feed the tag as the final chunk of "ciphertext" data
-            // This tells the cipher "here's the authentication tag, verify it"
-            int processed = cipher.update(tagBuffer, 0, this.tagLen, out, outOff);
-            
-            // Complete the decryption and verify the tag
-            // If tag verification fails, this will throw AEADBadTagException
-            int finalLen = cipher.doFinal(out, outOff + processed);
-            
-            return processed + finalLen;
+            try {
+                int processed = cipher.processBytes(
+                        tag, tagOff, tagLen, out, outOff);
+                return processed + cipher.doFinal(out, outOff + processed);
+            } catch (InvalidCipherTextException exc) {
+                AEADBadTagException badTag =
+                        new AEADBadTagException("AES-GCM authentication failed");
+                badTag.initCause(exc);
+                throw badTag;
+            } catch (RuntimeException exc) {
+                throw new GeneralSecurityException(
+                        "AES-GCM decrypt final failed", exc);
+            }
         }
 
         @Override
         public void close() {
+            cipher.reset();
         }
     }
 }

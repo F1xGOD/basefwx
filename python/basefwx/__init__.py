@@ -4,6 +4,9 @@
 
 """Public Python API for BaseFWX."""
 
+from typing import Optional
+
+from . import x25519
 from .api_files import (
     LiveDecryptor,
     LiveEncryptor,
@@ -50,6 +53,12 @@ from .api_strings import (
     pb512encode,
     uhash513,
 )
+from .crypto._pq import (
+    current_kem_algorithm,
+    generate_kem_keypair,
+    is_supported_kem_algorithm,
+    kem_algorithm_for_public_key,
+)
 from .main import basefwx, cli, main
 from .plugin import (
     API_VERSION as PLUGIN_API_VERSION,
@@ -71,6 +80,25 @@ from .plugin import (
     register_native as register_native_plugin,
 )
 from .version import __version__
+
+
+def hkdf_sha256(
+    key_material: bytes,
+    *,
+    length: int = 32,
+    info: bytes = b"basefwx.kem.v1",
+    salt: Optional[bytes] = None,
+) -> bytes:
+    """Derive key material with HKDF-SHA256 and an optional explicit salt."""
+    from .crypto._primitives import _hkdf_sha256
+
+    return _hkdf_sha256(
+        key_material,
+        length=length,
+        info=info,
+        salt=salt,
+    )
+
 
 __all__ = [
     "__version__",
@@ -103,7 +131,12 @@ __all__ = [
     "fwxAES_live_encrypt_chunks",
     "fwxAES_live_encrypt_ffmpeg",
     "fwxAES_live_encrypt_stream",
+    "generate_kem_keypair",
     "hash512",
+    "hkdf_sha256",
+    "current_kem_algorithm",
+    "is_supported_kem_algorithm",
+    "kem_algorithm_for_public_key",
     "jMGd",
     "jMGe",
     "kFAd",
@@ -124,6 +157,7 @@ __all__ = [
     "pb512file_decode_bytes",
     "pb512file_encode_bytes",
     "uhash513",
+    "x25519",
     # plugin SPI (3.7.0)
     "BasefwxPlugin",
     "BasefwxPluginError",

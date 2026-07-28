@@ -22,11 +22,17 @@ package com.fixcraft.basefwx.plugin;
  * encrypt time, so a peer that doesn't have the matching plugin
  * loaded refuses the blob before any decryption happens.
  *
- * <p>This Java SPI is the counterpart of the C/C++ ABI in
- * <code>cpp/include/basefwx/plugin.h</code>. A .so plugin loaded
- * through the JNI bridge appears in Java as a {@link BasefwxPlugin}
- * implementation backed by the native vtable; pure-Java plugins
- * shipped as a .jar implement this interface directly.
+ * <p>This Java SPI is the Profile A counterpart of the C/C++ ABI in
+ * <code>cpp/include/basefwx/plugin.h</code> (deterministic
+ * {@code forward}/{@code inverse}, PRE/POST AEAD). Pure-Java plugins
+ * shipped as a .jar implement this interface directly and are loaded
+ * via {@link java.util.ServiceLoader} or
+ * {@link BasefwxPluginRegistry#register(BasefwxPlugin)}. A JNI bridge
+ * that would surface a native {@code .so} as a {@link BasefwxPlugin}
+ * is <strong>not</strong> shipped yet (deferred; use the C++ host
+ * loader or Python ctypes path for native plugins). Keyed transforms,
+ * {@code POS_RAW}, and capability bits are C++-led and not part of
+ * this Java SPI.
  *
  * <h2>Contract</h2>
  *

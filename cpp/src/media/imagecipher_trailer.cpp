@@ -14,6 +14,7 @@
 #include "basefwx/keywrap.hpp"
 #include "basefwx/pb512.hpp"
 #include "basefwx/system_info.hpp"
+#include "basefwx/secure_temp.hpp"
 
 #include <algorithm>
 #include <array>
@@ -102,6 +103,10 @@ void AppendTrailerStream(const std::filesystem::path& output_path,
     auto size = std::filesystem::file_size(original_path, ec);
     if (ec) {
         throw std::runtime_error("Failed to stat input for trailer");
+    }
+    if (key_header.size()
+        > basefwx::constants::kFwxAesMaxKeyHeaderLen) {
+        throw std::runtime_error("JMG key header too large");
     }
     std::uint64_t blob_len = static_cast<std::uint64_t>(key_header.size())
                              + basefwx::constants::kAeadNonceLen
@@ -283,7 +288,18 @@ bool TryDecryptTrailerStream(const std::filesystem::path& input_path,
                                         | (static_cast<std::uint32_t>(meta[2]) << 16)
                                         | (static_cast<std::uint32_t>(meta[3]) << 8)
                                         | static_cast<std::uint32_t>(meta[4]);
-            if (payload_len > blob_len) {
+            const std::uint64_t jmg_header_min =
+                basefwx::constants::kJmgKeyMagic.size() + meta.size();
+            const std::uint64_t required_after_payload =
+                basefwx::constants::kAeadNonceLen
+                + basefwx::constants::kAeadTagLen;
+            if (payload_len
+                    > basefwx::constants::kFwxAesMaxKeyHeaderLen
+                        - jmg_header_min
+                || blob_len < jmg_header_min + required_after_payload
+                || payload_len
+                    > blob_len - jmg_header_min
+                        - required_after_payload) {
                 throw std::runtime_error("Invalid JMG key header length");
             }
             Bytes header_bytes;
@@ -350,7 +366,11 @@ bool TryDecryptTrailerStream(const std::filesystem::path& input_path,
         std::vector<std::uint8_t> buffer(1024 * 1024);
         std::vector<std::uint8_t> outbuf(buffer.size() + 16);
         int out_len = 0;
-        std::ofstream output(output_path, std::ios::binary);
+        auto authenticated_temp =
+            basefwx::temp::SecureTempPath::CreateSibling(
+                output_path, "media-auth");
+        std::ofstream output(
+            authenticated_temp.path(), std::ios::binary);
         if (!output) {
             EVP_CIPHER_CTX_free(ctx);
             return false;
@@ -406,6 +426,17 @@ bool TryDecryptTrailerStream(const std::filesystem::path& input_path,
                    "AES-GCM tag failed");
             Ensure(EVP_DecryptFinal_ex(ctx, outbuf.data(), &out_len) == 1,
                    "AES-GCM auth failed");
+            if (out_len > 0) {
+                output.write(
+                    reinterpret_cast<const char*>(outbuf.data()),
+                    out_len);
+            }
+            output.flush();
+            Ensure(
+                static_cast<bool>(output),
+                "Failed to flush authenticated media output");
+            output.close();
+            authenticated_temp.CommitReplace(output_path);
         } catch (...) {
             EVP_CIPHER_CTX_free(ctx);
             throw;
@@ -578,7 +609,8 @@ Bytes LoadBaseKeyFromKeyTrailerFile(const std::filesystem::path& input_path,
     if (!trailer_info.has_value() || trailer_info->blob_len == 0) {
         return {};
     }
-    if (trailer_info->blob_len > static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max())) {
+    if (trailer_info->blob_len
+        > basefwx::constants::kFwxAesMaxKeyHeaderLen) {
         throw std::runtime_error("JMG key trailer too large");
     }
     Bytes blob(static_cast<std::size_t>(trailer_info->blob_len));

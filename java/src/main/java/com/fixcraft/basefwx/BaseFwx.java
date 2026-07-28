@@ -358,11 +358,24 @@ public final class BaseFwx {
     }
 
     public static void fwxAesDecryptFile(File input, File output, String password, boolean useMaster) {
-        try (FileInputStream in = new FileInputStream(input);
-             FileOutputStream out = new FileOutputStream(output)) {
-            FwxAesCodec.fwxAesDecryptStreamPublic(in, out, password, useMaster);
+        File temp = null;
+        try {
+            temp = BaseFwxUtil.createPrivateSiblingTempFile(
+                    output, ".basefwx-fwxaes-auth-", ".tmp");
+            try (FileInputStream in = new FileInputStream(input);
+                 FileOutputStream out = new FileOutputStream(temp)) {
+                FwxAesCodec.fwxAesDecryptStreamPublic(
+                        in, out, password, useMaster);
+                out.getFD().sync();
+            }
+            BaseFwxUtil.commitAuthenticatedFile(temp, output);
+            temp = null;
         } catch (IOException exc) {
             throw new IllegalStateException("fwxAES file decrypt failed", exc);
+        } finally {
+            if (temp != null) {
+                temp.delete();
+            }
         }
     }
 
@@ -379,13 +392,26 @@ public final class BaseFwx {
     }
 
     public static void fwxAesDecryptFileNio(File input, File output, String password, boolean useMaster) {
-        try (FileInputStream fis = new FileInputStream(input);
-             FileOutputStream fos = new FileOutputStream(output);
-             FileChannel in = fis.getChannel();
-             FileChannel out = fos.getChannel()) {
-            FwxAesCodec.fwxAesDecryptChannel(in, out, password, useMaster);
+        File temp = null;
+        try {
+            temp = BaseFwxUtil.createPrivateSiblingTempFile(
+                    output, ".basefwx-fwxaes-auth-", ".tmp");
+            try (FileInputStream fis = new FileInputStream(input);
+                 FileOutputStream fos = new FileOutputStream(temp);
+                 FileChannel in = fis.getChannel();
+                 FileChannel out = fos.getChannel()) {
+                FwxAesCodec.fwxAesDecryptChannel(
+                        in, out, password, useMaster);
+                out.force(true);
+            }
+            BaseFwxUtil.commitAuthenticatedFile(temp, output);
+            temp = null;
         } catch (IOException exc) {
             throw new IllegalStateException("fwxAES file decrypt failed", exc);
+        } finally {
+            if (temp != null) {
+                temp.delete();
+            }
         }
     }
     // Package-private (was private): BaseFwxImage calls this via
@@ -436,8 +462,24 @@ public final class BaseFwx {
             }
             return new byte[0];
         }
-        File candidate = expandUser(password);
-        if (candidate.isFile()) {
+        // Match C++ ResolvePassword (3.7.0+): bare passwords are ALWAYS
+        // literal. Filesystem read is opt-in via an explicit file:// URI.
+        // password:// forces the literal-string interpretation even when
+        // the string contains ://. Auto-detecting "string names an existing
+        // path → read that file" is removed — it silently changed secrets
+        // based on filesystem state.
+        final String passwordScheme = "password://";
+        final String fileScheme = "file://";
+        if (password.startsWith(passwordScheme)) {
+            return password.substring(passwordScheme.length())
+                    .getBytes(StandardCharsets.UTF_8);
+        }
+        if (password.startsWith(fileScheme)) {
+            String path = password.substring(fileScheme.length());
+            File candidate = expandUser(path);
+            if (!candidate.isFile()) {
+                throw new IllegalArgumentException("Password file not found: " + path);
+            }
             return readFileBytes(candidate);
         }
         return password.getBytes(StandardCharsets.UTF_8);

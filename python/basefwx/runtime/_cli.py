@@ -558,7 +558,11 @@ def cli(argv=None) -> int:
 
     if args.command == "version":
         argon2_state = "ON" if basefwx.hash_secret_raw is not None else "OFF"
-        pq_state = "ON" if getattr(basefwx.ml_kem_768, "CIPHERTEXT_SIZE", 0) else "OFF"
+        try:
+            pq_alg = basefwx.current_kem_algorithm()
+            pq_state = pq_alg
+        except Exception:
+            pq_state = "OFF"
         lzma_state = "ON" if getattr(basefwx, "lzma", None) is not None else "OFF"
         pillow_state = "ON" if basefwx.Image is not None else "OFF"
         numpy_state = "ON" if basefwx.np is not None else "OFF"
@@ -577,7 +581,7 @@ def cli(argv=None) -> int:
         print("gpg_signature: not checked (release signatures are detached)")
         print(
             "features: "
-            f"argon2={argon2_state} oqs={pq_state} lzma={lzma_state} "
+            f"argon2={argon2_state} pq={pq_state} lzma={lzma_state} "
             f"pillow={pillow_state} numpy={numpy_state} cupy={cupy_state}"
         )
         return 0

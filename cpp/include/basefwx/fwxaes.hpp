@@ -10,6 +10,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
 #include <iosfwd>
 #include <string>
 #include <vector>
@@ -55,6 +56,11 @@ std::uint64_t DecryptStream(std::istream& source,
                             std::ostream& dest,
                             const std::string& password,
                             bool use_master = false);
+std::uint64_t DecryptStreamFile(
+    const std::filesystem::path& source,
+    const std::filesystem::path& destination,
+    const std::string& password,
+    bool use_master = false);
 
 std::string NormalizeWrap(const Bytes& blob, const std::string& cover_phrase = "low taper fade");
 Bytes NormalizeUnwrap(const std::string& text);

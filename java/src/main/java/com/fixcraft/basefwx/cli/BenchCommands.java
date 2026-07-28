@@ -9,18 +9,35 @@ package com.fixcraft.basefwx.cli;
 import com.fixcraft.basefwx.BaseFwx;
 import com.fixcraft.basefwx.BaseFwxImage;
 
+import java.io.BufferedInputStream;
+import java.io.BufferedOutputStream;
 import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.nio.file.FileVisitResult;
 import java.nio.file.Path;
+import java.nio.file.SimpleFileVisitor;
+import java.nio.file.attribute.BasicFileAttributes;
+import java.nio.file.attribute.FileAttribute;
+import java.nio.file.attribute.PosixFilePermission;
+import java.nio.file.attribute.PosixFilePermissions;
 import java.util.Arrays;
+import java.util.EnumSet;
 import java.util.Locale;
+import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 
 final class BenchCommands {
+    private static final int STREAM_BUFFER_SIZE = 64 * 1024;
     private static volatile int BENCH_SINK = 0;
 
     private BenchCommands() {}
@@ -28,6 +45,111 @@ final class BenchCommands {
     @FunctionalInterface
     interface BenchWorker {
         long run(int workerId);
+    }
+
+    static final class ComparingOutputStream extends OutputStream {
+        private final InputStream expected;
+        private final byte[] expectedBuffer =
+                new byte[STREAM_BUFFER_SIZE];
+        private final byte[] singleByte = new byte[1];
+        private long verifiedBytes;
+        private boolean closed;
+
+        ComparingOutputStream(InputStream expected) {
+            if (expected == null) {
+                throw new NullPointerException("expected");
+            }
+            this.expected = expected;
+        }
+
+        @Override
+        public void write(int value) throws IOException {
+            singleByte[0] = (byte) value;
+            write(singleByte, 0, 1);
+        }
+
+        @Override
+        public void write(byte[] data, int offset, int length)
+                throws IOException {
+            if (data == null) {
+                throw new NullPointerException("data");
+            }
+            if ((offset | length) < 0
+                    || length > data.length - offset) {
+                throw new IndexOutOfBoundsException();
+            }
+            ensureOpen();
+
+            int inputOffset = offset;
+            int remaining = length;
+            while (remaining > 0) {
+                int chunk = Math.min(remaining, expectedBuffer.length);
+                int expectedBytes = readExpected(chunk);
+                if (expectedBytes != chunk) {
+                    throw new IOException(
+                            "Decrypted output longer than expected input"
+                            + " at byte " + (verifiedBytes + expectedBytes));
+                }
+                for (int i = 0; i < chunk; i++) {
+                    if (data[inputOffset + i] != expectedBuffer[i]) {
+                        throw new IOException(
+                                "Decrypted output mismatch at byte "
+                                + (verifiedBytes + i));
+                    }
+                }
+                verifiedBytes += chunk;
+                inputOffset += chunk;
+                remaining -= chunk;
+            }
+        }
+
+        void verifyComplete() throws IOException {
+            ensureOpen();
+            if (expected.read() != -1) {
+                throw new IOException(
+                        "Decrypted output shorter than expected input"
+                        + " at byte " + verifiedBytes);
+            }
+        }
+
+        long verifiedByteCount() {
+            return verifiedBytes;
+        }
+
+        private int readExpected(int length) throws IOException {
+            int total = 0;
+            while (total < length) {
+                int count = expected.read(
+                        expectedBuffer, total, length - total);
+                if (count < 0) {
+                    break;
+                }
+                if (count == 0) {
+                    int value = expected.read();
+                    if (value < 0) {
+                        break;
+                    }
+                    expectedBuffer[total] = (byte) value;
+                    count = 1;
+                }
+                total += count;
+            }
+            return total;
+        }
+
+        private void ensureOpen() throws IOException {
+            if (closed) {
+                throw new IOException("Comparing output stream is closed");
+            }
+        }
+
+        @Override
+        public void close() throws IOException {
+            if (!closed) {
+                closed = true;
+                expected.close();
+            }
+        }
     }
 
     /** @return 0 handled, 1 usage, -1 not handled */
@@ -271,31 +393,124 @@ final class BenchCommands {
         int iters = benchIters();
         int workers = benchWorkers();
         confirmSingleThreadCli(workers);
-        final byte[] data = readAllBytes(input);
-        BenchWorker worker = (idx) -> {
-            try {
-                java.io.ByteArrayInputStream src = new java.io.ByteArrayInputStream(data);
-                java.io.ByteArrayOutputStream encOut = new java.io.ByteArrayOutputStream(
-                    data.length + (data.length / 16) + 512
-                );
-                BaseFwx.fwxAesLiveEncryptStream(src, encOut, benchPassFinal, useMasterFlag);
-                byte[] encrypted = encOut.toByteArray();
+        if (!input.isFile()) {
+            throw new RuntimeException(
+                    "bench-live input is not a file: "
+                    + input.getAbsolutePath());
+        }
 
-                java.io.ByteArrayInputStream encIn = new java.io.ByteArrayInputStream(encrypted);
-                java.io.ByteArrayOutputStream decOut = new java.io.ByteArrayOutputStream(data.length);
-                BaseFwx.fwxAesLiveDecryptStream(encIn, decOut, benchPassFinal, useMasterFlag);
-                long size = decOut.size();
-                BENCH_SINK ^= (int) size;
-                return size;
-            } catch (RuntimeException exc) {
-                throw new RuntimeException("bench-live roundtrip failed", exc);
+        File[] tempDirs = new File[workers];
+        File[] encryptedFiles = new File[workers];
+        Throwable benchmarkFailure = null;
+        try {
+            for (int i = 0; i < workers; i++) {
+                try {
+                    tempDirs[i] = createPrivateTempDirectory(
+                            "basefwx-bench-live-" + i + "-");
+                    encryptedFiles[i] =
+                            new File(
+                                    tempDirs[i],
+                                    "ciphertext.live.fwx");
+                    createPrivateFile(encryptedFiles[i]);
+                } catch (IOException exc) {
+                    throw new RuntimeException(
+                            "Failed to create private bench-live"
+                            + " temporary storage",
+                            exc);
+                }
             }
-        };
-        long ns = workers > 1
-            ? benchParallelMedian(warmup, iters, workers, worker)
-            : benchMedian(warmup, iters, () -> worker.run(0));
-        System.out.println("BENCH_NS=" + ns);
-        return 0;
+
+            BenchWorker worker = (idx) -> {
+                File encryptedFile = encryptedFiles[idx];
+                try {
+                    try (InputStream source = new BufferedInputStream(
+                                 new FileInputStream(input),
+                                 STREAM_BUFFER_SIZE);
+                         OutputStream encryptedOutput =
+                                 new BufferedOutputStream(
+                                         new FileOutputStream(
+                                                 encryptedFile),
+                                         STREAM_BUFFER_SIZE)) {
+                        BaseFwx.fwxAesLiveEncryptStream(
+                                source,
+                                encryptedOutput,
+                                benchPassFinal,
+                                useMasterFlag);
+                    }
+
+                    long decryptedBytes;
+                    try (InputStream encryptedInput =
+                                 new BufferedInputStream(
+                                         new FileInputStream(
+                                                 encryptedFile),
+                                         STREAM_BUFFER_SIZE);
+                         ComparingOutputStream verifiedOutput =
+                                 new ComparingOutputStream(
+                                         new BufferedInputStream(
+                                                 new FileInputStream(input),
+                                                 STREAM_BUFFER_SIZE))) {
+                        decryptedBytes =
+                                BaseFwx.fwxAesLiveDecryptStream(
+                                        encryptedInput,
+                                        verifiedOutput,
+                                        benchPassFinal,
+                                        useMasterFlag);
+                        verifiedOutput.verifyComplete();
+                        if (decryptedBytes
+                                != verifiedOutput
+                                        .verifiedByteCount()) {
+                            throw new IOException(
+                                    "bench-live byte count mismatch:"
+                                    + " decrypt returned "
+                                    + decryptedBytes
+                                    + " but verified "
+                                    + verifiedOutput
+                                            .verifiedByteCount());
+                        }
+                    }
+                    BENCH_SINK ^= (int) decryptedBytes;
+                    return decryptedBytes;
+                } catch (IOException | RuntimeException exc) {
+                    throw new RuntimeException(
+                            "bench-live roundtrip failed for worker "
+                            + idx,
+                            exc);
+                }
+            };
+            long ns = workers > 1
+                ? benchParallelMedian(
+                        warmup, iters, workers, worker)
+                : benchMedian(
+                        warmup, iters, () -> worker.run(0));
+            System.out.println("BENCH_NS=" + ns);
+            System.out.println(
+                    "BENCH_VERIFIED_BYTES="
+                    + (input.length() * (long) workers));
+            return 0;
+        } catch (RuntimeException | Error failure) {
+            benchmarkFailure = failure;
+            throw failure;
+        } finally {
+            RuntimeException cleanupFailure = null;
+            for (int i = 0; i < workers; i++) {
+                try {
+                    cleanupBenchLivePath(tempDirs[i]);
+                } catch (RuntimeException failure) {
+                    if (cleanupFailure == null) {
+                        cleanupFailure = failure;
+                    } else {
+                        cleanupFailure.addSuppressed(failure);
+                    }
+                }
+            }
+            if (cleanupFailure != null) {
+                if (benchmarkFailure != null) {
+                    benchmarkFailure.addSuppressed(cleanupFailure);
+                } else {
+                    throw cleanupFailure;
+                }
+            }
+        }
     }
 
     private static int benchB512file(String[] args, int argc, boolean useMaster) {
@@ -517,6 +732,77 @@ final class BenchCommands {
         path.delete();
     }
 
+    private static File createPrivateTempDirectory(String prefix)
+            throws IOException {
+        Set<PosixFilePermission> permissions = EnumSet.of(
+                PosixFilePermission.OWNER_READ,
+                PosixFilePermission.OWNER_WRITE,
+                PosixFilePermission.OWNER_EXECUTE);
+        FileAttribute<Set<PosixFilePermission>> attribute =
+                PosixFilePermissions.asFileAttribute(permissions);
+        try {
+            return Files.createTempDirectory(prefix, attribute).toFile();
+        } catch (UnsupportedOperationException exc) {
+            throw new IOException(
+                    "bench-live requires atomic owner-only"
+                    + " temporary-directory permissions",
+                    exc);
+        }
+    }
+
+    private static void createPrivateFile(File file) throws IOException {
+        Set<PosixFilePermission> permissions = EnumSet.of(
+                PosixFilePermission.OWNER_READ,
+                PosixFilePermission.OWNER_WRITE);
+        FileAttribute<Set<PosixFilePermission>> attribute =
+                PosixFilePermissions.asFileAttribute(permissions);
+        try {
+            Files.createFile(file.toPath(), attribute);
+        } catch (UnsupportedOperationException exc) {
+            throw new IOException(
+                    "bench-live requires atomic owner-only"
+                    + " temporary-file permissions",
+                    exc);
+        }
+    }
+
+    private static void cleanupBenchLivePath(File path) {
+        if (path == null || !path.exists()) {
+            return;
+        }
+        try {
+            Files.walkFileTree(
+                    path.toPath(),
+                    new SimpleFileVisitor<Path>() {
+                        @Override
+                        public FileVisitResult visitFile(
+                                Path file,
+                                BasicFileAttributes attributes)
+                                throws IOException {
+                            Files.delete(file);
+                            return FileVisitResult.CONTINUE;
+                        }
+
+                        @Override
+                        public FileVisitResult postVisitDirectory(
+                                Path directory,
+                                IOException failure)
+                                throws IOException {
+                            if (failure != null) {
+                                throw failure;
+                            }
+                            Files.delete(directory);
+                            return FileVisitResult.CONTINUE;
+                        }
+                    });
+        } catch (IOException exc) {
+            throw new RuntimeException(
+                    "Failed to remove bench-live temporary storage: "
+                    + path.getAbsolutePath(),
+                    exc);
+        }
+    }
+
     private static int readEnvInt(String name, int defaultValue, int minValue) {
         String value = System.getenv(name);
         if (value == null || value.isEmpty()) {
@@ -612,9 +898,14 @@ final class BenchCommands {
         return medianOf(samples);
     }
 
-    private static long runParallel(ExecutorService pool, int workers, BenchWorker worker) {
+    static long runParallel(
+            ExecutorService pool,
+            int workers,
+            BenchWorker worker) {
         CountDownLatch latch = new CountDownLatch(workers);
         final long[] totalBytes = new long[1];
+        AtomicReference<Throwable> workerFailure =
+                new AtomicReference<Throwable>();
         for (int i = 0; i < workers; i++) {
             final int idx = i;
             pool.execute(() -> {
@@ -623,16 +914,36 @@ final class BenchCommands {
                     synchronized (totalBytes) {
                         totalBytes[0] += bytes;
                     }
+                } catch (Throwable exc) {
+                    workerFailure.compareAndSet(null, exc);
                 } finally {
                     latch.countDown();
                 }
             });
         }
-        try {
-            latch.await();
-        } catch (InterruptedException exc) {
+        boolean interrupted = false;
+        while (true) {
+            try {
+                latch.await();
+                break;
+            } catch (InterruptedException exc) {
+                interrupted = true;
+            }
+        }
+        if (interrupted) {
             Thread.currentThread().interrupt();
-            throw new RuntimeException("Parallel benchmark interrupted", exc);
+            throw new RuntimeException("Parallel benchmark interrupted");
+        }
+        Throwable failure = workerFailure.get();
+        if (failure instanceof RuntimeException) {
+            throw (RuntimeException) failure;
+        }
+        if (failure instanceof Error) {
+            throw (Error) failure;
+        }
+        if (failure != null) {
+            throw new RuntimeException(
+                    "Parallel benchmark worker failed", failure);
         }
         return totalBytes[0];
     }

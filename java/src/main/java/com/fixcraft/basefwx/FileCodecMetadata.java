@@ -36,15 +36,68 @@ import static com.fixcraft.basefwx.FileCodecObfuscation.*;
 final class FileCodecMetadata {
     private FileCodecMetadata() {}
 
-static int parseMetadataInt(String raw, int fallback) {
+static int parsePeerPbkdf2Iterations(String raw, int fallback) {
         if (raw == null || raw.isEmpty()) {
+            FileCodecKdf.requirePeerPbkdf2WithinLimits(fallback);
             return fallback;
         }
-        try {
-            return Integer.parseInt(raw);
-        } catch (NumberFormatException exc) {
-            return fallback;
+        if (raw.length() > 10) {
+            throw new IllegalArgumentException(
+                    "Peer ENC-KDF-ITER exceeds int range");
         }
+        if (raw.length() > 1 && raw.charAt(0) == '0') {
+            throw new IllegalArgumentException(
+                    "Peer ENC-KDF-ITER must not contain leading zeros");
+        }
+        int parsed = 0;
+        for (int i = 0; i < raw.length(); i++) {
+            char ch = raw.charAt(i);
+            if (ch < '0' || ch > '9') {
+                throw new IllegalArgumentException(
+                        "Peer ENC-KDF-ITER must be an unsigned decimal integer");
+            }
+            int digit = ch - '0';
+            if (parsed > (Integer.MAX_VALUE - digit) / 10) {
+                throw new IllegalArgumentException(
+                        "Peer ENC-KDF-ITER exceeds int range");
+            }
+            parsed = parsed * 10 + digit;
+        }
+        FileCodecKdf.requirePeerPbkdf2WithinLimits(parsed);
+        return parsed;
+    }
+
+static Integer parseMetadataIntOrNull(String raw) {
+        if (raw == null || raw.isEmpty()) {
+            return null;
+        }
+        if (raw.length() > 10) {
+            throw new IllegalArgumentException(
+                    "Peer Argon2 parameter exceeds int range");
+        }
+        if (raw.length() > 1 && raw.charAt(0) == '0') {
+            throw new IllegalArgumentException(
+                    "Peer Argon2 parameter must not contain leading zeros");
+        }
+        int parsed = 0;
+        for (int i = 0; i < raw.length(); i++) {
+            char ch = raw.charAt(i);
+            if (ch < '0' || ch > '9') {
+                throw new IllegalArgumentException(
+                        "Peer Argon2 parameter must be an unsigned decimal integer");
+            }
+            int digit = ch - '0';
+            if (parsed > (Integer.MAX_VALUE - digit) / 10) {
+                throw new IllegalArgumentException(
+                        "Peer Argon2 parameter exceeds int range");
+            }
+            parsed = parsed * 10 + digit;
+        }
+        if (parsed == 0) {
+            throw new IllegalArgumentException(
+                    "Peer Argon2 parameter must be positive");
+        }
+        return parsed;
     }
 
 static boolean isStreamMode(String metadataBlob) {
@@ -56,23 +109,49 @@ static boolean isStreamMode(String metadataBlob) {
     }
 
 static String peekMetadataBlob(File input) {
+        if (input.length() < 12L) {
+            return "";
+        }
         try (FileInputStream in = new FileInputStream(input)) {
             int lenUser = readU32(in, "Ciphertext payload truncated");
+            requireBoundedFileLength(
+                    input, 4L, lenUser, Constants.LENGTH_PREFIXED_MAX,
+                    "user key transport");
             skipFully(in, lenUser, "Ciphertext payload truncated");
             int lenMaster = readU32(in, "Ciphertext payload truncated");
+            requireHeaderLengthTotal((long) lenUser + lenMaster);
+            requireBoundedFileLength(
+                    input, 8L + lenUser, lenMaster,
+                    Constants.LENGTH_PREFIXED_MAX, "master key transport");
             skipFully(in, lenMaster, "Ciphertext payload truncated");
             int lenPayload = readU32(in, "Ciphertext payload truncated");
-            if (lenPayload < 4) {
+            long payloadLength = resolvePayloadLengthFromFileSize(
+                    input, lenUser, lenMaster, lenPayload);
+            long payloadOffset = 12L + lenUser + lenMaster;
+            if (payloadLength != input.length() - payloadOffset) {
+                throw new IllegalArgumentException(
+                        "Ciphertext payload length does not match remaining file");
+            }
+            if (payloadLength < 4) {
                 return "";
             }
             int metaLen = readU32(in, "Ciphertext payload truncated");
-            if (metaLen <= 0) {
+            if (metaLen < 0 || (long) metaLen > payloadLength - 4L) {
+                throw new IllegalArgumentException(
+                        "Ciphertext metadata length invalid");
+            }
+            requireHeaderLengthTotal(
+                    (long) lenUser + lenMaster + metaLen);
+            requireBoundedFileLength(
+                    input, payloadOffset + 4L, metaLen,
+                    Constants.METADATA_MAX, "metadata");
+            if (metaLen == 0) {
                 return "";
             }
             byte[] meta = readExactBytes(in, metaLen, "Ciphertext payload truncated");
             return new String(meta, StandardCharsets.UTF_8);
-        } catch (IOException | IllegalArgumentException exc) {
-            return "";
+        } catch (IOException exc) {
+            throw new IllegalStateException("Failed to preview ciphertext metadata", exc);
         }
     }
 
@@ -99,15 +178,17 @@ static byte[] buildStreamHeader(long inputSize,
 static String buildMetadata(String method,
                                         boolean strip,
                                         boolean useMaster,
+                                        String masterKem,
                                         String aead,
                                         String kdfLabel) {
-        return buildMetadata(method, strip, useMaster, aead, kdfLabel,
+        return buildMetadata(method, strip, useMaster, masterKem, aead, kdfLabel,
             null, null, null, null, null, null, null, null);
     }
 
 static String buildMetadata(String method,
                                         boolean strip,
                                         boolean useMaster,
+                                        String masterKem,
                                         String aead,
                                         String kdfLabel,
                                         String mode,
@@ -118,15 +199,48 @@ static String buildMetadata(String method,
                                         Integer argonMem,
                                         Integer argonPar,
                                         String pack) {
+        return buildMetadata(
+                method, strip, useMaster, masterKem, aead, kdfLabel,
+                mode, obfuscation, obfMode, kdfIters, argonTime,
+                argonMem, argonPar, pack, null);
+    }
+
+static String buildMetadata(String method,
+                                        boolean strip,
+                                        boolean useMaster,
+                                        String masterKem,
+                                        String aead,
+                                        String kdfLabel,
+                                        String mode,
+                                        Boolean obfuscation,
+                                        String obfMode,
+                                        Integer kdfIters,
+                                        Integer argonTime,
+                                        Integer argonMem,
+                                        Integer argonPar,
+                                        String pack,
+                                        String keySeparation) {
+        kdfLabel = FileCodecKdf.resolveKdfLabel(kdfLabel);
         if (strip) {
             return "";
+        }
+        if (useMaster) {
+            if (!Constants.MASTER_PQ_ALG_DEFAULT.equals(masterKem)
+                    && !Constants.MASTER_PQ_ALG_HIGH.equals(masterKem)
+                    && !"EC".equals(masterKem)) {
+                throw new IllegalArgumentException(
+                        "Master-enabled metadata requires an explicit selected KEM");
+            }
+        } else if (!"none".equals(masterKem)) {
+            throw new IllegalArgumentException(
+                    "Master-disabled metadata must use ENC-KEM=none");
         }
         Map<String, String> info = new LinkedHashMap<>();
         info.put("ENC-TIME", Instant.now().toString());
         info.put("ENC-VERSION", Constants.ENGINE_VERSION);
         info.put("ENC-METHOD", method);
         info.put("ENC-MASTER", useMaster ? "yes" : "no");
-        info.put("ENC-KEM", useMaster ? "EC" : "none");
+        info.put("ENC-KEM", masterKem);
         info.put("ENC-AEAD", aead);
         info.put("ENC-KDF", kdfLabel);
         if (mode != null && !mode.isEmpty()) {
@@ -152,8 +266,17 @@ static String buildMetadata(String method,
         if (pack != null && !pack.isEmpty()) {
             info.put("ENC-P", pack);
         }
+        if (keySeparation != null && !keySeparation.isEmpty()) {
+            info.put("ENC-KSEP", keySeparation);
+        }
         String json = encodeJson(info);
-        return Base64Codec.encode(json.getBytes(StandardCharsets.UTF_8));
+        String encoded = Base64Codec.encode(
+                json.getBytes(StandardCharsets.UTF_8));
+        if (encoded.length() > Constants.METADATA_MAX) {
+            throw new IllegalArgumentException(
+                    "Payload metadata exceeds 1 MiB cap");
+        }
+        return encoded;
     }
 
 static String encodeJson(Map<String, String> map) {

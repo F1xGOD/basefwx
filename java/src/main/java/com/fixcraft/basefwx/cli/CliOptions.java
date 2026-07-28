@@ -8,6 +8,7 @@ package com.fixcraft.basefwx.cli;
 
 import com.fixcraft.basefwx.Constants;
 import com.fixcraft.basefwx.MediaCipher;
+import com.fixcraft.basefwx.PQ;
 import com.fixcraft.basefwx.VersionInfo;
 
 import java.io.File;
@@ -86,7 +87,7 @@ final class CliOptions {
         // Argon2BytesGenerator (always available as a runtime dep), so the
         // feature flag flips on. OQS / LZMA remain OFF in Java; configure
         // them out-of-band on the C++ side if you need full coverage.
-        System.out.println("features: argon2=ON oqs=OFF lzma=OFF");
+        System.out.println("features: argon2=ON pq=" + PQ.currentKemAlgorithm() + " lzma=OFF");
     }
 
     static String[] hwPlanForCommand(String command) {

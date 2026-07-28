@@ -62,6 +62,7 @@
 #endif
 #endif
 #include "basefwx/cli/bench.hpp"
+#include "basefwx/cli/bench_memory.hpp"
 #include "basefwx/cli/globals.hpp"
 #include "basefwx/cli/inspect.hpp"
 #include "basefwx/cli/options.hpp"
@@ -71,6 +72,92 @@
 #include "basefwx/plugin_loader.hpp"
 
 namespace {
+
+class ReadOnlyMemoryBuffer final : public std::streambuf {
+public:
+    explicit ReadOnlyMemoryBuffer(const std::vector<std::uint8_t>& data) {
+        char* begin = const_cast<char*>(
+                reinterpret_cast<const char*>(data.data()));
+        setg(begin, begin, begin + data.size());
+    }
+};
+
+class ReadOnlyMemoryStream final : public std::istream {
+public:
+    explicit ReadOnlyMemoryStream(const std::vector<std::uint8_t>& data)
+        : std::istream(nullptr), buffer_(data) {
+        rdbuf(&buffer_);
+    }
+
+private:
+    ReadOnlyMemoryBuffer buffer_;
+};
+
+class CountingOutputBuffer final : public std::streambuf {
+public:
+    std::size_t size() const noexcept {
+        return size_;
+    }
+
+protected:
+    std::streamsize xsputn(const char*, std::streamsize count) override {
+        if (count <= 0) {
+            return 0;
+        }
+        const auto amount = static_cast<std::size_t>(count);
+        if (amount > std::numeric_limits<std::size_t>::max() - size_) {
+            return 0;
+        }
+        size_ += amount;
+        return count;
+    }
+
+    int_type overflow(int_type ch) override {
+        if (traits_type::eq_int_type(ch, traits_type::eof())) {
+            return traits_type::not_eof(ch);
+        }
+        if (size_ == std::numeric_limits<std::size_t>::max()) {
+            return traits_type::eof();
+        }
+        ++size_;
+        return ch;
+    }
+
+private:
+    std::size_t size_ = 0;
+};
+
+class CountingOutputStream final : public std::ostream {
+public:
+    CountingOutputStream()
+        : std::ostream(nullptr) {
+        rdbuf(&buffer_);
+    }
+
+    std::size_t size() const noexcept {
+        return buffer_.size();
+    }
+
+private:
+    CountingOutputBuffer buffer_;
+};
+
+std::uint64_t LiveBenchMemoryLimitBytes() {
+    const char* configured =
+            std::getenv("BASEFWX_BENCH_MEMORY_LIMIT_BYTES");
+    if (configured && *configured) {
+        char* end = nullptr;
+        const unsigned long long parsed =
+                std::strtoull(configured, &end, 10);
+        if (end != configured && *end == '\0' && parsed > 0) {
+            return static_cast<std::uint64_t>(parsed);
+        }
+    }
+    const auto memory = basefwx::system::DetectMemoryInfo();
+    return memory.available_bytes > 0
+            ? memory.available_bytes
+            : memory.total_bytes;
+}
 
 void HandleStopSignal(int /*signum*/) {
     basefwx::runtime::RequestStop();
@@ -761,23 +848,41 @@ int main(int argc, char** argv) {
                 }
             }
             auto data = ReadBinaryFile(input);
-            std::string payload(reinterpret_cast<const char*>(data.data()), data.size());
             int warmup = basefwx::cli::BenchWarmup();
             int iters = basefwx::cli::BenchIters();
-            std::size_t workers = static_cast<std::size_t>(basefwx::cli::BenchWorkers());
-            if (workers == 0) {
-                workers = 1;
+            const std::size_t requested_workers =
+                    static_cast<std::size_t>(
+                            basefwx::cli::BenchWorkers());
+            const std::size_t workers =
+                    basefwx::cli::BoundLiveBenchWorkers(
+                            requested_workers,
+                            static_cast<std::uint64_t>(data.size()),
+                            LiveBenchMemoryLimitBytes());
+            if (workers < std::max<std::size_t>(requested_workers, 1)) {
+                std::cerr
+                        << "WARN: bench-live limited workers from "
+                        << requested_workers << " to " << workers
+                        << " for the input size and memory budget\n";
             }
             basefwx::cli::ConfirmSingleThreadCli(workers);
             auto op = [&]() -> std::size_t {
-                std::istringstream source(payload, std::ios::in | std::ios::binary);
-                std::ostringstream encrypted(std::ios::out | std::ios::binary);
+                ReadOnlyMemoryStream source(data);
+                std::stringstream encrypted(
+                        std::ios::in | std::ios::out | std::ios::binary);
                 basefwx::FwxAesLiveEncryptStream(source, encrypted, password, use_master);
-                std::string enc_blob = encrypted.str();
-                std::istringstream enc_in(enc_blob, std::ios::in | std::ios::binary);
-                std::ostringstream restored(std::ios::out | std::ios::binary);
-                basefwx::FwxAesLiveDecryptStream(enc_in, restored, password, use_master);
-                std::size_t len = restored.str().size();
+                encrypted.seekg(0, std::ios::beg);
+                if (!encrypted) {
+                    throw std::runtime_error(
+                            "bench-live failed to rewind encrypted stream");
+                }
+                CountingOutputStream restored;
+                basefwx::FwxAesLiveDecryptStream(
+                        encrypted, restored, password, use_master);
+                const std::size_t len = restored.size();
+                if (len != data.size()) {
+                    throw std::runtime_error(
+                            "bench-live restored length mismatch");
+                }
                 basefwx::cli::g_bench_sink.fetch_xor(len, std::memory_order_relaxed);
                 return len;
             };
@@ -1361,20 +1466,30 @@ int main(int argc, char** argv) {
                 if (opts.normalize || opts.compress) {
                     throw std::runtime_error("Streaming fwxAES does not support normalize or pack options");
                 }
-                std::ifstream input(opts.input, std::ios::binary);
-                if (!input) {
-                    throw std::runtime_error("Failed to open input file: " + opts.input);
-                }
-                std::ofstream output(opts.output, std::ios::binary);
-                if (!output) {
-                    throw std::runtime_error("Failed to open output file: " + opts.output);
-                }
                 basefwx::fwxaes::Options stream_opts = BuildFwxAesOptions(opts);
                 if (command == "fwxaes-stream-enc") {
+                    std::ifstream input(
+                        opts.input, std::ios::binary);
+                    if (!input) {
+                        throw std::runtime_error(
+                            "Failed to open input file: "
+                            + opts.input);
+                    }
+                    std::ofstream output(
+                        opts.output, std::ios::binary);
+                    if (!output) {
+                        throw std::runtime_error(
+                            "Failed to open output file: "
+                            + opts.output);
+                    }
                     basefwx::RequireStrongPasswordForEncryption(basefwx::ResolvePassword(opts.password), "fwxAES stream");
                     basefwx::fwxaes::EncryptStream(input, output, opts.password, stream_opts);
                 } else {
-                    basefwx::fwxaes::DecryptStream(input, output, opts.password, stream_opts.use_master);
+                    (void)basefwx::fwxaes::DecryptStreamFile(
+                        opts.input,
+                        opts.output,
+                        opts.password,
+                        stream_opts.use_master);
                 }
                 complete_progress();
                 return 0;

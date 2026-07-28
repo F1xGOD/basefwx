@@ -13,6 +13,8 @@
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
+#include <limits>
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -45,6 +47,43 @@ namespace {
 
 using basefwx::constants::kMasterEcMagic;
 
+struct BioDeleter {
+    void operator()(BIO* bio) const noexcept {
+        BIO_free(bio);
+    }
+};
+
+struct EcKeyDeleter {
+    void operator()(EC_KEY* key) const noexcept {
+        EC_KEY_free(key);
+    }
+};
+
+struct EcPointDeleter {
+    void operator()(EC_POINT* point) const noexcept {
+        EC_POINT_free(point);
+    }
+};
+
+struct EvpPkeyDeleter {
+    void operator()(EVP_PKEY* key) const noexcept {
+        EVP_PKEY_free(key);
+    }
+};
+
+struct EvpPkeyCtxDeleter {
+    void operator()(EVP_PKEY_CTX* context) const noexcept {
+        EVP_PKEY_CTX_free(context);
+    }
+};
+
+using BioPtr = std::unique_ptr<BIO, BioDeleter>;
+using EcKeyPtr = std::unique_ptr<EC_KEY, EcKeyDeleter>;
+using EcPointPtr = std::unique_ptr<EC_POINT, EcPointDeleter>;
+using EvpPkeyPtr = std::unique_ptr<EVP_PKEY, EvpPkeyDeleter>;
+using EvpPkeyCtxPtr =
+    std::unique_ptr<EVP_PKEY_CTX, EvpPkeyCtxDeleter>;
+
 std::filesystem::path ExpandUser(const std::string& path) {
     if (path.rfind("~/", 0) == 0 || path.rfind("~\\", 0) == 0) {
         std::string home = basefwx::env::HomeDir();
@@ -64,6 +103,23 @@ std::filesystem::path DefaultPrivatePath() {
 }
 
 Bytes ReadFileBytes(const std::filesystem::path& path) {
+    constexpr std::uintmax_t kMaxKeyBytes = 4u * 1024u * 1024u;
+    std::error_code status_error;
+    if (!std::filesystem::is_regular_file(path, status_error)
+        || status_error) {
+        throw std::runtime_error(
+            "Key path is not a regular file: " + path.string());
+    }
+    const std::uintmax_t file_size =
+        std::filesystem::file_size(path, status_error);
+    if (status_error) {
+        throw std::runtime_error(
+            "Failed to inspect key file: " + path.string());
+    }
+    if (file_size > kMaxKeyBytes) {
+        throw std::runtime_error(
+            "Key file too large (>4 MiB): " + path.string());
+    }
     std::ifstream input(path, std::ios::binary);
     if (!input) {
         throw std::runtime_error("Failed to open key file: " + path.string());
@@ -72,6 +128,10 @@ Bytes ReadFileBytes(const std::filesystem::path& path) {
     std::streamoff size = input.tellg();
     if (size < 0) {
         throw std::runtime_error("Failed to read key file: " + path.string());
+    }
+    if (static_cast<std::uintmax_t>(size) > kMaxKeyBytes) {
+        throw std::runtime_error(
+            "Key file too large (>4 MiB): " + path.string());
     }
     input.seekg(0, std::ios::beg);
     Bytes data(static_cast<std::size_t>(size));
@@ -98,16 +158,6 @@ void WriteFileBytes(const std::filesystem::path& path, const Bytes& data) {
     }
 }
 
-void SetPrivatePermissions(const std::filesystem::path& path) {
-    std::error_code ec;
-    std::filesystem::permissions(
-        path,
-        std::filesystem::perms::owner_read | std::filesystem::perms::owner_write,
-        std::filesystem::perm_options::replace,
-        ec
-    );
-}
-
 void SetPublicPermissions(const std::filesystem::path& path) {
     std::error_code ec;
     std::filesystem::permissions(
@@ -129,239 +179,232 @@ Bytes BioToBytes(BIO* bio) {
                  reinterpret_cast<std::uint8_t*>(mem->data) + mem->length);
 }
 
-EVP_PKEY* LoadPublicKey(const Bytes& raw) {
+EvpPkeyPtr LoadPublicKey(const Bytes& raw) {
     if (raw.empty()) {
         throw std::runtime_error("Empty EC public key data");
     }
-    BIO* bio = BIO_new_mem_buf(raw.data(), static_cast<int>(raw.size()));
-    EVP_PKEY* key = PEM_read_bio_PUBKEY(bio, nullptr, nullptr, nullptr);
-    BIO_free(bio);
+    if (raw.size() > static_cast<std::size_t>(
+                         std::numeric_limits<int>::max())) {
+        throw std::runtime_error("EC public key data too large");
+    }
+    BioPtr bio(BIO_new_mem_buf(raw.data(), static_cast<int>(raw.size())));
+    if (!bio) {
+        throw std::runtime_error("Failed to allocate BIO");
+    }
+    EvpPkeyPtr key(
+        PEM_read_bio_PUBKEY(bio.get(), nullptr, nullptr, nullptr));
     if (key) {
         return key;
     }
-    bio = BIO_new_mem_buf(raw.data(), static_cast<int>(raw.size()));
-    key = PEM_read_bio_PrivateKey(bio, nullptr, nullptr, nullptr);
-    BIO_free(bio);
+    bio.reset(BIO_new_mem_buf(raw.data(), static_cast<int>(raw.size())));
+    if (!bio) {
+        throw std::runtime_error("Failed to allocate BIO");
+    }
+    key.reset(
+        PEM_read_bio_PrivateKey(bio.get(), nullptr, nullptr, nullptr));
     if (key) {
         return key;
     }
     const unsigned char* ptr = raw.data();
-    key = d2i_PUBKEY(nullptr, &ptr, static_cast<long>(raw.size()));
+    key.reset(d2i_PUBKEY(nullptr, &ptr, static_cast<long>(raw.size())));
     if (key) {
         return key;
     }
     ptr = raw.data();
-    key = d2i_AutoPrivateKey(nullptr, &ptr, static_cast<long>(raw.size()));
+    key.reset(
+        d2i_AutoPrivateKey(nullptr, &ptr, static_cast<long>(raw.size())));
     if (key) {
         return key;
     }
     throw std::runtime_error("Unsupported EC public key format");
 }
 
-EVP_PKEY* LoadPrivateKey(const Bytes& raw) {
+EvpPkeyPtr LoadPrivateKey(const Bytes& raw) {
     if (raw.empty()) {
         throw std::runtime_error("Empty EC private key data");
     }
-    BIO* bio = BIO_new_mem_buf(raw.data(), static_cast<int>(raw.size()));
-    EVP_PKEY* key = PEM_read_bio_PrivateKey(bio, nullptr, nullptr, nullptr);
-    BIO_free(bio);
+    if (raw.size() > static_cast<std::size_t>(
+                         std::numeric_limits<int>::max())) {
+        throw std::runtime_error("EC private key data too large");
+    }
+    BioPtr bio(BIO_new_mem_buf(raw.data(), static_cast<int>(raw.size())));
+    if (!bio) {
+        throw std::runtime_error("Failed to allocate BIO");
+    }
+    EvpPkeyPtr key(
+        PEM_read_bio_PrivateKey(bio.get(), nullptr, nullptr, nullptr));
     if (key) {
         return key;
     }
     const unsigned char* ptr = raw.data();
-    key = d2i_AutoPrivateKey(nullptr, &ptr, static_cast<long>(raw.size()));
+    key.reset(
+        d2i_AutoPrivateKey(nullptr, &ptr, static_cast<long>(raw.size())));
     if (key) {
         return key;
     }
     throw std::runtime_error("Unsupported EC private key format");
 }
 
-EVP_PKEY* GenerateKey() {
-    EVP_PKEY_CTX* ctx = EVP_PKEY_CTX_new_id(EVP_PKEY_EC, nullptr);
+EvpPkeyPtr GenerateKey() {
+    EvpPkeyCtxPtr ctx(EVP_PKEY_CTX_new_id(EVP_PKEY_EC, nullptr));
     if (!ctx) {
         throw std::runtime_error("Failed to initialize EC keygen");
     }
-    if (EVP_PKEY_keygen_init(ctx) != 1) {
-        EVP_PKEY_CTX_free(ctx);
+    if (EVP_PKEY_keygen_init(ctx.get()) != 1) {
         throw std::runtime_error("Failed to init EC keygen");
     }
-    if (EVP_PKEY_CTX_set_ec_paramgen_curve_nid(ctx, NID_secp521r1) != 1) {
-        EVP_PKEY_CTX_free(ctx);
+    if (EVP_PKEY_CTX_set_ec_paramgen_curve_nid(
+            ctx.get(), NID_secp521r1) != 1) {
         throw std::runtime_error("Failed to set EC curve");
     }
-    if (EVP_PKEY_CTX_set_ec_param_enc(ctx, OPENSSL_EC_NAMED_CURVE) != 1) {
-        EVP_PKEY_CTX_free(ctx);
+    if (EVP_PKEY_CTX_set_ec_param_enc(
+            ctx.get(), OPENSSL_EC_NAMED_CURVE) != 1) {
         throw std::runtime_error("Failed to set EC params");
     }
-    EVP_PKEY* pkey = nullptr;
-    if (EVP_PKEY_keygen(ctx, &pkey) != 1 || !pkey) {
-        EVP_PKEY_CTX_free(ctx);
+    EVP_PKEY* raw_key = nullptr;
+    const int result = EVP_PKEY_keygen(ctx.get(), &raw_key);
+    EvpPkeyPtr pkey(raw_key);
+    if (result != 1 || !pkey) {
         throw std::runtime_error("Failed to generate EC key");
     }
-    EVP_PKEY_CTX_free(ctx);
     return pkey;
 }
 
 Bytes PublicPemFromKey(EVP_PKEY* key) {
-    BIO* bio = BIO_new(BIO_s_mem());
+    BioPtr bio(BIO_new(BIO_s_mem()));
     if (!bio) {
         throw std::runtime_error("Failed to allocate BIO");
     }
-    if (PEM_write_bio_PUBKEY(bio, key) != 1) {
-        BIO_free(bio);
+    if (PEM_write_bio_PUBKEY(bio.get(), key) != 1) {
         throw std::runtime_error("Failed to write EC public key");
     }
-    Bytes out = BioToBytes(bio);
-    BIO_free(bio);
-    return out;
-}
-
-Bytes PrivatePemFromKey(EVP_PKEY* key) {
-    BIO* bio = BIO_new(BIO_s_mem());
-    if (!bio) {
-        throw std::runtime_error("Failed to allocate BIO");
-    }
-    if (PEM_write_bio_PrivateKey(bio, key, nullptr, nullptr, 0, nullptr, nullptr) != 1) {
-        BIO_free(bio);
-        throw std::runtime_error("Failed to write EC private key");
-    }
-    Bytes out = BioToBytes(bio);
-    BIO_free(bio);
-    return out;
+    return BioToBytes(bio.get());
 }
 
 void EnsureCurve(EVP_PKEY* key) {
-    EC_KEY* ec_key = EVP_PKEY_get1_EC_KEY(key);
+    EcKeyPtr ec_key(EVP_PKEY_get1_EC_KEY(key));
     if (!ec_key) {
         throw std::runtime_error("EC key expected");
     }
-    const EC_GROUP* group = EC_KEY_get0_group(ec_key);
+    const EC_GROUP* group = EC_KEY_get0_group(ec_key.get());
+    if (!group) {
+        throw std::runtime_error("EC key group missing");
+    }
     int nid = EC_GROUP_get_curve_name(group);
-    EC_KEY_free(ec_key);
     if (nid != NID_secp521r1) {
         throw std::runtime_error("EC key curve must be secp521r1");
     }
 }
 
 Bytes EncodePublicPoint(EVP_PKEY* key) {
-    EC_KEY* ec_key = EVP_PKEY_get1_EC_KEY(key);
+    EcKeyPtr ec_key(EVP_PKEY_get1_EC_KEY(key));
     if (!ec_key) {
         throw std::runtime_error("EC key expected");
     }
-    const EC_GROUP* group = EC_KEY_get0_group(ec_key);
-    const EC_POINT* point = EC_KEY_get0_public_key(ec_key);
+    const EC_GROUP* group = EC_KEY_get0_group(ec_key.get());
+    const EC_POINT* point = EC_KEY_get0_public_key(ec_key.get());
     if (!group || !point) {
-        EC_KEY_free(ec_key);
         throw std::runtime_error("EC public key missing");
     }
     std::size_t len = EC_POINT_point2oct(group, point, POINT_CONVERSION_UNCOMPRESSED, nullptr, 0, nullptr);
     if (len == 0) {
-        EC_KEY_free(ec_key);
         throw std::runtime_error("Failed to encode EC public key");
     }
     Bytes out(len);
     if (EC_POINT_point2oct(group, point, POINT_CONVERSION_UNCOMPRESSED, out.data(), out.size(), nullptr) != len) {
-        EC_KEY_free(ec_key);
         throw std::runtime_error("Failed to encode EC public key");
     }
-    EC_KEY_free(ec_key);
     return out;
 }
 
-EVP_PKEY* PublicKeyFromPoint(const Bytes& encoded) {
-    EC_KEY* ec_key = EC_KEY_new_by_curve_name(NID_secp521r1);
+EvpPkeyPtr PublicKeyFromPoint(const Bytes& encoded) {
+    EcKeyPtr ec_key(EC_KEY_new_by_curve_name(NID_secp521r1));
     if (!ec_key) {
         throw std::runtime_error("Failed to create EC key");
     }
-    const EC_GROUP* group = EC_KEY_get0_group(ec_key);
-    EC_POINT* point = EC_POINT_new(group);
+    const EC_GROUP* group = EC_KEY_get0_group(ec_key.get());
+    if (!group) {
+        throw std::runtime_error("Failed to get EC group");
+    }
+    EcPointPtr point(EC_POINT_new(group));
     if (!point) {
-        EC_KEY_free(ec_key);
         throw std::runtime_error("Failed to create EC point");
     }
-    if (EC_POINT_oct2point(group, point, encoded.data(), encoded.size(), nullptr) != 1) {
-        EC_POINT_free(point);
-        EC_KEY_free(ec_key);
+    if (EC_POINT_oct2point(
+            group,
+            point.get(),
+            encoded.data(),
+            encoded.size(),
+            nullptr) != 1) {
         throw std::runtime_error("Invalid EC public key encoding");
     }
-    if (EC_KEY_set_public_key(ec_key, point) != 1) {
-        EC_POINT_free(point);
-        EC_KEY_free(ec_key);
+    if (EC_KEY_set_public_key(ec_key.get(), point.get()) != 1) {
         throw std::runtime_error("Failed to set EC public key");
     }
-    EC_POINT_free(point);
-    EVP_PKEY* pkey = EVP_PKEY_new();
+    EvpPkeyPtr pkey(EVP_PKEY_new());
     if (!pkey) {
-        EC_KEY_free(ec_key);
         throw std::runtime_error("Failed to allocate EVP_PKEY");
     }
-    if (EVP_PKEY_set1_EC_KEY(pkey, ec_key) != 1) {
-        EVP_PKEY_free(pkey);
-        EC_KEY_free(ec_key);
+    if (EVP_PKEY_set1_EC_KEY(pkey.get(), ec_key.get()) != 1) {
         throw std::runtime_error("Failed to assign EC key");
     }
-    EC_KEY_free(ec_key);
     return pkey;
 }
 
 Bytes DeriveShared(EVP_PKEY* priv, EVP_PKEY* peer) {
-    EVP_PKEY_CTX* ctx = EVP_PKEY_CTX_new(priv, nullptr);
+    EvpPkeyCtxPtr ctx(EVP_PKEY_CTX_new(priv, nullptr));
     if (!ctx) {
         throw std::runtime_error("Failed to init ECDH ctx");
     }
-    if (EVP_PKEY_derive_init(ctx) != 1) {
-        EVP_PKEY_CTX_free(ctx);
+    if (EVP_PKEY_derive_init(ctx.get()) != 1) {
         throw std::runtime_error("Failed to init ECDH derive");
     }
-    if (EVP_PKEY_derive_set_peer(ctx, peer) != 1) {
-        EVP_PKEY_CTX_free(ctx);
+    if (EVP_PKEY_derive_set_peer(ctx.get(), peer) != 1) {
         throw std::runtime_error("Failed to set ECDH peer");
     }
     std::size_t len = 0;
-    if (EVP_PKEY_derive(ctx, nullptr, &len) != 1 || len == 0) {
-        EVP_PKEY_CTX_free(ctx);
+    if (EVP_PKEY_derive(ctx.get(), nullptr, &len) != 1 || len == 0) {
         throw std::runtime_error("Failed to size ECDH shared secret");
     }
     Bytes shared(len);
-    if (EVP_PKEY_derive(ctx, shared.data(), &len) != 1) {
-        EVP_PKEY_CTX_free(ctx);
+    if (EVP_PKEY_derive(ctx.get(), shared.data(), &len) != 1) {
+        basefwx::crypto::SecureClear(shared);
         throw std::runtime_error("Failed to derive ECDH shared secret");
     }
     shared.resize(len);
-    EVP_PKEY_CTX_free(ctx);
     return shared;
 }
 
 }  // namespace
 
 bool IsEcMasterBlob(const Bytes& blob) {
-    if (blob.size() < kMasterEcMagic.size()) {
+    constexpr std::size_t point_len =
+        basefwx::constants::kMasterEcPointLen;
+    constexpr std::size_t header_len = 2;
+    if (blob.size() != kMasterEcMagic.size() + header_len + point_len) {
         return false;
     }
-    return std::equal(kMasterEcMagic.begin(), kMasterEcMagic.end(), blob.begin());
+    const std::size_t length_offset = kMasterEcMagic.size();
+    const std::uint16_t declared = static_cast<std::uint16_t>(
+        (static_cast<std::uint16_t>(blob[length_offset]) << 8)
+        | blob[length_offset + 1]);
+    return declared == point_len
+        && blob[length_offset + header_len] == 0x04
+        && std::equal(
+            kMasterEcMagic.begin(), kMasterEcMagic.end(), blob.begin());
 }
 
 std::optional<Bytes> LoadMasterPublicKey(bool create_if_missing) {
+    (void)create_if_missing;
     std::string env_pub = basefwx::env::Get("BASEFWX_MASTER_EC_PUB");
-    std::string env_priv = basefwx::env::Get("BASEFWX_MASTER_EC_PRIV");
     if (!env_pub.empty()) {
         std::filesystem::path pub_path = ExpandUser(env_pub);
         if (std::filesystem::exists(pub_path)) {
             return ReadFileBytes(pub_path);
         }
-        if (create_if_missing) {
-            std::filesystem::path priv_path = env_priv.empty() ? DefaultPrivatePath() : ExpandUser(env_priv);
-            EVP_PKEY* key = GenerateKey();
-            Bytes priv_bytes = PrivatePemFromKey(key);
-            Bytes pub_bytes = PublicPemFromKey(key);
-            EVP_PKEY_free(key);
-            WriteFileBytes(priv_path, priv_bytes);
-            WriteFileBytes(pub_path, pub_bytes);
-            SetPrivatePermissions(priv_path);
-            SetPublicPermissions(pub_path);
-            return pub_bytes;
-        }
-        return std::nullopt;
+        throw std::runtime_error(
+            "Configured master EC public key not found: "
+            + pub_path.string());
     }
     std::filesystem::path pub_path = DefaultPublicPath();
     std::filesystem::path priv_path = DefaultPrivatePath();
@@ -369,25 +412,14 @@ std::optional<Bytes> LoadMasterPublicKey(bool create_if_missing) {
         return ReadFileBytes(pub_path);
     }
     if (std::filesystem::exists(priv_path)) {
-        Bytes priv_bytes = ReadFileBytes(priv_path);
-        EVP_PKEY* key = LoadPrivateKey(priv_bytes);
-        Bytes pub_bytes = PublicPemFromKey(key);
-        EVP_PKEY_free(key);
+        basefwx::crypto::SecureBytes priv_bytes{
+            ReadFileBytes(priv_path)};
+        EvpPkeyPtr key = LoadPrivateKey(priv_bytes.bytes());
+        Bytes pub_bytes = PublicPemFromKey(key.get());
         if (!std::filesystem::exists(pub_path)) {
             WriteFileBytes(pub_path, pub_bytes);
             SetPublicPermissions(pub_path);
         }
-        return pub_bytes;
-    }
-    if (create_if_missing) {
-        EVP_PKEY* key = GenerateKey();
-        Bytes priv_bytes = PrivatePemFromKey(key);
-        Bytes pub_bytes = PublicPemFromKey(key);
-        EVP_PKEY_free(key);
-        WriteFileBytes(priv_path, priv_bytes);
-        WriteFileBytes(pub_path, pub_bytes);
-        SetPrivatePermissions(priv_path);
-        SetPublicPermissions(pub_path);
         return pub_bytes;
     }
     return std::nullopt;
@@ -397,10 +429,15 @@ Bytes LoadMasterPrivateKey() {
     std::vector<std::filesystem::path> candidates;
     std::string env_priv = basefwx::env::Get("BASEFWX_MASTER_EC_PRIV");
     if (!env_priv.empty()) {
-        candidates.push_back(ExpandUser(env_priv));
+        const auto configured = ExpandUser(env_priv);
+        if (!std::filesystem::exists(configured)) {
+            throw std::runtime_error(
+                "Configured master EC private key not found: "
+                + configured.string());
+        }
+        return ReadFileBytes(configured);
     }
     candidates.push_back(DefaultPrivatePath());
-    candidates.push_back(std::filesystem::path("W:\\master_ec_private.pem"));
     for (const auto& path : candidates) {
         if (!path.empty() && std::filesystem::exists(path)) {
             return ReadFileBytes(path);
@@ -410,13 +447,12 @@ Bytes LoadMasterPrivateKey() {
 }
 
 KemResult KemEncrypt(const Bytes& public_key) {
-    EVP_PKEY* peer = LoadPublicKey(public_key);
-    EnsureCurve(peer);
-    EVP_PKEY* eph = GenerateKey();
-    Bytes shared = DeriveShared(eph, peer);
-    Bytes epk = EncodePublicPoint(eph);
-    EVP_PKEY_free(peer);
-    EVP_PKEY_free(eph);
+    EvpPkeyPtr peer = LoadPublicKey(public_key);
+    EnsureCurve(peer.get());
+    EvpPkeyPtr eph = GenerateKey();
+    basefwx::crypto::SecureBytes shared{
+        DeriveShared(eph.get(), peer.get())};
+    Bytes epk = EncodePublicPoint(eph.get());
     if (epk.size() > 0xFFFFu) {
         throw std::runtime_error("EC public key encoding too large");
     }
@@ -427,7 +463,7 @@ KemResult KemEncrypt(const Bytes& public_key) {
     blob.push_back(static_cast<std::uint8_t>((len >> 8) & 0xFF));
     blob.push_back(static_cast<std::uint8_t>(len & 0xFF));
     blob.insert(blob.end(), epk.begin(), epk.end());
-    return {blob, shared};
+    return {std::move(blob), shared.Release()};
 }
 
 Bytes KemDecrypt(const Bytes& private_key, const Bytes& blob) {
@@ -445,13 +481,10 @@ Bytes KemDecrypt(const Bytes& private_key, const Bytes& blob) {
     }
     Bytes epk(blob.begin() + static_cast<std::ptrdiff_t>(offset),
               blob.begin() + static_cast<std::ptrdiff_t>(offset + len));
-    EVP_PKEY* priv = LoadPrivateKey(private_key);
-    EnsureCurve(priv);
-    EVP_PKEY* peer = PublicKeyFromPoint(epk);
-    Bytes shared = DeriveShared(priv, peer);
-    EVP_PKEY_free(priv);
-    EVP_PKEY_free(peer);
-    return shared;
+    EvpPkeyPtr priv = LoadPrivateKey(private_key);
+    EnsureCurve(priv.get());
+    EvpPkeyPtr peer = PublicKeyFromPoint(epk);
+    return DeriveShared(priv.get(), peer.get());
 }
 
 }  // namespace basefwx::ec

@@ -95,24 +95,24 @@ On platforms without AES-NI or with weaker JCA implementations the gap is wider;
 
 
 ## Scope (v1)
-- fwxAES raw encrypt/decrypt (PBKDF2 or Argon2id KDF + EC master-key wrap)
+- fwxAES raw encrypt/decrypt (PBKDF2 or Argon2id KDF + optional ML-KEM-768/1024 / EC master-key wrap)
 - fwxAES streaming encrypt/decrypt (InputStream/OutputStream)
 - fwxAES live packet streaming encrypt/decrypt (frame-based, transport-agnostic)
 - jMG media cipher for images/audio (video path is temporarily disabled by default unless `BASEFWX_ENABLE_JMG_VIDEO=1`)
-- b512 / pb512 encode/decode (PBKDF2 or Argon2id + optional EC master-key wrap)
-- b256 encode/decode
+- b512 / pb512 encode/decode (PBKDF2 or Argon2id + optional ML-KEM-768/1024 / EC master-key wrap)
+- b256 encode/decode (deprecated; still decodes)
 - n10 numeric encode/decode (text + bytes/file helpers)
 - kFM carrier transforms (auto media/audio encode + strict carrier decode)
 - b64 encode/decode
-- hash512 / uhash513
-- a512 encode/decode
-- bi512 encode
+- hash512 / uhash513 (uhash513 deprecated)
+- a512 encode/decode (deprecated)
+- bi512 encode (deprecated)
 - Minimal CLI entrypoint
-- b512file + pb512file bytes + file helpers (in-memory)
+- b512file + pb512file bytes + streaming file helpers, including Argon2-heavy and PQ master-wrap paths
 
-Not yet included:
-- PQ master-key (ML-KEM) support
-
+Known gaps (not “missing PQ/Argon2” overall):
+- Java SPI plugins are Profile A only (no keyed / `POS_RAW` / native `.so` JNI bridge yet)
+- LZMA/XZ container support remains native/Python-only
 ## Build
 Use Gradle if available:
 ```
@@ -197,7 +197,7 @@ Notes:
 - For b512/pb512/fwxAES, use the same KDF label on all runtimes (`pbkdf2` or `argon2id`). Argon2id blobs require a peer that supports Argon2 (Java via BouncyCastle in `KeyWrap`/`Crypto`; C++/Python via libargon2).
 - fwxAES PBKDF2 mode is fully compatible across Python/C++/Java.
 - EC master-key wrap is supported using P-521 (secp521r1) and EC1 blobs.
-- AES-heavy file containers (pb512file) are implemented and cross-compatible with Python/C++ (PBKDF2 mode).
+- AES-heavy file containers (pb512file) are implemented and cross-compatible with Python/C++ in PBKDF2 and Argon2id modes.
 - kFM containers are compatible across Python/C++/Java (including `--bw` PNG carrier mode).
 - `kFMe` is the primary encoder (`kFAe` is deprecated alias; Java API: `BaseFwxImage.kFMe`).
 - `kFMd` is the primary decoder (`kFAd` is deprecated alias; Java API: `BaseFwxImage.kFMd`).
@@ -243,6 +243,10 @@ try (InputStream enc = new FileInputStream("out.live");
 Java reads EC public/private keys from:
 - `BASEFWX_MASTER_EC_PUB` and `BASEFWX_MASTER_EC_PRIV`, or
 - `~/master_ec_public.pem` and `~/master_ec_private.pem`
+
+Explicit environment paths are authoritative: missing, unreadable,
+non-regular, or larger-than-4-MiB key files fail closed rather than
+falling back to the home-directory key.
 
 ## Android
 The library is pure Java and uses standard `javax.crypto` APIs. AES-GCM requires API 21+ on Android.

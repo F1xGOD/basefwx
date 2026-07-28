@@ -41,32 +41,59 @@ static File pb512FileEncodeFileStream(File input,
                                                   String password,
                                                   boolean useMaster) {
         byte[] pw = BaseFwx.resolvePasswordBytes(password, useMaster);
+        PasswordPolicy.requireStrongPassword(pw, "Encryption");
         if (pw.length == 0) {
             throw new IllegalArgumentException("Password required for AES-heavy streaming mode");
         }
         String kdfLabel = resolveUserKdfLabel();
-        if (!"pbkdf2".equals(kdfLabel)) {
-            throw new UnsupportedKdfException(kdfLabel,
-                "pb512file: Argon2 KDF for the heavy file-codec path is not yet wired in Java; use pbkdf2. Constants.HEAVY_ARGON2_* are defined — implementation tracked as a future minor release.");
-        }
         int heavyIters = Constants.HEAVY_PBKDF2_ITERATIONS;
+        requirePeerPbkdf2WithinLimits(heavyIters);
+        Integer heavyArgonTime = null;
+        Integer heavyArgonMem = null;
+        Integer heavyArgonPar = null;
+        if ("argon2id".equals(kdfLabel)) {
+            heavyArgonTime = Constants.HEAVY_ARGON2_TIME_COST;
+            heavyArgonMem = Constants.HEAVY_ARGON2_MEMORY_KIB;
+            heavyArgonPar = Constants.HEAVY_ARGON2_PARALLELISM;
+        }
         boolean obfuscate = payloadObfuscationEnabled();
-        boolean useMasterEffective = false;
+        KeyWrap.MasterKeySelection selectedMaster =
+                KeyWrap.selectMasterKey(useMaster);
+        boolean useMasterEffective = selectedMaster.usedMaster();
         byte[] masterBlob = new byte[0];
         byte[] ephemeralKey = null;
+        PayloadKeySeparation.PayloadKeys payloadKeys = null;
 
-        if (useMaster) {
-            try {
-                java.security.PublicKey pub = EcKeys.loadMasterPublic(EcKeys.masterEcAutoCreateEnabled());
-                if (pub != null) {
-                    EcKeys.EcKemResult kem = EcKeys.kemEncrypt(pub);
-                    masterBlob = kem.masterBlob;
-                    ephemeralKey = Crypto.hkdfSha256(kem.shared, Constants.KEM_INFO, 32);
-                    useMasterEffective = true;
+        try {
+        if (useMasterEffective) {
+            if (selectedMaster.pqPublicKey != null) {
+                try {
+                    PQ.KemResult kem =
+                            PQ.kemEncrypt(selectedMaster.pqPublicKey);
+                    masterBlob = kem.ciphertext;
+                    ephemeralKey = deriveKemKeyAndWipe(kem.shared, Constants.KEM_INFO);
+                } catch (Exception exc) {
+                    if (exc instanceof RuntimeException) {
+                        throw (RuntimeException) exc;
+                    }
+                    throw new IllegalStateException("PQ master key wrap failed", exc);
                 }
-            } catch (RuntimeException exc) {
-                useMasterEffective = false;
+            } else if (selectedMaster.ecPublicKey != null) {
+                try {
+                    EcKeys.EcKemResult kem =
+                            EcKeys.kemEncrypt(selectedMaster.ecPublicKey);
+                    masterBlob = kem.masterBlob;
+                    ephemeralKey = deriveKemKeyAndWipe(kem.shared, Constants.KEM_INFO);
+                } catch (Exception exc) {
+                    throw new IllegalStateException(
+                            "EC master key wrap failed", exc);
+                }
             }
+        }
+        if (useMaster && PQ.strictPqOnly() && ephemeralKey == null) {
+            throw new IllegalStateException(
+                    "PQ strict mode requires an ML-KEM master public key "
+                    + "when master wrap is requested");
         }
         if (ephemeralKey == null) {
             ephemeralKey = Crypto.randomBytes(32);
@@ -80,16 +107,18 @@ static File pb512FileEncodeFileStream(File input,
             "AES-HEAVY",
             false,
             useMasterEffective,
+            selectedMaster.kemLabel,
             "AESGCM",
             kdfLabel,
             "STREAM",
             obfuscate,
             obfMode,
             heavyIters,
+            heavyArgonTime,
+            heavyArgonMem,
+            heavyArgonPar,
             null,
-            null,
-            null,
-            null
+            "v1"
         );
         byte[] metadataBytes = metadata.isEmpty()
             ? new byte[0]
@@ -105,16 +134,44 @@ static File pb512FileEncodeFileStream(File input,
         }
         byte[] userBlob = new byte[0];
         if (pw.length > 0) {
-            int iters = hardenPbkdf2Iterations(pw, heavyIters);
             byte[] salt = Crypto.randomBytes(Constants.USER_KDF_SALT_SIZE);
-            byte[] userKey = Crypto.pbkdf2HmacSha256(pw, salt, iters, 32);
-            byte[] wrapped = Crypto.aesGcmEncrypt(userKey, ephemeralKey, metadataBytes);
-            userBlob = new byte[salt.length + wrapped.length];
-            System.arraycopy(salt, 0, userBlob, 0, salt.length);
-            System.arraycopy(wrapped, 0, userBlob, salt.length, wrapped.length);
+            KeyWrap.KdfOptions opts = new KeyWrap.KdfOptions(kdfLabel, heavyIters);
+            if (heavyArgonTime != null) {
+                opts.argon2TimeCost = heavyArgonTime;
+            }
+            if (heavyArgonMem != null) {
+                opts.argon2MemoryKib = heavyArgonMem;
+            }
+            if (heavyArgonPar != null) {
+                opts.argon2Parallelism = heavyArgonPar;
+            }
+            byte[] userKey = deriveUserKey(pw, salt, kdfLabel, opts);
+            try {
+                byte[] wrapped = Crypto.aesGcmEncrypt(userKey, ephemeralKey, metadataBytes);
+                userBlob = new byte[salt.length + wrapped.length];
+                System.arraycopy(salt, 0, userBlob, 0, salt.length);
+                System.arraycopy(wrapped, 0, userBlob, salt.length, wrapped.length);
+            } finally {
+                Arrays.fill(userKey, (byte) 0);
+            }
+        }
+        boolean useDerivedKeys =
+                PayloadKeySeparation.usesDerivedKeys(metadata);
+        byte[] aeadKey = ephemeralKey;
+        byte[] obfuscationKey = ephemeralKey;
+        if (useDerivedKeys) {
+            payloadKeys = PayloadKeySeparation.derive(ephemeralKey);
+            aeadKey = payloadKeys.aead;
+            obfuscationKey = payloadKeys.obfuscation;
         }
         byte[] nonce = Crypto.randomBytes(Constants.AEAD_NONCE_LEN);
-        StreamObfuscator obfuscator = StreamObfuscator.forPassword(pw, streamSalt, fastObf);
+        StreamObfuscator obfuscator = obfuscate
+                ? (useDerivedKeys
+                    ? StreamObfuscator.forKey(
+                            obfuscationKey, streamSalt, fastObf)
+                    : StreamObfuscator.forPassword(
+                            pw, streamSalt, fastObf))
+                : null;
         File outFile = output != null ? output : new File(input.getParentFile(), input.getName() + ".fwx");
 
         try (FileInputStream fin = new FileInputStream(input);
@@ -133,7 +190,9 @@ static File pb512FileEncodeFileStream(File input,
             out.write(nonce);
 
             CryptoBackend backend = CryptoBackends.get();
-            try (CryptoBackend.AeadEncryptor enc = backend.newGcmEncryptor(ephemeralKey, nonce, metadataBytes)) {
+            try (CryptoBackend.AeadEncryptor enc =
+                         backend.newGcmEncryptor(
+                                 aeadKey, nonce, metadataBytes)) {
                 byte[] outBuf = new byte[Constants.STREAM_CHUNK_SIZE + Constants.AEAD_TAG_LEN];
                 if (prefixBytes.length > 0) {
                     int outLen = enc.update(prefixBytes, 0, prefixBytes.length, outBuf, 0);
@@ -151,7 +210,9 @@ static File pb512FileEncodeFileStream(File input,
                 while (remaining > 0) {
                     int take = (int) Math.min(buffer.length, remaining);
                     readExact(in, buffer, take, "Streaming payload truncated");
-                    obfuscator.encodeChunkInPlace(buffer, take);
+                    if (obfuscator != null) {
+                        obfuscator.encodeChunkInPlace(buffer, take);
+                    }
                     int outLen = enc.update(buffer, 0, take, outBuf, 0);
                     if (outLen > 0) {
                         out.write(outBuf, 0, outLen);
@@ -173,6 +234,12 @@ static File pb512FileEncodeFileStream(File input,
             throw new IllegalStateException("AES-heavy streaming encode failed", exc);
         }
         return outFile;
+        } finally {
+            if (payloadKeys != null) {
+                payloadKeys.close();
+            }
+            PayloadKeySeparation.wipe(ephemeralKey);
+        }
     }
 
 static File pb512FileDecodeFileStream(File input,
@@ -190,18 +257,46 @@ static File pb512FileDecodeFileStream(File input,
         boolean useMasterEffective = useMaster;
         boolean obfuscateStream = true;
         boolean fastObfStream = false;
+        boolean useDerivedKeys = false;
+        byte[] ephemeralKey = null;
+        PayloadKeySeparation.PayloadKeys payloadKeys = null;
+        try {
         try (FileInputStream fin = new FileInputStream(input);
              BufferedInputStream in = new BufferedInputStream(fin, Constants.STREAM_CHUNK_SIZE)) {
             int lenUser = readU32(in, "Ciphertext payload truncated");
+            requireBoundedFileLength(
+                    input, 4L, lenUser, Constants.LENGTH_PREFIXED_MAX,
+                    "user key transport");
             byte[] userBlob = readExactBytes(in, lenUser, "Ciphertext payload truncated");
             int lenMaster = readU32(in, "Ciphertext payload truncated");
+            requireHeaderLengthTotal((long) lenUser + lenMaster);
+            requireBoundedFileLength(
+                    input, 8L + lenUser, lenMaster,
+                    Constants.LENGTH_PREFIXED_MAX, "master key transport");
             byte[] masterBlob = readExactBytes(in, lenMaster, "Ciphertext payload truncated");
             int lenPayloadHeader = readU32(in, "Ciphertext payload truncated");
             long lenPayload = resolvePayloadLengthFromFileSize(input, lenUser, lenMaster, lenPayloadHeader);
+            long payloadOffset = 12L + lenUser + lenMaster;
+            if (lenPayload != input.length() - payloadOffset) {
+                throw new IllegalArgumentException(
+                        "Ciphertext payload length does not match remaining file");
+            }
             if (lenPayload < 4L + Constants.AEAD_NONCE_LEN + Constants.AEAD_TAG_LEN) {
                 throw new IllegalArgumentException("Ciphertext payload truncated");
             }
             int metaLen = readU32(in, "Ciphertext payload truncated");
+            if (metaLen < 0
+                    || (long) metaLen > lenPayload - 4L
+                            - Constants.AEAD_NONCE_LEN
+                            - Constants.AEAD_TAG_LEN) {
+                throw new IllegalArgumentException(
+                        "Ciphertext metadata length invalid");
+            }
+            requireHeaderLengthTotal(
+                    (long) lenUser + lenMaster + metaLen);
+            requireBoundedFileLength(
+                    input, payloadOffset + 4L, metaLen,
+                    Constants.METADATA_MAX, "metadata");
             metadataBytes = readExactBytes(in, metaLen, "Ciphertext payload truncated");
             if (metadataBytes.length > 0) {
                 metadataBlob = new String(metadataBytes, StandardCharsets.UTF_8);
@@ -213,14 +308,23 @@ static File pb512FileDecodeFileStream(File input,
             if ("no".equalsIgnoreCase(masterHint)) {
                 useMasterEffective = false;
             }
-            String obfHint = metaValue(metadataBlob, "ENC-OBF");
-            obfuscateStream = !"no".equalsIgnoreCase(obfHint);
-            fastObfStream = "fast".equalsIgnoreCase(obfHint);
+            String obfHint = FileCodecs.requirePayloadObfuscationMode(
+                    metaValue(metadataBlob, "ENC-OBF"));
+            obfuscateStream = !"no".equals(obfHint);
+            fastObfStream = "fast".equals(obfHint);
             String kdfHint = metaValue(metadataBlob, "ENC-KDF");
-            if (kdfHint == null || kdfHint.isEmpty()) {
-                kdfHint = resolveUserKdfLabel();
-            }
-            int kdfIterHint = parseMetadataInt(metaValue(metadataBlob, "ENC-KDF-ITER"), Constants.HEAVY_PBKDF2_ITERATIONS);
+            String label = kdfHint == null || kdfHint.isEmpty()
+                    ? resolveUserKdfLabel()
+                    : resolvePeerKdfLabel(kdfHint);
+            int kdfIterHint = parsePeerPbkdf2Iterations(
+                    metaValue(metadataBlob, "ENC-KDF-ITER"),
+                    Constants.HEAVY_PBKDF2_ITERATIONS);
+            Integer argonTime = parseMetadataIntOrNull(metaValue(metadataBlob, "ENC-ARGON2-TC"));
+            Integer argonMem = parseMetadataIntOrNull(metaValue(metadataBlob, "ENC-ARGON2-MEM"));
+            Integer argonPar = parseMetadataIntOrNull(metaValue(metadataBlob, "ENC-ARGON2-PAR"));
+            requirePeerArgon2WithinLimits(argonTime, argonMem, argonPar);
+            useDerivedKeys =
+                    PayloadKeySeparation.usesDerivedKeys(metadataBlob);
 
             byte[] nonce = readExactBytes(in, Constants.AEAD_NONCE_LEN, "Ciphertext payload truncated");
             long cipherBodyLen = lenPayload - 4L - metaLen
@@ -229,38 +333,36 @@ static File pb512FileDecodeFileStream(File input,
                 throw new IllegalArgumentException("Ciphertext payload truncated");
             }
 
-            byte[] ephemeralKey = null;
-            if (masterBlob.length > 0) {
-                if (!useMasterEffective) {
-                    throw new IllegalArgumentException("Master key required to decode this payload");
-                }
-                java.security.PrivateKey priv = EcKeys.loadMasterPrivate();
-                byte[] shared = EcKeys.kemDecrypt(masterBlob, priv);
-                ephemeralKey = Crypto.hkdfSha256(shared, Constants.KEM_INFO, 32);
+            KeyWrap.KdfOptions opts = new KeyWrap.KdfOptions(label, kdfIterHint);
+            if (argonTime != null) {
+                opts.argon2TimeCost = argonTime;
             }
-            if (userBlob.length > 0) {
-                if (pw.length == 0) {
-                    throw new IllegalArgumentException("Password required to decode this payload");
-                }
-                if (userBlob.length < Constants.USER_KDF_SALT_SIZE) {
-                    throw new IllegalArgumentException("Corrupted user key blob: truncated data");
-                }
-                int iters = hardenPbkdf2Iterations(pw, kdfIterHint);
-                byte[] salt = Arrays.copyOfRange(userBlob, 0, Constants.USER_KDF_SALT_SIZE);
-                byte[] wrapped = Arrays.copyOfRange(userBlob, Constants.USER_KDF_SALT_SIZE, userBlob.length);
-                String label = resolveKdfLabel(kdfHint);
-                if (!"pbkdf2".equals(label)) {
-                    throw new IllegalArgumentException("Unsupported KDF label: " + label);
-                }
-                byte[] userKey = Crypto.pbkdf2HmacSha256(pw, salt, iters, 32);
-                ephemeralKey = Crypto.aesGcmDecrypt(userKey, wrapped, metadataBytes);
+            if (argonMem != null) {
+                opts.argon2MemoryKib = argonMem;
             }
-            if (ephemeralKey == null) {
-                throw new IllegalArgumentException("Unable to derive payload key");
+            if (argonPar != null) {
+                opts.argon2Parallelism = argonPar;
+            }
+            try {
+                ephemeralKey = recoverPayloadKey(
+                        userBlob, masterBlob, pw, useMasterEffective,
+                        Constants.KEM_INFO, metadataBytes, label, opts);
+            } catch (RuntimeException exc) {
+                throw exc;
+            } catch (Exception exc) {
+                throw new IllegalStateException("Master key unwrap failed", exc);
+            }
+            byte[] aeadKey = ephemeralKey;
+            if (useDerivedKeys) {
+                payloadKeys =
+                        PayloadKeySeparation.derive(ephemeralKey);
+                aeadKey = payloadKeys.aead;
             }
 
             CryptoBackend backend = CryptoBackends.get();
-            try (CryptoBackend.AeadDecryptor dec = backend.newGcmDecryptor(ephemeralKey, nonce, metadataBytes)) {
+            try (CryptoBackend.AeadDecryptor dec =
+                         backend.newGcmDecryptor(
+                                 aeadKey, nonce, metadataBytes)) {
                 tempPlain = BaseFwx.createPrivateTempFile("basefwx-stream", ".plain");
                 try (FileOutputStream fout = new FileOutputStream(tempPlain);
                      BufferedOutputStream plainOut = new BufferedOutputStream(fout, Constants.STREAM_CHUNK_SIZE)) {
@@ -323,7 +425,12 @@ static File pb512FileDecodeFileStream(File input,
                 : new byte[0];
 
             StreamObfuscator decoder = obfuscateStream
-                ? StreamObfuscator.forPassword(pw, salt, fastObfStream)
+                ? (useDerivedKeys
+                    ? StreamObfuscator.forKey(
+                            payloadKeys.obfuscation, salt,
+                            fastObfStream)
+                    : StreamObfuscator.forPassword(
+                            pw, salt, fastObfStream))
                 : null;
             File outFile = resolveDecodedOutput(input, output, extBytes);
             try (FileOutputStream fout = new FileOutputStream(outFile);
@@ -353,6 +460,12 @@ static File pb512FileDecodeFileStream(File input,
                 tempPlain.delete();
             }
         }
+        } finally {
+            if (payloadKeys != null) {
+                payloadKeys.close();
+            }
+            PayloadKeySeparation.wipe(ephemeralKey);
+        }
     }
 
 static byte[] pb512FileEncodeBytes(byte[] data,
@@ -374,17 +487,27 @@ static byte[] pb512FileEncodeBytes(byte[] data,
         if (approxB64Len > Constants.HKDF_MAX_LEN) {
             throw new IllegalArgumentException("pb512file_encode_bytes payload too large; use file-based streaming APIs");
         }
-        boolean useMasterEffective = useMaster && !stripMetadata;
+        boolean useMasterRequested = useMaster && !stripMetadata;
+        KeyWrap.MasterKeySelection selectedMaster =
+                KeyWrap.selectMasterKey(useMasterRequested);
+        boolean useMasterEffective = selectedMaster.usedMaster();
         String resolvedPassword = password == null ? "" : password;
+        PasswordPolicy.requireStrongPassword(
+                BaseFwx.resolvePasswordBytes(resolvedPassword, useMasterEffective), "Encryption");
         String ext = extension == null ? "" : extension;
         String b64Payload = Base64Codec.encode(data);
         String kdfLabel = resolveUserKdfLabel();
-        if (!"pbkdf2".equals(kdfLabel)) {
-            throw new UnsupportedKdfException(kdfLabel,
-                "pb512file: Argon2 KDF for the heavy file-codec path is not yet wired in Java; use pbkdf2. Constants.HEAVY_ARGON2_* are defined — implementation tracked as a future minor release.");
-        }
         boolean obfuscate = payloadObfuscationEnabled();
         int heavyIters = Constants.HEAVY_PBKDF2_ITERATIONS;
+        requirePeerPbkdf2WithinLimits(heavyIters);
+        Integer heavyArgonTime = null;
+        Integer heavyArgonMem = null;
+        Integer heavyArgonPar = null;
+        if ("argon2id".equals(kdfLabel)) {
+            heavyArgonTime = Constants.HEAVY_ARGON2_TIME_COST;
+            heavyArgonMem = Constants.HEAVY_ARGON2_MEMORY_KIB;
+            heavyArgonPar = Constants.HEAVY_ARGON2_PARALLELISM;
+        }
 
         String extToken = TextCodecs.pb512EncodeString(ext, resolvedPassword, useMasterEffective);
         String dataToken = TextCodecs.pb512EncodeString(b64Payload, resolvedPassword, useMasterEffective);
@@ -396,23 +519,26 @@ static byte[] pb512FileEncodeBytes(byte[] data,
             "AES-HEAVY",
             stripMetadata,
             useMasterEffective,
+            selectedMaster.kemLabel,
             "AESGCM",
             kdfLabel,
             null,
             obfuscate,
             obfMode,
             heavyIters,
+            heavyArgonTime,
+            heavyArgonMem,
+            heavyArgonPar,
             null,
-            null,
-            null,
-            null
+            "v1"
         );
         String plaintext = metadata.isEmpty()
             ? body
             : metadata + Constants.META_DELIM + body;
         byte[] plaintextBytes = plaintext.getBytes(StandardCharsets.UTF_8);
         return LengthPrefixedCodec.encryptAesPayloadBytes(plaintextBytes, resolvedPassword, useMasterEffective, metadata,
-            kdfLabel, heavyIters, obfuscate, fastObf);
+            kdfLabel, heavyIters, obfuscate, fastObf, heavyArgonTime,
+            heavyArgonMem, heavyArgonPar, selectedMaster);
     }
 
 static BaseFwx.DecodedFile pb512FileDecodeBytes(byte[] blob,
@@ -469,6 +595,10 @@ static File pb512FileDecodeFile(File input,
         String metaPreview = peekMetadataBlob(input);
         if (isStreamMode(metaPreview)) {
             return pb512FileDecodeFileStream(input, output, password, useMaster, metaPreview);
+        }
+        if (input.length() > Constants.LENGTH_PREFIXED_MAX) {
+            throw new IllegalArgumentException(
+                    "Non-stream pb512file exceeds 64 MiB decode cap");
         }
         byte[] blob = BaseFwx.readFileBytes(input);
         BaseFwx.DecodedFile decoded = pb512FileDecodeBytes(blob, password, useMaster);

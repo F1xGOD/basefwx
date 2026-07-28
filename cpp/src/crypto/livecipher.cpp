@@ -33,6 +33,11 @@ const Bytes kAadVec(
     reinterpret_cast<const std::uint8_t*>(basefwx::constants::kFwxAesAad.data()) + basefwx::constants::kFwxAesAad.size()
 );
 
+bool StrictPqOnly() {
+    return basefwx::env::IsEnabled("BASEFWX_PQ_STRICT", false)
+        || basefwx::env::IsEnabled("BASEFWX_PQ_ONLY", false);
+}
+
 std::uint32_t ResolveFwxAesIterations(std::uint32_t fallback) {
     std::string raw = basefwx::env::Get("BASEFWX_FWXAES_PBKDF2_ITERS");
     if (raw.empty()) {
@@ -149,7 +154,8 @@ Bytes BuildSessionHeader(std::uint8_t key_mode,
     if (salt.size() > 0xFF || nonce_prefix.size() > 0xFF) {
         throw std::runtime_error("Live header field too large");
     }
-    if (key_header.size() > std::numeric_limits<std::uint32_t>::max()) {
+    if (key_header.size()
+        > basefwx::constants::kFwxAesMaxKeyHeaderLen) {
         throw std::runtime_error("Live key header too large");
     }
     Bytes body(basefwx::constants::kLiveHeaderFixedLen + key_header.size() + salt.size() + nonce_prefix.size());
@@ -214,7 +220,7 @@ Bytes LiveEncryptor::InitSession() {
                 basefwx::crypto::SecureClear(mask_key.mask_key);
             }
         } catch (const std::exception&) {
-            if (!has_password) {
+            if (!has_password || StrictPqOnly()) {
                 throw;
             }
             use_wrap = false;
@@ -227,6 +233,7 @@ Bytes LiveEncryptor::InitSession() {
         }
         salt = basefwx::crypto::RandomBytes(basefwx::constants::kUserKdfSaltSize);
         iters = HardenFwxAesIterations(password_, ResolveFwxAesIterations(200000));
+        basefwx::keywrap::RequirePeerPbkdf2WithinLimits(iters);
         key_ = basefwx::crypto::Pbkdf2HmacSha256(password_, salt, iters, 32);
     }
 
@@ -331,6 +338,10 @@ void LiveDecryptor::ParseHeader(const std::uint8_t* body, std::size_t body_len) 
     std::uint8_t nonce_len = body[2];
     std::uint32_t key_header_len = ReadU32Be(body + 4);
     std::uint32_t iters = ReadU32Be(body + 8);
+    if (key_header_len
+        > basefwx::constants::kFwxAesMaxKeyHeaderLen) {
+        throw std::runtime_error("Live key header too large");
+    }
 
     std::size_t needed = basefwx::constants::kLiveHeaderFixedLen
         + static_cast<std::size_t>(key_header_len)
@@ -365,26 +376,25 @@ void LiveDecryptor::ParseHeader(const std::uint8_t* body, std::size_t body_len) 
         }
         auto parts = basefwx::format::UnpackLengthPrefixed(key_header, 2);
         basefwx::pb512::KdfOptions kdf;
-        Bytes mask_key = basefwx::keywrap::RecoverMaskKey(
-            parts[0],
-            parts[1],
-            password_,
-            use_master_,
-            basefwx::constants::kFwxAesMaskInfo,
-            basefwx::constants::kFwxAesAad,
-            kdf
-        );
-        key_ = basefwx::crypto::HkdfSha256(mask_key, basefwx::constants::kFwxAesKeyInfo, 32);
-        basefwx::crypto::SecureClear(mask_key);
+        basefwx::crypto::SecureBytes mask_key{
+            basefwx::keywrap::RecoverMaskKey(
+                parts[0],
+                parts[1],
+                password_,
+                use_master_,
+                basefwx::constants::kFwxAesMaskInfo,
+                basefwx::constants::kFwxAesAad,
+                kdf
+            )};
+        key_ = basefwx::crypto::HkdfSha256(
+            mask_key.bytes(), basefwx::constants::kFwxAesKeyInfo, 32);
     } else if (key_mode == basefwx::constants::kLiveKeyModePbkdf2) {
+        basefwx::keywrap::RequirePeerPbkdf2WithinLimits(iters);
         if (password_.empty()) {
             throw std::runtime_error("Password required for PBKDF2 live stream");
         }
         if (salt.empty()) {
             throw std::runtime_error("Missing live stream PBKDF2 salt");
-        }
-        if (iters == 0) {
-            throw std::runtime_error("Invalid live stream PBKDF2 iterations");
         }
         key_ = basefwx::crypto::Pbkdf2HmacSha256(password_, salt, iters, 32);
     } else {
@@ -494,6 +504,53 @@ std::vector<Bytes> LiveDecryptor::Update(const std::uint8_t* data, std::size_t l
         buffer_offset_ = 0;
     }
     CompactBufferIfNeeded(len);
+    auto validate_initial_outer_header = [&]() {
+        const std::size_t unread = buffer_.size() - buffer_offset_;
+        if (started_
+            || unread < basefwx::constants::kLiveFrameHeaderLen) {
+            return;
+        }
+        const std::uint8_t* head =
+            buffer_.data()
+            + static_cast<std::ptrdiff_t>(buffer_offset_);
+        if (std::memcmp(
+                head,
+                basefwx::constants::kLiveFrameMagic.data(),
+                basefwx::constants::kLiveFrameMagic.size()) != 0) {
+            throw std::runtime_error("Invalid live frame magic");
+        }
+        if (head[4] != basefwx::constants::kLiveFrameVersion) {
+            throw std::runtime_error(
+                "Unsupported live frame version");
+        }
+        if (head[5]
+                != basefwx::constants::kLiveFrameTypeHeader
+            || ReadU64Be(head + 6) != 0) {
+            throw std::runtime_error(
+                "Live stream must start with header frame");
+        }
+        const std::uint32_t body_len = ReadU32Be(head + 14);
+        if (body_len
+            > basefwx::constants::kLiveMaxHeaderBody) {
+            throw std::runtime_error("Live key header too large");
+        }
+    };
+    if (!started_
+        && buffer_.size() - buffer_offset_
+            < basefwx::constants::kLiveFrameHeaderLen
+        && data != nullptr
+        && len > 0) {
+        const std::size_t needed =
+            basefwx::constants::kLiveFrameHeaderLen
+            - (buffer_.size() - buffer_offset_);
+        const std::size_t take = std::min(needed, len);
+        buffer_.insert(buffer_.end(), data, data + take);
+        data += take;
+        len -= take;
+        validate_initial_outer_header();
+    } else {
+        validate_initial_outer_header();
+    }
     if (data != nullptr && len > 0) {
         if (buffer_.capacity() < buffer_.size() + len) {
             buffer_.reserve(buffer_.size() + len);

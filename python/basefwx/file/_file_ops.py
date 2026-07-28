@@ -17,13 +17,24 @@ class _LazyEngine:
 
 basefwx = _LazyEngine()
 
-def _build_metadata(method: str, strip: bool, use_master: bool, *, aead: str='AESGCM', kdf: 'basefwx.typing.Optional[str]'=None, mode: 'basefwx.typing.Optional[str]'=None, obfuscation: 'basefwx.typing.Optional[basefwx.typing.Union[bool, str]]'=None, kdf_iters: 'basefwx.typing.Optional[int]'=None, argon2_time_cost: 'basefwx.typing.Optional[int]'=None, argon2_memory_cost: 'basefwx.typing.Optional[int]'=None, argon2_parallelism: 'basefwx.typing.Optional[int]'=None, pack: 'basefwx.typing.Optional[str]'=None) -> str:
+def _build_metadata(method: str, strip: bool, use_master: bool, *, master_kem: str='none', aead: str='AESGCM', kdf: 'basefwx.typing.Optional[str]'=None, mode: 'basefwx.typing.Optional[str]'=None, obfuscation: 'basefwx.typing.Optional[basefwx.typing.Union[bool, str]]'=None, kdf_iters: 'basefwx.typing.Optional[int]'=None, argon2_time_cost: 'basefwx.typing.Optional[int]'=None, argon2_memory_cost: 'basefwx.typing.Optional[int]'=None, argon2_parallelism: 'basefwx.typing.Optional[int]'=None, pack: 'basefwx.typing.Optional[str]'=None, key_separation: 'basefwx.typing.Optional[str]'=None) -> str:
+    kdf_label = basefwx._resolve_kdf_label(kdf)
+    if key_separation not in (None, '', 'v1'):
+        raise ValueError('Unsupported payload key-separation version')
     if strip:
         return ''
     timestamp = basefwx.datetime.now(basefwx.timezone.utc).isoformat().replace('+00:00', 'Z')
     version = getattr(basefwx, '__version__', basefwx.ENGINE_VERSION)
-    kdf_label = (kdf or basefwx.USER_KDF or 'argon2id').lower()
-    info = {'ENC-TIME': timestamp, 'ENC-VERSION': version, 'ENC-METHOD': method, 'ENC-MASTER': 'yes' if use_master else 'no', 'ENC-KEM': basefwx.MASTER_PQ_ALG if use_master else 'none', 'ENC-AEAD': aead, 'ENC-KDF': kdf_label}
+    if use_master:
+        if master_kem not in ('ml-kem-768', 'ml-kem-1024', 'EC'):
+            raise ValueError(
+                'Master-enabled metadata requires an explicit selected KEM'
+            )
+    elif master_kem != 'none':
+        raise ValueError(
+            'Master-disabled metadata must use ENC-KEM=none'
+        )
+    info = {'ENC-TIME': timestamp, 'ENC-VERSION': version, 'ENC-METHOD': method, 'ENC-MASTER': 'yes' if use_master else 'no', 'ENC-KEM': master_kem, 'ENC-AEAD': aead, 'ENC-KDF': kdf_label}
     if mode:
         info['ENC-MODE'] = mode
     if obfuscation is not None:
@@ -41,8 +52,13 @@ def _build_metadata(method: str, strip: bool, use_master: bool, *, aead: str='AE
         info['ENC-ARGON2-PAR'] = str(argon2_parallelism)
     if pack:
         info[basefwx.PACK_META_KEY] = str(pack)
+    if key_separation:
+        info['ENC-KSEP'] = key_separation
     data = basefwx.json.dumps(info, separators=(',', ':')).encode('utf-8')
-    return basefwx.base64.b64encode(data).decode('utf-8')
+    encoded = basefwx.base64.b64encode(data).decode('utf-8')
+    if len(encoded.encode('utf-8')) > basefwx.METADATA_MAX:
+        raise ValueError('Payload metadata exceeds 1 MiB cap')
+    return encoded
 
 
 def _decode_metadata(blob: str) -> 'basefwx.typing.Dict[str, basefwx.typing.Any]':
@@ -68,11 +84,29 @@ def _split_with_delims(payload: str, delims: 'basefwx.typing.Iterable[str]', lab
     raise ValueError(f'Malformed {label} payload')
 
 
-def _apply_strip_attributes(path: 'basefwx.pathlib.Path') -> None:
+def _apply_stripped_path_attributes(
+    path: 'basefwx.pathlib.Path',
+) -> None:
+    if path.is_symlink():
+        return
+    basefwx.os.chmod(path, 0o700 if path.is_dir() else 0o600)
     try:
         basefwx.os.utime(path, (0, 0))
     except Exception:
         pass
+
+
+def _apply_strip_attributes(path: 'basefwx.pathlib.Path') -> None:
+    path = basefwx.pathlib.Path(path)
+    _apply_stripped_path_attributes(path)
+    if not path.is_dir() or path.is_symlink():
+        return
+    for root, directories, files in basefwx.os.walk(path):
+        root_path = basefwx.pathlib.Path(root)
+        for directory in directories:
+            _apply_stripped_path_attributes(root_path / directory)
+        for file_name in files:
+            _apply_stripped_path_attributes(root_path / file_name)
 
 
 def _remove_input(path: 'basefwx.pathlib.Path', keep_input: bool, output_path: 'basefwx.typing.Optional[basefwx.pathlib.Path]'=None) -> None:
@@ -233,10 +267,13 @@ def _resolve_password(password: 'basefwx.typing.Union[str, bytes, bytearray, mem
     if isinstance(password, (bytes, bytearray, memoryview)):
         return bytes(password)
     if isinstance(password, basefwx.pathlib.Path):
+        # Explicit Path objects are intentional filesystem references (unlike
+        # bare strings that merely happen to name a file). Require the path
+        # to exist — callers who want a literal should pass a str.
         candidate = password.expanduser()
-        if candidate.is_file():
-            return candidate.read_bytes()
-        return str(candidate)
+        if not candidate.is_file():
+            raise ValueError(f'Password file not found: {candidate}')
+        return candidate.read_bytes()
     if password == '':
         if not use_master:
             raise ValueError('Password required when master key usage is disabled')
@@ -252,8 +289,17 @@ def _resolve_password(password: 'basefwx.typing.Union[str, bytes, bytearray, mem
             return vault.derive_passphrase(label.strip() or 'default')
         except YubiKeyUnavailableError as exc:
             raise ValueError(str(exc)) from exc
-    candidate = basefwx.pathlib.Path(password).expanduser()
-    if candidate.is_file():
+    # Match C++ ResolvePassword (3.7.0+): bare passwords are ALWAYS literal.
+    # Filesystem read is opt-in via an explicit file:// URI. password://
+    # forces the literal-string interpretation. The old auto-detect behavior
+    # (read input as a file if it happened to name an existing path) is gone.
+    if isinstance(password, str) and password.startswith('password://'):
+        return password[len('password://'):]
+    if isinstance(password, str) and password.startswith('file://'):
+        path = password[len('file://'):]
+        candidate = basefwx.pathlib.Path(path).expanduser()
+        if not candidate.is_file():
+            raise ValueError(f'Password file not found: {candidate}')
         return candidate.read_bytes()
     return password
 

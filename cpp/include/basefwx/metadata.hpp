@@ -19,6 +19,7 @@ using MetadataMap = std::unordered_map<std::string, std::string>;
 std::string Build(const std::string& method,
                   bool strip,
                   bool use_master,
+                  std::string_view master_kem,
                   std::string_view aead,
                   std::string_view kdf_label,
                   std::string_view mode = {},

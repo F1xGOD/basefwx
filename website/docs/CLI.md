@@ -22,9 +22,12 @@ Methods (aliases in parentheses):
 
 Common flags:
 
-- `-p`, `--password` password text or a file path (empty means "master-only")
-- `--no-master` disable master key wrapping and recovery
-- `--use-master-pub <path>` ML-KEM-768 public key for master wrapping
+- `-p`, `--password` literal password text, `file://<path>`, or empty only
+  with `--use-master` and a configured master public key
+- `--use-master` enable master key wrapping and recovery (off by default)
+- `--no-master` explicitly disable master key wrapping and recovery
+- `--use-master-pub <path>` ML-KEM-768 or ML-KEM-1024 public key to use
+  with `--use-master`
 - `--strip` or `--trim` remove internal metadata from payload
 - `--no-obf` disable size-preserving obfuscation
 - `--compress` pack folders/files to tar before encrypting (auto-unpack on decrypt)
@@ -74,15 +77,34 @@ Master key usage (master-only payloads):
 
 ```
 export BASEFWX_MASTER_PQ_PUB=/secure/mlkem768.pub
-python -m basefwx cryptin aes-heavy payload.bin -p ""
+python -m basefwx cryptin aes-heavy payload.bin -p "" --use-master
 ```
 
 Notes:
 
-- If a password string resolves to an existing file path, the file contents are used as the password.
-- PQ private key lookup defaults to `~/master_pq.sk` (or `W:\master_pq.sk` on Windows).
-- Set `BASEFWX_PQ_STRICT=1` (or `BASEFWX_PQ_ONLY=1`) to disable EC fallback and require ML-KEM master wrapping only.
-- Set `BASEFWX_MASTER_PQ_ALG=ml-kem-1024` (or `BASEFWX_PQ_MAX=1`) to opt the C++ core into the larger ML-KEM parameter set; embedded baked keys remain available only for `ml-kem-768`.
+- Passwords are literal by default in C++, Java, and Python. To load a
+  password from a file, use an explicit `file://<path>` URI (`~/` expands).
+  Use `password://<literal>` to force a literal string that happens to
+  contain `://`. Bare strings are never interpreted as file paths.
+- PQ private key lookup uses `BASEFWX_MASTER_PQ_SK` when set, otherwise `~/master_pq.sk`.
+- Set `BASEFWX_PQ_STRICT` (or `BASEFWX_PQ_ONLY`) to `1`, `true`, `yes`,
+  or `on` (case-insensitive) to disable EC fallback and require ML-KEM
+  for a requested master wrap. On decrypt, an intact independent
+  password wrap remains usable even if master recovery is unavailable
+  or rejected by strict policy.
+- Set `BASEFWX_MASTER_PQ_ALG=ml-kem-1024` (or `BASEFWX_PQ_MAX=1`) to opt
+  key generation and default capability reporting into the larger ML-KEM
+  parameter set. A provisioned public key's actual size selects 768 versus
+  1024 for wrapping and authenticated `ENC-KEM` metadata; recovery selects
+  by private-key/ciphertext size. Default generation remains `ml-kem-768`.
+  Upstream ships with
+  **no** baked master public key — provision via `BASEFWX_MASTER_PQ_PUB`
+  or a build-time `-DBASEFWX_MASTER_PQ_PUB_B64=…` /
+  `-Dbasefwx.master.pq.public.b64=…` opt-in.
+- Explicit-salt HKDF and X25519 helpers are public multi-lang APIs
+  (C++ `HkdfSha256`/`x25519`, Java `Crypto.hkdfSha256`/`X25519`,
+  Python `basefwx.hkdf_sha256(salt=…)` / `basefwx.x25519`). They are not wired
+  into fwxAES file formats.
 - C++ `info` / `identify` / `probe` recognize length-prefixed containers, `FWX1` headers, and kFM PNG/WAV carriers, including legacy `kFAe` output.
 - When a file is not recognized as BaseFWX, the C++ CLI reports a heuristic guess (`unknown`, random-like, or a simple format hint) instead of only saying "corrupted container".
 - `kFMe` auto-detects source type (audio -> PNG, non-audio -> WAV).
@@ -358,7 +380,8 @@ Notes:
 - `--no-log` suppresses telemetry/warnings while preserving primary outputs/errors.
 - jMG video is disabled by default unless `BASEFWX_ENABLE_JMG_VIDEO=1`.
 - `kFMd` strictly decodes BaseFWX carriers and refuses plain files.
-- The Java module does not include ML-KEM or Argon2 support yet.
+- The Java module includes Argon2id (BouncyCastle, optional libargon2 JNI) and ML-KEM-768/1024 master wrap (BouncyCastle PQC). LZMA is not available. See `COMPATIBILITY.md`.
+- C++ CLI plugin flags: `--plugin <path>`, `--plugin-id <hex>`, `--plugin-pos pre|post`, `--plugin-config <file>` (Profile A PRE/POST). Keyed/`POS_RAW` host wiring is incomplete — see `examples/plugins/THREAT_MODEL.md`.
 
 ## Java API
 

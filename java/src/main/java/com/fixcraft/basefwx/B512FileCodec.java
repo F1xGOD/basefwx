@@ -41,106 +41,115 @@ static File b512FileEncodeFileStream(File input,
                                                  String password,
                                                  boolean useMaster) {
         byte[] pw = BaseFwx.resolvePasswordBytes(password, useMaster);
+        PasswordPolicy.requireStrongPassword(pw, "Encryption");
         if (pw.length == 0) {
             throw new IllegalArgumentException("Password required for streaming b512 encode");
         }
-        boolean useMasterEffective = false;
-        if (useMaster) {
-            try {
-                java.security.PublicKey pub = EcKeys.loadMasterPublic(EcKeys.masterEcAutoCreateEnabled());
-                useMasterEffective = pub != null;
-            } catch (RuntimeException exc) {
-                useMasterEffective = false;
-            }
-        }
         KeyWrap.MaskKeyResult mask = KeyWrap.prepareMaskKey(
             pw,
-            useMasterEffective,
+            useMaster,
             Constants.B512_FILE_MASK_INFO,
-            !useMasterEffective,
-            Constants.B512_AEAD_INFO,
+            true,
+            Constants.MASK_AAD_B512FILE,
             new KeyWrap.KdfOptions("pbkdf2", Constants.USER_KDF_ITERATIONS)
         );
-        useMasterEffective = useMasterEffective && mask.usedMaster;
-        String ext = BaseFwx.getExtension(input);
-        byte[] extBytes = ext.isEmpty() ? new byte[0] : ext.getBytes(StandardCharsets.UTF_8);
-        byte[] streamSalt = StreamObfuscator.generateSalt();
-        boolean fastObf = useFastObfuscation(input.length());
-        String metadata = buildMetadata("FWX512R", false, useMasterEffective, "AESGCM", "pbkdf2",
-            "STREAM", null, fastObf ? "fast" : "yes", null, null, null, null, null);
-        byte[] metadataBytes = metadata.isEmpty()
-            ? new byte[0]
-            : metadata.getBytes(StandardCharsets.UTF_8);
-        byte[] prefixBytes = metadataBytes.length == 0
-            ? new byte[0]
-            : concat(metadataBytes, Constants.META_DELIM.getBytes(StandardCharsets.UTF_8));
-        byte[] streamHeader = buildStreamHeader(input.length(), streamSalt, extBytes, Constants.STREAM_CHUNK_SIZE);
-        long plaintextLen = (long) prefixBytes.length + streamHeader.length + input.length();
-        long payloadLen = 4L + metadataBytes.length + Constants.AEAD_NONCE_LEN + plaintextLen + Constants.AEAD_TAG_LEN;
-        if (payloadLen > 0xFFFFFFFFL) {
-            throw new IllegalArgumentException("Streaming payload too large");
-        }
-        File outFile = output != null ? output : new File(input.getParentFile(), input.getName() + ".fwx");
-        byte[] aeadKey = Crypto.hkdfSha256(mask.maskKey, Constants.B512_AEAD_INFO, 32);
-        byte[] nonce = Crypto.randomBytes(Constants.AEAD_NONCE_LEN);
-        StreamObfuscator obfuscator = StreamObfuscator.forPassword(pw, streamSalt, fastObf);
-
-        try (FileInputStream fin = new FileInputStream(input);
-             BufferedInputStream in = new BufferedInputStream(fin, Constants.STREAM_CHUNK_SIZE);
-             FileOutputStream fout = new FileOutputStream(outFile);
-             BufferedOutputStream out = new BufferedOutputStream(fout, Constants.STREAM_CHUNK_SIZE)) {
-            writeU32(out, mask.userBlob.length);
-            out.write(mask.userBlob);
-            writeU32(out, mask.masterBlob.length);
-            out.write(mask.masterBlob);
-            writeU32(out, (int) payloadLen);
-            writeU32(out, metadataBytes.length);
-            if (metadataBytes.length > 0) {
-                out.write(metadataBytes);
+        try {
+            boolean useMasterEffective = mask.usedMaster;
+            String ext = BaseFwx.getExtension(input);
+            byte[] extBytes = ext.isEmpty() ? new byte[0] : ext.getBytes(StandardCharsets.UTF_8);
+            byte[] streamSalt = StreamObfuscator.generateSalt();
+            boolean fastObf = useFastObfuscation(input.length());
+            String metadata = buildMetadata("FWX512R", false, useMasterEffective,
+                mask.masterKem, "AESGCM", "pbkdf2",
+                "STREAM", null, fastObf ? "fast" : "yes", null, null, null, null, null);
+            byte[] metadataBytes = metadata.isEmpty()
+                ? new byte[0]
+                : metadata.getBytes(StandardCharsets.UTF_8);
+            byte[] prefixBytes = metadataBytes.length == 0
+                ? new byte[0]
+                : concat(metadataBytes, Constants.META_DELIM.getBytes(StandardCharsets.UTF_8));
+            byte[] streamHeader = buildStreamHeader(input.length(), streamSalt, extBytes, Constants.STREAM_CHUNK_SIZE);
+            long plaintextLen = (long) prefixBytes.length + streamHeader.length + input.length();
+            long payloadLen = 4L + metadataBytes.length + Constants.AEAD_NONCE_LEN + plaintextLen + Constants.AEAD_TAG_LEN;
+            if (payloadLen > 0xFFFFFFFFL) {
+                throw new IllegalArgumentException("Streaming payload too large");
             }
-            out.write(nonce);
-
-            CryptoBackend backend = CryptoBackends.get();
-            try (CryptoBackend.AeadEncryptor enc = backend.newGcmEncryptor(aeadKey, nonce, metadataBytes)) {
-                byte[] outBuf = new byte[Constants.STREAM_CHUNK_SIZE + Constants.AEAD_TAG_LEN];
-                if (prefixBytes.length > 0) {
-                    int outLen = enc.update(prefixBytes, 0, prefixBytes.length, outBuf, 0);
-                    if (outLen > 0) {
-                        out.write(outBuf, 0, outLen);
+            File outFile = output != null ? output : new File(input.getParentFile(), input.getName() + ".fwx");
+            byte[] aeadKey = KeyWrap.deriveKeyAndWipe(
+                    mask.maskKey, Constants.B512_AEAD_INFO, 32);
+            try {
+                byte[] nonce = Crypto.randomBytes(Constants.AEAD_NONCE_LEN);
+                StreamObfuscator obfuscator = StreamObfuscator.forPassword(
+                        pw, streamSalt, fastObf);
+                try (FileInputStream fin = new FileInputStream(input);
+                     BufferedInputStream in = new BufferedInputStream(fin, Constants.STREAM_CHUNK_SIZE);
+                     FileOutputStream fout = new FileOutputStream(outFile);
+                     BufferedOutputStream out = new BufferedOutputStream(fout, Constants.STREAM_CHUNK_SIZE)) {
+                    writeU32(out, mask.userBlob.length);
+                    out.write(mask.userBlob);
+                    writeU32(out, mask.masterBlob.length);
+                    out.write(mask.masterBlob);
+                    writeU32(out, (int) payloadLen);
+                    writeU32(out, metadataBytes.length);
+                    if (metadataBytes.length > 0) {
+                        out.write(metadataBytes);
                     }
-                }
-                int headerLen = enc.update(streamHeader, 0, streamHeader.length, outBuf, 0);
-                if (headerLen > 0) {
-                    out.write(outBuf, 0, headerLen);
-                }
+                    out.write(nonce);
 
-                byte[] buffer = new byte[Constants.STREAM_CHUNK_SIZE];
-                long remaining = input.length();
-                while (remaining > 0) {
-                    int take = (int) Math.min(buffer.length, remaining);
-                    readExact(in, buffer, take, "Streaming payload truncated");
-                    obfuscator.encodeChunkInPlace(buffer, take);
-                    int outLen = enc.update(buffer, 0, take, outBuf, 0);
-                    if (outLen > 0) {
-                        out.write(outBuf, 0, outLen);
+                    CryptoBackend backend = CryptoBackends.get();
+                    try (CryptoBackend.AeadEncryptor enc =
+                                 backend.newGcmEncryptor(aeadKey, nonce, metadataBytes)) {
+                        byte[] outBuf = new byte[
+                                Constants.STREAM_CHUNK_SIZE + Constants.AEAD_TAG_LEN];
+                        if (prefixBytes.length > 0) {
+                            int outLen = enc.update(
+                                    prefixBytes, 0, prefixBytes.length, outBuf, 0);
+                            if (outLen > 0) {
+                                out.write(outBuf, 0, outLen);
+                            }
+                        }
+                        int headerLen = enc.update(
+                                streamHeader, 0, streamHeader.length, outBuf, 0);
+                        if (headerLen > 0) {
+                            out.write(outBuf, 0, headerLen);
+                        }
+
+                        byte[] buffer = new byte[Constants.STREAM_CHUNK_SIZE];
+                        long remaining = input.length();
+                        while (remaining > 0) {
+                            int take = (int) Math.min(buffer.length, remaining);
+                            readExact(
+                                    in, buffer, take,
+                                    "Streaming payload truncated");
+                            obfuscator.encodeChunkInPlace(buffer, take);
+                            int outLen = enc.update(buffer, 0, take, outBuf, 0);
+                            if (outLen > 0) {
+                                out.write(outBuf, 0, outLen);
+                            }
+                            remaining -= take;
+                        }
+                        int finalLen = enc.doFinal(outBuf, 0);
+                        if (finalLen < Constants.AEAD_TAG_LEN) {
+                            throw new IllegalStateException(
+                                    "AES-GCM final block too short");
+                        }
+                        int ctLen = finalLen - Constants.AEAD_TAG_LEN;
+                        if (ctLen > 0) {
+                            out.write(outBuf, 0, ctLen);
+                        }
+                        out.write(outBuf, ctLen, Constants.AEAD_TAG_LEN);
                     }
-                    remaining -= take;
+                    out.flush();
                 }
-                int finalLen = enc.doFinal(outBuf, 0);
-                if (finalLen < Constants.AEAD_TAG_LEN) {
-                    throw new IllegalStateException("AES-GCM final block too short");
-                }
-                int ctLen = finalLen - Constants.AEAD_TAG_LEN;
-                if (ctLen > 0) {
-                    out.write(outBuf, 0, ctLen);
-                }
-                out.write(outBuf, ctLen, Constants.AEAD_TAG_LEN);
+            } catch (IOException | GeneralSecurityException exc) {
+                throw new IllegalStateException("Streaming b512 encode failed", exc);
+            } finally {
+                Arrays.fill(aeadKey, (byte) 0);
             }
-            out.flush();
-        } catch (IOException | GeneralSecurityException exc) {
-            throw new IllegalStateException("Streaming b512 encode failed", exc);
+            return outFile;
+        } finally {
+            mask.close();
         }
-        return outFile;
     }
 
 static File b512FileDecodeFileStream(File input,
@@ -161,15 +170,39 @@ static File b512FileDecodeFileStream(File input,
         try (FileInputStream fin = new FileInputStream(input);
              BufferedInputStream in = new BufferedInputStream(fin, Constants.STREAM_CHUNK_SIZE)) {
             int lenUser = readU32(in, "Ciphertext payload truncated");
+            requireBoundedFileLength(
+                    input, 4L, lenUser, Constants.LENGTH_PREFIXED_MAX,
+                    "user key transport");
             byte[] userBlob = readExactBytes(in, lenUser, "Ciphertext payload truncated");
             int lenMaster = readU32(in, "Ciphertext payload truncated");
+            requireHeaderLengthTotal((long) lenUser + lenMaster);
+            requireBoundedFileLength(
+                    input, 8L + lenUser, lenMaster,
+                    Constants.LENGTH_PREFIXED_MAX, "master key transport");
             byte[] masterBlob = readExactBytes(in, lenMaster, "Ciphertext payload truncated");
             int lenPayloadHeader = readU32(in, "Ciphertext payload truncated");
             long lenPayload = resolvePayloadLengthFromFileSize(input, lenUser, lenMaster, lenPayloadHeader);
+            long payloadOffset = 12L + lenUser + lenMaster;
+            if (lenPayload != input.length() - payloadOffset) {
+                throw new IllegalArgumentException(
+                        "Ciphertext payload length does not match remaining file");
+            }
             if (lenPayload < 4L + Constants.AEAD_NONCE_LEN + Constants.AEAD_TAG_LEN) {
                 throw new IllegalArgumentException("Ciphertext payload truncated");
             }
             int metaLen = readU32(in, "Ciphertext payload truncated");
+            if (metaLen < 0
+                    || (long) metaLen > lenPayload - 4L
+                            - Constants.AEAD_NONCE_LEN
+                            - Constants.AEAD_TAG_LEN) {
+                throw new IllegalArgumentException(
+                        "Ciphertext metadata length invalid");
+            }
+            requireHeaderLengthTotal(
+                    (long) lenUser + lenMaster + metaLen);
+            requireBoundedFileLength(
+                    input, payloadOffset + 4L, metaLen,
+                    Constants.METADATA_MAX, "metadata");
             metadataBytes = readExactBytes(in, metaLen, "Ciphertext payload truncated");
             if (metadataBytes.length > 0) {
                 metadataBlob = new String(metadataBytes, StandardCharsets.UTF_8);
@@ -196,34 +229,54 @@ static File b512FileDecodeFileStream(File input,
                 pw,
                 useMasterEffective,
                 Constants.B512_FILE_MASK_INFO,
-                Constants.B512_AEAD_INFO,
-                new KeyWrap.KdfOptions("pbkdf2", Constants.USER_KDF_ITERATIONS)
+                Constants.MASK_AAD_B512FILE,
+                new KeyWrap.KdfOptions("pbkdf2", Constants.USER_KDF_ITERATIONS),
+                Constants.B512_AEAD_INFO
             );
-            byte[] aeadKey = Crypto.hkdfSha256(maskKey, Constants.B512_AEAD_INFO, 32);
+            byte[] aeadKey = KeyWrap.deriveKeyAndWipe(
+                    maskKey, Constants.B512_AEAD_INFO, 32);
 
-            CryptoBackend backend = CryptoBackends.get();
-            try (CryptoBackend.AeadDecryptor dec = backend.newGcmDecryptor(aeadKey, nonce, metadataBytes)) {
-                tempPlain = BaseFwx.createPrivateTempFile("basefwx-stream", ".plain");
-                try (FileOutputStream fout = new FileOutputStream(tempPlain);
-                     BufferedOutputStream plainOut = new BufferedOutputStream(fout, Constants.STREAM_CHUNK_SIZE)) {
-                    byte[] buffer = new byte[Constants.STREAM_CHUNK_SIZE];
-                    byte[] outBuf = new byte[Constants.STREAM_CHUNK_SIZE];
-                    long remaining = cipherBodyLen;
-                    while (remaining > 0) {
-                        int take = (int) Math.min(buffer.length, remaining);
-                        readExact(in, buffer, take, "Ciphertext truncated");
-                        int outLen = dec.update(buffer, 0, take, outBuf, 0);
-                        if (outLen > 0) {
-                            plainOut.write(outBuf, 0, outLen);
+            try {
+                CryptoBackend backend = CryptoBackends.get();
+                try (CryptoBackend.AeadDecryptor dec =
+                             backend.newGcmDecryptor(
+                                     aeadKey, nonce, metadataBytes)) {
+                    tempPlain = BaseFwx.createPrivateTempFile(
+                            "basefwx-stream", ".plain");
+                    try (FileOutputStream fout = new FileOutputStream(tempPlain);
+                         BufferedOutputStream plainOut =
+                                 new BufferedOutputStream(
+                                         fout,
+                                         Constants.STREAM_CHUNK_SIZE)) {
+                        byte[] buffer = new byte[Constants.STREAM_CHUNK_SIZE];
+                        byte[] outBuf = new byte[Constants.STREAM_CHUNK_SIZE];
+                        long remaining = cipherBodyLen;
+                        while (remaining > 0) {
+                            int take = (int) Math.min(
+                                    buffer.length, remaining);
+                            readExact(
+                                    in, buffer, take,
+                                    "Ciphertext truncated");
+                            int outLen = dec.update(
+                                    buffer, 0, take, outBuf, 0);
+                            if (outLen > 0) {
+                                plainOut.write(outBuf, 0, outLen);
+                            }
+                            remaining -= take;
                         }
-                        remaining -= take;
-                    }
-                    byte[] tag = readExactBytes(in, Constants.AEAD_TAG_LEN, "Ciphertext payload truncated");
-                    int finalLen = dec.doFinal(tag, 0, tag.length, outBuf, 0);
-                    if (finalLen > 0) {
-                        plainOut.write(outBuf, 0, finalLen);
+                        byte[] tag = readExactBytes(
+                                in,
+                                Constants.AEAD_TAG_LEN,
+                                "Ciphertext payload truncated");
+                        int finalLen = dec.doFinal(
+                                tag, 0, tag.length, outBuf, 0);
+                        if (finalLen > 0) {
+                            plainOut.write(outBuf, 0, finalLen);
+                        }
                     }
                 }
+            } finally {
+                Arrays.fill(aeadKey, (byte) 0);
             }
         } catch (IOException | GeneralSecurityException exc) {
             if (tempPlain != null) {
@@ -324,25 +377,36 @@ static byte[] b512FileEncodeBytes(byte[] data,
             useMasterEffective,
             Constants.B512_FILE_MASK_INFO,
             !useMasterEffective,
-            Constants.B512_AEAD_INFO,
+            Constants.MASK_AAD_B512FILE,
             new KeyWrap.KdfOptions("pbkdf2", Constants.USER_KDF_ITERATIONS)
         );
-        useMasterEffective = useMasterEffective && mask.usedMaster;
-        String ext = extension == null ? "" : extension;
-        String b64Payload = Base64Codec.encode(data);
-        String extToken = TextCodecs.b512EncodeString(ext, password, useMasterEffective);
-        String dataToken = TextCodecs.b512EncodeString(b64Payload, password, useMasterEffective);
-        String metadata = buildMetadata("FWX512R", stripMetadata, useMasterEffective,
-            enableAead ? "AESGCM" : "NONE", "pbkdf2");
-        String body = extToken + Constants.FWX_DELIM + dataToken;
-        String payload = metadata.isEmpty() ? body : metadata + Constants.META_DELIM + body;
-        byte[] payloadBytes = payload.getBytes(StandardCharsets.UTF_8);
-        if (!enableAead) {
-            return payloadBytes;
+        try {
+            useMasterEffective = useMasterEffective && mask.usedMaster;
+            String ext = extension == null ? "" : extension;
+            String b64Payload = Base64Codec.encode(data);
+            String extToken = TextCodecs.b512EncodeString(ext, password, useMasterEffective);
+            String dataToken = TextCodecs.b512EncodeString(b64Payload, password, useMasterEffective);
+            String metadata = buildMetadata("FWX512R", stripMetadata, useMasterEffective,
+                mask.masterKem, enableAead ? "AESGCM" : "NONE", "pbkdf2");
+            String body = extToken + Constants.FWX_DELIM + dataToken;
+            String payload = metadata.isEmpty() ? body : metadata + Constants.META_DELIM + body;
+            byte[] payloadBytes = payload.getBytes(StandardCharsets.UTF_8);
+            if (!enableAead) {
+                return payloadBytes;
+            }
+            byte[] aeadKey = KeyWrap.deriveKeyAndWipe(
+                    mask.maskKey, Constants.B512_AEAD_INFO, 32);
+            try {
+                byte[] ctBlob = Crypto.aesGcmEncrypt(
+                        aeadKey, payloadBytes, Constants.B512_AEAD_INFO);
+                return Format.packLengthPrefixed(
+                        Arrays.asList(mask.userBlob, mask.masterBlob, ctBlob));
+            } finally {
+                Arrays.fill(aeadKey, (byte) 0);
+            }
+        } finally {
+            mask.close();
         }
-        byte[] aeadKey = Crypto.hkdfSha256(mask.maskKey, Constants.B512_AEAD_INFO, 32);
-        byte[] ctBlob = Crypto.aesGcmEncrypt(aeadKey, payloadBytes, Constants.B512_AEAD_INFO);
-        return Format.packLengthPrefixed(Arrays.asList(mask.userBlob, mask.masterBlob, ctBlob));
     }
 
 static BaseFwx.DecodedFile b512FileDecodeBytes(byte[] blob,
@@ -360,23 +424,40 @@ static BaseFwx.DecodedFile b512FileDecodeBytes(byte[] blob,
         }
         boolean useMasterEffective = useMaster && !stripMetadata;
         byte[] pw = BaseFwx.resolvePasswordBytes(password, useMasterEffective);
-        String content;
+        String content = null;
+        List<byte[]> binaryParts = null;
         try {
-            List<byte[]> parts = Format.unpackLengthPrefixed(blob, 3);
+            binaryParts = Format.unpackLengthPrefixed(blob, 3);
+        } catch (IllegalArgumentException formatFailure) {
+            // A blob that is not structurally length-prefixed may be the
+            // historical raw-text format. Once structural recognition
+            // succeeds, all keywrap and payload authentication failures are
+            // terminal and must never downgrade to this path.
+            content = new String(blob, StandardCharsets.UTF_8);
+        }
+        if (binaryParts != null) {
             byte[] maskKey = KeyWrap.recoverMaskKey(
-                parts.get(0),
-                parts.get(1),
+                binaryParts.get(0),
+                binaryParts.get(1),
                 pw,
                 useMasterEffective,
                 Constants.B512_FILE_MASK_INFO,
-                Constants.B512_AEAD_INFO,
-                new KeyWrap.KdfOptions("pbkdf2", Constants.USER_KDF_ITERATIONS)
+                Constants.MASK_AAD_B512FILE,
+                new KeyWrap.KdfOptions("pbkdf2", Constants.USER_KDF_ITERATIONS),
+                Constants.B512_AEAD_INFO
             );
-            byte[] aeadKey = Crypto.hkdfSha256(maskKey, Constants.B512_AEAD_INFO, 32);
-            byte[] payloadBytes = Crypto.aesGcmDecrypt(aeadKey, parts.get(2), Constants.B512_AEAD_INFO);
-            content = new String(payloadBytes, StandardCharsets.UTF_8);
-        } catch (RuntimeException exc) {
-            content = new String(blob, StandardCharsets.UTF_8);
+            byte[] aeadKey = KeyWrap.deriveKeyAndWipe(
+                    maskKey, Constants.B512_AEAD_INFO, 32);
+            try {
+                byte[] payloadBytes = Crypto.aesGcmDecrypt(
+                        aeadKey,
+                        binaryParts.get(2),
+                        Constants.B512_AEAD_INFO);
+                content = new String(
+                        payloadBytes, StandardCharsets.UTF_8);
+            } finally {
+                Arrays.fill(aeadKey, (byte) 0);
+            }
         }
         String[] metaSplit = splitMetadata(content);
         String metadataBlob = metaSplit[0];
@@ -416,6 +497,10 @@ static File b512FileDecodeFile(File input,
         String metaPreview = peekMetadataBlob(input);
         if (isStreamMode(metaPreview)) {
             return b512FileDecodeFileStream(input, output, password, useMaster, metaPreview);
+        }
+        if (input.length() > Constants.LENGTH_PREFIXED_MAX) {
+            throw new IllegalArgumentException(
+                    "Non-stream b512file exceeds 64 MiB decode cap");
         }
         byte[] blob = BaseFwx.readFileBytes(input);
         BaseFwx.DecodedFile decoded = b512FileDecodeBytes(blob, password, useMaster);

@@ -8,13 +8,24 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <vector>
 
 namespace basefwx::crypto {
 
+// One-shot AEAD / KDF / MAC / RNG helpers. Prefer these over opening a
+// parallel EVP_* path. Chunked streaming codecs (fwxaes, filecodec,
+// imagecipher, obfuscation) may call OpenSSL EVP directly for
+// throughput — see SECURITY.md "Crypto helper boundaries".
+
 using Bytes = std::vector<std::uint8_t>;
+
+class AuthenticationError : public std::runtime_error {
+public:
+    using std::runtime_error::runtime_error;
+};
 
 Bytes RandomBytes(std::size_t size);
 Bytes HkdfSha256(const Bytes& key_material, std::string_view info, std::size_t length);

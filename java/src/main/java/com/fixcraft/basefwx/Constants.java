@@ -24,6 +24,7 @@ public final class Constants {
     public static final int FWXAES_SALT_LEN = 16;
     public static final int FWXAES_IV_LEN = 12;
     public static final int FWXAES_KEY_LEN = 32;
+    public static final int FWXAES_MAX_KEY_HEADER_LEN = 64 * 1024;
     // 3.7.0: BASEFWX_TEST_KDF_ITERS is honored ONLY when the JVM is
     // launched with -Dbasefwx.testing=true (or the env var
     // BASEFWX_TESTING=1). The previous unconditional read meant a
@@ -31,7 +32,7 @@ public final class Constants {
     // silently produced low-cost ciphertext indistinguishable on the wire.
     private static final boolean TESTING_BUILD =
             Boolean.getBoolean("basefwx.testing")
-            || "1".equals(System.getenv("BASEFWX_TESTING"));
+            || envEnabled("BASEFWX_TESTING");
     private static final Integer TEST_KDF_ITERS =
             TESTING_BUILD ? envInt("BASEFWX_TEST_KDF_ITERS") : null;
     public static final boolean TEST_KDF_OVERRIDE = TEST_KDF_ITERS != null;
@@ -60,6 +61,7 @@ public final class Constants {
     // Short-password (<12 char) step-up to match C++ kShortArgon2*.
     public static final int SHORT_ARGON2_TIME_COST = 5;
     public static final int SHORT_ARGON2_MEMORY_KIB = 1 << 17;  // 128 MiB
+    public static final int SHORT_ARGON2_PARALLELISM = 4;
     // Heavy-mode Argon2id parameters — mirrors C++ kHeavyArgon2* constants.
     // Used by Pb512FileCodec heavy path; not yet wired for user-KDF.
     public static final int HEAVY_ARGON2_TIME_COST = 6;
@@ -79,6 +81,7 @@ public final class Constants {
     }
 
     public static final byte[] MASTER_EC_MAGIC = "EC1".getBytes(StandardCharsets.US_ASCII);
+    public static final int MASTER_EC_POINT_LEN = 133;
     public static final String MASTER_EC_CURVE = "secp521r1";
     public static final String MASTER_EC_PUBLIC_ENV = "BASEFWX_MASTER_EC_PUB";
     public static final String MASTER_EC_PRIVATE_ENV = "BASEFWX_MASTER_EC_PRIV";
@@ -92,9 +95,17 @@ public final class Constants {
     public static final byte[] MASK_AAD_B512 = "b512".getBytes(StandardCharsets.US_ASCII);
     public static final byte[] MASK_AAD_PB512 = "pb512".getBytes(StandardCharsets.US_ASCII);
     public static final byte[] MASK_AAD_JMG = "jmg".getBytes(StandardCharsets.US_ASCII);
+    // Mask-wrap AEAD AAD for b512file — must match C++ kMaskAadB512File /
+    // Python aad=b'b512file'. Do NOT use B512_AEAD_INFO here (that string is
+    // the HKDF info + payload AEAD AAD only).
+    public static final byte[] MASK_AAD_B512FILE = "b512file".getBytes(StandardCharsets.US_ASCII);
 
     public static final byte[] B512_FILE_MASK_INFO = "basefwx.b512file.mask.v1".getBytes(StandardCharsets.US_ASCII);
     public static final byte[] B512_AEAD_INFO = "basefwx.b512file.v1".getBytes(StandardCharsets.US_ASCII);
+    public static final byte[] FWXAES_PAYLOAD_AEAD_INFO =
+            "basefwx.fwxaes.payload.aead.v1".getBytes(StandardCharsets.US_ASCII);
+    public static final byte[] FWXAES_PAYLOAD_OBF_INFO =
+            "basefwx.fwxaes.payload.obf.v1".getBytes(StandardCharsets.US_ASCII);
     public static final int STREAM_THRESHOLD = 250 * 1024;
     public static final int STREAM_CHUNK_SIZE = 1 << 20;
     public static final int HKDF_MAX_LEN = 255 * 32;
@@ -127,6 +138,9 @@ public final class Constants {
     public static final int LIVE_FRAME_HEADER_LEN = 18; // magic(4) + ver(1) + type(1) + seq(8) + body_len(4)
     public static final int LIVE_HEADER_FIXED_LEN = 12; // key_mode(1) + salt_len(1) + nonce_len(1) + reserved(1) + key_hdr_len(4) + iters(4)
     public static final int LIVE_MAX_BODY = 1_073_741_824;
+    public static final int LIVE_MAX_HEADER_BODY =
+            LIVE_HEADER_FIXED_LEN + FWXAES_MAX_KEY_HEADER_LEN
+                    + 2 * 0xFF;
 
     public static final String FWX_DELIM = "\u001f\u001e";
     public static final String FWX_HEAVY_DELIM = "\u001f\u001d";
@@ -141,7 +155,22 @@ public final class Constants {
     public static final byte[] OBF_INFO_PERM = "basefwx.obf.perm.v1".getBytes(StandardCharsets.US_ASCII);
     public static final byte[] KEM_INFO = "basefwx.kem.v1".getBytes(StandardCharsets.US_ASCII);
 
-    public static final String MASTER_PQ_ALG = "ml-kem-768";
+    /** Default master wrap algorithm (opt-in 1024 via env). */
+    public static final String MASTER_PQ_ALG_DEFAULT = "ml-kem-768";
+    public static final String MASTER_PQ_ALG_HIGH = "ml-kem-1024";
+    /** @deprecated Prefer {@link PQ#currentKemAlgorithm()}; kept as the default wire name. */
+    public static final String MASTER_PQ_ALG = MASTER_PQ_ALG_DEFAULT;
+    public static final String MASTER_PQ_ALG_ENV = "BASEFWX_MASTER_PQ_ALG";
+
+    public static final int MINIMUM_PASSWORD_LENGTH = 10;
+    // Absolute ceilings for parameters parsed from untrusted peer metadata.
+    public static final int ARGON2_TIME_COST_MAX = 16;
+    public static final int ARGON2_MEMORY_KIB_MAX = 1 << 18; // 256 MiB
+    public static final int ARGON2_PARALLELISM_MAX = 16;
+    public static final int PEER_PBKDF2_ITERATIONS_MAX = 4_000_000;
+    public static final int LENGTH_PREFIXED_MAX = 64 * 1024 * 1024;
+    public static final int METADATA_MAX = 1 * 1024 * 1024;
+
     // 3.7.0: the upstream baked ML-KEM-768 master public key has been
     // removed from this constant. Deployments that want a baked key
     // override it via -Dbasefwx.master.pq.public.b64=<base64-blob> on
@@ -154,10 +183,6 @@ public final class Constants {
     public static final String MASTER_PQ_PRIVATE_ENV = "BASEFWX_MASTER_PQ_SK";
     public static final String PQ_STRICT_ENV = "BASEFWX_PQ_STRICT";
     public static final String PQ_ONLY_ENV = "BASEFWX_PQ_ONLY";
-    // Retained as a string only so callers that print env-var names still
-    // compile. The actual env-var is no longer consulted by PQ.java (the
-    // baked-key opt-in was removed alongside the baked literal).
-    public static final String MASTER_PQ_ALLOW_BAKED_ENV = "BASEFWX_MASTER_PQ_ALLOW_BAKED";
 
     public static final String ENGINE_VERSION = VersionInfo.engineVersion();
 
@@ -218,5 +243,20 @@ public final class Constants {
         } catch (NumberFormatException exc) {
             return null;
         }
+    }
+
+    static boolean envEnabled(String name) {
+        return envEnabledValue(System.getenv(name));
+    }
+
+    static boolean envEnabledValue(String raw) {
+        if (raw == null) {
+            return false;
+        }
+        String value = raw.trim();
+        return "1".equals(value)
+                || "true".equalsIgnoreCase(value)
+                || "yes".equalsIgnoreCase(value)
+                || "on".equalsIgnoreCase(value);
     }
 }

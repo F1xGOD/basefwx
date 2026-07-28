@@ -74,7 +74,7 @@ BaseFWX includes several related codec families:
 - `pb512` / `b512`: password-backed heavy encodings and file modes.
 - `livecipher`: packetized stream encryption for pipe and transport use.
 - `keywrap`: password and master-key wrapping helpers.
-- `pq`: ML-KEM-768 key encapsulation when liboqs support is enabled.
+- `pq`: ML-KEM-768/1024 key encapsulation when liboqs support is enabled.
 - `kFM`: strict media carrier encode/decode.
 - `jMG`: media cipher flows with optional exact-restore archive payloads.
 - `n10`, `b256`, `b512`: reversible text and binary encodings.
@@ -281,7 +281,8 @@ exactly. Video support may be gated by build and runtime flags.
 
 ## YUME Integration
 
-YUME uses the C++ BaseFWX library for inner crypto, not the BaseFWX CLI:
+YUME is a **separate sibling project** (not shipped in this repository).
+It uses the C++ BaseFWX library for inner crypto, not the BaseFWX CLI:
 
 ```text
 +--------------------------------+
@@ -344,7 +345,7 @@ The intended package split is:
 ```
 
 Local development builds may use a prepared vendor liboqs staging directory
-to keep ML-KEM-768 available. Debian archive builds should use a normal
+to keep ML-KEM-768/1024 available. Debian archive builds should use a normal
 packaged `liboqs-dev` dependency instead of embedding or copying liboqs into
 BaseFWX.
 

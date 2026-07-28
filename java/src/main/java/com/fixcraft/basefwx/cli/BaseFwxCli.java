@@ -24,6 +24,49 @@ import java.util.concurrent.TimeUnit;
 public final class BaseFwxCli {
     private BaseFwxCli() {}
 
+    static Number readOperatingSystemMetric(
+            Object bean, String modernMethod, String legacyMethod) {
+        if (bean == null || modernMethod == null || legacyMethod == null) {
+            return null;
+        }
+        try {
+            Class<?> mxBeanType =
+                    Class.forName("com.sun.management.OperatingSystemMXBean");
+            if (mxBeanType.isInstance(bean)) {
+                Number value = invokeNumericMetric(
+                        bean, mxBeanType, modernMethod);
+                if (value != null) {
+                    return value;
+                }
+                value = invokeNumericMetric(bean, mxBeanType, legacyMethod);
+                if (value != null) {
+                    return value;
+                }
+            }
+        } catch (ClassNotFoundException | LinkageError | SecurityException ignored) {
+            // Non-HotSpot or restricted runtime: try the concrete bean below.
+        }
+        Number value = invokeNumericMetric(
+                bean, bean.getClass(), modernMethod);
+        return value != null
+                ? value
+                : invokeNumericMetric(bean, bean.getClass(), legacyMethod);
+    }
+
+    private static Number invokeNumericMetric(
+            Object bean, Class<?> type, String methodName) {
+        try {
+            java.lang.reflect.Method method = type.getMethod(methodName);
+            if (method.getParameterTypes().length != 0) {
+                return null;
+            }
+            Object value = method.invoke(bean);
+            return value instanceof Number ? (Number) value : null;
+        } catch (ReflectiveOperationException | LinkageError | RuntimeException ignored) {
+            return null;
+        }
+    }
+
     private static final class CommandTelemetry implements AutoCloseable {
         private final boolean enabled;
         private final boolean expectGpu;
@@ -89,12 +132,15 @@ public final class BaseFwxCli {
         private Double sampleCpuPercent() {
             try {
                 java.lang.management.OperatingSystemMXBean baseBean = ManagementFactory.getOperatingSystemMXBean();
-                if (baseBean instanceof com.sun.management.OperatingSystemMXBean) {
-                    com.sun.management.OperatingSystemMXBean osBean =
-                        (com.sun.management.OperatingSystemMXBean) baseBean;
-                    double load = osBean.getCpuLoad();
-                    if (load >= 0.0d) {
-                        return Math.max(0.0d, Math.min(100.0d, load * 100.0d));
+                Number value = readOperatingSystemMetric(
+                        baseBean, "getCpuLoad", "getSystemCpuLoad");
+                if (value != null) {
+                    double load = value.doubleValue();
+                    if (load >= 0.0d
+                            && !Double.isNaN(load)
+                            && !Double.isInfinite(load)) {
+                        return Math.max(
+                                0.0d, Math.min(100.0d, load * 100.0d));
                     }
                 }
             } catch (Exception ignored) {
@@ -140,13 +186,24 @@ public final class BaseFwxCli {
         private Double sampleRamPercent() {
             try {
                 java.lang.management.OperatingSystemMXBean baseBean = ManagementFactory.getOperatingSystemMXBean();
-                if (baseBean instanceof com.sun.management.OperatingSystemMXBean) {
-                    com.sun.management.OperatingSystemMXBean osBean =
-                        (com.sun.management.OperatingSystemMXBean) baseBean;
-                    long total = osBean.getTotalMemorySize();
-                    long free = osBean.getFreeMemorySize();
-                    if (total > 0L) {
-                        return Math.max(0.0d, Math.min(100.0d, ((double) (total - free) * 100.0d) / (double) total));
+                Number totalValue = readOperatingSystemMetric(
+                        baseBean,
+                        "getTotalMemorySize",
+                        "getTotalPhysicalMemorySize");
+                Number freeValue = readOperatingSystemMetric(
+                        baseBean,
+                        "getFreeMemorySize",
+                        "getFreePhysicalMemorySize");
+                if (totalValue != null && freeValue != null) {
+                    long total = totalValue.longValue();
+                    long free = freeValue.longValue();
+                    if (total > 0L && free >= 0L) {
+                        return Math.max(
+                                0.0d,
+                                Math.min(
+                                        100.0d,
+                                        ((double) (total - free) * 100.0d)
+                                                / (double) total));
                     }
                 }
             } catch (Exception ignored) {
@@ -392,12 +449,11 @@ public final class BaseFwxCli {
                 if (argc < 4) {
                     return 1;
                 }
-                try (java.io.FileInputStream inStream = new java.io.FileInputStream(args[1]);
-                     java.io.FileOutputStream outStream = new java.io.FileOutputStream(args[2])) {
-                    BaseFwx.fwxAesDecryptStream(inStream, outStream, args[3], useMaster);
-                } catch (java.io.IOException exc) {
-                    throw new RuntimeException("fwxAES stream decrypt failed", exc);
-                }
+                BaseFwx.fwxAesDecryptFile(
+                        new File(args[1]),
+                        new File(args[2]),
+                        args[3],
+                        useMaster);
                 return 0;
             case "fwxaes-live-enc":
                 if (argc < 4) {

@@ -71,7 +71,7 @@ Password-backed heavy encodings and file modes.
 Packetized stream encryption for pipes and transport use.
 .TP
 .B keywrap / pq
-Password and master-key wrapping helpers, including ML-KEM-768 when liboqs
+Password and master-key wrapping helpers, including ML-KEM-768/1024 when liboqs
 support is enabled.
 .TP
 .B kFM / jMG
@@ -206,7 +206,7 @@ through the libbasefwx-dev build package and the libbasefwx3 runtime package.
 .fi
 .PP
 Local development builds may use a prepared vendor liboqs staging directory
-to keep ML-KEM-768 available. Debian archive builds should use a normal
+to keep ML-KEM-768/1024 available. Debian archive builds should use a normal
 packaged liboqs-dev dependency instead of embedding liboqs into BaseFWX.
 .SH FAILURE MODEL
 BaseFWX should fail closed. A wrong password, changed ciphertext, missing
@@ -229,5 +229,14 @@ pkg-config metadata.
 .I /usr/share/doc/libbasefwx3/EXPLAINED.md.gz
 Extended overview with reusable diagrams.
 .SH SEE ALSO
-.BR yume (1),
-.BR yumed (8)
+.BR basefwx (1)
+.PP
+YUME is a separate sibling project that can link against
+.BR libbasefwx ;
+its manual pages (if installed) are
+.BR yume (1)
+and
+.BR yumed (8).
+Those binaries and man pages are
+.B not
+part of this BaseFWX source tree.

@@ -85,7 +85,9 @@ class basefwx:
     from cryptography.hazmat.primitives.kdf.hkdf import HKDF
     from cryptography.hazmat.primitives.ciphers.aead import AESGCM
     try:
-        from pqcrypto.kem import ml_kem_768
+        from .crypto import _pq as _pq_mod
+        ml_kem_768 = _pq_mod.ml_kem_768
+        ml_kem_1024 = _pq_mod.ml_kem_1024
     except Exception:  # pragma: no cover - optional dependency
         class _PQUnavailable:
             CIPHERTEXT_SIZE = 0
@@ -99,6 +101,8 @@ class basefwx:
                 raise RuntimeError("pqcrypto is required for PQ operations (pip install pqcrypto)")
 
         ml_kem_768 = _PQUnavailable()
+        ml_kem_1024 = _PQUnavailable()
+        _pq_mod = None
     from datetime import datetime, timezone
     try:
         from argon2.low_level import hash_secret_raw as _argon2_hash_secret_raw, Type as _Argon2Type
@@ -109,6 +113,8 @@ class basefwx:
     from cryptography.hazmat.primitives import hmac
 
     _env_int = staticmethod(_prim._env_int)
+
+    _env_enabled = staticmethod(_prim._env_enabled)
 
     _perf_mode_enabled = staticmethod(_prim._perf_mode_enabled)
 
@@ -162,6 +168,12 @@ class basefwx:
         ".ico", ".heic", ".heif", ".ppm", ".pgm",
     })
     MASTER_PQ_ALG = "ml-kem-768"
+    MASTER_PQ_ALG_HIGH = "ml-kem-1024"
+    MINIMUM_PASSWORD_LENGTH = 10
+    ARGON2_TIME_COST_MAX = 16
+    ARGON2_MEMORY_COST_MAX = 2 ** 18  # 256 MiB
+    ARGON2_PARALLELISM_MAX = 16
+    PEER_PBKDF2_ITERATIONS_MAX = 4_000_000
     MASTER_EC_MAGIC = b"EC1"
     MASTER_EC_CURVE_NAME = "secp521r1"
     MASTER_EC_PUBLIC_ENV = "BASEFWX_MASTER_EC_PUB"
@@ -236,25 +248,12 @@ class basefwx:
         Argon2Type = _Argon2Type
     hash_secret_raw = _argon2_hash_secret_raw
     _ARGON2_AVAILABLE = hash_secret_raw is not None
-    # Use Argon2 by default if available AND sufficient RAM (>= 128 MiB)
-    # This follows Google's recommendation: "Argon2 (specifically Argon2id) is superior to PBKDF2"
-    _HAS_SUFFICIENT_RAM = _prim._check_ram_for_argon2() if _ARGON2_AVAILABLE else True
-    if _ARGON2_AVAILABLE and _HAS_SUFFICIENT_RAM:
-        USER_KDF_DEFAULT = "argon2id"
-    else:
-        USER_KDF_DEFAULT = "pbkdf2"
-        if _ARGON2_AVAILABLE and not _HAS_SUFFICIENT_RAM:
-            import warnings
-            warnings.warn(
-                "Insufficient RAM for Argon2 (< 128 MiB available). Using PBKDF2. "
-                "Set BASEFWX_USER_KDF=argon2 to override.",
-                ResourceWarning
-            )
+    # Argon2id remains the fail-closed default whenever its backend is
+    # installed. A transient RAM estimate must not silently change the wire
+    # KDF or weaken a deployment. Constrained hosts can explicitly select
+    # BASEFWX_USER_KDF=pbkdf2; Argon2 allocation failures are surfaced.
+    USER_KDF_DEFAULT = "argon2id" if _ARGON2_AVAILABLE else "pbkdf2"
     USER_KDF = os.getenv("BASEFWX_USER_KDF", USER_KDF_DEFAULT).lower()
-    # Only reduce iterations if Argon2 is unavailable AND user didn't explicitly set KDF
-    # This maintains cross-language compatibility when explicitly using PBKDF2
-    if not _ARGON2_AVAILABLE and os.getenv("BASEFWX_USER_KDF") is None:
-        USER_KDF_ITERATIONS = 32_768
     _TESTING_BUILD = os.getenv("BASEFWX_TESTING") == "1"
     _TEST_KDF_ITERS = _prim._env_int("BASEFWX_TEST_KDF_ITERS") if _TESTING_BUILD else None
     _USER_KDF_ITERS_ENV = _prim._env_int("BASEFWX_USER_KDF_ITERS")
@@ -323,9 +322,12 @@ class basefwx:
     elif _TEST_KDF_ITERS is not None:
         FWXAES_PBKDF2_ITERS = _TEST_KDF_ITERS
     FWXAES_KEY_LEN = 32
+    FWXAES_MAX_KEY_HEADER_LEN = 64 * 1024
     FWXAES_AAD = b"fwxAES"
     FWXAES_MASK_INFO = b"basefwx.fwxaes.mask.v1"
     FWXAES_KEY_INFO = b"basefwx.fwxaes.key.v1"
+    FWXAES_PAYLOAD_AEAD_INFO = b"basefwx.fwxaes.payload.aead.v1"
+    FWXAES_PAYLOAD_OBF_INFO = b"basefwx.fwxaes.payload.obf.v1"
     AN7_CHUNK_SIZE = 1 << 20
     AN7_SUPERBLOCK_CHUNKS = 10
     AN7_FLIP_STRIDE = 10
@@ -351,6 +353,9 @@ class basefwx:
     LIVE_NONCE_PREFIX_LEN = 4
     LIVE_HEADER_STRUCT = struct.Struct(">BBBBII")
     LIVE_FRAME_HEADER_STRUCT = struct.Struct(">4sBBQI")
+    LIVE_MAX_HEADER_BODY = (
+        LIVE_HEADER_STRUCT.size + FWXAES_MAX_KEY_HEADER_LEN + 2 * 0xFF
+    )
     NORMALIZE_THRESHOLD = 8 * 1024
     ZW0 = "\u200b"
     ZW1 = "\u200c"
@@ -434,6 +439,10 @@ class basefwx:
 
     _deobfuscate_bytes = staticmethod(_obf._deobfuscate_bytes)
 
+    _require_payload_obfuscation_mode = staticmethod(
+        _obf._require_payload_obfuscation_mode
+    )
+
     _StreamObfuscator = _obf._StreamObfuscator
 
     _build_metadata = staticmethod(_file_ops._build_metadata)
@@ -488,15 +497,31 @@ class basefwx:
 
     _ec_kem_enc = staticmethod(_master_key._ec_kem_enc)
 
+    _is_ec_master_blob = staticmethod(_master_key._is_ec_master_blob)
+
     _ec_kem_dec = staticmethod(_master_key._ec_kem_dec)
 
     _resolve_master_usage = staticmethod(_master_key._resolve_master_usage)
 
+    _select_master_key = staticmethod(_master_key._select_master_key)
+
     _kem_derive_key = staticmethod(_master_key._kem_derive_key)
+
+    _parse_peer_decimal = staticmethod(_kdf._parse_peer_decimal)
 
     _hkdf_sha256 = staticmethod(_prim._hkdf_sha256)
 
     _hkdf_stream_sha256 = staticmethod(_prim._hkdf_stream_sha256)
+
+    from .crypto import _x25519 as _x25519_mod
+    from .crypto import _pq as _pq_helpers
+    x25519 = _x25519_mod
+    generate_kem_keypair = staticmethod(_pq_helpers.generate_kem_keypair)
+    current_kem_algorithm = staticmethod(_pq_helpers.current_kem_algorithm)
+    is_supported_kem_algorithm = staticmethod(_pq_helpers.is_supported_kem_algorithm)
+    kem_algorithm_for_public_key = staticmethod(_pq_helpers.kem_algorithm_for_public_key)
+    _kem_encrypt = staticmethod(_pq_helpers.kem_encrypt)
+    _kem_decrypt = staticmethod(_pq_helpers.kem_decrypt)
 
     _mdcode_ascii = staticmethod(_codecs_str._mdcode_ascii)
 
@@ -510,6 +535,10 @@ class basefwx:
 
     _unpack_length_prefixed = staticmethod(_b512file._unpack_length_prefixed)
 
+    LENGTH_PREFIXED_MAX = _b512file.LENGTH_PREFIXED_MAX
+
+    METADATA_MAX = _b512file.METADATA_MAX
+
     _resolve_payload_length_from_file_size = staticmethod(_b512file._resolve_payload_length_from_file_size)
 
     _mask_payload = staticmethod(_obf._mask_payload)
@@ -519,6 +548,8 @@ class basefwx:
     _prepare_mask_key = staticmethod(_master_key._prepare_mask_key)
 
     _recover_mask_key_from_blob = staticmethod(_master_key._recover_mask_key_from_blob)
+
+    _strict_pq_only = staticmethod(_master_key._strict_pq_only)
 
     _jmg_security_profile_id = staticmethod(_jmg._jmg_security_profile_id)
 
@@ -573,11 +604,21 @@ class basefwx:
 
     _derive_user_key = staticmethod(_kdf._derive_user_key)
 
+    _resolve_kdf_label = staticmethod(_kdf._resolve_kdf_label)
+
     encryptAES = staticmethod(_kdf.encryptAES)
 
     decryptAES = staticmethod(_kdf.decryptAES)
 
     _coerce_password_bytes = staticmethod(_kdf._coerce_password_bytes)
+
+    _require_peer_argon2_within_limits = staticmethod(_kdf._require_peer_argon2_within_limits)
+
+    _require_peer_pbkdf2_within_limits = staticmethod(_kdf._require_peer_pbkdf2_within_limits)
+
+    _parse_peer_pbkdf2_iterations = staticmethod(_kdf._parse_peer_pbkdf2_iterations)
+
+    _require_strong_password_for_encryption = staticmethod(_kdf._require_strong_password_for_encryption)
 
     _harden_kdf_params = staticmethod(_kdf._harden_kdf_params)
 

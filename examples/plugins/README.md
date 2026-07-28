@@ -27,16 +27,17 @@ This directory contains:
 | `xor-rotate-java/` | A | Java equivalent of `xor-rotate/`. |
 | `xor-rotate-py/` | A | Python equivalent. |
 
-> **Status (3.7.0):** the C ABI (`plugin.h`), C++ helper layer
+> **Status (3.7.0+):** the C ABI (`plugin.h`), C++ helper layer
 > (`plugin.hpp`), static-embed Registry (`plugin_static.hpp`), all
-> example plugins above, the Java SPI (Profile A), and the Python SPI
-> + ctypes bridge (Profile A) are committed. `scripts/plugin-smoke.sh`
-> exercises the ABI end-to-end. **Deferred to 3.7.x:** the runtime
-> loader inside the BaseFWX CLI / fwxAES pipeline, wire-format plugin
-> tags, JNI bridge for native `.so` from Java, Profile B Java/Python
-> SPI parity, and the `basefwx-plugin-verify` tool. The
-> `static-embed/` example is a self-contained host that exercises the
-> keyed contract without any of the deferred pieces.
+> example plugins above, the Java SPI (**Profile A** deterministic
+> PRE/POST), and the Python SPI + ctypes bridge (Profile A) are
+> committed. The C++ fwxAES/CLI host loader and wire-format plugin tag
+> (`algo=0x03`) ship in 3.7.0 — see `COMPATIBILITY.md`.
+> `scripts/plugin-smoke.sh` exercises the ABI end-to-end.
+> **Still deferred / incomplete:** JNI bridge for native `.so` from
+> Java, Profile B (keyed / `POS_RAW` / `capabilities()`) Java/Python
+> SPI parity, and the `basefwx-plugin-verify` tool. Profile A is the
+> only SPI surface mirrored across all three runtimes today.
 
 ## The thirty-second pitch
 

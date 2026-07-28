@@ -7,6 +7,8 @@
 from __future__ import annotations
 
 from ._b512_obfuscation import (
+    LENGTH_PREFIXED_MAX,
+    METADATA_MAX,
     _estimate_aead_blob_size,
     _pack_length_prefixed,
     _resolve_payload_length_from_file_size,
@@ -37,6 +39,8 @@ from ._b512_stream import (
 
 __all__ = [
     "_aes_heavy_encode_path_stream",
+    "LENGTH_PREFIXED_MAX",
+    "METADATA_MAX",
     "_b512_decode_path",
     "_b512_decode_path_stream",
     "_b512_encode_path",

@@ -21,6 +21,7 @@
 #include "basefwx/pb512.hpp"
 #include "basefwx/pq.hpp"
 #include "basefwx/runtime.hpp"
+#include "basefwx/secure_temp.hpp"
 
 #include <algorithm>
 #include <array>
@@ -41,6 +42,8 @@ std::string Pb512EncodeFileSimple(const std::filesystem::path& input,
                                   const basefwx::pb512::KdfOptions& kdf,
                                   std::string_view pack_flag) {
     std::string resolved = basefwx::ResolvePassword(password);
+    const std::uint32_t heavy_pbkdf2_iterations =
+        basefwx::constants::HeavyPbkdf2Iterations();
     Bytes data = ReadFileBytes(input);
     std::string b64_payload = basefwx::base64::Encode(data);
     std::string ext = input.extension().string();
@@ -53,8 +56,15 @@ std::string Pb512EncodeFileSimple(const std::filesystem::path& input,
             ec_pub = TryLoadEcPublic(true);
         }
     }
+    if (options.use_master && !options.strip_metadata
+        && StrictPqOnly() && !pq_pub.has_value()) {
+        throw std::runtime_error(
+            "PQ strict mode requires a configured ML-KEM master public key");
+    }
     bool use_master_effective = options.use_master && !options.strip_metadata
         && (pq_pub.has_value() || ec_pub.has_value());
+    const std::string master_kem =
+        MasterKemLabel(pq_pub, ec_pub, use_master_effective);
     basefwx::pb512::KdfOptions kdf_opts = kdf;
     std::string kdf_label = ResolveKdfLabel(kdf_opts);
     bool obf_enabled = EnableObfuscation(options);
@@ -77,11 +87,12 @@ std::string Pb512EncodeFileSimple(const std::filesystem::path& input,
         "AES-HEAVY",
         options.strip_metadata,
         use_master_effective,
+        master_kem,
         "AESGCM",
         kdf_label,
         "",
         obf_mode,
-        basefwx::constants::HeavyPbkdf2Iterations(),
+        heavy_pbkdf2_iterations,
         argon_time,
         argon_mem,
         argon_par,
@@ -98,9 +109,11 @@ std::string Pb512EncodeFileSimple(const std::filesystem::path& input,
         plaintext,
         resolved,
         use_master_effective,
+        pq_pub,
+        ec_pub,
         metadata_blob,
         kdf_opts,
-        basefwx::constants::HeavyPbkdf2Iterations(),
+        heavy_pbkdf2_iterations,
         argon_time,
         argon_mem,
         argon_par,
@@ -123,6 +136,8 @@ std::string Pb512EncodeFileStream(const std::filesystem::path& input,
                                   const basefwx::pb512::KdfOptions& kdf,
                                   std::string_view pack_flag) {
     std::string resolved = basefwx::ResolvePassword(password);
+    const std::uint32_t heavy_pbkdf2_iterations =
+        basefwx::constants::HeavyPbkdf2Iterations();
     if (resolved.empty()) {
         throw std::runtime_error("Password required for AES-heavy streaming mode");
     }
@@ -137,8 +152,15 @@ std::string Pb512EncodeFileStream(const std::filesystem::path& input,
             ec_pub = TryLoadEcPublic(true);
         }
     }
+    if (options.use_master && !options.strip_metadata
+        && StrictPqOnly() && !pq_pub.has_value()) {
+        throw std::runtime_error(
+            "PQ strict mode requires a configured ML-KEM master public key");
+    }
     bool use_master_effective = options.use_master && !options.strip_metadata
         && (pq_pub.has_value() || ec_pub.has_value());
+    const std::string master_kem =
+        MasterKemLabel(pq_pub, ec_pub, use_master_effective);
     basefwx::pb512::KdfOptions kdf_opts = kdf;
     std::string kdf_label = ResolveKdfLabel(kdf_opts);
     bool obf_enabled = EnableObfuscation(options);
@@ -162,11 +184,12 @@ std::string Pb512EncodeFileStream(const std::filesystem::path& input,
         "AES-HEAVY",
         options.strip_metadata,
         use_master_effective,
+        master_kem,
         "AESGCM",
         kdf_label,
         "STREAM",
         obf_mode,
-        basefwx::constants::HeavyPbkdf2Iterations(),
+        heavy_pbkdf2_iterations,
         argon_time,
         argon_mem,
         argon_par,
@@ -206,13 +229,17 @@ std::string Pb512EncodeFileStream(const std::filesystem::path& input,
         if (pq_pub.has_value()) {
             basefwx::pq::KemResult kem = basefwx::pq::KemEncrypt(*pq_pub);
             master_payload = kem.ciphertext;
-            ephemeral_key = basefwx::crypto::HkdfSha256(kem.shared, constants::kKemInfo, 32);
-            basefwx::crypto::SecureClear(kem.shared);
+            basefwx::crypto::SecureBytes shared{
+                std::move(kem.shared)};
+            ephemeral_key = basefwx::crypto::HkdfSha256(
+                shared.bytes(), constants::kKemInfo, 32);
         } else if (ec_pub.has_value()) {
             basefwx::ec::KemResult kem = basefwx::ec::KemEncrypt(*ec_pub);
             master_payload = kem.blob;
-            ephemeral_key = basefwx::crypto::HkdfSha256(kem.shared, constants::kKemInfo, 32);
-            basefwx::crypto::SecureClear(kem.shared);
+            basefwx::crypto::SecureBytes shared{
+                std::move(kem.shared)};
+            ephemeral_key = basefwx::crypto::HkdfSha256(
+                shared.bytes(), constants::kKemInfo, 32);
         } else {
             ephemeral_key = basefwx::crypto::RandomBytes(constants::kEphemeralKeyLen);
         }
@@ -223,7 +250,7 @@ std::string Pb512EncodeFileStream(const std::filesystem::path& input,
     Bytes user_blob;
     if (!resolved.empty()) {
         basefwx::pb512::KdfOptions kdf_wrap = kdf_opts;
-        kdf_wrap.pbkdf2_iterations = basefwx::constants::HeavyPbkdf2Iterations();
+        kdf_wrap.pbkdf2_iterations = heavy_pbkdf2_iterations;
         if (argon_time.has_value()) {
             kdf_wrap.argon2_time_cost = argon_time.value();
         }
@@ -235,14 +262,22 @@ std::string Pb512EncodeFileStream(const std::filesystem::path& input,
         }
         kdf_wrap = HardenKdfOptionsForPassword(resolved, kdf_wrap);
         Bytes salt = basefwx::crypto::RandomBytes(constants::kUserKdfSaltSize);
-        Bytes user_key = basefwx::keywrap::DeriveUserKeyWithLabel(resolved, salt, kdf_label, kdf_wrap);
-        Bytes wrapped = basefwx::crypto::AeadEncrypt(user_key, ephemeral_key, metadata_bytes);
-        basefwx::crypto::SecureClear(user_key);
+        basefwx::crypto::SecureBytes user_key{
+            basefwx::keywrap::DeriveUserKeyWithLabel(
+                resolved, salt, kdf_label, kdf_wrap)};
+        Bytes wrapped = basefwx::crypto::AeadEncrypt(
+            user_key.bytes(), ephemeral_key, metadata_bytes);
         user_blob.reserve(salt.size() + wrapped.size());
         user_blob.insert(user_blob.end(), salt.begin(), salt.end());
         user_blob.insert(user_blob.end(), wrapped.begin(), wrapped.end());
     }
-    payload_keys = DerivePayloadKeys(ephemeral_key);
+    const bool use_derived_keys = UsesDerivedPayloadKeys(
+        basefwx::metadata::Decode(metadata_blob));
+    Bytes* aead_key = &ephemeral_key;
+    if (use_derived_keys) {
+        payload_keys = DerivePayloadKeys(ephemeral_key);
+        aead_key = &payload_keys.aead;
+    }
 
     Bytes nonce = basefwx::crypto::RandomBytes(constants::kAeadNonceLen);
     std::uint64_t payload_len = 4 + metadata_bytes.size() + nonce.size() + plaintext_len + constants::kAeadTagLen;
@@ -271,7 +306,7 @@ std::string Pb512EncodeFileStream(const std::filesystem::path& input,
     }
     output.write(reinterpret_cast<const char*>(nonce.data()), static_cast<std::streamsize>(nonce.size()));
 
-    AesGcmEncryptor encryptor(payload_keys.aead, nonce, metadata_bytes);
+    AesGcmEncryptor encryptor(*aead_key, nonce, metadata_bytes);
     if (!prefix_bytes.empty()) {
         Bytes ct = encryptor.Update(prefix_bytes);
         output.write(reinterpret_cast<const char*>(ct.data()), static_cast<std::streamsize>(ct.size()));
@@ -281,11 +316,18 @@ std::string Pb512EncodeFileStream(const std::filesystem::path& input,
         output.write(reinterpret_cast<const char*>(ct.data()), static_cast<std::streamsize>(ct.size()));
     }
 
-    basefwx::obf::StreamObfuscator obfuscator = basefwx::obf::StreamObfuscator::ForKey(
-        payload_keys.obf,
-        stream_salt,
-        fast_obf
-    );
+    std::optional<basefwx::obf::StreamObfuscator> obfuscator;
+    if (obf_enabled) {
+        if (use_derived_keys) {
+            obfuscator.emplace(
+                basefwx::obf::StreamObfuscator::ForKey(
+                    payload_keys.obf, stream_salt, fast_obf));
+        } else {
+            obfuscator.emplace(
+                basefwx::obf::StreamObfuscator::ForPassword(
+                    resolved, stream_salt, fast_obf));
+        }
+    }
     std::ifstream input_stream(input, std::ios::binary);
     if (!input_stream) {
         throw std::runtime_error("Failed to open input file: " + input.string());
@@ -299,7 +341,9 @@ std::string Pb512EncodeFileStream(const std::filesystem::path& input,
             break;
         }
         buffer.resize(static_cast<std::size_t>(got));
-        obfuscator.EncodeChunkInPlace(buffer);
+        if (obfuscator.has_value()) {
+            obfuscator->EncodeChunkInPlace(buffer);
+        }
         Bytes ct = encryptor.Update(buffer);
         output.write(reinterpret_cast<const char*>(ct.data()), static_cast<std::streamsize>(ct.size()));
     }
@@ -344,6 +388,12 @@ std::string Pb512DecodeFileStream(const std::filesystem::path& input,
 
     std::uint32_t len_user = 0;
     read_u32(len_user);
+    RequireAvailableLength(
+        input,
+        handle,
+        len_user,
+        constants::kLengthPrefixedMax,
+        "user key transport");
     Bytes user_blob(len_user);
     if (len_user > 0) {
         handle.read(reinterpret_cast<char*>(user_blob.data()), len_user);
@@ -353,6 +403,14 @@ std::string Pb512DecodeFileStream(const std::filesystem::path& input,
     }
     std::uint32_t len_master = 0;
     read_u32(len_master);
+    RequireHeaderLengthTotal(
+        static_cast<std::uint64_t>(len_user) + len_master);
+    RequireAvailableLength(
+        input,
+        handle,
+        len_master,
+        constants::kLengthPrefixedMax,
+        "master key transport");
     Bytes master_blob(len_master);
     if (len_master > 0) {
         handle.read(reinterpret_cast<char*>(master_blob.data()), len_master);
@@ -365,8 +423,28 @@ std::string Pb512DecodeFileStream(const std::filesystem::path& input,
     if (len_payload < 4 + constants::kAeadNonceLen + constants::kAeadTagLen) {
         throw std::runtime_error("Ciphertext payload truncated");
     }
+    RequireAvailableLength(
+        input,
+        handle,
+        len_payload,
+        std::numeric_limits<std::uint32_t>::max(),
+        "payload");
     std::uint32_t metadata_len = 0;
     read_u32(metadata_len);
+    if (metadata_len > len_payload - 4u) {
+        throw std::runtime_error(
+            "Ciphertext metadata length invalid");
+    }
+    RequireHeaderLengthTotal(
+        static_cast<std::uint64_t>(len_user)
+        + len_master
+        + metadata_len);
+    RequireAvailableLength(
+        input,
+        handle,
+        metadata_len,
+        constants::kMetadataMax,
+        "metadata");
     Bytes metadata_bytes(metadata_len);
     if (metadata_len > 0) {
         handle.read(reinterpret_cast<char*>(metadata_bytes.data()), metadata_len);
@@ -399,12 +477,15 @@ std::string Pb512DecodeFileStream(const std::filesystem::path& input,
     }
 
     std::string kdf_label = basefwx::metadata::GetValue(meta, "ENC-KDF");
-    kdf_label = basefwx::keywrap::ResolveKdfLabel(kdf_label.empty() ? kdf.label : kdf_label);
-    auto kdf_iter = ParseUint32(basefwx::metadata::GetValue(meta, "ENC-KDF-ITER"));
+    kdf_label = kdf_label.empty()
+        ? basefwx::keywrap::ResolveKdfLabel(kdf.label)
+        : basefwx::keywrap::ResolvePeerKdfLabel(kdf_label);
+    auto kdf_iter = ParsePeerPbkdf2Iterations(
+        basefwx::metadata::GetValue(meta, "ENC-KDF-ITER"));
     auto argon2_time = ParseUint32(basefwx::metadata::GetValue(meta, "ENC-ARGON2-TC"));
     auto argon2_mem = ParseUint32(basefwx::metadata::GetValue(meta, "ENC-ARGON2-MEM"));
     auto argon2_par = ParseUint32(basefwx::metadata::GetValue(meta, "ENC-ARGON2-PAR"));
-    bool use_derived_keys = basefwx::metadata::GetValue(meta, "ENC-KSEP") == "v1";
+    bool use_derived_keys = UsesDerivedPayloadKeys(meta);
 
     Bytes ephemeral_key;
     PayloadKeys payload_keys;
@@ -413,56 +494,9 @@ std::string Pb512DecodeFileStream(const std::filesystem::path& input,
     secrets.Add(ephemeral_key);
     secrets.Add(payload_keys.aead);
     secrets.Add(payload_keys.obf);
-    if (!master_blob.empty()) {
-        if (!use_master_effective) {
-            throw std::runtime_error("Master key required to decrypt this payload");
-        }
-        if (basefwx::ec::IsEcMasterBlob(master_blob)) {
-            if (StrictPqOnly()) {
-                throw std::runtime_error("EC master blobs are disabled in PQ strict mode");
-            }
-            basefwx::crypto::SecureBytes private_key{basefwx::ec::LoadMasterPrivateKey()};
-            basefwx::crypto::SecureBytes shared{
-                basefwx::ec::KemDecrypt(private_key.bytes(), master_blob)};
-            ephemeral_key = basefwx::crypto::HkdfSha256(shared.bytes(), constants::kKemInfo, 32);
-        } else {
-            basefwx::crypto::SecureBytes private_key{basefwx::pq::LoadMasterPrivateKey()};
-            basefwx::crypto::SecureBytes shared{
-                basefwx::pq::KemDecrypt(private_key.bytes(), master_blob)};
-            ephemeral_key = basefwx::crypto::HkdfSha256(shared.bytes(), constants::kKemInfo, 32);
-        }
-    } else if (!user_blob.empty()) {
-        if (resolved.empty()) {
-            throw std::runtime_error("User password required to decrypt this payload");
-        }
-        if (user_blob.size() < constants::kUserKdfSaltSize + constants::kAeadNonceLen + constants::kAeadTagLen) {
-            throw std::runtime_error("Corrupted user key blob: missing salt or AEAD data");
-        }
-        Bytes salt(user_blob.begin(), user_blob.begin() + static_cast<std::ptrdiff_t>(constants::kUserKdfSaltSize));
-        Bytes wrapped(user_blob.begin() + static_cast<std::ptrdiff_t>(constants::kUserKdfSaltSize), user_blob.end());
-        basefwx::pb512::KdfOptions kdf_opts = kdf;
-        kdf_opts.label = kdf_label;
-        if (kdf_iter.has_value()) {
-            kdf_opts.pbkdf2_iterations = kdf_iter.value();
-        } else {
-            kdf_opts.pbkdf2_iterations = basefwx::constants::kUserKdfIterations;
-        }
-        if (argon2_time.has_value()) {
-            kdf_opts.argon2_time_cost = argon2_time.value();
-        }
-        if (argon2_mem.has_value()) {
-            kdf_opts.argon2_memory_cost = argon2_mem.value();
-        }
-        if (argon2_par.has_value()) {
-            kdf_opts.argon2_parallelism = argon2_par.value();
-        }
-        kdf_opts = HardenKdfOptionsForPassword(resolved, kdf_opts);
-        Bytes user_key = basefwx::keywrap::DeriveUserKeyWithLabel(resolved, salt, kdf_label, kdf_opts);
-        ephemeral_key = basefwx::crypto::AeadDecrypt(user_key, wrapped, metadata_bytes);
-        basefwx::crypto::SecureClear(user_key);
-    } else {
-        throw std::runtime_error("Ciphertext missing key transport data");
-    }
+    ephemeral_key = RecoverPayloadKey(
+        user_blob, master_blob, resolved, use_master_effective, metadata_bytes,
+        kdf_label, kdf_iter, argon2_time, argon2_mem, argon2_par, kdf);
 
     Bytes* aead_key = &ephemeral_key;
     Bytes* obf_key = nullptr;
@@ -473,9 +507,11 @@ std::string Pb512DecodeFileStream(const std::filesystem::path& input,
     }
 
     AesGcmDecryptor decryptor(*aead_key, nonce, metadata_bytes);
-    std::filesystem::path temp_plain = input;
-    temp_plain += ".plain.tmp";
-    TempFileCleanup temp_plain_cleanup(temp_plain);
+    auto temp_plain_file =
+        basefwx::temp::SecureTempPath::CreateSibling(
+            input, "pb512-plain");
+    const std::filesystem::path& temp_plain =
+        temp_plain_file.path();
     std::ofstream plain_out(temp_plain, std::ios::binary);
     if (!plain_out) {
         throw std::runtime_error("Failed to create temp file");
@@ -569,20 +605,26 @@ std::string Pb512DecodeFileStream(const std::filesystem::path& input,
         }
     }
 
-    std::string obf_hint = basefwx::metadata::GetValue(meta, "ENC-OBF");
-    if (obf_hint.empty()) {
-        obf_hint = "yes";
-    }
-    bool fast_obf = obf_hint == "fast";
+    const std::string obf_hint = RequirePayloadObfuscationMode(
+        basefwx::metadata::GetValue(meta, "ENC-OBF"));
+    const bool should_deobfuscate = obf_hint != "no";
+    bool fast_obf = should_deobfuscate && obf_hint == "fast";
     std::optional<basefwx::obf::StreamObfuscator> decoder_v1;
     std::optional<basefwx::obf::StreamObfuscator> decoder_legacy;
-    if (obf_key != nullptr) {
-        decoder_v1.emplace(basefwx::obf::StreamObfuscator::ForKey(*obf_key, salt, fast_obf));
-    } else {
-        if (resolved.empty()) {
-            throw std::runtime_error("Password required for AES-heavy streaming decode");
+    if (should_deobfuscate) {
+        if (obf_key != nullptr) {
+            decoder_v1.emplace(
+                basefwx::obf::StreamObfuscator::ForKey(
+                    *obf_key, salt, fast_obf));
+        } else {
+            if (resolved.empty()) {
+                throw std::runtime_error(
+                    "Password required for AES-heavy streaming decode");
+            }
+            decoder_legacy.emplace(
+                basefwx::obf::StreamObfuscator::ForPassword(
+                    resolved, salt, fast_obf));
         }
-        decoder_legacy.emplace(basefwx::obf::StreamObfuscator::ForPassword(resolved, salt, fast_obf));
     }
     std::filesystem::path target = input;
     target.replace_extension("");
@@ -609,7 +651,7 @@ std::string Pb512DecodeFileStream(const std::filesystem::path& input,
         }
         if (decoder_v1.has_value()) {
             decoder_v1->DecodeChunkInPlace(chunk_buf_bytes);
-        } else {
+        } else if (decoder_legacy.has_value()) {
             decoder_legacy->DecodeChunkInPlace(chunk_buf_bytes);
         }
         out.write(reinterpret_cast<const char*>(chunk_buf_bytes.data()),
@@ -621,12 +663,6 @@ std::string Pb512DecodeFileStream(const std::filesystem::path& input,
         throw std::runtime_error("Failed to write output file");
     }
     plain_in.close();
-    std::error_code remove_ec;
-    std::filesystem::remove(temp_plain, remove_ec);
-    if (remove_ec) {
-        throw std::runtime_error("Failed to remove temp file: " + remove_ec.message());
-    }
-    temp_plain_cleanup.Dismiss();
     if (!options.keep_input) {
         std::filesystem::remove(input);
     }
@@ -642,6 +678,8 @@ std::vector<std::uint8_t> Pb512EncodeBytes(const std::vector<std::uint8_t>& data
                                            const FileOptions& options,
                                            const basefwx::pb512::KdfOptions& kdf) {
     std::string resolved = basefwx::ResolvePassword(password);
+    const std::uint32_t heavy_pbkdf2_iterations =
+        basefwx::constants::HeavyPbkdf2Iterations();
     std::uint64_t b64_len = ((data.size() + 2u) / 3u) * 4u;
     if (b64_len > basefwx::constants::kHkdfMaxLen) {
         throw std::runtime_error("pb512file bytes payload too large; use file-based streaming APIs");
@@ -659,6 +697,8 @@ std::vector<std::uint8_t> Pb512EncodeBytes(const std::vector<std::uint8_t>& data
     }
     bool use_master_effective = options.use_master && !options.strip_metadata
         && (pq_pub.has_value() || ec_pub.has_value());
+    const std::string master_kem =
+        MasterKemLabel(pq_pub, ec_pub, use_master_effective);
     basefwx::pb512::KdfOptions kdf_opts = kdf;
     std::string kdf_label = ResolveKdfLabel(kdf_opts);
     bool obf_enabled = EnableObfuscation(options);
@@ -681,11 +721,12 @@ std::vector<std::uint8_t> Pb512EncodeBytes(const std::vector<std::uint8_t>& data
         "AES-HEAVY",
         options.strip_metadata,
         use_master_effective,
+        master_kem,
         "AESGCM",
         kdf_label,
         "",
         obf_mode,
-        basefwx::constants::HeavyPbkdf2Iterations(),
+        heavy_pbkdf2_iterations,
         argon_time,
         argon_mem,
         argon_par,
@@ -702,9 +743,11 @@ std::vector<std::uint8_t> Pb512EncodeBytes(const std::vector<std::uint8_t>& data
         plaintext,
         resolved,
         use_master_effective,
+        pq_pub,
+        ec_pub,
         metadata_blob,
         kdf_opts,
-        basefwx::constants::HeavyPbkdf2Iterations(),
+        heavy_pbkdf2_iterations,
         argon_time,
         argon_mem,
         argon_par,
@@ -720,9 +763,9 @@ DecodedBytes Pb512DecodeBytes(const std::vector<std::uint8_t>& blob,
                               const basefwx::pb512::KdfOptions& kdf) {
     std::string resolved = basefwx::ResolvePassword(password);
     bool use_master_effective = options.use_master && !options.strip_metadata;
-    bool obf_enabled = EnableObfuscation(options);
     std::string metadata_blob;
-    std::string plaintext = DecryptAesPayload(blob, resolved, use_master_effective, kdf, obf_enabled, &metadata_blob);
+    std::string plaintext = DecryptAesPayload(
+        blob, resolved, use_master_effective, kdf, &metadata_blob);
 
     auto [meta_blob, payload] = SplitMetadata(plaintext);
     auto meta = basefwx::metadata::Decode(meta_blob);
@@ -806,11 +849,15 @@ std::string Pb512DecodeFile(const std::string& path,
         }
     }
 
+    if (FileSize(input) > constants::kLengthPrefixedMax) {
+        throw std::runtime_error(
+            "Non-stream pb512file exceeds 64 MiB decode cap");
+    }
     Bytes blob = ReadFileBytes(input);
     bool use_master_effective = options.use_master && !options.strip_metadata;
     std::string metadata_blob;
-    bool obf_enabled = EnableObfuscation(options);
-    std::string plaintext = DecryptAesPayload(blob, resolved, use_master_effective, kdf, obf_enabled, &metadata_blob);
+    std::string plaintext = DecryptAesPayload(
+        blob, resolved, use_master_effective, kdf, &metadata_blob);
 
     auto [meta_blob, payload] = SplitMetadata(plaintext);
     auto meta = basefwx::metadata::Decode(meta_blob);

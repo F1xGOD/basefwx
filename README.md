@@ -31,7 +31,7 @@ Repository policy:
 
 What's in the box:
 
-- AES-256-GCM payloads with optional ML-KEM-768 master-key wrapping
+- AES-256-GCM payloads with optional ML-KEM-768/1024 master-key wrapping
 - Password-based encryption via Argon2id (recommended) or PBKDF2
 - fwxAES file format with an optional normalize wrapper that hides bytes in zero-width Unicode markers
 - A packetized live-stream API so fwxAES works inside ffmpeg/SIP/transport pipes

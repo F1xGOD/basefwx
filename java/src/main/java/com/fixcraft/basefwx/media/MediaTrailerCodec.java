@@ -16,7 +16,14 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.RandomAccessFile;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.AtomicMoveNotSupportedException;
+import java.nio.file.Files;
+import java.nio.file.StandardCopyOption;
+import java.nio.file.attribute.FileAttribute;
+import java.nio.file.attribute.PosixFilePermission;
+import java.nio.file.attribute.PosixFilePermissions;
 import java.util.Arrays;
+import java.util.EnumSet;
 import java.util.List;
 import java.util.Locale;
 
@@ -32,6 +39,9 @@ public final class MediaTrailerCodec {
                                             byte[] archiveInfo) {
         if (archiveInfo == null || archiveInfo.length == 0) {
             archiveInfo = Constants.IMAGECIPHER_ARCHIVE_INFO;
+        }
+        if (keyHeader.length > Constants.FWXAES_MAX_KEY_HEADER_LEN) {
+            throw new IllegalArgumentException("JMG key header too large");
         }
         if (archiveKey == null) {
             byte[] material = deriveMediaMaterial(password);
@@ -90,6 +100,7 @@ public final class MediaTrailerCodec {
                                                 boolean useMaster,
                                                 File output) {
         boolean headerSeen = false;
+        File pendingOutput = null;
         try (RandomAccessFile raf = new RandomAccessFile(input, "r")) {
             byte[] magic = Constants.IMAGECIPHER_TRAILER_MAGIC;
             int footerLen = magic.length + 4;
@@ -141,7 +152,22 @@ public final class MediaTrailerCodec {
                 byte[] payloadLenBytes = new byte[4];
                 raf.readFully(payloadLenBytes);
                 long payloadLen = MediaCipherUtil.readU32(payloadLenBytes, 0);
-                headerBytes = Constants.JMG_KEY_MAGIC.length + 1 + 4 + payloadLen;
+                long headerMin =
+                        (long) Constants.JMG_KEY_MAGIC.length + 1L + 4L;
+                long requiredAfterHeader =
+                        Constants.AEAD_NONCE_LEN
+                        + Constants.AEAD_TAG_LEN;
+                if (payloadLen
+                            > Constants.FWXAES_MAX_KEY_HEADER_LEN
+                                - headerMin
+                        || blobLen < headerMin + requiredAfterHeader
+                        || payloadLen
+                            > blobLen - headerMin
+                                - requiredAfterHeader) {
+                    throw new IllegalArgumentException(
+                            "Invalid JMG key header length");
+                }
+                headerBytes = headerMin + payloadLen;
                 byte[] payload = new byte[(int) payloadLen];
                 raf.readFully(payload);
                 int profileId = Constants.JMG_SECURITY_PROFILE_LEGACY;
@@ -157,7 +183,8 @@ public final class MediaTrailerCodec {
                 byte[] maskKey = KeyWrap.recoverMaskKey(parts.get(0), parts.get(1), password, useMaster,
                     Constants.JMG_MASK_INFO, Constants.MASK_AAD_JMG, new KeyWrap.KdfOptions("pbkdf2", Constants.USER_KDF_ITERATIONS));
                 archiveInfo = jmgArchiveInfoForProfile(profileId);
-                archiveKey = Crypto.hkdfSha256(maskKey, archiveInfo, 32);
+                archiveKey = KeyWrap.deriveKeyAndWipe(
+                        maskKey, archiveInfo, 32);
                 nonce = new byte[Constants.AEAD_NONCE_LEN];
                 raf.readFully(nonce);
                 cipherBodyLen = blobLen - headerBytes - Constants.AEAD_NONCE_LEN - Constants.AEAD_TAG_LEN;
@@ -173,9 +200,10 @@ public final class MediaTrailerCodec {
             }
 
             CryptoBackend backend = CryptoBackends.get();
+            pendingOutput = createAuthenticatedSiblingTemp(output);
             try (CryptoBackend.AeadDecryptor dec = backend.newGcmDecryptor(
                 archiveKey, nonce, archiveInfo)) {
-                try (BufferedOutputStream out = new BufferedOutputStream(new FileOutputStream(output),
+                try (BufferedOutputStream out = new BufferedOutputStream(new FileOutputStream(pendingOutput),
                     Constants.STREAM_CHUNK_SIZE)) {
                     byte[] inBuf = new byte[Constants.STREAM_CHUNK_SIZE];
                     byte[] outBuf = new byte[Constants.STREAM_CHUNK_SIZE];
@@ -200,12 +228,70 @@ public final class MediaTrailerCodec {
                     }
                 }
             }
+            commitAuthenticatedOutput(pendingOutput, output);
+            pendingOutput = null;
             return true;
         } catch (Exception exc) {
             if (headerSeen) {
                 throw new IllegalStateException("Failed to decrypt trailer", exc);
             }
             return false;
+        } finally {
+            if (pendingOutput != null) {
+                try {
+                    Files.deleteIfExists(pendingOutput.toPath());
+                } catch (IOException ignored) {
+                }
+            }
+        }
+    }
+
+    private static File createAuthenticatedSiblingTemp(File output)
+            throws IOException {
+        File absoluteOutput = output.getAbsoluteFile();
+        File parent = absoluteOutput.getParentFile();
+        if (parent == null) {
+            parent = new File(".").getAbsoluteFile();
+        }
+        if (!parent.isDirectory() && !parent.mkdirs()) {
+            throw new IOException(
+                    "Failed to create output directory: " + parent);
+        }
+        String prefix = ".basefwx-media-auth-";
+        try {
+            FileAttribute<?> permissions =
+                    PosixFilePermissions.asFileAttribute(EnumSet.of(
+                            PosixFilePermission.OWNER_READ,
+                            PosixFilePermission.OWNER_WRITE));
+            return Files.createTempFile(
+                    parent.toPath(), prefix, ".tmp", permissions).toFile();
+        } catch (UnsupportedOperationException exc) {
+            File temp = Files.createTempFile(
+                    parent.toPath(), prefix, ".tmp").toFile();
+            if ((!temp.canRead() && !temp.setReadable(true, true))
+                    || (!temp.canWrite()
+                        && !temp.setWritable(true, true))) {
+                Files.deleteIfExists(temp.toPath());
+                throw new IOException(
+                        "Authenticated temporary file is not owner-usable");
+            }
+            return temp;
+        }
+    }
+
+    private static void commitAuthenticatedOutput(
+            File pendingOutput, File output) throws IOException {
+        try {
+            Files.move(
+                    pendingOutput.toPath(),
+                    output.toPath(),
+                    StandardCopyOption.REPLACE_EXISTING,
+                    StandardCopyOption.ATOMIC_MOVE);
+        } catch (AtomicMoveNotSupportedException exc) {
+            Files.move(
+                    pendingOutput.toPath(),
+                    output.toPath(),
+                    StandardCopyOption.REPLACE_EXISTING);
         }
     }
 
@@ -280,6 +366,9 @@ public final class MediaTrailerCodec {
         if (keyHeader == null || keyHeader.length == 0) {
             throw new IllegalArgumentException("Missing JMG key header for no-archive mode");
         }
+        if (keyHeader.length > Constants.FWXAES_MAX_KEY_HEADER_LEN) {
+            throw new IllegalArgumentException("JMG key header too large");
+        }
         appendBalancedTrailer(output, Constants.IMAGECIPHER_KEY_TRAILER_MAGIC, keyHeader);
     }
 
@@ -290,6 +379,9 @@ public final class MediaTrailerCodec {
         TrailerInfo info = extractBalancedTrailerInfo(path, Constants.IMAGECIPHER_KEY_TRAILER_MAGIC);
         if (info == null) {
             return null;
+        }
+        if (info.blobLen > Constants.FWXAES_MAX_KEY_HEADER_LEN) {
+            throw new IllegalArgumentException("JMG key trailer too large");
         }
         byte[] blob = new byte[(int) info.blobLen];
         try (RandomAccessFile raf = new RandomAccessFile(path, "r")) {
@@ -424,13 +516,32 @@ public final class MediaTrailerCodec {
 
     static JmgKeys prepareJmgKeys(byte[] password, boolean useMaster, int securityProfile) {
         securityProfile = normalizeJmgProfile(securityProfile);
-        KeyWrap.MaskKeyResult mask = KeyWrap.prepareMaskKey(password, useMaster, Constants.JMG_MASK_INFO,
-            false, Constants.MASK_AAD_JMG, new KeyWrap.KdfOptions("pbkdf2", Constants.USER_KDF_ITERATIONS));
-        byte[] material = Crypto.hkdfSha256(mask.maskKey, jmgStreamInfoForProfile(securityProfile), 64);
-        byte[] baseKey = Arrays.copyOfRange(material, 0, 32);
-        byte[] archiveKey = Crypto.hkdfSha256(mask.maskKey, jmgArchiveInfoForProfile(securityProfile), 32);
-        byte[] header = buildJmgHeader(mask.userBlob, mask.masterBlob, securityProfile);
-        return new JmgKeys(baseKey, archiveKey, material, header, securityProfile);
+        try (KeyWrap.MaskKeyResult mask = KeyWrap.prepareMaskKey(
+                password,
+                useMaster,
+                Constants.JMG_MASK_INFO,
+                false,
+                Constants.MASK_AAD_JMG,
+                new KeyWrap.KdfOptions(
+                        "pbkdf2", Constants.USER_KDF_ITERATIONS))) {
+            byte[] material = Crypto.hkdfSha256(
+                    mask.maskKey,
+                    jmgStreamInfoForProfile(securityProfile),
+                    64);
+            byte[] baseKey = Arrays.copyOfRange(material, 0, 32);
+            byte[] archiveKey = Crypto.hkdfSha256(
+                    mask.maskKey,
+                    jmgArchiveInfoForProfile(securityProfile),
+                    32);
+            byte[] header = buildJmgHeader(
+                    mask.userBlob, mask.masterBlob, securityProfile);
+            return new JmgKeys(
+                    baseKey,
+                    archiveKey,
+                    material,
+                    header,
+                    securityProfile);
+        }
     }
 
     static JmgHeader parseJmgHeader(byte[] blob, byte[] password, boolean useMaster) {
@@ -446,7 +557,10 @@ public final class MediaTrailerCodec {
             throw new IllegalArgumentException("Unsupported JMG key header version");
         }
         long payloadLen = MediaCipherUtil.readU32(blob, Constants.JMG_KEY_MAGIC.length + 1);
-        int headerLen = (int) (headerMin + payloadLen);
+        if (payloadLen > Constants.FWXAES_MAX_KEY_HEADER_LEN - headerMin) {
+            throw new IllegalArgumentException("JMG key header too large");
+        }
+        int headerLen = headerMin + (int) payloadLen;
         if (blob.length < headerLen) {
             throw new IllegalArgumentException("Truncated JMG key header");
         }
@@ -463,10 +577,17 @@ public final class MediaTrailerCodec {
         List<byte[]> parts = Format.unpackLengthPrefixed(keyPayload, 2);
         byte[] maskKey = KeyWrap.recoverMaskKey(parts.get(0), parts.get(1), password, useMaster,
             Constants.JMG_MASK_INFO, Constants.MASK_AAD_JMG, new KeyWrap.KdfOptions("pbkdf2", Constants.USER_KDF_ITERATIONS));
-        byte[] material = Crypto.hkdfSha256(maskKey, jmgStreamInfoForProfile(profileId), 64);
-        byte[] baseKey = Arrays.copyOfRange(material, 0, 32);
-        byte[] archiveKey = Crypto.hkdfSha256(maskKey, jmgArchiveInfoForProfile(profileId), 32);
-        return new JmgHeader(headerLen, baseKey, archiveKey, material, profileId);
+        try {
+            byte[] material = Crypto.hkdfSha256(
+                    maskKey, jmgStreamInfoForProfile(profileId), 64);
+            byte[] baseKey = Arrays.copyOfRange(material, 0, 32);
+            byte[] archiveKey = Crypto.hkdfSha256(
+                    maskKey, jmgArchiveInfoForProfile(profileId), 32);
+            return new JmgHeader(
+                    headerLen, baseKey, archiveKey, material, profileId);
+        } finally {
+            Arrays.fill(maskKey, (byte) 0);
+        }
     }
 
     static byte[] buildJmgHeader(byte[] userBlob, byte[] masterBlob, int securityProfile) {
@@ -476,6 +597,9 @@ public final class MediaTrailerCodec {
         payload[0] = (byte) securityProfile;
         System.arraycopy(packed, 0, payload, 1, packed.length);
         int total = Constants.JMG_KEY_MAGIC.length + 1 + 4 + payload.length;
+        if (total > Constants.FWXAES_MAX_KEY_HEADER_LEN) {
+            throw new IllegalArgumentException("JMG key header too large");
+        }
         byte[] out = new byte[total];
         int offset = 0;
         System.arraycopy(Constants.JMG_KEY_MAGIC, 0, out, offset, Constants.JMG_KEY_MAGIC.length);

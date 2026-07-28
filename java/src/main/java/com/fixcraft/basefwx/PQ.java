@@ -6,10 +6,13 @@
 
 package com.fixcraft.basefwx;
 
+import org.bouncycastle.crypto.AsymmetricCipherKeyPair;
 import org.bouncycastle.crypto.SecretWithEncapsulation;
 import org.bouncycastle.jce.provider.BouncyCastleProvider;
 import org.bouncycastle.pqc.crypto.crystals.kyber.KyberKEMExtractor;
 import org.bouncycastle.pqc.crypto.crystals.kyber.KyberKEMGenerator;
+import org.bouncycastle.pqc.crypto.crystals.kyber.KyberKeyGenerationParameters;
+import org.bouncycastle.pqc.crypto.crystals.kyber.KyberKeyPairGenerator;
 import org.bouncycastle.pqc.crypto.crystals.kyber.KyberParameters;
 import org.bouncycastle.pqc.crypto.crystals.kyber.KyberPrivateKeyParameters;
 import org.bouncycastle.pqc.crypto.crystals.kyber.KyberPublicKeyParameters;
@@ -23,23 +26,88 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.security.*;
+import java.security.SecureRandom;
+import java.security.Security;
 import java.util.Arrays;
 import java.util.Base64;
+import java.util.Locale;
 import javax.security.auth.DestroyFailedException;
 import java.util.zip.InflaterInputStream;
 import java.util.zip.ZipException;
 
 /**
- * Post-Quantum cryptography support using ML-KEM-768 (Kyber).
+ * Post-Quantum cryptography support using ML-KEM-768 / ML-KEM-1024 (Kyber).
+ * Default remains ML-KEM-768; opt into 1024 via {@code BASEFWX_MASTER_PQ_ALG}
+ * after KATs vs liboqs pass (BC Kyber matches OQS ML-KEM for both sizes).
  */
 public final class PQ {
     private PQ() {}
 
     private static final int MAX_KEY_BYTES = 4 * 1024 * 1024;
 
+    public enum KemAlgorithm {
+        ML_KEM_768("ml-kem-768", KyberParameters.kyber768, 1184, 2400, 1088),
+        ML_KEM_1024("ml-kem-1024", KyberParameters.kyber1024, 1568, 3168, 1568);
+
+        private final String wireName;
+        private final KyberParameters parameters;
+        private final int publicKeyBytes;
+        private final int privateKeyBytes;
+        private final int ciphertextBytes;
+
+        KemAlgorithm(String wireName, KyberParameters parameters,
+                     int publicKeyBytes, int privateKeyBytes, int ciphertextBytes) {
+            this.wireName = wireName;
+            this.parameters = parameters;
+            this.publicKeyBytes = publicKeyBytes;
+            this.privateKeyBytes = privateKeyBytes;
+            this.ciphertextBytes = ciphertextBytes;
+        }
+
+        public String wireName() {
+            return wireName;
+        }
+
+        KyberParameters parameters() {
+            return parameters;
+        }
+
+        public static KemAlgorithm fromName(String name) {
+            if (name == null || name.isEmpty()) {
+                return ML_KEM_768;
+            }
+            String normalized = name.trim().toLowerCase(Locale.ROOT);
+            if (("kyber768".equals(normalized) || "kyber-768".equals(normalized))
+                    || Constants.MASTER_PQ_ALG_DEFAULT.equals(normalized)
+                    || "ml-kem-768".equals(normalized)) {
+                return ML_KEM_768;
+            }
+            if (("kyber1024".equals(normalized) || "kyber-1024".equals(normalized))
+                    || Constants.MASTER_PQ_ALG_HIGH.equals(normalized)
+                    || "ml-kem-1024".equals(normalized)) {
+                return ML_KEM_1024;
+            }
+            throw new IllegalArgumentException("Unsupported ML-KEM algorithm: " + name);
+        }
+    }
+
+    public static final class KemKeyPair {
+        public final byte[] publicKey;
+        public final byte[] privateKey;
+
+        public KemKeyPair(byte[] publicKey, byte[] privateKey) {
+            this.publicKey = publicKey;
+            this.privateKey = privateKey;
+        }
+
+        public void wipePrivate() {
+            if (privateKey != null) {
+                Arrays.fill(privateKey, (byte) 0);
+            }
+        }
+    }
+
     static {
-        // Register Bouncy Castle providers
         if (Security.getProvider(BouncyCastleProvider.PROVIDER_NAME) == null) {
             Security.addProvider(new BouncyCastleProvider());
         }
@@ -58,27 +126,49 @@ public final class PQ {
         }
     }
 
-    /**
-     * True when EC master blobs must be refused (PQ-only deployments).
-     * Mirrors C++ {@code StrictPqOnly()} in keywrap.cpp.
-     */
-    static boolean strictPqOnly() {
-        return envEnabled(Constants.PQ_STRICT_ENV) || envEnabled(Constants.PQ_ONLY_ENV);
+    /** Current algorithm from env (default ml-kem-768). */
+    public static String currentKemAlgorithm() {
+        return resolveKemAlgorithm().wireName();
     }
 
-    private static boolean envEnabled(String name) {
-        String value = System.getenv(name);
-        if (value == null || value.isEmpty()) {
+    public static boolean isSupportedKemAlgorithm(String algorithm) {
+        if (algorithm == null || algorithm.trim().isEmpty()) {
             return false;
         }
-        return "1".equals(value) || "true".equalsIgnoreCase(value)
-                || "yes".equalsIgnoreCase(value);
+        try {
+            KemAlgorithm.fromName(algorithm);
+            return true;
+        } catch (IllegalArgumentException exc) {
+            return false;
+        }
     }
 
-    /**
-     * Load the master ML-KEM-768 private key from configuration.
-     * Mirrors C++ {@code basefwx::pq::LoadMasterPrivateKey}.
-     */
+    static String configuredMasterKemAlgorithm() {
+        try {
+            return inferKemAlgorithmFromPublicKey(loadMasterPublicKey()).wireName();
+        } catch (Exception exc) {
+            throw new IllegalStateException(
+                    "Unable to determine configured master ML-KEM algorithm", exc);
+        }
+    }
+
+    static KemAlgorithm resolveKemAlgorithm() {
+        String configured = System.getenv(Constants.MASTER_PQ_ALG_ENV);
+        if (configured == null || configured.trim().isEmpty()) {
+            if (Constants.envEnabled("BASEFWX_PQ_MAX")
+                    || Constants.envEnabled("BASEFWX_PQ_1024")) {
+                return KemAlgorithm.ML_KEM_1024;
+            }
+            return KemAlgorithm.ML_KEM_768;
+        }
+        return KemAlgorithm.fromName(configured);
+    }
+
+    static boolean strictPqOnly() {
+        return Constants.envEnabled(Constants.PQ_STRICT_ENV)
+                || Constants.envEnabled(Constants.PQ_ONLY_ENV);
+    }
+
     public static byte[] loadMasterPrivateKey() throws IOException {
         String envPath = System.getenv(Constants.MASTER_PQ_PRIVATE_ENV);
         if (envPath != null && !envPath.isEmpty()) {
@@ -99,11 +189,6 @@ public final class PQ {
                 + Constants.MASTER_PQ_PRIVATE_ENV + " or place at ~/master_pq.sk)");
     }
 
-    /**
-     * True when an operator explicitly configured a PQ master public key
-     * (runtime env path or build-time baked literal). Mirrors C++ branches
-     * that distinguish configured vs absent keys in LoadMasterPublicKey.
-     */
     static boolean isMasterPublicKeyConfigured() {
         String envPath = System.getenv(Constants.MASTER_PQ_PUBLIC_ENV);
         if (envPath != null && !envPath.isEmpty()) {
@@ -113,17 +198,6 @@ public final class PQ {
         return baked != null && !baked.isEmpty();
     }
 
-    /**
-     * Load the master ML-KEM-768 public key from configuration.
-     *
-     * <p>3.7.0: the upstream baked key has been removed; sourced in order:
-     * <ol>
-     *   <li>Runtime path via {@code BASEFWX_MASTER_PQ_PUB=<file>} (env).</li>
-     *   <li>Build-time literal via {@code -Dbasefwx.master.pq.public.b64=<base64>}
-     *       JVM system property — empty by default.</li>
-     * </ol>
-     * Throws when a key source is configured but missing or invalid.
-     */
     public static byte[] loadMasterPublicKey() throws Exception {
         String envPath = System.getenv(Constants.MASTER_PQ_PUBLIC_ENV);
         if (envPath != null && !envPath.isEmpty()) {
@@ -145,9 +219,6 @@ public final class PQ {
                 + "-Dbasefwx.master.pq.public.b64=<base64-key>.");
     }
 
-    /**
-     * Decode key bytes (handle base64 encoding and zlib compression).
-     */
     public static byte[] decodeKeyBytes(byte[] raw) throws IOException {
         if (raw == null || raw.length == 0) {
             return raw;
@@ -156,25 +227,19 @@ public final class PQ {
             throw new IOException("Key material too large (>4 MiB)");
         }
 
-        // Try trimming whitespace
         byte[] trimmed = trim(raw);
-        
-        // Try base64 decode
-        byte[] decoded = null;
+        byte[] decoded;
         try {
             String text = new String(trimmed, StandardCharsets.UTF_8);
             decoded = Base64.getDecoder().decode(text);
         } catch (Exception e) {
-            // Not base64, use raw
             decoded = trimmed;
         }
 
-        // Try zlib decompress
         byte[] inflated = tryZlibDecompress(decoded);
         if (inflated != null) {
             return inflated;
         }
-
         return decoded;
     }
 
@@ -237,56 +302,93 @@ public final class PQ {
         return Paths.get(path);
     }
 
-    /**
-     * Perform KEM encapsulation using ML-KEM-768 (Kyber768).
-     * This matches the behavior of pqcrypto.kem.ml_kem_768.encrypt() in Python
-     * and OQS_KEM_encaps() in C++.
-     */
-    public static KemResult kemEncrypt(byte[] publicKeyBytes) throws Exception {
-        if (!Constants.MASTER_PQ_ALG.equals("ml-kem-768")) {
-            throw new IllegalArgumentException("Only ml-kem-768 is supported");
-        }
+    public static KemKeyPair generateKeyPair() {
+        return generateKeyPair(resolveKemAlgorithm());
+    }
 
-        // Use Bouncy Castle Kyber API for ML-KEM-768 (Kyber768)
-        // Note: ML-KEM-768 is the NIST standardized version of Kyber768
-        KyberParameters params = KyberParameters.kyber768;
-        KyberPublicKeyParameters pubKey = 
-            new KyberPublicKeyParameters(params, publicKeyBytes);
-        
+    public static KemKeyPair generateKeyPair(KemAlgorithm algorithm) {
+        KyberKeyPairGenerator generator = new KyberKeyPairGenerator();
+        generator.init(new KyberKeyGenerationParameters(new SecureRandom(), algorithm.parameters()));
+        AsymmetricCipherKeyPair pair = generator.generateKeyPair();
+        KyberPublicKeyParameters pub = (KyberPublicKeyParameters) pair.getPublic();
+        KyberPrivateKeyParameters priv = (KyberPrivateKeyParameters) pair.getPrivate();
+        return new KemKeyPair(pub.getEncoded(), priv.getEncoded());
+    }
+
+    public static KemKeyPair generateKeyPair(String algorithm) {
+        return generateKeyPair(KemAlgorithm.fromName(algorithm));
+    }
+
+    public static KemResult kemEncrypt(byte[] publicKeyBytes) throws Exception {
+        return kemEncrypt(inferKemAlgorithmFromPublicKey(publicKeyBytes), publicKeyBytes);
+    }
+
+    public static KemResult kemEncrypt(KemAlgorithm algorithm, byte[] publicKeyBytes) throws Exception {
+        KyberPublicKeyParameters pubKey =
+                new KyberPublicKeyParameters(algorithm.parameters(), publicKeyBytes);
         KyberKEMGenerator kemGen = new KyberKEMGenerator(new SecureRandom());
         SecretWithEncapsulation secretEnc = kemGen.generateEncapsulated(pubKey);
-
         try {
-            byte[] ciphertext = secretEnc.getEncapsulation();
-            byte[] sharedSecret = secretEnc.getSecret();
-            return new KemResult(ciphertext, sharedSecret);
+            return new KemResult(secretEnc.getEncapsulation(), secretEnc.getSecret());
         } finally {
             try {
                 secretEnc.destroy();
             } catch (DestroyFailedException ignored) {
-                // The returned shared secret is wiped by KeyWrap after HKDF.
+                // Caller wipes shared after HKDF.
             }
         }
     }
 
-    /**
-     * Perform KEM decapsulation using ML-KEM-768 (Kyber768).
-     * This matches the behavior of pqcrypto.kem.ml_kem_768.decrypt() in Python
-     * and OQS_KEM_decaps() in C++.
-     */
+    public static KemResult kemEncrypt(String algorithm, byte[] publicKeyBytes) throws Exception {
+        return kemEncrypt(KemAlgorithm.fromName(algorithm), publicKeyBytes);
+    }
+
     public static byte[] kemDecrypt(byte[] privateKeyBytes, byte[] ciphertext) throws Exception {
-        if (!Constants.MASTER_PQ_ALG.equals("ml-kem-768")) {
-            throw new IllegalArgumentException("Only ml-kem-768 is supported");
-        }
+        return kemDecrypt(
+                inferKemAlgorithmFromCiphertext(privateKeyBytes, ciphertext),
+                privateKeyBytes,
+                ciphertext);
+    }
 
-        // Use Bouncy Castle Kyber API for ML-KEM-768 (Kyber768)
-        KyberParameters params = KyberParameters.kyber768;
-        KyberPrivateKeyParameters privKey = 
-            new KyberPrivateKeyParameters(params, privateKeyBytes);
-        
+    public static byte[] kemDecrypt(KemAlgorithm algorithm, byte[] privateKeyBytes, byte[] ciphertext)
+            throws Exception {
+        KyberPrivateKeyParameters privKey =
+                new KyberPrivateKeyParameters(algorithm.parameters(), privateKeyBytes);
         KyberKEMExtractor kemExt = new KyberKEMExtractor(privKey);
-        byte[] sharedSecret = kemExt.extractSecret(ciphertext);
+        return kemExt.extractSecret(ciphertext);
+    }
 
-        return sharedSecret;
+    public static byte[] kemDecrypt(String algorithm, byte[] privateKeyBytes, byte[] ciphertext)
+            throws Exception {
+        return kemDecrypt(KemAlgorithm.fromName(algorithm), privateKeyBytes, ciphertext);
+    }
+
+    static KemAlgorithm inferKemAlgorithmFromPublicKey(byte[] publicKey) {
+        if (publicKey == null) {
+            throw new IllegalArgumentException("ML-KEM public key must not be null");
+        }
+        for (KemAlgorithm algorithm : KemAlgorithm.values()) {
+            if (publicKey.length == algorithm.publicKeyBytes) {
+                return algorithm;
+            }
+        }
+        throw new IllegalArgumentException(
+                "Invalid ML-KEM public key length; expected ML-KEM-768 or ML-KEM-1024");
+    }
+
+    private static KemAlgorithm inferKemAlgorithmFromCiphertext(
+            byte[] privateKey, byte[] ciphertext) {
+        if (privateKey == null || ciphertext == null) {
+            throw new IllegalArgumentException(
+                    "ML-KEM private key and ciphertext must not be null");
+        }
+        for (KemAlgorithm algorithm : KemAlgorithm.values()) {
+            if (privateKey.length == algorithm.privateKeyBytes
+                    && ciphertext.length == algorithm.ciphertextBytes) {
+                return algorithm;
+            }
+        }
+        throw new IllegalArgumentException(
+                "Invalid or mismatched ML-KEM private-key/ciphertext lengths");
     }
 }

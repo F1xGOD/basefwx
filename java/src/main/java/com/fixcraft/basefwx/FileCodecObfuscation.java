@@ -23,6 +23,7 @@ import java.time.Instant;
 import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import javax.crypto.Cipher;
 import javax.crypto.Mac;
@@ -41,6 +42,19 @@ static boolean payloadObfuscationEnabled() {
         }
         String v = raw.trim().toLowerCase();
         return v.equals("1") || v.equals("true") || v.equals("yes") || v.equals("on");
+    }
+
+static String requirePayloadObfuscationMode(String raw) {
+        String mode = raw == null || raw.trim().isEmpty()
+                ? "yes"
+                : raw.trim().toLowerCase(Locale.ROOT);
+        if (!mode.equals("yes")
+                && !mode.equals("no")
+                && !mode.equals("fast")) {
+            throw new IllegalArgumentException(
+                    "Unsupported payload obfuscation mode");
+        }
+        return mode;
     }
 
 static boolean perfModeEnabled() {
@@ -467,25 +481,46 @@ static final class StreamObfuscator {
             if (password == null || password.length == 0) {
                 throw new IllegalArgumentException("Password required for streaming obfuscation");
             }
+            return forKey(password, salt, fast);
+        }
+
+        static StreamObfuscator forKey(byte[] secret, byte[] salt, boolean fast) {
+            if (secret == null || secret.length == 0) {
+                throw new IllegalArgumentException(
+                        "Streaming obfuscation key must not be empty");
+            }
             if (salt == null || salt.length < Constants.STREAM_SALT_LEN) {
                 throw new IllegalArgumentException("Streaming obfuscation salt must be at least 16 bytes");
             }
-            byte[] base = new byte[password.length + salt.length];
-            System.arraycopy(password, 0, base, 0, password.length);
-            System.arraycopy(salt, 0, base, password.length, salt.length);
-            byte[] maskKey = Crypto.hkdfSha256(base, Constants.STREAM_INFO_KEY, 32);
-            // lgtm[java/static-initialization-vector] - IV derived from HKDF with password+random salt, unique per stream
-            byte[] iv = Crypto.hkdfSha256(base, Constants.STREAM_INFO_IV, 16);
-            byte[] permMaterial = Crypto.hkdfSha256(base, Constants.STREAM_INFO_PERM, 32);
-            byte[] permPrk = Crypto.hkdfPrkSha256(permMaterial);
-            Mac permMac = Crypto.initHmac(permPrk);
+            byte[] base = new byte[secret.length + salt.length];
+            System.arraycopy(secret, 0, base, 0, secret.length);
+            System.arraycopy(salt, 0, base, secret.length, salt.length);
+            byte[] maskKey = null;
+            byte[] iv = null;
+            byte[] permMaterial = null;
+            byte[] permPrk = null;
             try {
+                maskKey = Crypto.hkdfSha256(
+                        base, Constants.STREAM_INFO_KEY, 32);
+                // lgtm[java/static-initialization-vector] - IV derived from
+                // HKDF with a secret and random per-stream salt.
+                iv = Crypto.hkdfSha256(
+                        base, Constants.STREAM_INFO_IV, 16);
+                permMaterial = Crypto.hkdfSha256(
+                        base, Constants.STREAM_INFO_PERM, 32);
+                permPrk = Crypto.hkdfPrkSha256(permMaterial);
+                Mac permMac = Crypto.initHmac(permPrk);
                 Cipher cipher = Cipher.getInstance("AES/CTR/NoPadding");
-                // IV is derived from HKDF at line 2181 using password+salt, unique per stream
                 cipher.init(Cipher.ENCRYPT_MODE, new SecretKeySpec(maskKey, "AES"), new IvParameterSpec(iv));
                 return new StreamObfuscator(permMac, cipher, fast);
             } catch (GeneralSecurityException exc) {
                 throw new IllegalStateException("AES-CTR init failed", exc);
+            } finally {
+                PayloadKeySeparation.wipe(base);
+                PayloadKeySeparation.wipe(maskKey);
+                PayloadKeySeparation.wipe(iv);
+                PayloadKeySeparation.wipe(permMaterial);
+                PayloadKeySeparation.wipe(permPrk);
             }
         }
 
@@ -560,13 +595,22 @@ static final class StreamObfuscator {
             }
             permMac.update(info);
             permMac.update((byte) 1);
-            byte[] seedBytes = permMac.doFinal();
-            ChunkParams params = new ChunkParams();
-            params.seed = seed64FromBytes(seedBytes);
-            params.rotation = seedBytes[0] & 0x07;
-            params.swap = (seedBytes[1] & 0x01) != 0;
-            chunkIndex += 1;
-            return params;
+            byte[] expanded = permMac.doFinal();
+            // HKDF-Expand is specified as 16 bytes for this seed. The
+            // HMAC call returns the full 32-byte block, so truncate before
+            // selecting the low 64 bits to match Python and C++.
+            byte[] seedBytes = Arrays.copyOf(expanded, 16);
+            try {
+                ChunkParams params = new ChunkParams();
+                params.seed = seed64FromBytes(seedBytes);
+                params.rotation = seedBytes[0] & 0x07;
+                params.swap = (seedBytes[1] & 0x01) != 0;
+                chunkIndex += 1;
+                return params;
+            } finally {
+                Arrays.fill(expanded, (byte) 0);
+                Arrays.fill(seedBytes, (byte) 0);
+            }
         }
 
         private static void swapNibbles(byte[] buffer) {

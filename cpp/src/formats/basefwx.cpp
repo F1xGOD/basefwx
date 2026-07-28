@@ -499,10 +499,26 @@ void RequireStrongPasswordForEncryption(const std::string& password, std::string
     std::size_t min_len = basefwx::constants::kMinimumPasswordLength;
     std::string raw_min = basefwx::env::Get("BASEFWX_MIN_PASSWORD_LEN");
     if (!raw_min.empty()) {
-        try {
-            std::size_t parsed = static_cast<std::size_t>(std::stoull(raw_min));
-            min_len = parsed;
-        } catch (const std::exception&) {
+        raw_min.erase(
+            raw_min.begin(),
+            std::find_if(raw_min.begin(), raw_min.end(),
+                         [](unsigned char ch) { return !std::isspace(ch); }));
+        raw_min.erase(
+            std::find_if(raw_min.rbegin(), raw_min.rend(),
+                         [](unsigned char ch) { return !std::isspace(ch); })
+                .base(),
+            raw_min.end());
+        if (!raw_min.empty() && raw_min.front() != '-') {
+            try {
+                std::size_t consumed = 0;
+                const unsigned long long parsed = std::stoull(raw_min, &consumed);
+                if (consumed == raw_min.size() &&
+                    parsed <= static_cast<unsigned long long>(
+                        std::numeric_limits<std::size_t>::max())) {
+                    min_len = static_cast<std::size_t>(parsed);
+                }
+            } catch (const std::exception&) {
+            }
         }
     }
     if (min_len == 0 || password.size() >= min_len) {

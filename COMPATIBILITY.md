@@ -7,17 +7,31 @@
 | Runtime | Argon2id | PQ/OQS | LZMA/XZ | AN7/DEAN7 | Notes |
 | :-- | :--: | :--: | :--: | :--: | :-- |
 | C++ | ✅ | ✅ | ✅ | ✅ | Reference release runtime for performance and full native feature set. |
-| Python | ✅ with `basefwx[argon2]` | ✅ via `pqcrypto` | ✅ | ✅ | Feature-complete scripting/runtime path. |
-| Java | ✅ since 3.7.0 (BouncyCastle `Argon2BytesGenerator`; libargon2 JNI optional) | ✅ keywrap (BouncyCastle ML-KEM-768; EC fallback only when PQ pub not configured) | ❌ | ✅ | Argon2id user-KDF wrap supported. PQ master-wrap parity with C++/Python via `KeyWrap` + `PQ.kemEncrypt` / `PQ.kemDecrypt`. JNI bridge to libargon2 (`NativeCryptoBackend.argon2idHashRaw`) speeds Argon2 up ~5–10× on systems where the native lib is loadable; falls through to pure-Java BouncyCastle otherwise (byte-identical output, just slower). |
+| Python | ✅ (`argon2-cffi` is a hard dependency; `basefwx[argon2]` remains a no-op extra for old install scripts) | ✅ via `pqcrypto` | ✅ | ✅ | Feature-complete scripting/runtime path. |
+| Java | ✅ since 3.7.0 (BouncyCastle `Argon2BytesGenerator`; libargon2 JNI optional) | ✅ keywrap (BouncyCastle ML-KEM-768/1024; EC fallback only when PQ pub not configured) | ❌ | ✅ | Argon2id user-KDF wrap on fwxAES / b512 / pb512file / KeyWrap. Peer `ENC-ARGON2-*` costs fail closed above shared maxima. |
 
 ### 3.8.0-dev1 protocol-building API parity
 
-The explicit-salt HKDF overload, explicit ML-KEM-768 / ML-KEM-1024
-selection with ephemeral key generation, and X25519 helpers introduced in
-3.8.0-dev1 are currently public **C++ APIs only**. They do not change the
-existing BaseFWX file formats or the cross-runtime ML-KEM-768 master-key wrap.
-Java and Python mirrors require provider-specific encoding decisions and
-cross-runtime known-answer tests before they can be advertised as equivalent.
+Explicit-salt HKDF, ML-KEM-768 / ML-KEM-1024 selection with
+`GenerateKeyPair` / `generate_kem_keypair`, and X25519 helpers are
+public on **C++, Java, and Python**. Cross-runtime byte identity is
+gated by shared KAT fixtures under `testdata/protocol_kats/` (emitted by
+`scripts/gen_protocol_kats.py` from the C++/liboqs reference). Default
+master-key generation/default reporting remains **ML-KEM-768**;
+`BASEFWX_MASTER_PQ_ALG=ml-kem-1024` (and `BASEFWX_PQ_MAX` /
+`BASEFWX_PQ_1024`) opts generation and reporting into 1024 on all three
+runtimes after KAT pass. Those variables alone never change an fwxAES /
+b512 / pb512 file: the provisioned public key's standardized size selects
+the wrap algorithm and authenticated `ENC-KEM` value.
+
+The repository files are fixed interoperability snapshots. Regeneration
+creates fresh randomized X25519/ML-KEM keypairs and encapsulations, then
+writes the same JSON to the shared root fixture (used by C++/Python) and
+Java test resources. Generation refuses to mutate either copy unless
+both ML-KEM sections are available, and stages each replacement in its
+destination directory. The two replacements are not one filesystem
+transaction; use `scripts/gen_protocol_kats.py --check-copies` to detect
+drift after an interruption.
 
 ### Argon2 parallelism portability
 
@@ -59,6 +73,66 @@ Do not describe Android "heavy" as equivalent to desktop "heavy" until
 the constants are reconciled and the resulting auth latency / memory
 use is benchmarked on the Android device class being targeted.
 
+### Peer PBKDF2 cost ceiling
+
+All three BaseFWX runtimes reject peer-controlled PBKDF2 iteration
+counts outside `1..4_000_000` before starting the KDF. The rule covers
+`ENC-KDF-ITER` in simple and direct-stream file codecs plus the
+unsigned iteration fields in raw/streaming fwxAES and live headers.
+Metadata parsing is strict: zero, signs, trailing junk, decimal
+overflow, integer overflow, and `4_000_001` are invalid; exactly
+`4_000_000` remains accepted.
+
+The 4,000,000 ceiling is twice the shared 2,000,000-iteration heavy
+writer profile and is aligned with YUME's protocol-side limit. It
+does not change writer defaults; it bounds unauthenticated
+peer-triggered CPU amplification during decode.
+
+The 4,000,000 value is a decoder safety ceiling, not a claim that
+4,000,000 PBKDF2 iterations are cryptographically stronger than
+10,000,000. Higher counts increase password-guess cost, but they also
+increase attacker-controlled CPU amplification and latency. Writers use
+the shared 2,000,000 heavy profile; deployments needing more protection
+should prefer Argon2id within the authenticated shared parameter caps
+instead of accepting unbounded PBKDF2 work from peers.
+
+Writers also reject configured PBKDF2 costs above 4,000,000 before key
+encapsulation, KDF work, or output creation. This is a shared wire and
+resource-safety boundary, not a recommendation to replace Argon2id with
+the highest permitted PBKDF2 count.
+
+### AES-heavy payload key separation
+
+New non-stripped AES-heavy simple and direct-stream writers in C++,
+Java, and Python emit authenticated metadata `ENC-KSEP=v1`. They
+transport the same root key used by legacy files, then derive:
+
+| Purpose | Exact HKDF-SHA256 info label |
+| :-- | :-- |
+| Payload AES-256-GCM | `basefwx.fwxaes.payload.aead.v1` |
+| Payload obfuscation | `basefwx.fwxaes.payload.obf.v1` |
+
+All three decoders implement the same rules:
+
+- `ENC-KSEP=v1`: use the two derived subkeys.
+- Missing or empty `ENC-KSEP`: decode the legacy raw-root-key format.
+- Any other value: fail closed before key recovery or payload crypto.
+
+Stripped-metadata output necessarily omits the marker and therefore
+retains the legacy key schedule. This preserves old-file readability
+without guessing a key schedule and prevents a new writer from
+advertising `v1` while encrypting with the root key.
+
+The repository cross-runtime matrix verifies `ENC-KSEP=v1` and decoded
+byte equality for all six C++/Java/Python producer-to-consumer directions
+on both the simple codec and a deterministic payload larger than 3 MiB
+that forces direct streaming. Every direction runs once with payload
+obfuscation enabled and once with it disabled. The producer must emit
+`ENC-OBF=yes`/`fast` or `ENC-OBF=no` to match the bytes it actually
+encrypted, and the consumer follows that authenticated wire value rather
+than its local producer preference. Missing `ENC-OBF` retains the legacy
+`yes` behavior; values other than `yes`, `no`, and `fast` fail closed.
+
 ### fwxAES plugin tag (new in 3.7.0)
 
 Plugin use is opt-in at encrypt time. When present, byte 4 of the FWX1
@@ -85,14 +159,39 @@ decrypt on 3.6.4 peers (unknown algo — fail closed).
 
 All three runtimes accept two kinds of `master_blob` in a keywrap header:
 
-- **EC-magic-prefixed** (`EC1` + ECIES-wrapped key) — decoded by `EcKeys` / `basefwx::ec::KemDecrypt` / `_ec_kem_dec`.
-- **PQ blob** (raw ML-KEM-768 ciphertext, no magic prefix) — decoded by `PQ.kemDecrypt` / `basefwx::pq::KemDecrypt` / `ml_kem_768.decrypt`.
+- **Exact EC frame** (`EC1` + u16 length 133 + one uncompressed P-521
+  point; 138 bytes total) — decoded by `EcKeys` /
+  `basefwx::ec::KemDecrypt` / `_ec_kem_dec`.
+- **PQ blob** (raw ML-KEM-768 or ML-KEM-1024 ciphertext, no magic
+  prefix) — decoded by `PQ.kemDecrypt` / `basefwx::pq::KemDecrypt` /
+  `_pq.kem_decrypt`. The standardized private-key/ciphertext sizes select
+  the algorithm; decrypt does not depend on matching process env state.
 
-On encrypt, when `useMaster=true`, every runtime **prefers the PQ public key** (`BASEFWX_MASTER_PQ_PUB` or build-time baked literal) and falls back to EC only when PQ is unavailable and `BASEFWX_PQ_STRICT` / `BASEFWX_PQ_ONLY` is not set.
+On encrypt, when `useMaster=true`, every runtime **prefers the PQ public key** (`BASEFWX_MASTER_PQ_PUB`, or an opt-in build-time embed via `-DBASEFWX_MASTER_PQ_PUB_B64` / `-Dbasefwx.master.pq.public.b64` — empty in upstream artifacts) and falls back to EC only when PQ is unavailable and `BASEFWX_PQ_STRICT` / `BASEFWX_PQ_ONLY` is not set.
+The exact selected public-key instance is retained for wrapping and
+metadata: its standardized size determines `ENC-KEM=ml-kem-768` or
+`ml-kem-1024`; EC fallback records `EC`; no effective master records
+`none`. `BASEFWX_MASTER_PQ_ALG` affects generation/default reporting,
+not a provisioned key's wrap algorithm or metadata.
 
-On decrypt, `KeyWrap.recoverMaskKey` branches on `MASTER_EC_MAGIC`; non-EC blobs use `PQ.loadMasterPrivateKey()` (`BASEFWX_MASTER_PQ_SK` or `~/master_pq.sk`). Password fallback to the user blob remains when master recovery fails and a password was supplied.
+On decrypt, `KeyWrap.recoverMaskKey` recognizes only the exact 138-byte
+`EC1` P-521 frame; all other blobs are dispatched by standardized ML-KEM
+key/ciphertext size rather than by a three-byte prefix.
+Non-EC blobs use `PQ.loadMasterPrivateKey()`
+(`BASEFWX_MASTER_PQ_SK` when explicitly set, otherwise
+`~/master_pq.sk`). An explicitly configured private-key path is
+authoritative: if it is missing, recovery fails instead of silently
+trying the home-directory default. For a dual-wrapped payload, the
+independent user blob remains usable with the correct password when
+master recovery is disabled or the master key is missing, wrong,
+corrupt, or rejected by strict-PQ policy.
 
-**Strict PQ mode:** set `BASEFWX_PQ_STRICT=1` or `BASEFWX_PQ_ONLY=1` to refuse EC master blobs (matches C++ `StrictPqOnly()`).
+**Strict PQ mode:** set `BASEFWX_PQ_STRICT` or `BASEFWX_PQ_ONLY` to a
+true spelling (`1`, `true`, `yes`, or `on`, case-insensitive) to refuse
+EC master blobs. A master-wrap encryption request fails if no ML-KEM
+public key is configured; it does not silently emit an EC- or
+password-only payload. Strict policy does not disable a valid,
+independent password wrap already present on decrypt.
 
 **Password-only blobs** (no master key) work everywhere. **EC-master** and **PQ-master** blobs round-trip across C++, Java, and Python when the matching master keys are configured.
 
@@ -127,14 +226,26 @@ Release policy:
   - Short passwords: ~128 MiB for enhanced security (memory_cost=2^17 KiB)
   - Heavy operations: ~256 MiB (memory_cost=2^18 KiB)
 
-**Low Memory Fallback**: If you encounter "Insufficient memory for Argon2id" errors:
+**Low-memory selection**: choose PBKDF2 explicitly before encryption if
+the host cannot run the advertised Argon2 profile:
 ```bash
 export BASEFWX_USER_KDF=pbkdf2
 ```
 
-### PBKDF2 (Fallback KDF)
+An Argon2 allocation/runtime failure is terminal. BaseFWX does not
+silently switch KDFs after serializing an Argon2 label.
+
+If Python starts without the optional Argon2 module, automatic KDF
+selection chooses PBKDF2 before metadata is built and retains the shared
+600,000-iteration writer default. It does not use the historical
+32,768-iteration compatibility downgrade.
+
+### PBKDF2 (Explicit Alternative)
 - **Memory**: Minimal (~1 MiB)
-- **Security**: Still secure with high iteration count (200,000+ iterations)
+- **Writer defaults**: 600,000 iterations for ordinary user wrapping;
+  2,000,000 for AES-heavy file operations
+- **Safety ceiling**: 4,000,000 iterations for producers and
+  peer-controlled decode parameters
 
 ## Error Messages
 

@@ -20,8 +20,18 @@ set(BASEFWX_NUMERIC_VERSION
 
 project(basefwx_cpp VERSION ${BASEFWX_NUMERIC_VERSION} LANGUAGES CXX)
 
+if(PROJECT_IS_TOP_LEVEL)
+    set(_basefwx_build_tests_default ON)
+else()
+    set(_basefwx_build_tests_default OFF)
+endif()
+option(BASEFWX_BUILD_TESTS
+       "Build BaseFWX internal policy and compatibility tests"
+       ${_basefwx_build_tests_default})
 option(BASEFWX_BUILD_CLI "Build BaseFWX CLI" ON)
 option(BASEFWX_BUILD_JNI "Build the basefwxcrypto JNI shared library for the Java bindings" OFF)
+option(BASEFWX_BUILD_PROTOCOL_KAT_GEN
+       "Build the internal multi-runtime protocol-vector generator" OFF)
 option(BASEFWX_REQUIRE_ARGON2 "Require libargon2 for Argon2id support" ON)
 option(BASEFWX_REQUIRE_OQS "Require liboqs for ML-KEM-768 support" OFF)
 option(BASEFWX_OQS_STATIC "Prefer static liboqs when available" OFF)
@@ -36,6 +46,9 @@ option(BASEFWX_WIN_IPO "Enable IPO/LTCG on Windows Release builds" OFF)
 set(BASEFWX_VENDOR_DIR "" CACHE PATH "Path to vendored dependencies root")
 set(BASEFWX_CLI_GPG_PUBLIC_KEY_FILE "" CACHE FILEPATH "ASCII-armored GPG public key to embed into the CLI for detached signature verification")
 set(BASEFWX_CLI_GPG_FINGERPRINT "" CACHE STRING "Expected GPG signing key fingerprint to display in CLI version output")
+set(BASEFWX_LEAK_PROBE_SOURCE "" CACHE FILEPATH
+    "Internal generated leak-probe source (empty disables the probe target)")
+mark_as_advanced(BASEFWX_LEAK_PROBE_SOURCE)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -630,6 +643,7 @@ add_library(basefwxcpp
     src/media/imagecipher_trailer.cpp
     src/platform/cli_colors.cpp
     src/platform/env.cpp
+    src/platform/secure_temp.cpp
     src/platform/system_info.cpp
     src/plugin/plugin_loader.cpp
 )
@@ -658,7 +672,9 @@ target_link_libraries(basefwxcpp PUBLIC OpenSSL::Crypto ZLIB::ZLIB)
 if(UNIX AND NOT APPLE)
     target_link_libraries(basefwxcpp PRIVATE ${CMAKE_DL_LIBS})
 elseif(WIN32)
-    # dlopen equivalent is in kernel32 via LoadLibrary — no extra link needed.
+    # Advapi32 provides the explicit owner-only ACL used for authenticated
+    # plaintext temp directories.
+    target_link_libraries(basefwxcpp PRIVATE advapi32)
 endif()
 
 # GCC 8 and older keep std::filesystem in a separate support library.
@@ -724,6 +740,16 @@ if(BASEFWX_TESTING)
     message(WARNING "BaseFWX: BASEFWX_TESTING is ON — do not use this build in production")
 endif()
 
+if(BASEFWX_LEAK_PROBE_SOURCE)
+    if(NOT EXISTS "${BASEFWX_LEAK_PROBE_SOURCE}")
+        message(FATAL_ERROR
+            "BASEFWX_LEAK_PROBE_SOURCE does not exist: "
+            "${BASEFWX_LEAK_PROBE_SOURCE}")
+    endif()
+    add_executable(basefwx_leak_probe "${BASEFWX_LEAK_PROBE_SOURCE}")
+    target_link_libraries(basefwx_leak_probe PRIVATE basefwxcpp)
+endif()
+
 if(BASEFWX_BUILD_CLI)
     add_executable(basefwx_cpp
         src/main.cpp
@@ -731,6 +757,7 @@ if(BASEFWX_BUILD_CLI)
         src/cli/password.cpp
         src/cli/output.cpp
         src/cli/bench.cpp
+        src/cli/bench_memory.cpp
         src/cli/inspect.cpp
         src/cli/telemetry.cpp
         src/cli/options.cpp
@@ -742,6 +769,52 @@ if(BASEFWX_BUILD_CLI)
         "${CMAKE_CURRENT_BINARY_DIR}/generated"
         "${CMAKE_CURRENT_SOURCE_DIR}/include"
     )
+endif()
+
+# One-shot KAT emitter for multi-runtime parity (HKDF / X25519 / ML-KEM).
+# Keep it out of downstream projects that consume BaseFWX via add_subdirectory();
+# scripts/gen_protocol_kats.py opts in explicitly.
+if(BASEFWX_BUILD_TESTS)
+    include(CTest)
+endif()
+
+if(BASEFWX_BUILD_TESTS AND BUILD_TESTING)
+    add_executable(peer_kdf_policy_test tools/peer_kdf_policy_test.cpp)
+    target_link_libraries(peer_kdf_policy_test PRIVATE basefwxcpp)
+    target_include_directories(peer_kdf_policy_test PRIVATE
+        "${CMAKE_CURRENT_BINARY_DIR}/generated"
+        "${CMAKE_CURRENT_SOURCE_DIR}/include"
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/file"
+    )
+    add_test(NAME peer_kdf_policy_test COMMAND peer_kdf_policy_test)
+
+    add_executable(bench_memory_policy_test
+        tools/bench_memory_policy_test.cpp
+        src/cli/bench_memory.cpp
+    )
+    target_include_directories(bench_memory_policy_test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/include"
+    )
+    add_test(NAME bench_memory_policy_test COMMAND bench_memory_policy_test)
+
+    add_executable(base64_compatibility_test
+        tools/base64_compatibility_test.cpp
+    )
+    target_link_libraries(base64_compatibility_test PRIVATE basefwxcpp)
+    target_include_directories(base64_compatibility_test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/include"
+    )
+    add_test(NAME base64_compatibility_test COMMAND base64_compatibility_test)
+endif()
+
+if(BASEFWX_BUILD_PROTOCOL_KAT_GEN)
+    add_executable(protocol_kat_gen tools/protocol_kat_gen.cpp)
+    target_link_libraries(protocol_kat_gen PRIVATE basefwxcpp)
+    target_include_directories(protocol_kat_gen PRIVATE
+        "${CMAKE_CURRENT_BINARY_DIR}/generated"
+        "${CMAKE_CURRENT_SOURCE_DIR}/include"
+    )
+
 endif()
 
 # Optional JNI shared library that backs the Java FwxAESJNI implementation.

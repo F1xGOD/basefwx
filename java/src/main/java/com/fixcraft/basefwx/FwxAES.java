@@ -78,7 +78,7 @@ public interface FwxAES {
 
     final class Builder {
         private boolean enableJni = false;
-        private boolean useMaster = true;
+        private boolean useMaster = false;
 
         private Builder() {}
 

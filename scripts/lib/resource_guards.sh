@@ -199,6 +199,9 @@ bench_guards_apply() {
     else
         ulimit_msg="(ulimit -v not supported; cap not enforced)"
     fi
+    if [[ -z "${BASEFWX_BENCH_MEMORY_LIMIT_BYTES:-}" ]]; then
+        export BASEFWX_BENCH_MEMORY_LIMIT_BYTES=$((target_mem_kib * 1024))
+    fi
 
     cat >&2 <<EOF
 [resource-guards] enabled

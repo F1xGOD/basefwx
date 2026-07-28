@@ -351,6 +351,24 @@ std::vector<std::uint8_t> LegacyPcm16MonoToCarrierBytes(const std::vector<std::u
     return out;
 }
 
+std::vector<std::uint8_t> LegacyCarrierBytesToPcm16Mono(
+    const std::vector<std::uint8_t>& carrier) {
+    std::vector<std::uint8_t> pcm = carrier;
+    if (pcm.size() % 2 != 0) {
+        pcm.push_back(0);
+    }
+    for (std::size_t i = 0; i < pcm.size(); i += 2) {
+        const std::uint16_t value = static_cast<std::uint16_t>(pcm[i])
+                                  | static_cast<std::uint16_t>(pcm[i + 1] << 8);
+        const std::int16_t sample = static_cast<std::int16_t>(
+            static_cast<std::int32_t>(value) - 32768);
+        const std::uint16_t encoded = static_cast<std::uint16_t>(sample);
+        pcm[i] = static_cast<std::uint8_t>(encoded & 0xFFu);
+        pcm[i + 1] = static_cast<std::uint8_t>((encoded >> 8) & 0xFFu);
+    }
+    return pcm;
+}
+
 std::vector<std::uint8_t> ReadWavCarrierBytes(const std::filesystem::path& path) {
     std::vector<std::uint8_t> file = basefwx::ReadFile(path.string());
     if (file.size() < 44) {
@@ -537,7 +555,9 @@ std::vector<std::uint8_t> ReadAudioCarrierBytes(const std::filesystem::path& pat
 }
 
 void WriteWavCarrierBytes(const std::filesystem::path& path, const std::vector<std::uint8_t>& carrier) {
-    std::vector<std::uint8_t> pcm = EncodeMappedAudioCarrier(carrier);
+    // Keep the producer wire-compatible with the Python and Java runtimes.
+    // Mapped carriers remain decode-only for files emitted by older C++ builds.
+    std::vector<std::uint8_t> pcm = LegacyCarrierBytesToPcm16Mono(carrier);
 
     std::vector<std::uint8_t> out;
     out.reserve(44 + pcm.size());
@@ -579,15 +599,11 @@ std::vector<std::uint8_t> ReadPngCarrierBytes(const std::filesystem::path& path)
 void WritePngCarrierBytes(const std::filesystem::path& path,
                           const std::vector<std::uint8_t>& carrier,
                           bool bw_mode) {
-    std::vector<std::uint8_t> frame = BuildKfmCarrierFrame(kKfmImageCarrierMagic, carrier);
     int channels = bw_mode ? 1 : 3;
-    std::size_t bytes_per_pixel = KfmPngBytesPerPixel(channels);
-    std::size_t header_pixels = KfmPngHeaderPixels(channels);
-    std::size_t remaining_bytes = (frame.size() > kKfmCarrierFrameHeaderLen)
-        ? (frame.size() - kKfmCarrierFrameHeaderLen)
-        : 0u;
-    std::size_t payload_pixels = (remaining_bytes + bytes_per_pixel - 1u) / bytes_per_pixel;
-    std::size_t used_pixels = header_pixels + payload_pixels;
+    std::size_t used_pixels = std::max<std::size_t>(
+        1u,
+        (carrier.size() + static_cast<std::size_t>(channels) - 1u)
+            / static_cast<std::size_t>(channels));
     int width = static_cast<int>(std::ceil(std::sqrt(static_cast<double>(used_pixels))));
     if (width < 1) {
         width = 1;
@@ -597,26 +613,7 @@ void WritePngCarrierBytes(const std::filesystem::path& path,
     std::size_t capacity = capacity_pixels * static_cast<std::size_t>(channels);
 
     std::vector<std::uint8_t> pixels_data = basefwx::crypto::RandomBytes(capacity);
-    for (std::size_t i = 0; i < header_pixels; ++i) {
-        std::size_t offset = i * bytes_per_pixel;
-        std::size_t take = std::min(bytes_per_pixel, frame.size() - offset);
-        EncodeKfmPixelBlock(pixels_data, channels, i, frame.data() + static_cast<std::ptrdiff_t>(offset), take, i);
-    }
-
-    std::uint32_t crc = crc32(0L, carrier.data(), static_cast<uInt>(carrier.size()));
-    std::uint64_t seed = KfmCarrierSeed(static_cast<std::uint32_t>(carrier.size()), crc, 0xB4C38F6D5A1279E1ULL);
-    auto positions = BuildShuffledPositions(capacity_pixels - header_pixels, seed);
-    for (std::size_t i = 0; i < payload_pixels; ++i) {
-        std::size_t offset = kKfmCarrierFrameHeaderLen + i * bytes_per_pixel;
-        std::size_t take = std::min(bytes_per_pixel, frame.size() - offset);
-        std::size_t pixel_index = header_pixels + positions[i];
-        EncodeKfmPixelBlock(pixels_data,
-                            channels,
-                            pixel_index,
-                            frame.data() + static_cast<std::ptrdiff_t>(offset),
-                            take,
-                            header_pixels + i);
-    }
+    std::copy(carrier.begin(), carrier.end(), pixels_data.begin());
 
     if (!path.parent_path().empty()) {
         std::filesystem::create_directories(path.parent_path());

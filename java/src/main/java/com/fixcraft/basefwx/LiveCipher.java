@@ -61,15 +61,14 @@ public final class LiveCipher {
     }
 
     private static int hardenFwxAesIterations(byte[] password, int iterations) {
-        if (password == null || password.length == 0) {
-            return iterations;
+        if (!Constants.TEST_KDF_OVERRIDE
+                && password != null
+                && password.length > 0
+                && password.length < Constants.SHORT_PASSWORD_MIN) {
+            iterations = Math.max(
+                    iterations, Constants.SHORT_PBKDF2_ITERS);
         }
-        if (Constants.TEST_KDF_OVERRIDE) {
-            return iterations;
-        }
-        if (password.length < Constants.SHORT_PASSWORD_MIN) {
-            return Math.max(iterations, Constants.SHORT_PBKDF2_ITERS);
-        }
+        FileCodecKdf.requirePeerPbkdf2WithinLimits(iterations);
         return iterations;
     }
 
@@ -118,6 +117,11 @@ public final class LiveCipher {
                                              byte[] salt,
                                              byte[] noncePrefix,
                                              int iterations) {
+        if (keyHeader.length
+                > Constants.FWXAES_MAX_KEY_HEADER_LEN) {
+            throw new IllegalArgumentException(
+                    "Live key header too large");
+        }
         int total = HEADER_FIXED_LEN + keyHeader.length + salt.length + noncePrefix.length;
         byte[] out = new byte[total];
         out[0] = (byte) (keyMode & 0xFF);
@@ -184,6 +188,7 @@ public final class LiveCipher {
 
         public LiveEncryptor(String password, boolean useMaster) {
             this.password = BaseFwx.resolvePasswordBytes(password, useMaster);
+            PasswordPolicy.requireStrongPassword(this.password, "fwxAES live encryption");
             this.useMaster = useMaster;
             this.started = false;
             this.finalized = false;
@@ -193,7 +198,7 @@ public final class LiveCipher {
         }
 
         public LiveEncryptor(String password) {
-            this(password, true);
+            this(password, false);
         }
 
         private byte[] initSession() {
@@ -205,27 +210,29 @@ public final class LiveCipher {
             byte[] sessionKey;
 
             if (useMaster) {
-                try {
-                    KeyWrap.MaskKeyResult mask = KeyWrap.prepareMaskKey(
+                try (KeyWrap.MaskKeyResult mask = KeyWrap.prepareMaskKey(
                         password,
                         true,
                         Constants.FWXAES_MASK_INFO,
                         false,
                         Constants.FWXAES_AAD,
                         new KeyWrap.KdfOptions("pbkdf2", Constants.USER_KDF_ITERATIONS)
-                    );
+                    )) {
                     boolean useWrap = mask.usedMaster || !hasPassword;
                     if (useWrap) {
                         keyMode = Constants.LIVE_KEYMODE_WRAP;
                         keyHeader = Format.packLengthPrefixed(Arrays.asList(mask.userBlob, mask.masterBlob));
-                        sessionKey = Crypto.hkdfSha256(mask.maskKey, Constants.FWXAES_KEY_INFO, Constants.FWXAES_KEY_LEN);
+                        sessionKey = KeyWrap.deriveKeyAndWipe(
+                                mask.maskKey,
+                                Constants.FWXAES_KEY_INFO,
+                                Constants.FWXAES_KEY_LEN);
                         noncePrefix = Crypto.randomBytes(Constants.LIVE_NONCE_PREFIX_LEN);
                         key = sessionKey;
                         return packFrame(Constants.LIVE_FRAME_TYPE_HEADER, 0L,
                             buildSessionHeader(keyMode, keyHeader, salt, noncePrefix, 0));
                     }
                 } catch (RuntimeException exc) {
-                    if (!hasPassword) {
+                    if (!hasPassword || PQ.strictPqOnly()) {
                         throw exc;
                     }
                 }
@@ -435,6 +442,35 @@ public final class LiveCipher {
             bufferEnd = unread;
         }
 
+        private void validateInitialOuterHeader() {
+            if (started || bufferedSize() < FRAME_HEADER_LEN) {
+                return;
+            }
+            int frameStart = bufferStart;
+            if (!bytesEqualAt(buffer, frameStart, LIVE_MAGIC)) {
+                throw new IllegalArgumentException(
+                        "Invalid live frame magic");
+            }
+            int version = buffer[frameStart + 4] & 0xFF;
+            if (version != Constants.LIVE_FRAME_VERSION) {
+                throw new IllegalArgumentException(
+                        "Unsupported live frame version");
+            }
+            int frameType = buffer[frameStart + 5] & 0xFF;
+            long sequence = readU64(buffer, frameStart + 6);
+            if (frameType != Constants.LIVE_FRAME_TYPE_HEADER
+                    || sequence != 0L) {
+                throw new IllegalArgumentException(
+                        "Live stream must start with header frame");
+            }
+            int bodyLen = readU32(buffer, frameStart + 14);
+            if (bodyLen < 0
+                    || bodyLen > Constants.LIVE_MAX_HEADER_BODY) {
+                throw new IllegalArgumentException(
+                        "Live key header too large");
+            }
+        }
+
         private void parseHeader(byte[] data, int bodyOff, int bodyLen) {
             if (bodyLen < HEADER_FIXED_LEN) {
                 throw new IllegalArgumentException("Truncated live stream header");
@@ -444,8 +480,11 @@ public final class LiveCipher {
             int nonceLen = data[bodyOff + 2] & 0xFF;
             int keyHeaderLen = readU32(data, bodyOff + 4);
             int iters = readU32(data, bodyOff + 8);
-            if (keyHeaderLen < 0) {
-                throw new IllegalArgumentException("Invalid live stream key header length");
+            if (keyHeaderLen < 0
+                    || keyHeaderLen
+                            > Constants.FWXAES_MAX_KEY_HEADER_LEN) {
+                throw new IllegalArgumentException(
+                        "Live key header too large");
             }
 
             long need = (long) HEADER_FIXED_LEN + (long) keyHeaderLen + (long) saltLen + (long) nonceLen;
@@ -483,16 +522,17 @@ public final class LiveCipher {
                     Constants.FWXAES_AAD,
                     new KeyWrap.KdfOptions("pbkdf2", Constants.USER_KDF_ITERATIONS)
                 );
-                key = Crypto.hkdfSha256(maskKey, Constants.FWXAES_KEY_INFO, Constants.FWXAES_KEY_LEN);
+                key = KeyWrap.deriveKeyAndWipe(
+                        maskKey,
+                        Constants.FWXAES_KEY_INFO,
+                        Constants.FWXAES_KEY_LEN);
             } else if (keyMode == Constants.LIVE_KEYMODE_PBKDF2) {
+                FileCodecKdf.requirePeerPbkdf2WithinLimits(iters);
                 if (password.length == 0) {
                     throw new IllegalArgumentException("Password required for PBKDF2 live stream");
                 }
                 if (salt.length == 0) {
                     throw new IllegalArgumentException("Missing live stream PBKDF2 salt");
-                }
-                if (iters <= 0) {
-                    throw new IllegalArgumentException("Invalid live stream PBKDF2 iterations");
                 }
                 key = Crypto.pbkdf2HmacSha256(password, salt, iters, Constants.FWXAES_KEY_LEN);
             } else {
@@ -509,11 +549,16 @@ public final class LiveCipher {
                 throw new IllegalArgumentException("Truncated live data frame");
             }
             int plainLen = readU32(data, off);
-            if (plainLen < 0) {
-                throw new IllegalArgumentException("Invalid live frame length");
-            }
             int ctOff = off + 4;
             int ctLen = len - 4;
+            long availablePlaintext =
+                    (long) ctLen - Constants.AEAD_TAG_LEN;
+            if (plainLen < 0
+                    || availablePlaintext < 0
+                    || (long) plainLen != availablePlaintext) {
+                throw new IllegalArgumentException(
+                        "Live frame length mismatch");
+            }
             byte[] nonce = nonceForSequence(noncePrefix, sequence);
             byte[] aad = liveAad(Constants.LIVE_FRAME_TYPE_DATA, sequence, plainLen);
             byte[] plain = new byte[plainLen];
@@ -560,8 +605,23 @@ public final class LiveCipher {
                 throw new IllegalArgumentException("Live stream already finalized");
             }
             checkSliceBounds(data, off, len, "frame");
-            if (len > 0) {
-                append(data, off, len);
+            int inputOffset = off;
+            int inputLength = len;
+            if (!started
+                    && bufferedSize() < FRAME_HEADER_LEN
+                    && inputLength > 0) {
+                int take = Math.min(
+                        FRAME_HEADER_LEN - bufferedSize(),
+                        inputLength);
+                append(data, inputOffset, take);
+                inputOffset += take;
+                inputLength -= take;
+                validateInitialOuterHeader();
+            } else {
+                validateInitialOuterHeader();
+            }
+            if (inputLength > 0) {
+                append(data, inputOffset, inputLength);
             }
             List<byte[]> outputs = new ArrayList<byte[]>();
             while (bufferedSize() >= FRAME_HEADER_LEN) {

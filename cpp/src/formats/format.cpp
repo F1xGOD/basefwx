@@ -7,7 +7,9 @@
 #include "basefwx/format.hpp"
 
 #include "basefwx/base64.hpp"
+#include "basefwx/constants.hpp"
 
+#include <limits>
 #include <stdexcept>
 
 namespace basefwx::format {
@@ -27,8 +29,23 @@ std::uint32_t ReadU32BE(const Bytes& data, std::size_t offset) {
 }  // namespace
 
 Bytes PackLengthPrefixed(const std::vector<Bytes>& parts) {
-    std::size_t total = 4 * parts.size();
+    constexpr std::size_t max =
+        static_cast<std::size_t>(basefwx::constants::kLengthPrefixedMax);
+    if (parts.size() > max / 4u) {
+        throw std::runtime_error(
+            "Length-prefixed blob exceeds 64 MiB total cap");
+    }
+    std::size_t total = 4u * parts.size();
     for (const auto& part : parts) {
+        if (part.size() > max
+            || part.size() > std::numeric_limits<std::uint32_t>::max()) {
+            throw std::runtime_error(
+                "Length-prefixed part exceeds 64 MiB cap");
+        }
+        if (part.size() > max - total) {
+            throw std::runtime_error(
+                "Length-prefixed blob exceeds 64 MiB total cap");
+        }
         total += part.size();
     }
     Bytes out(total);
@@ -53,8 +70,14 @@ std::vector<Bytes> UnpackLengthPrefixed(const Bytes& data, std::size_t count) {
     // Without this, a malicious blob declaring a single 4 GiB part survives
     // until the data.size() bounds check fires — long enough for any
     // upstream code that pre-sizes a buffer from the length field to OOM.
-    constexpr std::size_t kMaxPartLen = 64 * 1024 * 1024;
-    constexpr std::size_t kMaxTotalLen = 64 * 1024 * 1024;
+    constexpr std::size_t kMaxPartLen =
+        static_cast<std::size_t>(basefwx::constants::kLengthPrefixedMax);
+    constexpr std::size_t kMaxTotalLen =
+        static_cast<std::size_t>(basefwx::constants::kLengthPrefixedMax);
+    if (data.size() > kMaxTotalLen) {
+        throw std::runtime_error(
+            "Length-prefixed blob exceeds 64 MiB total cap");
+    }
     std::vector<Bytes> parts;
     parts.reserve(count);
     std::size_t offset = 0;
@@ -90,6 +113,9 @@ PayloadParts SplitPayload(const Bytes& payload) {
         throw std::runtime_error("Payload too short");
     }
     std::uint32_t meta_len = ReadU32BE(payload, 0);
+    if (meta_len > basefwx::constants::kMetadataMax) {
+        throw std::runtime_error("Payload metadata exceeds 1 MiB cap");
+    }
     std::size_t meta_end = 4 + meta_len;
     if (meta_end > payload.size()) {
         throw std::runtime_error("Malformed payload metadata header");
@@ -107,6 +133,9 @@ std::optional<MetadataPreview> TryDecodeMetadata(const Bytes& payload) {
         return std::nullopt;
     }
     std::uint32_t meta_len = ReadU32BE(payload, 0);
+    if (meta_len > basefwx::constants::kMetadataMax) {
+        return std::nullopt;
+    }
     std::size_t meta_end = 4 + meta_len;
     if (meta_end > payload.size()) {
         return std::nullopt;

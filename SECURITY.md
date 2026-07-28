@@ -2,7 +2,9 @@
 
 ## Supported Versions
 
-**Versioning note:** Current releases use `MAJOR.MINOR.PATCH` (e.g., `3.6.4`).
+**Versioning note:** Current tree / development line is tracked in
+`VERSION` (currently `3.8.0-dev1`). Published releases use
+`MAJOR.MINOR.PATCH` (latest tagged release: **3.7.0**).
 
 > [!CAUTION]
 > DO NOT USE ANY VERSION BELOW 2.6, you -> WILL <- get compromised!
@@ -21,7 +23,15 @@
 | **Latest release** | 👑 Currently recommended. **Frozen at publish time** — the version you can run today. Any future fix arrives as a *new* release, not as an in-place patch. | ✅ |
 | **All older releases** | ❌ Superseded the moment a newer release ships. They are not patched, not backported to, and not republished. The *new* release is the maintenance. | ❌ |
 
-### What's New in 3.6.4
+### Current status (3.7.0 / 3.8.0-dev1)
+
+- **3.7.0** — blackbox plugin ABI (C++ host loader + fwxAES `algo=0x03` wire tag), Java Argon2id user-KDF, fixed Argon2 parallelism default of **4** across C++/Java/Python, removal of the upstream baked ML-KEM master public key and `BASEFWX_MASTER_PQ_ALLOW_BAKED` / path-as-password auto-read. See [RELEASE-NOTES-3.7.0.md](RELEASE-NOTES-3.7.0.md) and [COMPATIBILITY.md](COMPATIBILITY.md).
+- **3.8.0-dev1** (this tree) — multi-runtime protocol-building primitives
+  (explicit-salt HKDF, ML-KEM-768/1024 selection + GenerateKeyPair,
+  X25519) with C++/liboqs KATs under `testdata/protocol_kats/`. See
+  `CHANGELOG.md` / `COMPATIBILITY.md`.
+
+### Historical: What's New in 3.6.4
 
 For the full write-up — KDF cost table, security-normalized
 performance comparison vs 3.6.3, JNI win, AN7/DEAN7, PQ stance —
@@ -75,7 +85,7 @@ actually get is:
 | Runtime | Default password KDF (no env override)                        |
 | ------- | ------------------------------------------------------------- |
 | C++     | **Argon2id** if libargon2 was linked at build time (the release builds require it), else PBKDF2-HMAC-SHA256. |
-| Python  | **Argon2id** if `argon2-cffi` is importable **and** the host has ≥ 128 MiB free RAM; otherwise PBKDF2-HMAC-SHA256. |
+| Python  | **Argon2id** when `argon2-cffi` is available. If the module is absent before selection, Python uses the full 600,000-iteration PBKDF2 writer default; allocation/runtime failure after Argon2 selection is terminal. Choose PBKDF2 explicitly before encryption on constrained hosts. |
 | Java    | **Argon2id** (via BouncyCastle's `Argon2BytesGenerator`, supported since 3.7.0) or **PBKDF2-HMAC-SHA256** — controlled by `BASEFWX_USER_KDF`. |
 
 `BASEFWX_USER_KDF` overrides the default per process (`argon2id` /
@@ -83,6 +93,28 @@ actually get is:
 and blobs interop across runtimes — the KDF label is encoded in the
 wrap header so blobs produced by any runtime can be decoded by any
 other. See `COMPATIBILITY.md` for the capability matrix.
+
+The KDF label is authenticated wire state. A runtime never silently
+switches an Argon2-labelled operation to PBKDF2 after allocation or
+runtime failure, because doing so would emit an undecryptable blob.
+
+AES-heavy simple and direct-stream files also authenticate the payload
+key-schedule marker. New non-stripped writers in C++, Java, and Python
+emit `ENC-KSEP=v1`, deriving independent 32-byte AES-GCM and
+obfuscation keys with HKDF-SHA256 info labels
+`basefwx.fwxaes.payload.aead.v1` and
+`basefwx.fwxaes.payload.obf.v1`. A missing marker means the legacy
+raw-root-key schedule; unknown values fail closed. Decoders never guess
+between schedules. The authenticated `ENC-OBF` value controls whether
+the payload is deobfuscated; a local writer preference cannot override
+that wire decision during simple or direct-stream decode. Missing
+`ENC-OBF` retains legacy obfuscation; unknown values fail closed.
+
+Unauthenticated wire lengths are bounded before allocation or KDF work:
+fwxAES, live, and JMG wrap/key headers share a 64 KiB maximum. Streaming
+decryptors stage plaintext in private storage, verify the GCM tag, then
+publish to the caller destination. A failed tag or hostile length must
+leave an existing destination unchanged.
 
 **This password-only default is already post-quantum-resistant.** AES-256
 under Grover is ≈ 128-bit-equivalent, the KDF salt is per-blob, and
@@ -92,44 +124,65 @@ mixed in here, because in a password-only setting it would not add
 security — every PQ private key would itself have to be unwrapped
 from the password, so cracking the password breaks every layer.
 
-#### Optional: ML-KEM-768 master-key wrap (off by default)
+#### Optional: ML-KEM master-key wrap
 
-When (and only when) the caller explicitly opts in
-(`useMaster=true` in any API call, `--with-master` on the C++ CLI,
-or the Java builder method), basefwx adds an ML-KEM-768 wrap on top
-of the password wrap. The mask key is encapsulated to a master
-public key, and the user blob still holds the password-encrypted
-copy — either path can decrypt independently. **All three runtimes
-ship post-quantum support out of the box** — they just use different
-backing libraries:
+**API defaults:** the C++ CLI / `basefwx::fwxaes::Options`, Python CLI,
+and Java CLI default master wrap **off**. Library defaults are also off
+for Python `encryptAES` / `decryptAES`, fwxAES raw/stream helpers, and live
+constructors, and for Java `FwxAES.Builder` and the one-argument
+`LiveCipher.LiveEncryptor` constructor. Pass `true` / `--use-master`
+to opt in when a master public key is configured. Compatibility-sensitive
+Python b512/file/media/JMG entry points, Java's one-argument
+`LiveCipher.LiveDecryptor`, and `FwxAESPureJava()` retain their existing
+master-enabled defaults; callers should pass the desired policy explicitly.
 
-| Runtime | ML-KEM-768 implementation         | Build requirement                                                                                  |
+When (and only when) the caller opts in
+(`useMaster=true` / `--use-master` / equivalent), basefwx adds an
+ML-KEM wrap on top of the password wrap. The provisioned public key's
+standardized size selects **ML-KEM-768** or **ML-KEM-1024** and the
+authenticated `ENC-KEM` value; `BASEFWX_MASTER_PQ_ALG` only changes key
+generation/default reporting and cannot change a file by itself. The mask key is
+encapsulated to a master public key, and the user blob still holds
+the password-encrypted copy — either path can decrypt independently.
+**All three runtimes ship post-quantum support out of the box** —
+they just use different backing libraries:
+
+| Runtime | ML-KEM implementation             | Build requirement                                                                                  |
 | ------- | --------------------------------- | -------------------------------------------------------------------------------------------------- |
 | C++     | **liboqs** (Open Quantum Safe)    | Linked at build time; release builds enforce this via `BASEFWX_REQUIRE_OQS=ON` (no silent downgrade). |
-| Java    | **BouncyCastle PQC** (Kyber-768)  | Bundled in the published JAR; no extra system package required.                                    |
-| Python  | **`pqcrypto.kem.ml_kem_768`**     | Pulled in by the `basefwx` Python wheel.                                                           |
+| Java    | **BouncyCastle PQC** (ML-KEM-768/1024) | Bundled in the published JAR; no extra system package required.                              |
+| Python  | **`pqcrypto.kem.ml_kem_768/1024`** | Pulled in by the `basefwx` Python wheel.                                                          |
 
 Sources for the master public key, in priority order:
 
-1. **Caller-provided** via `BASEFWX_MASTER_PQ_PUB=<path-or-base64>` —
+1. **Caller-provided** via `BASEFWX_MASTER_PQ_PUB=<path>` —
    this is the recommended path for self-hosted / open-source
-   deployments. You generate your own ML-KEM-768 keypair, keep the
+   deployments. You generate your own ML-KEM-768 or ML-KEM-1024 keypair, keep the
    private key offline, and configure the public half via env or your
    own key-management tooling.
 2. ~~**Baked-in fallback**~~ — **removed in 3.7.0**. The baked-in
    key literal, `BASEFWX_MASTER_PQ_ALLOW_BAKED`, and `ALLOW_BAKED_PUB`
    have been removed from all three runtimes. Deployments must supply
    their own key via option 1 above.
-3. **None** — without either of the above, `useMaster=true` falls
-   back to the password-only path (above) or, if
-   `BASEFWX_PQ_STRICT=1` / `BASEFWX_PQ_ONLY=1` is set, fails cleanly
-   instead of falling back.
+3. **None** — without either of the above, `useMaster=true` first
+   considers a separately provisioned EC master public key. If neither
+   master key is available, password-backed encryption can continue
+   only outside strict-PQ mode. When strict mode is enabled, a requested
+   master wrap fails instead of emitting an EC- or password-only
+   downgrade.
 
-Decryption with master-key blobs always succeeds with the password
-alone; the master private key only matters for password-loss
-recovery. There is no scenario where enabling `useMaster` makes the
-password path weaker — it adds an *additional* path, never a
-replacement.
+For a dual-wrapped payload, a correct password and intact user blob
+remain an independent decrypt path when master recovery is disabled or
+fails because a private key is missing, wrong, corrupt, or rejected by
+strict-PQ policy. A master-only payload still requires its matching
+private key. Enabling `useMaster` adds a recovery path; it does not
+replace or weaken a password wrap that is present.
+
+Set `BASEFWX_PQ_STRICT` or `BASEFWX_PQ_ONLY` to `1`, `true`, `yes`, or
+`on` (case-insensitive) to enable strict mode. The same true spellings
+are accepted where the touched KDF/performance paths use Java
+`Constants.envEnabled` or Python `_env_enabled`. Legacy flags with
+exact-`1` contracts retain their existing semantics.
 
 > [!NOTE]
 > `liboqs` is a **C++-only** build dependency. Java and Python do
@@ -190,9 +243,15 @@ the policy points that matter for security reports:
   deterministic plugin used in raw mode is a substitution cipher,
   not encryption.
 
-* **`host_secret` is mandatory when claimed.** The host fails the
-  call closed if a plugin sets `CAP_REQUIRES_HOST_KEY` and the
-  host passes `host_secret_len == 0`. Same for `CAP_REQUIRES_TWEAK`.
+* **`host_secret` / tweak CAP bits (documented contract, host wiring incomplete).**
+  The ABI and Profile B examples declare `CAP_REQUIRES_HOST_KEY` /
+  `CAP_REQUIRES_TWEAK`, and helper macros can fail closed when those
+  lengths are zero. The **production fwxAES/CLI host loader today
+  only dispatches unkeyed `forward`/`inverse`** and enforces
+  `CAP_SAFE_RAW_MODE` for `POS_RAW`. Until the host threads
+  `host_secret` / `tweak` through `TransformForward`/`TransformInverse`,
+  do not treat keyed CAP enforcement as a shipped host guarantee —
+  see `examples/plugins/THREAT_MODEL.md`.
 
 * **Plugin scope of this document.** Vulnerabilities **in the ABI
   contract** (e.g. host accepts a plugin without checking
@@ -206,6 +265,48 @@ the policy points that matter for security reports:
   debugger / memory read on the host process). Use OS-level
   isolation, secure enclaves, or hardware-backed key storage for
   that layer.
+
+### Crypto helper boundaries
+
+One-shot AEAD, HKDF, PBKDF2, Argon2id, HMAC, and random generation
+belong in the shared crypto helpers:
+
+* C++: `basefwx::crypto::*` in `cpp/include/basefwx/crypto.hpp`
+  (implementation in `cpp/src/crypto/crypto.cpp`).
+* Java: `com.fixcraft.basefwx.Crypto` (and the internal
+  `CryptoBackend` / `JavaCryptoBackend` / `NativeCryptoBackend`
+  dispatch used only by that helper).
+
+**Streaming exception (intentional):** large-file / media pipelines
+reuse OpenSSL `EVP_*` (C++) or JCA `Cipher` (Java) directly for
+chunked GCM/CTR so they can avoid buffering whole payloads. Those
+call sites must still use the same algorithms, nonce/tag lengths,
+and AAD labels as the helpers (`kAeadNonceLen` / `AEAD_NONCE_LEN` =
+12, `kAeadTagLen` / `AEAD_TAG_LEN` = 16). New one-shot crypto must
+not invent a parallel `EVP_*` / `Cipher.getInstance` path outside
+the helpers.
+
+Password inputs on the Java public API still arrive as `String` in
+several entry points (historical). Prefer `byte[]` / `char[]` for
+new APIs; wipe `byte[]` password buffers after use. `String`
+passwords cannot be wiped — treat that as a known limitation of
+the legacy surface, not a reason to add more `String` password APIs.
+
+**Peer Argon2 costs:** decrypt paths that honor `ENC-ARGON2-TC` /
+`ENC-ARGON2-MEM` / `ENC-ARGON2-PAR` from blob metadata fail closed
+when values exceed the shared maxima
+(`kArgon2TimeCostMax=16`, `kArgon2MemoryCostMax=1<<18` KiB,
+`kArgon2ParallelismMax=16` and Java/Python mirrors).
+
+**Peer PBKDF2 costs:** C++, Java, and Python accept peer-controlled
+PBKDF2 iteration counts only in the inclusive range `1..4_000_000`.
+This applies to `ENC-KDF-ITER` metadata and the unsigned iteration
+fields in raw/streaming fwxAES and live headers. Decimal metadata is
+parsed strictly: signs, trailing characters, overflow, zero, and
+values above the ceiling fail before any KDF work. The ceiling is
+twice the shared 2,000,000-iteration heavy writer profile, is aligned
+with YUME's protocol-side ceiling, and bounds unauthenticated CPU
+amplification without changing the writer default.
 
 ---
 

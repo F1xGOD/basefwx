@@ -8,8 +8,15 @@ from __future__ import annotations
 
 from ._b512_common import basefwx
 
+LENGTH_PREFIXED_MAX = 64 * 1024 * 1024
+METADATA_MAX = 1 * 1024 * 1024
+
 def _pack_length_prefixed(*parts: bytes) -> bytes:
     total = 4 * len(parts) + sum((len(p) for p in parts))
+    if total > LENGTH_PREFIXED_MAX:
+        raise ValueError('Length-prefixed blob exceeds 64 MiB total cap')
+    if any(len(part) > LENGTH_PREFIXED_MAX for part in parts):
+        raise ValueError('Length-prefixed part exceeds 64 MiB cap')
     out = bytearray(total)
     mv = memoryview(out)
     offset = 0
@@ -23,6 +30,8 @@ def _pack_length_prefixed(*parts: bytes) -> bytes:
 def _unpack_length_prefixed(data: bytes, count: int) -> 'basefwx.typing.Tuple[bytes, ...]':
     mv = memoryview(data)
     total_len = len(mv)
+    if total_len > LENGTH_PREFIXED_MAX:
+        raise ValueError('Length-prefixed blob exceeds 64 MiB total cap')
     offset = 0
     parts: 'basefwx.typing.List[bytes]' = []
     for _ in range(count):
@@ -30,7 +39,9 @@ def _unpack_length_prefixed(data: bytes, count: int) -> 'basefwx.typing.Tuple[by
             raise ValueError('Malformed length-prefixed blob (missing length)')
         length = basefwx.struct.unpack_from('>I', mv, offset)[0]
         offset += 4
-        if offset + length > total_len:
+        if length > LENGTH_PREFIXED_MAX:
+            raise ValueError('Length-prefixed part exceeds 64 MiB cap')
+        if length > total_len - offset:
             raise ValueError('Malformed length-prefixed blob (truncated part)')
         parts.append(bytes(mv[offset:offset + length]))
         offset += length

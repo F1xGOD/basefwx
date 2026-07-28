@@ -50,6 +50,7 @@ def _fwxaes_iterations(password: 'basefwx.typing.Union[str, bytes, bytearray, me
 
 
 def _kdf_pbkdf2_raw(password: bytes, salt: bytes, iters: int) -> bytes:
+    _require_peer_pbkdf2_within_limits(iters)
     return basefwx.hashlib.pbkdf2_hmac('sha256', password, salt, iters, dklen=basefwx.FWXAES_KEY_LEN)
 
 
@@ -80,8 +81,127 @@ def _derive_user_key_pbkdf2(password: 'basefwx.typing.Union[str, bytes, bytearra
     if len(salt) < basefwx.USER_KDF_SALT_SIZE:
         raise ValueError('User key salt must be at least 16 bytes')
     iterations = iterations or basefwx.USER_KDF_ITERATIONS
+    _require_peer_pbkdf2_within_limits(iterations)
     password_bytes = basefwx._coerce_password_bytes(password)
     return (basefwx.hashlib.pbkdf2_hmac('sha256', password_bytes, salt, iterations, dklen=length), salt)
+
+
+def _require_peer_argon2_within_limits(
+    argon2_time_cost: 'basefwx.typing.Optional[int]',
+    argon2_memory_cost: 'basefwx.typing.Optional[int]',
+    argon2_parallelism: 'basefwx.typing.Optional[int]',
+) -> None:
+    if argon2_time_cost is not None:
+        if argon2_time_cost <= 0:
+            raise ValueError('Peer ENC-ARGON2-TC must be positive')
+        if argon2_time_cost > basefwx.ARGON2_TIME_COST_MAX:
+            raise ValueError('Peer ENC-ARGON2-TC exceeds maximum')
+    if argon2_memory_cost is not None:
+        if argon2_memory_cost <= 0:
+            raise ValueError('Peer ENC-ARGON2-MEM must be positive')
+        if argon2_memory_cost > basefwx.ARGON2_MEMORY_COST_MAX:
+            raise ValueError('Peer ENC-ARGON2-MEM exceeds maximum')
+    if argon2_parallelism is not None:
+        if argon2_parallelism <= 0:
+            raise ValueError('Peer ENC-ARGON2-PAR must be positive')
+        if argon2_parallelism > basefwx.ARGON2_PARALLELISM_MAX:
+            raise ValueError('Peer ENC-ARGON2-PAR exceeds maximum')
+
+
+def _require_peer_pbkdf2_within_limits(iterations: int) -> None:
+    if not isinstance(iterations, int) or isinstance(iterations, bool):
+        raise ValueError('Peer PBKDF2 iteration count must be an integer')
+    if iterations <= 0:
+        raise ValueError('Peer PBKDF2 iteration count must be positive')
+    if iterations > basefwx.PEER_PBKDF2_ITERATIONS_MAX:
+        raise ValueError('Peer PBKDF2 iteration count exceeds maximum')
+
+
+def _parse_peer_pbkdf2_iterations(value: 'basefwx.typing.Any', default: int) -> int:
+    parsed = _parse_peer_decimal(
+        value, 'ENC-KDF-ITER', basefwx.PEER_PBKDF2_ITERATIONS_MAX,
+        default=default,
+    )
+    _require_peer_pbkdf2_within_limits(parsed)
+    return parsed
+
+
+def _parse_peer_decimal(
+    value: 'basefwx.typing.Any',
+    field: str,
+    maximum: int,
+    *,
+    default: 'basefwx.typing.Optional[int]' = None,
+) -> 'basefwx.typing.Optional[int]':
+    """Parse unauthenticated decimal metadata without large-int conversion."""
+    if value is None or value == '':
+        return default
+    if not isinstance(value, str) or not value:
+        raise ValueError(
+            f'Peer {field} must be an unsigned decimal integer'
+        )
+    maximum_text = str(maximum)
+    if len(value) > len(maximum_text):
+        raise ValueError(f'Peer {field} exceeds maximum')
+    if any(char < '0' or char > '9' for char in value):
+        raise ValueError(
+            f'Peer {field} must be an unsigned decimal integer'
+        )
+    if len(value) > 1 and value[0] == '0':
+        raise ValueError(
+            f'Peer {field} must not contain leading zeros'
+        )
+    if (
+        len(value) == len(maximum_text)
+        and value > maximum_text
+    ):
+        raise ValueError(f'Peer {field} exceeds maximum')
+    return int(value)
+
+
+def _require_strong_password_for_encryption(
+    password: 'basefwx.typing.Union[str, bytes, bytearray, memoryview]',
+    context: str = 'Encryption',
+) -> None:
+    pw = _coerce_password_bytes(password) if password is not None else b''
+    if not pw:
+        return
+    if basefwx._TEST_KDF_ITERS is not None:
+        return
+    if basefwx._env_enabled('BASEFWX_ALLOW_WEAK_PASSWORD'):
+        return
+    min_len = basefwx.MINIMUM_PASSWORD_LENGTH
+    raw_min = basefwx.os.getenv('BASEFWX_MIN_PASSWORD_LEN')
+    if raw_min and raw_min.strip():
+        try:
+            configured = int(raw_min.strip())
+            if configured >= 0:
+                min_len = configured
+        except ValueError:
+            pass
+    if min_len == 0 or len(pw) >= min_len:
+        return
+    label = context or 'Encryption'
+    raise ValueError(
+        f'{label} requires a password of at least {min_len} UTF-8 bytes '
+        f'(set BASEFWX_ALLOW_WEAK_PASSWORD=1 to override)'
+    )
+
+
+def _resolve_kdf_label(kdf: 'basefwx.typing.Optional[str]', *, peer: bool=False) -> str:
+    if peer:
+        if kdf not in {'pbkdf2', 'argon2', 'argon2id'}:
+            raise ValueError(f'Unsupported peer KDF label: {kdf}')
+        return 'argon2id' if kdf == 'argon2' else kdf
+    requested = kdf
+    if requested is None or not str(requested).strip() or str(requested).lower() == 'auto':
+        requested = basefwx.USER_KDF
+    if requested is None or not str(requested).strip() or str(requested).lower() == 'auto':
+        requested = basefwx.USER_KDF_DEFAULT
+    normalized = str(requested).lower()
+    if normalized not in {'pbkdf2', 'argon2', 'argon2id'}:
+        raise ValueError(f'Unsupported KDF label: {normalized}')
+    return 'argon2id' if normalized == 'argon2' else normalized
 
 
 def _derive_user_key(password: 'basefwx.typing.Union[str, bytes, bytearray, memoryview]', salt: bytes | None=None, *, iterations: int | None=None, kdf: 'basefwx.typing.Optional[str]'=None, argon2_time_cost: 'basefwx.typing.Optional[int]'=None, argon2_memory_cost: 'basefwx.typing.Optional[int]'=None, argon2_parallelism: 'basefwx.typing.Optional[int]'=None) -> 'basefwx.typing.Tuple[bytes, bytes]':
@@ -91,29 +211,21 @@ def _derive_user_key(password: 'basefwx.typing.Union[str, bytes, bytearray, memo
     argon2_time_cost = argon2_time_cost if argon2_time_cost is not None else basefwx.ARGON2_TIME_COST
     argon2_memory_cost = argon2_memory_cost if argon2_memory_cost is not None else basefwx.ARGON2_MEMORY_COST
     argon2_parallelism = argon2_parallelism if argon2_parallelism is not None else basefwx.ARGON2_PARALLELISM
+    _require_peer_argon2_within_limits(argon2_time_cost, argon2_memory_cost, argon2_parallelism)
     iterations, argon2_time_cost, argon2_memory_cost, argon2_parallelism = basefwx._harden_kdf_params(password, iterations=iterations, argon2_time_cost=argon2_time_cost, argon2_memory_cost=argon2_memory_cost, argon2_parallelism=argon2_parallelism)
-    requested_kdf = (kdf or basefwx.USER_KDF or basefwx.USER_KDF_DEFAULT).lower()
+    requested_kdf = _resolve_kdf_label(kdf)
     if requested_kdf in {'argon2', 'argon2id'}:
         if basefwx.hash_secret_raw is None:
-            if kdf is not None:
-                raise RuntimeError('Argon2 KDF requested but argon2 backend is unavailable')
-            if not basefwx._WARNED_ARGON2_MISSING:
-                print('⚠️  Warning: argon2 backend unavailable, falling back to PBKDF2.')
-                basefwx._WARNED_ARGON2_MISSING = True
-            requested_kdf = 'pbkdf2'
-        else:
-            try:
-                return basefwx._derive_user_key_argon2id(password, salt, time_cost=argon2_time_cost, memory_cost=argon2_memory_cost, parallelism=argon2_parallelism)
-            except MemoryError as e:
-                print(f'⚠️  USING PBKDF2, ARGON2 FAILED! CAUSE: {e}')
-                print(f'⚠️  Insufficient memory for Argon2. Falling back to PBKDF2.')
-                requested_kdf = 'pbkdf2'
-            except RuntimeError as e:
-                if 'memory' in str(e).lower() or 'insufficient' in str(e).lower():
-                    print(f'⚠️  USING PBKDF2, ARGON2 FAILED! CAUSE: {e}')
-                    requested_kdf = 'pbkdf2'
-                else:
-                    raise
+            raise RuntimeError(
+                'Argon2 KDF requested but argon2 backend is unavailable'
+            )
+        return basefwx._derive_user_key_argon2id(
+            password,
+            salt,
+            time_cost=argon2_time_cost,
+            memory_cost=argon2_memory_cost,
+            parallelism=argon2_parallelism,
+        )
     return basefwx._derive_user_key_pbkdf2(password, salt, iterations=iterations)
 
 
@@ -141,25 +253,48 @@ def derive_key_from_text(text, salt, key_length_bytes=32):
     return key
 
 
-def encryptAES(plaintext: str, user_key: 'basefwx.typing.Union[str, bytes, bytearray, memoryview]', use_master: bool=True, *, metadata_blob: 'basefwx.typing.Optional[str]'=None, master_public_key: 'basefwx.typing.Optional[bytes]'=None, kdf: 'basefwx.typing.Optional[str]'=None, progress_callback: 'basefwx.typing.Optional[basefwx.typing.Callable[[int, int], None]]'=None, obfuscate: bool=True, fast_obfuscation: bool=False, kdf_iterations: 'basefwx.typing.Optional[int]'=None, argon2_time_cost: 'basefwx.typing.Optional[int]'=None, argon2_memory_cost: 'basefwx.typing.Optional[int]'=None, argon2_parallelism: 'basefwx.typing.Optional[int]'=None) -> bytes:
+def encryptAES(plaintext: str, user_key: 'basefwx.typing.Union[str, bytes, bytearray, memoryview]', use_master: bool=False, *, metadata_blob: 'basefwx.typing.Optional[str]'=None, master_public_key: 'basefwx.typing.Optional[bytes]'=None, master_selection=None, kdf: 'basefwx.typing.Optional[str]'=None, progress_callback: 'basefwx.typing.Optional[basefwx.typing.Callable[[int, int], None]]'=None, obfuscate: bool=True, fast_obfuscation: bool=False, kdf_iterations: 'basefwx.typing.Optional[int]'=None, argon2_time_cost: 'basefwx.typing.Optional[int]'=None, argon2_memory_cost: 'basefwx.typing.Optional[int]'=None, argon2_parallelism: 'basefwx.typing.Optional[int]'=None) -> bytes:
+    kdf_used = basefwx._resolve_kdf_label(kdf)
     user_key = basefwx._resolve_password(user_key, use_master=use_master)
+    basefwx._require_strong_password_for_encryption(user_key, 'Encryption')
     if not user_key and (not use_master):
         raise ValueError('Cannot encrypt without user password or master key')
-    basefwx.sys.set_int_max_str_digits(2000000000)
     metadata_blob = metadata_blob if metadata_blob is not None else basefwx._split_metadata(plaintext)[0]
     metadata_bytes = metadata_blob.encode('utf-8') if metadata_blob else b''
+    if len(metadata_bytes) > basefwx.METADATA_MAX:
+        raise ValueError('Payload metadata exceeds 1 MiB cap')
+    meta_info = basefwx._decode_metadata(metadata_blob) if metadata_blob else {}
+    key_separation = meta_info.get('ENC-KSEP')
+    if key_separation not in (None, '', 'v1'):
+        raise ValueError('Unsupported payload key-separation version')
+    use_derived_keys = key_separation == 'v1'
     aad = metadata_bytes if metadata_bytes else b''
-    pq_public = master_public_key if master_public_key is not None else basefwx._load_master_pq_public() if use_master else None
-    ec_public = None
-    if use_master and pq_public is None:
-        try:
-            ec_public = basefwx._load_master_ec_public()
-        except Exception:
-            ec_public = None
-    use_master_effective = use_master and (pq_public is not None or ec_public is not None)
+    minimum_fixed_size = (
+        3 * 4
+        + 4
+        + len(metadata_bytes)
+        + basefwx.AEAD_NONCE_LEN
+        + basefwx.AEAD_TAG_LEN
+    )
+    if len(plaintext) > basefwx.LENGTH_PREFIXED_MAX - minimum_fixed_size:
+        raise ValueError('Length-prefixed blob exceeds 64 MiB total cap')
+    payload_bytes = plaintext.encode('utf-8')
+    minimum_blob_size = minimum_fixed_size + len(payload_bytes)
+    if minimum_blob_size > basefwx.LENGTH_PREFIXED_MAX:
+        raise ValueError('Length-prefixed blob exceeds 64 MiB total cap')
+    selection = master_selection or basefwx._select_master_key(
+        use_master, master_public_key
+    )
+    pq_public = selection.pq_public
+    ec_public = selection.ec_public
+    use_master_effective = use_master and selection.used_master
+    if not user_key and not use_master_effective:
+        raise ValueError(
+            'Password required when no usable master key is available'
+        )
     if use_master_effective:
         if pq_public is not None:
-            kem_ciphertext, kem_shared = basefwx.ml_kem_768.encrypt(pq_public)
+            kem_ciphertext, kem_shared = basefwx._kem_encrypt(pq_public)
             master_payload = kem_ciphertext
             ephemeral_key = basefwx._kem_derive_key(kem_shared)
         else:
@@ -170,17 +305,38 @@ def encryptAES(plaintext: str, user_key: 'basefwx.typing.Union[str, bytes, bytea
         master_payload = b''
         ephemeral_key = basefwx.os.urandom(32)
     if user_key:
-        kdf_used = (kdf or basefwx.USER_KDF or 'argon2id').lower()
         user_derived_key, user_salt = basefwx._derive_user_key(user_key, salt=None, iterations=kdf_iterations or basefwx.USER_KDF_ITERATIONS, kdf=kdf_used, argon2_time_cost=argon2_time_cost, argon2_memory_cost=argon2_memory_cost, argon2_parallelism=argon2_parallelism)
         wrapped_ephemeral = basefwx._aead_encrypt(user_derived_key, ephemeral_key, aad)
         ephemeral_enc_user = user_salt + wrapped_ephemeral
     else:
         ephemeral_enc_user = b''
-    payload_bytes = plaintext.encode('utf-8')
+    payload_aead_key = (
+        basefwx._hkdf_sha256(
+            ephemeral_key,
+            info=basefwx.FWXAES_PAYLOAD_AEAD_INFO,
+            length=32,
+        )
+        if use_derived_keys
+        else ephemeral_key
+    )
+    payload_obf_key = (
+        basefwx._hkdf_sha256(
+            ephemeral_key,
+            info=basefwx.FWXAES_PAYLOAD_OBF_INFO,
+            length=32,
+        )
+        if use_derived_keys
+        else ephemeral_key
+    )
     if obfuscate and basefwx.ENABLE_OBFUSCATION:
-        payload_bytes = basefwx._obfuscate_bytes(payload_bytes, ephemeral_key, fast=fast_obfuscation)
+        payload_bytes = basefwx._obfuscate_bytes(
+            payload_bytes, payload_obf_key, fast=fast_obfuscation
+        )
     nonce = basefwx.os.urandom(basefwx.AEAD_NONCE_LEN)
-    encryptor = basefwx.Cipher(basefwx.algorithms.AES(ephemeral_key), basefwx.modes.GCM(nonce)).encryptor()
+    encryptor = basefwx.Cipher(
+        basefwx.algorithms.AES(payload_aead_key),
+        basefwx.modes.GCM(nonce),
+    ).encryptor()
     if aad:
         encryptor.authenticate_additional_data(aad)
     chunk_size = 1 << 20
@@ -197,27 +353,32 @@ def encryptAES(plaintext: str, user_key: 'basefwx.typing.Union[str, bytes, bytea
     tag = encryptor.tag
     ciphertext = nonce + b''.join(cipher_chunks) + tag
     payload = len(metadata_bytes).to_bytes(4, 'big') + metadata_bytes + ciphertext
-
-    def int_to_4(i):
-        return i.to_bytes(4, byteorder='big', signed=False)
-    blob = b''
-    blob += int_to_4(len(ephemeral_enc_user)) + ephemeral_enc_user
-    blob += int_to_4(len(master_payload)) + master_payload
-    blob += int_to_4(len(payload)) + payload
+    blob = basefwx._pack_length_prefixed(
+        ephemeral_enc_user, master_payload, payload
+    )
     basefwx._del('ephemeral_key')
+    basefwx._del('payload_aead_key')
+    basefwx._del('payload_obf_key')
     basefwx._del('user_derived_key')
     basefwx._del('kem_shared')
     basefwx._del('payload_bytes')
     return blob
 
 
-def decryptAES(encrypted_blob: bytes, key: 'basefwx.typing.Union[str, bytes, bytearray, memoryview]'='', use_master: bool=True, *, master_public_key: 'basefwx.typing.Optional[bytes]'=None, allow_legacy: 'basefwx.typing.Optional[bool]'=None, progress_callback: 'basefwx.typing.Optional[basefwx.typing.Callable[[int, int], None]]'=None) -> str:
+def decryptAES(encrypted_blob: bytes, key: 'basefwx.typing.Union[str, bytes, bytearray, memoryview]'='', use_master: bool=False, *, master_public_key: 'basefwx.typing.Optional[bytes]'=None, allow_legacy: 'basefwx.typing.Optional[bool]'=None, progress_callback: 'basefwx.typing.Optional[basefwx.typing.Callable[[int, int], None]]'=None) -> str:
     key = basefwx._resolve_password(key, use_master=use_master)
-    basefwx.sys.set_int_max_str_digits(2000000000)
+    if len(encrypted_blob) > basefwx.LENGTH_PREFIXED_MAX:
+        raise ValueError('Length-prefixed blob exceeds 64 MiB total cap')
 
     def read_chunk(in_bytes, offset):
+        if offset < 0 or offset + 4 > len(in_bytes):
+            raise ValueError('Malformed length-prefixed blob: missing length')
         length = int.from_bytes(in_bytes[offset:offset + 4], 'big')
         offset += 4
+        if length > basefwx.LENGTH_PREFIXED_MAX:
+            raise ValueError('Length-prefixed part exceeds 64 MiB cap')
+        if length > len(in_bytes) - offset:
+            raise ValueError('Malformed length-prefixed blob: truncated chunk')
         chunk = in_bytes[offset:offset + length]
         offset += length
         return (chunk, offset)
@@ -228,11 +389,11 @@ def decryptAES(encrypted_blob: bytes, key: 'basefwx.typing.Union[str, bytes, byt
         if master_present:
             if not use_master:
                 raise ValueError('Master key required to decrypt this payload (legacy)')
-            if master_blob.startswith(basefwx.MASTER_EC_MAGIC):
+            if basefwx._is_ec_master_blob(master_blob):
                 kem_shared = basefwx._ec_kem_dec(master_blob)
             else:
                 private_key = basefwx._load_master_pq_private()
-                kem_shared = basefwx.ml_kem_768.decrypt(private_key, master_blob)
+                kem_shared = basefwx._kem_decrypt(private_key, master_blob)
             ephemeral_key = basefwx._kem_derive_key(kem_shared)
         elif user_present:
             if not key:
@@ -278,6 +439,8 @@ def decryptAES(encrypted_blob: bytes, key: 'basefwx.typing.Union[str, bytes, byt
     ephemeral_enc_user, offset = read_chunk(encrypted_blob, offset)
     ephemeral_enc_master, offset = read_chunk(encrypted_blob, offset)
     payload_blob, offset = read_chunk(encrypted_blob, offset)
+    if offset != len(encrypted_blob):
+        raise ValueError('Malformed length-prefixed blob: trailing data')
     master_blob_present = len(ephemeral_enc_master) > 0
     user_blob_present = len(ephemeral_enc_user) > 0
     if len(payload_blob) < 4:
@@ -286,6 +449,8 @@ def decryptAES(encrypted_blob: bytes, key: 'basefwx.typing.Union[str, bytes, byt
             return legacy_decrypt(ephemeral_enc_user, ephemeral_enc_master, payload_blob)
         raise ValueError('Ciphertext payload truncated')
     metadata_len = int.from_bytes(payload_blob[:4], 'big')
+    if metadata_len > basefwx.METADATA_MAX:
+        raise ValueError('Ciphertext metadata length exceeds 1 MiB cap')
     metadata_end = 4 + metadata_len
     if metadata_end > len(payload_blob):
         if legacy_allowed:
@@ -299,33 +464,40 @@ def decryptAES(encrypted_blob: bytes, key: 'basefwx.typing.Union[str, bytes, byt
         metadata_blob = ''
     aad = metadata_bytes if metadata_bytes else b''
     meta_info = basefwx._decode_metadata(metadata_blob) if metadata_blob else {}
-    obf_hint = (meta_info.get('ENC-OBF') or 'yes').lower()
-    should_deobfuscate = basefwx.ENABLE_OBFUSCATION and obf_hint != 'no'
+    key_separation = meta_info.get('ENC-KSEP')
+    if key_separation not in (None, '', 'v1'):
+        raise ValueError('Unsupported payload key-separation version')
+    use_derived_keys = key_separation == 'v1'
+    obf_hint = basefwx._require_payload_obfuscation_mode(
+        meta_info.get('ENC-OBF')
+    )
+    should_deobfuscate = obf_hint != 'no'
     fast_obf = should_deobfuscate and obf_hint == 'fast'
 
-    def _parse_int(value: 'basefwx.typing.Any', default: 'basefwx.typing.Optional[int]') -> 'basefwx.typing.Optional[int]':
-        if value is None:
-            return default
-        try:
-            return int(value)
-        except (TypeError, ValueError):
-            return default
-    kdf_hint = (meta_info.get('ENC-KDF') or basefwx.USER_KDF or 'argon2id').lower()
-    kdf_iter_hint = _parse_int(meta_info.get('ENC-KDF-ITER'), basefwx.USER_KDF_ITERATIONS)
-    argon2_time_hint = _parse_int(meta_info.get('ENC-ARGON2-TC'), None)
-    argon2_mem_hint = _parse_int(meta_info.get('ENC-ARGON2-MEM'), None)
-    argon2_par_hint = _parse_int(meta_info.get('ENC-ARGON2-PAR'), None)
+    wire_kdf_hint = meta_info.get('ENC-KDF')
+    kdf_hint = (
+        basefwx._resolve_kdf_label(wire_kdf_hint, peer=True)
+        if wire_kdf_hint
+        else basefwx._resolve_kdf_label(None)
+    )
+    kdf_iter_hint = basefwx._parse_peer_pbkdf2_iterations(
+        meta_info.get('ENC-KDF-ITER'), basefwx.USER_KDF_ITERATIONS
+    )
+    argon2_time_hint = basefwx._parse_peer_decimal(
+        meta_info.get('ENC-ARGON2-TC'), 'ENC-ARGON2-TC',
+        basefwx.ARGON2_TIME_COST_MAX,
+    )
+    argon2_mem_hint = basefwx._parse_peer_decimal(
+        meta_info.get('ENC-ARGON2-MEM'), 'ENC-ARGON2-MEM',
+        basefwx.ARGON2_MEMORY_COST_MAX,
+    )
+    argon2_par_hint = basefwx._parse_peer_decimal(
+        meta_info.get('ENC-ARGON2-PAR'), 'ENC-ARGON2-PAR',
+        basefwx.ARGON2_PARALLELISM_MAX,
+    )
     ciphertext = payload_blob[metadata_end:]
-    if master_blob_present:
-        if not use_master:
-            raise ValueError('Master key required to decrypt this payload')
-        if ephemeral_enc_master.startswith(basefwx.MASTER_EC_MAGIC):
-            kem_shared = basefwx._ec_kem_dec(ephemeral_enc_master)
-        else:
-            private_key = basefwx._load_master_pq_private()
-            kem_shared = basefwx.ml_kem_768.decrypt(private_key, ephemeral_enc_master)
-        ephemeral_key = basefwx._kem_derive_key(kem_shared)
-    elif user_blob_present:
+
+    def _unwrap_with_user() -> bytes:
         if not key:
             raise ValueError('User password required to decrypt this payload')
         min_len = basefwx.USER_KDF_SALT_SIZE + 13
@@ -334,25 +506,72 @@ def decryptAES(encrypted_blob: bytes, key: 'basefwx.typing.Union[str, bytes, byt
         user_salt = ephemeral_enc_user[:basefwx.USER_KDF_SALT_SIZE]
         wrapped_ephemeral = ephemeral_enc_user[basefwx.USER_KDF_SALT_SIZE:]
         user_derived_key, _ = basefwx._derive_user_key(key, salt=user_salt, iterations=kdf_iter_hint or basefwx.USER_KDF_ITERATIONS, kdf=kdf_hint, argon2_time_cost=argon2_time_hint, argon2_memory_cost=argon2_mem_hint, argon2_parallelism=argon2_par_hint)
+        return basefwx._aead_decrypt(user_derived_key, wrapped_ephemeral, aad)
+
+    def _unwrap_user_with_legacy_policy() -> bytes:
         try:
-            ephemeral_key = basefwx._aead_decrypt(user_derived_key, wrapped_ephemeral, aad)
+            return _unwrap_with_user()
         except basefwx.InvalidTag as exc:
             if legacy_allowed:
                 _confirm_legacy_fallback('User-branch AEAD authentication failed; attempting legacy CBC decrypt')
-                return legacy_decrypt(ephemeral_enc_user, ephemeral_enc_master, payload_blob)
+                raise _LegacyUserFallback(
+                    legacy_decrypt(ephemeral_enc_user, ephemeral_enc_master, payload_blob)
+                )
             raise ValueError('User branch authentication failed; incorrect password or tampering') from exc
-    else:
-        if legacy_allowed:
-            _confirm_legacy_fallback('Ciphertext missing key transport data; AEAD decode unavailable')
-            return legacy_decrypt(ephemeral_enc_user, ephemeral_enc_master, payload_blob)
-        raise ValueError('Ciphertext missing key transport data')
+
+    class _LegacyUserFallback(Exception):
+        def __init__(self, plaintext: str):
+            super().__init__('legacy user fallback completed')
+            self.plaintext = plaintext
+
+    try:
+        if master_blob_present and use_master:
+            try:
+                if basefwx._is_ec_master_blob(ephemeral_enc_master):
+                    if basefwx._env_enabled('BASEFWX_PQ_STRICT') or basefwx._env_enabled(
+                        'BASEFWX_PQ_ONLY'
+                    ):
+                        raise ValueError('EC master blobs are disabled in PQ strict mode')
+                    kem_shared = basefwx._ec_kem_dec(ephemeral_enc_master)
+                else:
+                    private_key = basefwx._load_master_pq_private()
+                    kem_shared = basefwx._kem_decrypt(private_key, ephemeral_enc_master)
+                ephemeral_key = basefwx._kem_derive_key(kem_shared)
+            except Exception:
+                if user_blob_present and key:
+                    ephemeral_key = _unwrap_user_with_legacy_policy()
+                else:
+                    raise
+        elif master_blob_present and not use_master:
+            if user_blob_present and key:
+                ephemeral_key = _unwrap_user_with_legacy_policy()
+            else:
+                raise ValueError('Master key required to decrypt this payload')
+        elif user_blob_present:
+            ephemeral_key = _unwrap_user_with_legacy_policy()
+        else:
+            if legacy_allowed:
+                _confirm_legacy_fallback('Ciphertext missing key transport data; AEAD decode unavailable')
+                return legacy_decrypt(ephemeral_enc_user, ephemeral_enc_master, payload_blob)
+            raise ValueError('Ciphertext missing key transport data')
+    except _LegacyUserFallback as fallback:
+        return fallback.plaintext
     try:
         if len(ciphertext) < basefwx.AEAD_NONCE_LEN + basefwx.AEAD_TAG_LEN:
             raise ValueError('Ciphertext truncated')
         nonce = ciphertext[:basefwx.AEAD_NONCE_LEN]
         tag = ciphertext[-basefwx.AEAD_TAG_LEN:]
         cipher_body = ciphertext[basefwx.AEAD_NONCE_LEN:-basefwx.AEAD_TAG_LEN]
-        decryptor_ctx = basefwx.Cipher(basefwx.algorithms.AES(ephemeral_key), basefwx.modes.GCM(nonce, tag)).decryptor()
+        aead_key = (
+            basefwx._hkdf_sha256(
+                ephemeral_key,
+                info=basefwx.FWXAES_PAYLOAD_AEAD_INFO,
+                length=32,
+            )
+            if use_derived_keys
+            else ephemeral_key
+        )
+        decryptor_ctx = basefwx.Cipher(basefwx.algorithms.AES(aead_key), basefwx.modes.GCM(nonce, tag)).decryptor()
         if aad:
             decryptor_ctx.authenticate_additional_data(aad)
         chunk_size = 1 << 20
@@ -373,7 +592,16 @@ def decryptAES(encrypted_blob: bytes, key: 'basefwx.typing.Union[str, bytes, byt
             return legacy_decrypt(ephemeral_enc_user, ephemeral_enc_master, payload_blob)
         raise ValueError('AEAD authentication failed; ciphertext or metadata tampered') from exc
     if should_deobfuscate:
-        payload_bytes = basefwx._deobfuscate_bytes(payload_bytes, ephemeral_key, fast=fast_obf)
+        obf_key = (
+            basefwx._hkdf_sha256(
+                ephemeral_key,
+                info=basefwx.FWXAES_PAYLOAD_OBF_INFO,
+                length=32,
+            )
+            if use_derived_keys
+            else ephemeral_key
+        )
+        payload_bytes = basefwx._deobfuscate_bytes(payload_bytes, obf_key, fast=fast_obf)
     plaintext = payload_bytes.decode('utf-8')
     header_blob, _ = basefwx._split_metadata(plaintext)
     if metadata_blob and header_blob and (header_blob != metadata_blob):

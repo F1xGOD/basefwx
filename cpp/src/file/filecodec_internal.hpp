@@ -39,31 +39,6 @@ struct StreamCipherLayout {
     std::uint64_t body_len = 0;
 };
 
-class TempFileCleanup {
-public:
-    explicit TempFileCleanup(std::filesystem::path path)
-        : path_(std::move(path)) {}
-
-    TempFileCleanup(const TempFileCleanup&) = delete;
-    TempFileCleanup& operator=(const TempFileCleanup&) = delete;
-
-    ~TempFileCleanup() {
-        if (!active_) {
-            return;
-        }
-        std::error_code ec;
-        std::filesystem::remove(path_, ec);
-    }
-
-    void Dismiss() noexcept {
-        active_ = false;
-    }
-
-private:
-    std::filesystem::path path_;
-    bool active_ = true;
-};
-
 class AesGcmEncryptor {
 public:
     AesGcmEncryptor(const Bytes& key, const Bytes& nonce, const Bytes& aad) {
@@ -198,6 +173,8 @@ std::optional<Bytes> TryLoadEcPublic(bool create_if_missing);
 
 PayloadKeys DerivePayloadKeys(const Bytes& root_key);
 
+bool UsesDerivedPayloadKeys(const basefwx::metadata::MetadataMap& meta);
+
 Bytes ReadFileBytes(const std::filesystem::path& path);
 
 void WriteFileBytes(const std::filesystem::path& path, const Bytes& data);
@@ -211,6 +188,10 @@ std::string ToString(const Bytes& data);
 std::string ResolveKdfLabel(const basefwx::pb512::KdfOptions& kdf);
 
 std::optional<std::uint32_t> ParseUint32(const std::string& value);
+std::optional<std::uint32_t> ParsePeerPbkdf2Iterations(const std::string& value);
+std::string MasterKemLabel(const std::optional<Bytes>& pq_public_key,
+                           const std::optional<Bytes>& ec_public_key,
+                           bool use_master);
 
 std::pair<std::string, std::string> SplitMetadata(const std::string& payload);
 
@@ -233,14 +214,39 @@ void ThrowIfInterrupted();
 
 std::uint64_t TellPosOrThrow(std::istream& stream);
 
+std::uint64_t RemainingFileBytes(const std::filesystem::path& input,
+                                 std::istream& stream);
+
+void RequireAvailableLength(const std::filesystem::path& input,
+                            std::istream& stream,
+                            std::uint32_t length,
+                            std::uint64_t maximum,
+                            std::string_view field);
+
+void RequireHeaderLengthTotal(std::uint64_t total);
+
 StreamCipherLayout ResolveStreamCipherLayout(const std::filesystem::path& input,
                                              std::istream& stream,
                                              std::uint32_t encoded_payload_len,
                                              std::uint32_t metadata_len);
 
+Bytes RecoverPayloadKey(const Bytes& user_blob,
+                        const Bytes& master_blob,
+                        const std::string& password,
+                        bool use_master,
+                        const Bytes& metadata_bytes,
+                        const std::string& kdf_label,
+                        std::optional<std::uint32_t> kdf_iterations,
+                        std::optional<std::uint32_t> argon2_time,
+                        std::optional<std::uint32_t> argon2_mem,
+                        std::optional<std::uint32_t> argon2_par,
+                        const basefwx::pb512::KdfOptions& kdf);
+
 Bytes EncryptAesPayload(const std::string& plaintext,
                         const std::string& password,
                         bool use_master,
+                        const std::optional<Bytes>& pq_public_key,
+                        const std::optional<Bytes>& ec_public_key,
                         const std::string& metadata_blob,
                         const basefwx::pb512::KdfOptions& kdf,
                         std::uint32_t kdf_iterations,
@@ -254,7 +260,6 @@ std::string DecryptAesPayload(const Bytes& blob,
                               const std::string& password,
                               bool use_master,
                               const basefwx::pb512::KdfOptions& kdf,
-                              bool obfuscate,
                               std::string* metadata_out);
 
 bool EnableAead(const FileOptions& options);
@@ -267,7 +272,21 @@ bool UseFastObfuscation(std::uint64_t length);
 
 std::string ObfMode(bool obfuscate, bool fast);
 
+std::string RequirePayloadObfuscationMode(std::string_view mode);
+
 std::optional<std::string> PeekMetadataBlob(const std::filesystem::path& input);
+
+std::string B512DecodeFileStream(
+    const std::filesystem::path& input,
+    const std::string& password,
+    const FileOptions& options,
+    const basefwx::pb512::KdfOptions& kdf);
+
+std::string Pb512DecodeFileStream(
+    const std::filesystem::path& input,
+    const std::string& password,
+    const FileOptions& options,
+    const basefwx::pb512::KdfOptions& kdf);
 
 std::string B512EncodeFile(const std::string& path,
                            const std::string& password,

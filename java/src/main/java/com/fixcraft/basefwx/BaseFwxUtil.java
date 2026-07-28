@@ -13,6 +13,8 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.AtomicMoveNotSupportedException;
+import java.nio.file.StandardCopyOption;
 import java.nio.file.attribute.FileAttribute;
 import java.nio.file.attribute.PosixFilePermission;
 import java.nio.file.attribute.PosixFilePermissions;
@@ -29,6 +31,54 @@ final class BaseFwxUtil {
             return tempPath.toFile();
         } catch (UnsupportedOperationException e) {
             return File.createTempFile(prefix, suffix);
+        }
+    }
+
+    static File createPrivateSiblingTempFile(
+            File target, String prefix, String suffix)
+            throws IOException {
+        File absolute = target.getAbsoluteFile();
+        Path parent = absolute.toPath().getParent();
+        if (parent == null) {
+            throw new IOException(
+                    "Output path has no parent directory");
+        }
+        Files.createDirectories(parent);
+        try {
+            FileAttribute<?> attr =
+                    PosixFilePermissions.asFileAttribute(
+                            EnumSet.of(
+                                    PosixFilePermission.OWNER_READ,
+                                    PosixFilePermission.OWNER_WRITE));
+            return Files.createTempFile(
+                    parent, prefix, suffix, attr).toFile();
+        } catch (UnsupportedOperationException exc) {
+            File temp = File.createTempFile(
+                    prefix, suffix, parent.toFile());
+            if ((!temp.canRead() && !temp.setReadable(true, true))
+                    || (!temp.canWrite()
+                        && !temp.setWritable(true, true))) {
+                temp.delete();
+                throw new IOException(
+                        "Temporary file is not owner-usable");
+            }
+            return temp;
+        }
+    }
+
+    static void commitAuthenticatedFile(
+            File temp, File target) throws IOException {
+        try {
+            Files.move(
+                    temp.toPath(),
+                    target.toPath(),
+                    StandardCopyOption.ATOMIC_MOVE,
+                    StandardCopyOption.REPLACE_EXISTING);
+        } catch (AtomicMoveNotSupportedException exc) {
+            Files.move(
+                    temp.toPath(),
+                    target.toPath(),
+                    StandardCopyOption.REPLACE_EXISTING);
         }
     }
 

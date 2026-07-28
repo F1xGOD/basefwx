@@ -17,6 +17,14 @@ class _LazyEngine:
 
 basefwx = _LazyEngine()
 
+
+def _require_payload_obfuscation_mode(value: object) -> str:
+    mode = str(value or 'yes').strip().lower()
+    if mode not in {'yes', 'no', 'fast'}:
+        raise ValueError('Unsupported payload obfuscation mode')
+    return mode
+
+
 def _obfuscate_bytes(data: bytes, ephemeral_key: bytes, *, fast: bool=False) -> bytes:
     if not data:
         return data
@@ -161,9 +169,16 @@ class _StreamObfuscator:
     def for_password(cls, password: 'basefwx.typing.Union[str, bytes, bytearray, memoryview]', salt: bytes, fast: bool=False) -> '_StreamObfuscator':
         if not password:
             raise ValueError('Password required for streaming obfuscation')
+        return cls.for_key(basefwx._coerce_password_bytes(password), salt, fast)
+
+    @classmethod
+    def for_key(cls, secret: 'basefwx.typing.Union[bytes, bytearray, memoryview]', salt: bytes, fast: bool=False) -> '_StreamObfuscator':
+        secret_bytes = bytes(secret)
+        if not secret_bytes:
+            raise ValueError('Streaming obfuscation key must not be empty')
         if len(salt) < cls._SALT_LEN:
             raise ValueError('Streaming obfuscation salt must be at least 16 bytes')
-        base_material = basefwx._coerce_password_bytes(password) + salt
+        base_material = secret_bytes + salt
         mask_key = basefwx._hkdf_sha256(base_material, info=basefwx.STREAM_INFO_KEY, length=32)
         iv = basefwx._hkdf_sha256(base_material, info=basefwx.STREAM_INFO_IV, length=16)
         perm_material = basefwx._hkdf_sha256(base_material, info=basefwx.STREAM_INFO_PERM, length=32)
@@ -254,8 +269,12 @@ class _StreamObfuscator:
         return bytes(buffer)
 
     @classmethod
-    def encode_file(cls, src_path: 'basefwx.pathlib.Path', dst_handle: 'basefwx.typing.Optional[basefwx.typing.Any]', password: str, salt: bytes, *, chunk_size: int, fast: bool=False, forward_chunk: 'basefwx.typing.Callable[[bytes], None]', progress_cb: 'basefwx.typing.Optional[basefwx.typing.Callable[[int, int], None]]'=None) -> int:
-        encoder = cls.for_password(password, salt, fast=fast)
+    def encode_file(cls, src_path: 'basefwx.pathlib.Path', dst_handle: 'basefwx.typing.Optional[basefwx.typing.Any]', password: str, salt: bytes, *, chunk_size: int, fast: bool=False, forward_chunk: 'basefwx.typing.Callable[[bytes], None]', progress_cb: 'basefwx.typing.Optional[basefwx.typing.Callable[[int, int], None]]'=None, key: 'basefwx.typing.Optional[basefwx.typing.Union[bytes, bytearray, memoryview]]'=None) -> int:
+        encoder = (
+            cls.for_key(key, salt, fast=fast)
+            if key is not None
+            else cls.for_password(password, salt, fast=fast)
+        )
         total = src_path.stat().st_size
         processed = 0
         with open(src_path, 'rb') as src:

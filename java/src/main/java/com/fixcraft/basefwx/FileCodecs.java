@@ -38,6 +38,10 @@ final class FileCodecs {
         return FileCodecObfuscation.payloadObfuscationEnabled();
     }
 
+    static String requirePayloadObfuscationMode(String raw) {
+        return FileCodecObfuscation.requirePayloadObfuscationMode(raw);
+    }
+
     static boolean perfModeEnabled() {
         return FileCodecObfuscation.perfModeEnabled();
     }
@@ -54,8 +58,16 @@ final class FileCodecs {
         return FileCodecKdf.resolveKdfLabel(label);
     }
 
-    static int parseMetadataInt(String raw, int fallback) {
-        return FileCodecMetadata.parseMetadataInt(raw, fallback);
+    static String resolvePeerKdfLabel(String label) {
+        return FileCodecKdf.resolvePeerKdfLabel(label);
+    }
+
+    static int parsePeerPbkdf2Iterations(String raw, int fallback) {
+        return FileCodecMetadata.parsePeerPbkdf2Iterations(raw, fallback);
+    }
+
+    static Integer parseMetadataIntOrNull(String raw) {
+        return FileCodecMetadata.parseMetadataIntOrNull(raw);
     }
 
     static int hardenPbkdf2Iterations(byte[] password, int iterations) {
@@ -218,21 +230,20 @@ final class FileCodecs {
         return FileCodecIo.concat(parts);
     }
 
-    static boolean startsWith(byte[] data, byte[] prefix) {
-        return FileCodecIo.startsWith(data, prefix);
-    }
-
     static String buildMetadata(String method,
                                             boolean strip,
                                             boolean useMaster,
+                                            String masterKem,
                                             String aead,
                                             String kdfLabel) {
-        return FileCodecMetadata.buildMetadata(method, strip, useMaster, aead, kdfLabel);
+        return FileCodecMetadata.buildMetadata(
+                method, strip, useMaster, masterKem, aead, kdfLabel);
     }
 
     static String buildMetadata(String method,
                                             boolean strip,
                                             boolean useMaster,
+                                            String masterKem,
                                             String aead,
                                             String kdfLabel,
                                             String mode,
@@ -243,7 +254,28 @@ final class FileCodecs {
                                             Integer argonMem,
                                             Integer argonPar,
                                             String pack) {
-        return FileCodecMetadata.buildMetadata(method, strip, useMaster, aead, kdfLabel, mode, obfuscation, obfMode, kdfIters, argonTime, argonMem, argonPar, pack);
+        return FileCodecMetadata.buildMetadata(method, strip, useMaster, masterKem, aead, kdfLabel, mode, obfuscation, obfMode, kdfIters, argonTime, argonMem, argonPar, pack);
+    }
+
+    static String buildMetadata(String method,
+                                            boolean strip,
+                                            boolean useMaster,
+                                            String masterKem,
+                                            String aead,
+                                            String kdfLabel,
+                                            String mode,
+                                            Boolean obfuscation,
+                                            String obfMode,
+                                            Integer kdfIters,
+                                            Integer argonTime,
+                                            Integer argonMem,
+                                            Integer argonPar,
+                                            String pack,
+                                            String keySeparation) {
+        return FileCodecMetadata.buildMetadata(
+                method, strip, useMaster, masterKem, aead, kdfLabel,
+                mode, obfuscation, obfMode, kdfIters, argonTime,
+                argonMem, argonPar, pack, keySeparation);
     }
 
     static String encodeJson(Map<String, String> map) {

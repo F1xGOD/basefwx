@@ -86,12 +86,18 @@ def _env_int(name: str) -> 'Optional[int]':
     return parsed
 
 
-def _perf_mode_enabled() -> bool:
-    raw = _os_module.getenv('BASEFWX_PERF')
-    if not raw:
+def _env_enabled_value(value: 'Optional[str]') -> bool:
+    if value is None:
         return False
-    value = raw.strip().lower()
-    return value in ('1', 'true', 'yes', 'on')
+    return value.strip().lower() in ('1', 'true', 'yes', 'on')
+
+
+def _env_enabled(name: str) -> bool:
+    return _env_enabled_value(_os_module.getenv(name))
+
+
+def _perf_mode_enabled() -> bool:
+    return _env_enabled('BASEFWX_PERF')
 
 
 def _use_fast_obfuscation(length: int) -> bool:
@@ -333,8 +339,16 @@ def _xor_keystream_inplace(buf: bytearray, key: bytes, info: bytes=OBF_INFO_MASK
         ctr += 1
 
 
-def _hkdf_sha256(key_material: bytes, *, length: int=32, info: bytes=b'basefwx.kem.v1') -> bytes:
-    hk = HKDF(algorithm=hashes.SHA256(), length=length, salt=None, info=info)
+def _hkdf_sha256(
+    key_material: bytes,
+    *,
+    length: int = 32,
+    info: bytes = b'basefwx.kem.v1',
+    salt: bytes | None = None,
+) -> bytes:
+    """HKDF-SHA256. ``salt=None`` / empty matches C++ empty-salt (HashLen zeros)."""
+    extract_salt = None if not salt else salt
+    hk = HKDF(algorithm=hashes.SHA256(), length=length, salt=extract_salt, info=info)
     return hk.derive(key_material)
 
 
@@ -413,4 +427,3 @@ def uhash513(string: str):
 def _lazy_b512encode(*args, **kwargs):
     from ..legacy import basefwx as _engine
     return _engine.b512encode(*args, **kwargs)
-

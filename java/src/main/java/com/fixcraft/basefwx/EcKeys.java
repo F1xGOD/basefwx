@@ -36,6 +36,8 @@ import javax.crypto.KeyAgreement;
 public final class EcKeys {
     private EcKeys() {}
 
+    private static final int MAX_KEY_BYTES = 4 * 1024 * 1024;
+
     public static boolean masterEcAutoCreateEnabled() {
         // 3.7.0: silent EC master autogeneration removed (mirrors the C++
         // change in keywrap.cpp). The env var stays referenced so anyone
@@ -47,19 +49,21 @@ public final class EcKeys {
     }
 
     public static PublicKey loadMasterPublic(boolean createIfMissing) {
+        // 3.7.0+: createIfMissing is ignored. Silent EC master
+        // autogeneration was removed; callers must provision keys
+        // out-of-band. The parameter remains so existing call sites compile.
         File envPath = resolveEnvPath(Constants.MASTER_EC_PUBLIC_ENV);
         File defaultPath = defaultPublicPath();
-        if (envPath != null && envPath.isFile()) {
+        if (envPath != null) {
+            if (!envPath.isFile()) {
+                throw new IllegalStateException(
+                        "Configured master EC public key is not a regular file: "
+                                + envPath);
+            }
             return readPublicKey(envPath);
         }
         if (defaultPath.isFile()) {
             return readPublicKey(defaultPath);
-        }
-        if (createIfMissing) {
-            KeyPair pair = generateKeyPair();
-            writePem(defaultPublicPath(), "PUBLIC KEY", pair.getPublic().getEncoded());
-            writePem(defaultPrivatePath(), "PRIVATE KEY", pair.getPrivate().getEncoded());
-            return pair.getPublic();
         }
         return null;
     }
@@ -67,7 +71,12 @@ public final class EcKeys {
     public static PrivateKey loadMasterPrivate() {
         File envPath = resolveEnvPath(Constants.MASTER_EC_PRIVATE_ENV);
         File defaultPath = defaultPrivatePath();
-        if (envPath != null && envPath.isFile()) {
+        if (envPath != null) {
+            if (!envPath.isFile()) {
+                throw new IllegalStateException(
+                        "Configured master EC private key is not a regular file: "
+                                + envPath);
+            }
             return readPrivateKey(envPath);
         }
         if (defaultPath.isFile()) {
@@ -96,22 +105,34 @@ public final class EcKeys {
         return new EcKemResult(masterBlob, shared);
     }
 
-    public static byte[] kemDecrypt(byte[] masterBlob, PrivateKey privateKey) {
+    public static boolean isEcMasterBlob(byte[] masterBlob) {
+        if (masterBlob == null) {
+            return false;
+        }
         int magicLen = Constants.MASTER_EC_MAGIC.length;
-        if (masterBlob.length < magicLen + 2) {
-            throw new IllegalArgumentException("Malformed EC master blob");
+        int expectedTotal = magicLen + 2 + Constants.MASTER_EC_POINT_LEN;
+        if (masterBlob.length != expectedTotal) {
+            return false;
         }
         for (int i = 0; i < magicLen; i++) {
             if (masterBlob[i] != Constants.MASTER_EC_MAGIC[i]) {
-                throw new IllegalArgumentException("Invalid EC master blob");
+                return false;
             }
         }
+        int length = ((masterBlob[magicLen] & 0xFF) << 8)
+                | (masterBlob[magicLen + 1] & 0xFF);
+        return length == Constants.MASTER_EC_POINT_LEN
+                && masterBlob[magicLen + 2] == 0x04;
+    }
+
+    public static byte[] kemDecrypt(byte[] masterBlob, PrivateKey privateKey) {
+        if (!isEcMasterBlob(masterBlob)) {
+            throw new IllegalArgumentException("Invalid EC master blob");
+        }
+        int magicLen = Constants.MASTER_EC_MAGIC.length;
         int length = ((masterBlob[magicLen] & 0xFF) << 8) | (masterBlob[magicLen + 1] & 0xFF);
         int start = magicLen + 2;
         int end = start + length;
-        if (end > masterBlob.length) {
-            throw new IllegalArgumentException("Truncated EC master blob");
-        }
         byte[] encoded = new byte[length];
         System.arraycopy(masterBlob, start, encoded, 0, length);
         ECPublicKey ephemeral = decodePublicKey(encoded);
@@ -304,11 +325,21 @@ public final class EcKeys {
     }
 
     private static byte[] readAllBytes(File file) throws IOException {
+        if (!file.isFile()) {
+            throw new IOException("Key path is not a regular file: " + file);
+        }
+        if (file.length() > MAX_KEY_BYTES) {
+            throw new IOException("Key file too large (>4 MiB): " + file);
+        }
         try (FileInputStream in = new FileInputStream(file);
              ByteArrayOutputStream out = new ByteArrayOutputStream()) {
             byte[] buffer = new byte[8192];
             int read;
             while ((read = in.read(buffer)) != -1) {
+                if (out.size() > MAX_KEY_BYTES - read) {
+                    throw new IOException(
+                            "Key file too large (>4 MiB): " + file);
+                }
                 out.write(buffer, 0, read);
             }
             return out.toByteArray();

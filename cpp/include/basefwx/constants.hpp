@@ -8,7 +8,7 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <limits>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 
@@ -26,6 +26,16 @@ inline constexpr std::size_t kUserKdfIterationsFallback = 32768;
 inline constexpr std::uint32_t kArgon2TimeCost = 4;
 inline constexpr std::uint32_t kArgon2MemoryCost = 1u << 16;
 inline constexpr std::uint32_t kArgon2Parallelism = 4;
+// Absolute ceilings for parameters parsed from untrusted peer metadata.
+// These are intentionally no higher than 16 passes / the 256 MiB heavy profile.
+inline constexpr std::uint32_t kArgon2TimeCostMax = 16;
+inline constexpr std::uint32_t kArgon2MemoryCostMax = 1u << 18;  // 256 MiB
+inline constexpr std::uint32_t kArgon2ParallelismMax = 16;
+inline constexpr std::uint32_t kPeerPbkdf2IterationsMax = 4000000;
+// Bounds for unauthenticated length-prefixed headers. Streaming payload bodies
+// may be larger, but their key-transport + metadata header may not.
+inline constexpr std::uint64_t kLengthPrefixedMax = 64ull * 1024ull * 1024ull;
+inline constexpr std::uint64_t kMetadataMax = 1ull * 1024ull * 1024ull;
 inline constexpr std::size_t kMinimumPasswordLength = 10;
 inline constexpr std::size_t kShortPasswordMin = 12;
 inline constexpr std::size_t kShortPbkdf2Iterations = 1000000;
@@ -45,18 +55,20 @@ inline std::uint32_t HeavyPbkdf2Iterations() {
     if (raw.empty()) {
         return kHeavyPbkdf2Iterations;
     }
+    std::uint64_t parsed = 0;
     try {
-        std::uint64_t parsed = static_cast<std::uint64_t>(std::stoul(raw));
-        if (parsed == 0) {
-            return kHeavyPbkdf2Iterations;
-        }
-        if (parsed > std::numeric_limits<std::uint32_t>::max()) {
-            return std::numeric_limits<std::uint32_t>::max();
-        }
-        return static_cast<std::uint32_t>(parsed);
+        parsed = static_cast<std::uint64_t>(std::stoul(raw));
     } catch (const std::exception&) {
         return kHeavyPbkdf2Iterations;
     }
+    if (parsed == 0) {
+        return kHeavyPbkdf2Iterations;
+    }
+    if (parsed > kPeerPbkdf2IterationsMax) {
+        throw std::invalid_argument(
+            "BASEFWX_HEAVY_PBKDF2_ITERS exceeds decoder maximum (4000000)");
+    }
+    return static_cast<std::uint32_t>(parsed);
 }
 
 // 3.7.0: parallelism is fixed at the compile-time constant (4 / 4) so
@@ -80,6 +92,7 @@ inline constexpr std::size_t kAeadNonceLen = 12;
 inline constexpr std::size_t kAeadTagLen = 16;
 inline constexpr std::size_t kEphemeralKeyLen = 32;
 inline constexpr std::size_t kUserWrapFixedLen = kUserKdfSaltSize + kAeadNonceLen + kAeadTagLen + kEphemeralKeyLen;
+inline constexpr std::size_t kFwxAesMaxKeyHeaderLen = 64u * 1024u;
 
 inline constexpr std::size_t kStreamChunkSize = 1u << 20;
 inline constexpr std::size_t kStreamThreshold = 250u * 1024u;
@@ -109,6 +122,7 @@ inline constexpr std::string_view kMasterPqAlgHigh = "ml-kem-1024";
 #endif
 inline constexpr std::string_view kMasterPqPublicB64 = BASEFWX_MASTER_PQ_PUB_B64;
 inline constexpr std::string_view kMasterEcMagic = "EC1";
+inline constexpr std::size_t kMasterEcPointLen = 133;
 
 inline constexpr std::string_view kStreamMagic = "STRMOBF1";
 
@@ -150,6 +164,8 @@ inline constexpr std::size_t kLiveNoncePrefixLen = 4;
 inline constexpr std::size_t kLiveFrameHeaderLen = 18;
 inline constexpr std::size_t kLiveHeaderFixedLen = 12;
 inline constexpr std::size_t kLiveMaxBody = 1u << 30;
+inline constexpr std::size_t kLiveMaxHeaderBody =
+    kLiveHeaderFixedLen + kFwxAesMaxKeyHeaderLen + 2u * 0xFFu;
 
 inline constexpr std::string_view kB512MaskInfo = "basefwx.b512.mask.v1";
 inline constexpr std::string_view kPb512MaskInfo = "basefwx.pb512.mask.v1";

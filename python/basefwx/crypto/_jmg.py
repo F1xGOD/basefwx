@@ -51,6 +51,9 @@ def _jmg_archive_info_for_profile(profile_id: int) -> bytes:
 def _jmg_build_key_header(user_blob: bytes, master_blob: bytes, *, security_profile: 'basefwx.typing.Union[str, int, None]'=None) -> bytes:
     profile_id = basefwx._jmg_security_profile_id(security_profile)
     payload = bytes([profile_id]) + basefwx._pack_length_prefixed(user_blob, master_blob)
+    header_min = len(basefwx.JMG_KEY_MAGIC) + 1 + 4
+    if len(payload) > basefwx.FWXAES_MAX_KEY_HEADER_LEN - header_min:
+        raise ValueError('JMG key header too large')
     return basefwx.JMG_KEY_MAGIC + bytes([basefwx.JMG_KEY_VERSION]) + len(payload).to_bytes(4, 'big') + payload
 
 
@@ -60,6 +63,8 @@ def _jmg_profile_from_key_header(blob: bytes) -> int:
         raise ValueError('Invalid JMG key header')
     version = blob[len(basefwx.JMG_KEY_MAGIC)]
     payload_len = int.from_bytes(blob[len(basefwx.JMG_KEY_MAGIC) + 1:len(basefwx.JMG_KEY_MAGIC) + 5], 'big')
+    if payload_len > basefwx.FWXAES_MAX_KEY_HEADER_LEN - header_min:
+        raise ValueError('JMG key header too large')
     header_len = header_min + payload_len
     if len(blob) != header_len:
         raise ValueError('Truncated JMG key header')
@@ -81,6 +86,8 @@ def _jmg_parse_key_header(blob: bytes, password: 'basefwx.typing.Union[str, byte
     if version not in {basefwx.JMG_KEY_VERSION_LEGACY, basefwx.JMG_KEY_VERSION}:
         raise ValueError('Unsupported JMG key header version')
     payload_len = int.from_bytes(blob[len(basefwx.JMG_KEY_MAGIC) + 1:len(basefwx.JMG_KEY_MAGIC) + 5], 'big')
+    if payload_len > basefwx.FWXAES_MAX_KEY_HEADER_LEN - header_min:
+        raise ValueError('JMG key header too large')
     header_len = header_min + payload_len
     if len(blob) < header_len:
         raise ValueError('Truncated JMG key header')

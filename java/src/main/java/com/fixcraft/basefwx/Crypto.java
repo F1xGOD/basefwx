@@ -15,6 +15,7 @@ import java.nio.charset.StandardCharsets;
 import java.security.GeneralSecurityException;
 import java.security.SecureRandom;
 import java.util.Arrays;
+import javax.crypto.AEADBadTagException;
 import javax.crypto.Cipher;
 import javax.crypto.Mac;
 import javax.crypto.SecretKeyFactory;
@@ -25,7 +26,26 @@ import javax.crypto.spec.SecretKeySpec;
 import org.bouncycastle.crypto.generators.Argon2BytesGenerator;
 import org.bouncycastle.crypto.params.Argon2Parameters;
 
+/**
+ * Shared one-shot crypto helpers for the Java runtime (HKDF, PBKDF2,
+ * Argon2id, AES-GCM/CTR, HMAC, SecureRandom). Callers outside this
+ * class should go through these entry points rather than opening a
+ * parallel {@code Cipher.getInstance} path. Chunked streaming codecs
+ * (fwxAES / file / media) may use JCA directly for throughput — see
+ * SECURITY.md "Crypto helper boundaries".
+ */
 public final class Crypto {
+    public static final class AuthenticationException
+            extends IllegalArgumentException {
+        AuthenticationException(String message) {
+            super(message);
+        }
+
+        AuthenticationException(String message, Throwable cause) {
+            super(message, cause);
+        }
+    }
+
     private static final SecureRandom RNG = new SecureRandom();
     private static final byte[] HKDF_ZERO_SALT = new byte[32];
     // ThreadLocals must be initialized before detectPbkdf2Compat() to avoid init-order bug
@@ -63,8 +83,21 @@ public final class Crypto {
         return out;
     }
 
+    /**
+     * HKDF-SHA256 extract+expand with the historical zero salt (HashLen zeros).
+     * Prefer {@link #hkdfSha256(byte[], byte[], byte[], int)} when a caller salt is available.
+     */
     public static byte[] hkdfSha256(byte[] keyMaterial, byte[] info, int length) {
-        byte[] prk = hmacSha256(HKDF_ZERO_SALT, keyMaterial);
+        return hkdfSha256(keyMaterial, null, info, length);
+    }
+
+    /**
+     * HKDF-SHA256 with an explicit extract salt. Empty/null salt matches the
+     * 3-arg overload and OpenSSL's HashLen-zero default (C++ reference).
+     */
+    public static byte[] hkdfSha256(byte[] keyMaterial, byte[] salt, byte[] info, int length) {
+        byte[] extractSalt = (salt == null || salt.length == 0) ? HKDF_ZERO_SALT : salt;
+        byte[] prk = hmacSha256(extractSalt, keyMaterial);
         return hkdfExpandRfc(prk, info == null ? new byte[0] : info, length);
     }
 
@@ -541,7 +574,8 @@ public final class Crypto {
             }
             // Negative = auth or arg failure. Throw the standard JCA-shaped
             // error so callers can keep their existing handling.
-            throw new IllegalArgumentException("Bad password or corrupted payload");
+            throw new AuthenticationException(
+                    "Bad password or corrupted payload");
         }
         try {
             Cipher cipher = AES_GCM_DEC.get();
@@ -577,6 +611,9 @@ public final class Crypto {
                 // Large data: byte[] fallback (can't use chunked DirectByteBuffer for GCM decrypt output)
                 return cipher.doFinal(ciphertext, ctOff, ctLen, out, outOff);
             }
+        } catch (AEADBadTagException exc) {
+            throw new AuthenticationException(
+                    "Bad password or corrupted payload", exc);
         } catch (GeneralSecurityException exc) {
             throw new IllegalArgumentException("Bad password or corrupted payload", exc);
         }

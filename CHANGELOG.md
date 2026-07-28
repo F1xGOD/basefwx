@@ -2,13 +2,167 @@
 
 ## [Unreleased]
 
+### Security
+- **Payload key separation (`ENC-KSEP=v1`).** New non-stripped
+  AES-heavy simple and direct-stream file payloads from C++, Java, and
+  Python derive independent AES-GCM and obfuscation subkeys from the
+  transported root with the exact HKDF-SHA256 labels
+  `basefwx.fwxaes.payload.aead.v1` and
+  `basefwx.fwxaes.payload.obf.v1`. An absent marker retains the legacy
+  root-key format; every decoder rejects unknown marker versions before
+  key recovery or payload crypto. The cross-runtime matrix now asserts
+  the marker, authenticated `ENC-OBF=yes|no` semantics, and byte equality
+  in all six C++/Java/Python producer-to-consumer directions for both
+  simple payloads and a deterministic payload larger than 3 MiB. The
+  resulting 24-lane gate also fixed direct-stream writers/readers that
+  previously applied obfuscation despite advertising `ENC-OBF=no`.
+  Decoders now follow the authenticated mode independently of local
+  writer settings and reject unknown `ENC-OBF` values.
+- **Authentication-before-publication.** Generic fwxAES stream/file and
+  media-trailer decryptors now authenticate into a private spool before
+  replacing or writing caller-visible destinations. Java no longer has
+  a 250 KiB in-memory decrypt ceiling. C++ sibling temps use exclusive
+  creation and owner-only permissions (including a protected
+  current-user DACL on Windows).
+- **Pre-auth allocation hardening.** Raw/live fwxAES and JMG trailer
+  parsers validate overflow-safe claimed layouts before allocation,
+  KDF, key recovery, or output. fwxAES/live/JMG key headers share a
+  64 KiB cap across all three runtimes.
+- **Peer PBKDF2 cost ceiling (C++/Java/Python).** Peer-controlled
+  `ENC-KDF-ITER` metadata and raw/streaming fwxAES/live iteration
+  fields now fail closed outside `1..4_000_000`, with strict decimal
+  parsing before KDF work. The 4,000,000 ceiling is twice the shared
+  2,000,000-iteration heavy writer profile, aligned with YUME, and
+  bounds unauthenticated CPU amplification.
+- **Peer Argon2 cost caps (C++/Java/Python).** Metadata
+  `ENC-ARGON2-TC/MEM/PAR` above shared maxima (16 / \(2^{18}\) KiB /
+  16) fail closed on decrypt/derive.
+- **Pre-auth metadata/resource caps.** Python uses one strict bounded
+  decimal parser for every peer KDF number, caps length-prefixed blobs
+  at 64 MiB and metadata at 1 MiB, and validates declared stream lengths
+  against the remaining file before allocating or invoking a KDF.
+- **Producer KDF ceiling.** C++, Java, and Python raw, stream, live, and
+  AES-heavy file writers reject PBKDF2 profiles above 4,000,000 before
+  key encapsulation, derivation, header construction, or output.
+- **Password minimum length parity.** Java/Python encrypt paths enforce
+  the C++ `kMinimumPasswordLength=10` policy (override with
+  `BASEFWX_ALLOW_WEAK_PASSWORD=1` / `BASEFWX_MIN_PASSWORD_LEN`).
+  Negative/invalid minimum overrides no longer weaken the default, and
+  Python stream/live/file entry points enforce the same policy.
+- **KEM selection is blob-derived.** Compatibility encrypt/decrypt
+  overloads infer ML-KEM-768 versus ML-KEM-1024 from standardized
+  key/ciphertext sizes, so recovery no longer depends on matching
+  `BASEFWX_MASTER_PQ_ALG` process state.
+- **Authenticated selected KEM metadata.** File writers retain the exact
+  selected PQ/EC public key; its actual type/size determines
+  `ENC-KEM=ml-kem-768`, `ml-kem-1024`, `EC`, or `none`.
+- **EC key loading fails closed.** C++/Java/Python cap EC public/private
+  files at 4 MiB, treat explicit paths as authoritative, and remove the
+  stray native Windows private-key fallback.
+- **Python Argon2 failure is terminal.** Allocation/runtime errors no
+  longer silently switch to PBKDF2 after Argon2 metadata was chosen.
+- **Python missing-Argon fallback retains the full PBKDF2 cost.** When
+  the Argon2 module is unavailable before KDF selection, Python chooses
+  PBKDF2 at the shared 600,000-iteration writer default; it no longer
+  applies the historical 32,768-iteration downgrade.
+- **Java PB512 stream permutation parity.** Java now truncates the
+  per-chunk HKDF expansion to the protocol-specified 16 bytes before
+  selecting its 64-bit permutation seed. Previously it selected the
+  seed from the untruncated 32-byte HMAC block, so non-fast Java streams
+  authenticated but decoded incompatibly with C++/Python once a chunk
+  entered the 4 KiB PCG permutation path.
+- **Java secret cleanup.** KEM shared secrets and loaded PQ private keys
+  are wiped in `finally` paths even when HKDF or decapsulation fails.
+- **Bounded Python master-key loading.** PQ/EC key files, overrides, and
+  zlib-decoded material are capped at 4 MiB, matching native/Java loaders
+  and rejecting compressed expansion bombs before KEM parsing.
+- **Java + Python password resolution parity with C++.** Bare password
+  strings are always literal; filesystem read requires an explicit
+  `file://` URI; `password://` forces a literal. Removes the silent
+  "string names an existing path → read that file" behavior that C++
+  already closed in 3.7.0. Unit tests cover the URI schemes on Java
+  and Python.
+- **Java `b512file` mask-wrap AAD parity.** `B512FileCodec` now uses
+  `MASK_AAD_B512FILE` (`"b512file"`) for `KeyWrap` prepare/recover,
+  matching C++ `kMaskAadB512File` and Python `aad=b'b512file'`. It
+  previously passed `B512_AEAD_INFO` (`"basefwx.b512file.v1"`), which
+  broke cross-runtime decrypt of the password wrap. Payload AEAD /
+  HKDF still use `B512_AEAD_INFO`.
+  Decode alone retries the exact Java-3.7 user-wrap AAD after a canonical
+  user-wrap authentication failure; parse/KDF/master/payload failures
+  never trigger the compatibility retry.
+- **Orig-tar privacy.** Debian orig archives now use Git-known
+  tracked/unignored files only and fail closed on private AI/agent/tool
+  state or secret-path names at any depth.
+
+### Added
+- **Phase 0 — protocol KATs.** `scripts/gen_protocol_kats.py` +
+  `cpp/tools/protocol_kat_gen.cpp` emit shared repository fixtures under
+  `testdata/protocol_kats/` (HKDF, X25519, ML-KEM-768/1024). The
+  generator is opt-in (`BASEFWX_BUILD_PROTOCOL_KAT_GEN=ON`) so it does
+  not pollute projects that consume BaseFWX through `add_subdirectory`.
+  Generation requires both ML-KEM sections before replacing either
+  fixture, stages same-directory temporary files, and provides
+  `--check-copies` to detect root/Java drift after an interrupted
+  two-file update.
+- **Phase A — explicit-salt HKDF.** Java
+  `Crypto.hkdfSha256(ikm, salt, info, len)` and Python
+  `hkdf_sha256(..., salt=)` match the C++ 4-arg overload (KAT-tested).
+- **Phase B — X25519.** Java `com.fixcraft.basefwx.X25519` and Python
+  `basefwx.x25519`: raw 32-byte keys, wipe helpers, reject
+  all-zero shared. Java uses BouncyCastle's lightweight API and remains
+  compatible with the module's Java 8 bytecode target. Not wired into
+  fwxAES. **Android sync-list note:**
+  add `X25519.java` to Yume Android `syncBasefwxJava` when that tree
+  is updated (out of this repo).
+- **Phase C — ML-KEM alg selection + GenerateKeyPair + 1024.** Java
+  `PQ.KemAlgorithm` / `generateKeyPair` / alg-parameterized
+  encrypt/decrypt; Python `generate_kem_keypair` /
+  `current_kem_algorithm` / `is_supported_kem_algorithm`. Default
+  generation/default reporting remains 768;
+  `BASEFWX_MASTER_PQ_ALG=ml-kem-1024` opts generation/reporting into 1024
+  but never changes a file by itself. Provisioned key size selects the
+  actual wrap and authenticated `ENC-KEM` value. BC Kyber
+  matches liboqs KATs for both sizes. CLI `version` prints
+  `pq=ml-kem-768|1024` instead of misleading `oqs=OFF`.
+
 ### Changed
+- **Phase D — file/wire parity.** Java pb512file Argon2-heavy +
+  streaming/PQ master wrap (prefer PQ via `KeyWrap`/`PQ`); master-wrap
+  defaults changed to off only for Python `encryptAES` / `decryptAES`,
+  fwxAES raw/stream/live constructors, and Java `FwxAES.Builder` /
+  one-argument `LiveCipher.LiveEncryptor`, matching the CLIs/C++
+  `basefwx::fwxaes::Options`. Compatibility-sensitive Python
+  b512/file/media/JMG, Java one-argument `LiveCipher.LiveDecryptor`,
+  and `FwxAESPureJava()` defaults remain unchanged; password
+  min-length parity (above).
+- **Phase E — docs.** COMPATIBILITY / SECURITY / CLI / CHANGELOG
+  advertise multi-lang builders after KAT gates.
 - **License policy**: replace the old GPL-3.0 + Additional Terms model
   with a file-level split — LGPL-3.0-or-later for core library/API/runtime
   and plugin ABI/SPI, GPL-3.0-or-later for standalone
   CLI/tools/benchmarks/scripts, and MIT OR Apache-2.0 for example plugin
   templates. Canonical texts live in `LICENCE`, `LICENSES/`, and
   `LICENSING.md`. Remaining tooling without headers was updated to match.
+- **Docs truth pass:** CLI password/master-key notes, SECURITY.md current
+  status (3.7.0 / 3.8.0-dev1), COMPATIBILITY Argon2/Python wording,
+  plugin README loader status, Yume-as-sibling man/EXPLAINED notes,
+  crypto helper boundary section in SECURITY.md; fix Java
+  ML-KEM/Argon2 CLI/README lies; `--use-master` naming; honest keyed
+  plugin host_secret status in SECURITY.md / THREAT_MODEL.md.
+- **Private hygiene:** ignore `AGENTS.md` / `CLAUDE.md` / `RULE.md` /
+  `.cursorrules` (and nested forms); exclude `.private/**` from branch
+  sync and Debian orig tarballs.
+- **Master recovery policy parity:** C++/Java/Python dual-wrapped
+  payloads use the independent password wrap when master recovery is
+  disabled or fails because a key is missing, wrong, corrupt, or
+  rejected by strict-PQ policy. Strict PQ mode refuses password-only /
+  EC fallback when a master wrap is requested for encryption.
+- **Environment boolean parity:** `BASEFWX_PQ_STRICT` /
+  `BASEFWX_PQ_ONLY` and the common Java `Constants.envEnabled` / Python
+  `_env_enabled` helpers used by the KDF/performance paths touched here
+  accept `1`, `true`, `yes`, or `on`, case-insensitively. Legacy flags
+  with exact-`1` contracts retain their existing semantics.
 
 ## [v3.8.0-dev1] - 2026-07-19
 

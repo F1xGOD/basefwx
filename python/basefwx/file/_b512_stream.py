@@ -23,16 +23,11 @@ def _b512_encode_path(path: 'basefwx.pathlib.Path', password: str, reporter: 'ba
     size_hint: 'basefwx.typing.Optional[basefwx.typing.Tuple[int, int]]' = None
     if reporter:
         reporter.update(file_index, 0.05, 'prepare', display_path)
-    pubkey_bytes, master_available = basefwx._resolve_master_usage(use_master and (not strip_metadata), master_pubkey)
-    use_master_effective = (use_master and (not strip_metadata)) and master_available
-    heavy_iters = basefwx.HEAVY_PBKDF2_ITERATIONS
-    heavy_argon_time = basefwx.HEAVY_ARGON2_TIME_COST if basefwx.hash_secret_raw is not None else None
-    heavy_argon_mem = basefwx.HEAVY_ARGON2_MEMORY_COST if basefwx.hash_secret_raw is not None else None
-    heavy_argon_par = basefwx.HEAVY_ARGON2_PARALLELISM if basefwx.hash_secret_raw is not None else None
-    heavy_iters = basefwx.HEAVY_PBKDF2_ITERATIONS
-    heavy_argon_time = basefwx.HEAVY_ARGON2_TIME_COST if basefwx.hash_secret_raw is not None else None
-    heavy_argon_mem = basefwx.HEAVY_ARGON2_MEMORY_COST if basefwx.hash_secret_raw is not None else None
-    heavy_argon_par = basefwx.HEAVY_ARGON2_PARALLELISM if basefwx.hash_secret_raw is not None else None
+    master_selection = basefwx._select_master_key(
+        use_master and (not strip_metadata), master_pubkey
+    )
+    pubkey_bytes = master_selection.pq_public
+    use_master_effective = master_selection.used_master
     heavy_iters = basefwx.HEAVY_PBKDF2_ITERATIONS
     heavy_argon_time = basefwx.HEAVY_ARGON2_TIME_COST if basefwx.hash_secret_raw is not None else None
     heavy_argon_mem = basefwx.HEAVY_ARGON2_MEMORY_COST if basefwx.hash_secret_raw is not None else None
@@ -50,9 +45,9 @@ def _b512_encode_path(path: 'basefwx.pathlib.Path', password: str, reporter: 'ba
     data_token = basefwx.b512encode(b64_payload, password, use_master=use_master_effective)
     if reporter:
         reporter.update(file_index, 0.65, 'b256', display_path)
-    kdf_used = (basefwx.USER_KDF or 'argon2id').lower()
+    kdf_used = basefwx._resolve_kdf_label(None)
     use_aead = basefwx.ENABLE_B512_AEAD
-    metadata_blob = basefwx._build_metadata('FWX512R', strip_metadata, use_master_effective, aead='AESGCM' if use_aead else 'NONE', kdf=kdf_used, pack=pack_flag or None)
+    metadata_blob = basefwx._build_metadata('FWX512R', strip_metadata, use_master_effective, master_kem=master_selection.kem_label, aead='AESGCM' if use_aead else 'NONE', kdf=kdf_used, pack=pack_flag or None)
     body = f'{ext_token}{basefwx.FWX_DELIM}{data_token}'
     payload = f'{metadata_blob}{basefwx.META_DELIM}{body}' if metadata_blob else body
     payload_bytes = payload.encode('utf-8')
@@ -62,7 +57,7 @@ def _b512_encode_path(path: 'basefwx.pathlib.Path', password: str, reporter: 'ba
     user_blob: bytes = b''
     master_blob: bytes = b''
     if use_aead:
-        mask_key, user_blob, master_blob, _ = basefwx._prepare_mask_key(password, use_master_effective, mask_info=basefwx.B512_FILE_MASK_INFO, require_password=not use_master_effective, aad=b'b512file')
+        mask_key, user_blob, master_blob, _ = basefwx._prepare_mask_key(password, use_master_effective, mask_info=basefwx.B512_FILE_MASK_INFO, require_password=not use_master_effective, aad=b'b512file', master_selection=master_selection)
         aead_key = basefwx._hkdf_sha256(mask_key, info=basefwx.B512_AEAD_INFO)
         ct_blob = basefwx._aead_encrypt(aead_key, payload_bytes, basefwx.B512_AEAD_INFO)
         output_bytes = basefwx._pack_length_prefixed(user_blob, master_blob, ct_blob)
@@ -74,7 +69,6 @@ def _b512_encode_path(path: 'basefwx.pathlib.Path', password: str, reporter: 'ba
     size_hint = (input_size, approx_size)
     if strip_metadata:
         basefwx._apply_strip_attributes(output_path)
-        basefwx.os.chmod(output_path, 0)
     basefwx._remove_input(path, keep_input, output_path)
     if reporter:
         reporter.update(file_index, 1.0, 'done', output_path, size_hint=size_hint)
@@ -99,13 +93,16 @@ def _b512_encode_path_stream(path: 'basefwx.pathlib.Path', password: str, report
     if not basefwx.ENABLE_B512_AEAD:
         raise RuntimeError('Streaming b512 encode requires AEAD mode')
     chunk_size = basefwx.STREAM_CHUNK_SIZE
-    pubkey_bytes, master_available = basefwx._resolve_master_usage(use_master and (not strip_metadata), master_pubkey)
-    use_master_effective = (use_master and (not strip_metadata)) and master_available
+    master_selection = basefwx._select_master_key(
+        use_master and (not strip_metadata), master_pubkey
+    )
+    pubkey_bytes = master_selection.pq_public
+    use_master_effective = master_selection.used_master
     stream_salt = basefwx._StreamObfuscator.generate_salt()
     ext_bytes = (path.suffix or '').encode('utf-8')
     fast_obf = not strip_metadata and basefwx._use_fast_obfuscation(input_size)
     obf_mode = 'fast' if fast_obf else 'yes'
-    metadata_blob = basefwx._build_metadata('FWX512R', strip_metadata, use_master_effective, mode='STREAM', obfuscation=obf_mode, pack=pack_flag or None)
+    metadata_blob = basefwx._build_metadata('FWX512R', strip_metadata, use_master_effective, master_kem=master_selection.kem_label, mode='STREAM', obfuscation=obf_mode, pack=pack_flag or None)
     metadata_bytes = metadata_blob.encode('utf-8') if metadata_blob else b''
     metadata_len = len(metadata_bytes)
     prefix_bytes = metadata_bytes + basefwx.META_DELIM.encode('utf-8') if metadata_blob else b''
@@ -118,7 +115,7 @@ def _b512_encode_path_stream(path: 'basefwx.pathlib.Path', password: str, report
     stream_header.extend(ext_bytes)
     stream_header_bytes = bytes(stream_header)
     plaintext_len = len(prefix_bytes) + len(stream_header_bytes) + input_size
-    mask_key, user_blob, master_blob, _ = basefwx._prepare_mask_key(password, use_master_effective, mask_info=basefwx.B512_FILE_MASK_INFO, require_password=not use_master_effective, aad=b'b512file')
+    mask_key, user_blob, master_blob, _ = basefwx._prepare_mask_key(password, use_master_effective, mask_info=basefwx.B512_FILE_MASK_INFO, require_password=not use_master_effective, aad=b'b512file', master_selection=master_selection)
     aead_key = basefwx._hkdf_sha256(mask_key, info=basefwx.B512_AEAD_INFO)
     len_user = len(user_blob)
     len_master = len(master_blob)
@@ -186,7 +183,6 @@ def _b512_encode_path_stream(path: 'basefwx.pathlib.Path', password: str, report
         cleanup_paths.remove(final_tmp_path)
         if strip_metadata:
             basefwx._apply_strip_attributes(output_path)
-            basefwx.os.chmod(output_path, 0)
         basefwx._remove_input(path, keep_input, output_path)
         if reporter:
             reporter.update(file_index, 1.0, 'done', output_path, size_hint=actual_hint)
@@ -211,6 +207,85 @@ def _b512_encode_path_stream(path: 'basefwx.pathlib.Path', password: str, report
         raise RuntimeError('Streaming b512 encode failed')
     return result
 
+
+def _preview_b512_length_prefixed_container(
+    path: 'basefwx.pathlib.Path',
+    input_size: int,
+) -> 'basefwx.typing.Optional[basefwx.typing.Tuple[str, basefwx.typing.Dict[str, basefwx.typing.Any]]]':
+    """Preview an exact three-part container without reading payloads into memory."""
+    if input_size < 12:
+        return None
+    with open(path, 'rb') as preview:
+        len_user_bytes = preview.read(4)
+        if len(len_user_bytes) != 4:
+            return None
+        len_user = int.from_bytes(len_user_bytes, 'big')
+        user_end = preview.tell() + len_user
+        if user_end > input_size - 8:
+            return None
+        preview.seek(user_end)
+
+        len_master_bytes = preview.read(4)
+        if len(len_master_bytes) != 4:
+            return None
+        len_master = int.from_bytes(len_master_bytes, 'big')
+        master_end = preview.tell() + len_master
+        if master_end > input_size - 4:
+            return None
+        preview.seek(master_end)
+
+        len_payload_bytes = preview.read(4)
+        if len(len_payload_bytes) != 4:
+            return None
+        len_payload = int.from_bytes(len_payload_bytes, 'big')
+        payload_start = preview.tell()
+        if payload_start + len_payload != input_size:
+            return None
+
+        # From this point the file is structurally an exact length-prefixed
+        # container. Framing policy failures must not become legacy text.
+        if len_user > basefwx.LENGTH_PREFIXED_MAX:
+            raise ValueError('Ciphertext user key transport length invalid')
+        if len_master > basefwx.LENGTH_PREFIXED_MAX:
+            raise ValueError('Ciphertext master key transport length invalid')
+        if len_user + len_master > basefwx.LENGTH_PREFIXED_MAX:
+            raise ValueError(
+                'Ciphertext key transport header exceeds 64 MiB cap'
+            )
+        if len_payload < 4:
+            return '', {}
+
+        metadata_len_bytes = preview.read(4)
+        if len(metadata_len_bytes) != 4:
+            return '', {}
+        metadata_len = int.from_bytes(metadata_len_bytes, 'big')
+        if (
+            metadata_len > basefwx.METADATA_MAX
+            or metadata_len > len_payload - 4
+        ):
+            return '', {}
+        if (
+            len_user + len_master + metadata_len
+            > basefwx.LENGTH_PREFIXED_MAX
+        ):
+            raise ValueError('Ciphertext header exceeds 64 MiB cap')
+        metadata_bytes = preview.read(metadata_len)
+        if len(metadata_bytes) != metadata_len:
+            return '', {}
+        try:
+            metadata_blob = (
+                metadata_bytes.decode('utf-8') if metadata_bytes else ''
+            )
+        except UnicodeDecodeError:
+            return '', {}
+        metadata = basefwx._decode_metadata(metadata_blob)
+        if not isinstance(metadata, dict):
+            return '', {}
+        if (metadata.get('ENC-MODE') or '').lower() != 'stream':
+            return '', {}
+        return metadata_blob, metadata
+
+
 def _b512_decode_path(path: 'basefwx.pathlib.Path', password: str, reporter: 'basefwx._ProgressReporter'=None, file_index: int=0, total_files: int=1, strip_metadata: bool=False, use_master: bool=True) -> 'basefwx.typing.Tuple[basefwx.pathlib.Path, int]':
     basefwx._ensure_existing_file(path)
     basefwx.os.chmod(path, 384)
@@ -220,34 +295,20 @@ def _b512_decode_path(path: 'basefwx.pathlib.Path', password: str, reporter: 'ba
         reporter.update(file_index, 0.1, 'read', path)
     metadata_blob_preview = ''
     meta_preview: 'basefwx.typing.Dict[str, basefwx.typing.Any]' = {}
+    recognized_binary = False
     if basefwx.ENABLE_B512_AEAD:
-        try:
-            with open(path, 'rb') as preview:
-                len_user_bytes = preview.read(4)
-                if len(len_user_bytes) == 4:
-                    len_user = int.from_bytes(len_user_bytes, 'big')
-                    preview.seek(len_user, basefwx.os.SEEK_CUR)
-                    len_master_bytes = preview.read(4)
-                    if len(len_master_bytes) == 4:
-                        len_master = int.from_bytes(len_master_bytes, 'big')
-                        preview.seek(len_master, basefwx.os.SEEK_CUR)
-                        len_payload_bytes = preview.read(4)
-                        if len(len_payload_bytes) == 4:
-                            len_payload = int.from_bytes(len_payload_bytes, 'big')
-                            if len_payload >= 4:
-                                metadata_len_bytes = preview.read(4)
-                                if len(metadata_len_bytes) == 4:
-                                    metadata_len = int.from_bytes(metadata_len_bytes, 'big')
-                                    metadata_bytes_preview = preview.read(metadata_len)
-                                    try:
-                                        metadata_blob_preview = metadata_bytes_preview.decode('utf-8') if metadata_bytes_preview else ''
-                                    except UnicodeDecodeError:
-                                        metadata_blob_preview = ''
-                                    meta_preview = basefwx._decode_metadata(metadata_blob_preview)
-        except Exception:
-            meta_preview = {}
+        preview_result = _preview_b512_length_prefixed_container(
+            path, input_size
+        )
+        if preview_result is not None:
+            metadata_blob_preview, meta_preview = preview_result
+            recognized_binary = True
     if (meta_preview.get('ENC-MODE') or '').lower() == 'stream':
         return basefwx._b512_decode_path_stream(path, password, reporter, file_index, strip_metadata, use_master, meta_preview, metadata_blob_preview, input_size=input_size)
+    if input_size > basefwx.LENGTH_PREFIXED_MAX:
+        raise ValueError(
+            'Non-stream ciphertext exceeds 64 MiB length-prefixed cap'
+        )
     raw_bytes = path.read_bytes()
     user_blob: bytes = b''
     master_blob: bytes = b''
@@ -255,16 +316,20 @@ def _b512_decode_path(path: 'basefwx.pathlib.Path', password: str, reporter: 'ba
     use_master_effective = use_master and (not strip_metadata)
     binary_mode = False
     try:
-        user_blob, master_blob, ct_blob = basefwx._unpack_length_prefixed(raw_bytes, 3)
+        user_blob, master_blob, ct_blob = basefwx._unpack_length_prefixed(
+            raw_bytes, 3
+        )
         binary_mode = True
     except ValueError:
+        if recognized_binary:
+            raise
         binary_mode = False
     if binary_mode:
         mask_key = None
         aead_key = None
         payload_bytes = None
         try:
-            mask_key = basefwx._recover_mask_key_from_blob(user_blob, master_blob, password, use_master_effective, mask_info=basefwx.B512_FILE_MASK_INFO, aad=b'b512file')
+            mask_key = basefwx._recover_mask_key_from_blob(user_blob, master_blob, password, use_master_effective, mask_info=basefwx.B512_FILE_MASK_INFO, aad=b'b512file', legacy_user_aad=basefwx.B512_AEAD_INFO)
             aead_key = basefwx._hkdf_sha256(mask_key, info=basefwx.B512_AEAD_INFO)
             payload_bytes = basefwx._aead_decrypt(aead_key, ct_blob, basefwx.B512_AEAD_INFO)
             content = payload_bytes.decode('utf-8')
@@ -333,6 +398,8 @@ def _b512_decode_path_stream(path: 'basefwx.pathlib.Path', password: str, report
             if len(len_user_bytes) < 4:
                 raise ValueError('Ciphertext payload truncated')
             len_user = int.from_bytes(len_user_bytes, 'big')
+            if len_user > basefwx.LENGTH_PREFIXED_MAX or len_user > input_size - handle.tell():
+                raise ValueError('Ciphertext user key transport length invalid')
             user_blob = handle.read(len_user)
             if len(user_blob) != len_user:
                 raise ValueError('Ciphertext payload truncated')
@@ -340,6 +407,12 @@ def _b512_decode_path_stream(path: 'basefwx.pathlib.Path', password: str, report
             if len(len_master_bytes) < 4:
                 raise ValueError('Ciphertext payload truncated')
             len_master = int.from_bytes(len_master_bytes, 'big')
+            if len_master > basefwx.LENGTH_PREFIXED_MAX or len_master > input_size - handle.tell():
+                raise ValueError('Ciphertext master key transport length invalid')
+            if len_user + len_master > basefwx.LENGTH_PREFIXED_MAX:
+                raise ValueError(
+                    'Ciphertext key transport header exceeds 64 MiB cap'
+                )
             master_blob = handle.read(len_master)
             if len(master_blob) != len_master:
                 raise ValueError('Ciphertext payload truncated')
@@ -354,6 +427,17 @@ def _b512_decode_path_stream(path: 'basefwx.pathlib.Path', password: str, report
             if len(metadata_len_bytes) < 4:
                 raise ValueError('Ciphertext payload truncated')
             metadata_len = int.from_bytes(metadata_len_bytes, 'big')
+            if (
+                metadata_len > basefwx.METADATA_MAX
+                or metadata_len > len_payload - 4
+                or metadata_len > input_size - handle.tell()
+            ):
+                raise ValueError('Ciphertext metadata length invalid')
+            if (
+                len_user + len_master + metadata_len
+                > basefwx.LENGTH_PREFIXED_MAX
+            ):
+                raise ValueError('Ciphertext header exceeds 64 MiB cap')
             metadata_bytes = handle.read(metadata_len)
             if len(metadata_bytes) != metadata_len:
                 raise ValueError('Ciphertext payload truncated')
@@ -378,7 +462,7 @@ def _b512_decode_path_stream(path: 'basefwx.pathlib.Path', password: str, report
             if len(tag) != basefwx.AEAD_TAG_LEN:
                 raise ValueError('Ciphertext payload truncated')
             handle.seek(cipher_body_start)
-            mask_key = basefwx._recover_mask_key_from_blob(user_blob, master_blob, password, use_master_effective, mask_info=basefwx.B512_FILE_MASK_INFO, aad=b'b512file')
+            mask_key = basefwx._recover_mask_key_from_blob(user_blob, master_blob, password, use_master_effective, mask_info=basefwx.B512_FILE_MASK_INFO, aad=b'b512file', legacy_user_aad=basefwx.B512_AEAD_INFO)
             aead_key = basefwx._hkdf_sha256(mask_key, info=basefwx.B512_AEAD_INFO)
             decryptor = basefwx.Cipher(basefwx.algorithms.AES(aead_key), basefwx.modes.GCM(nonce, tag)).decryptor()
             if metadata_bytes:
@@ -507,6 +591,8 @@ def _b512_decode_path_stream(path: 'basefwx.pathlib.Path', password: str, report
 def _aes_heavy_encode_path_stream(path: 'basefwx.pathlib.Path', password: str, reporter: 'basefwx._ProgressReporter'=None, file_index: int=0, strip_metadata: bool=False, use_master: bool=True, master_pubkey: 'basefwx.typing.Optional[bytes]'=None, pack_flag: str='', output_path: 'basefwx.typing.Optional[basefwx.pathlib.Path]'=None, display_path: 'basefwx.typing.Optional[basefwx.pathlib.Path]'=None, *, input_size: 'basefwx.typing.Optional[int]'=None, keep_input: bool=False) -> 'basefwx.typing.Tuple[basefwx.pathlib.Path, int]':
     basefwx._ensure_existing_file(path)
     basefwx._ensure_size_limit(path)
+    heavy_iters = basefwx.HEAVY_PBKDF2_ITERATIONS
+    basefwx._require_peer_pbkdf2_within_limits(heavy_iters)
     display_path = display_path or path
     output_path = output_path or path.with_suffix('.fwx')
     input_size = input_size if input_size is not None else path.stat().st_size
@@ -515,17 +601,42 @@ def _aes_heavy_encode_path_stream(path: 'basefwx.pathlib.Path', password: str, r
     if reporter:
         reporter.update(file_index, 0.05, 'prepare', display_path)
     chunk_size = basefwx.STREAM_CHUNK_SIZE
-    pubkey_bytes, master_available = basefwx._resolve_master_usage(use_master and (not strip_metadata), master_pubkey)
-    use_master_effective = (use_master and (not strip_metadata)) and master_available
-    kdf_used = (basefwx.USER_KDF or 'argon2id').lower()
-    heavy_iters = basefwx.HEAVY_PBKDF2_ITERATIONS
+    master_selection = basefwx._select_master_key(
+        use_master and (not strip_metadata), master_pubkey
+    )
+    pubkey_bytes = master_selection.pq_public
+    use_master_effective = master_selection.used_master
+    kdf_used = basefwx._resolve_kdf_label(None)
     heavy_argon_time = basefwx.HEAVY_ARGON2_TIME_COST if basefwx.hash_secret_raw is not None else None
     heavy_argon_mem = basefwx.HEAVY_ARGON2_MEMORY_COST if basefwx.hash_secret_raw is not None else None
     heavy_argon_par = basefwx.HEAVY_ARGON2_PARALLELISM if basefwx.hash_secret_raw is not None else None
     stream_salt = basefwx._StreamObfuscator.generate_salt()
-    fast_obf = not strip_metadata and basefwx._use_fast_obfuscation(input_size)
-    obf_mode = 'fast' if fast_obf else 'yes'
-    metadata_blob = basefwx._build_metadata('AES-HEAVY', strip_metadata, use_master_effective, kdf=kdf_used, mode='STREAM', obfuscation=obf_mode, kdf_iters=heavy_iters, argon2_time_cost=heavy_argon_time, argon2_memory_cost=heavy_argon_mem, argon2_parallelism=heavy_argon_par, pack=pack_flag or None)
+    obfuscate_payload = basefwx.ENABLE_OBFUSCATION
+    fast_obf = (
+        obfuscate_payload
+        and not strip_metadata
+        and basefwx._use_fast_obfuscation(input_size)
+    )
+    obf_mode = (
+        'no'
+        if not obfuscate_payload
+        else ('fast' if fast_obf else 'yes')
+    )
+    metadata_blob = basefwx._build_metadata(
+        'AES-HEAVY',
+        strip_metadata,
+        use_master_effective,
+        master_kem=master_selection.kem_label,
+        kdf=kdf_used,
+        mode='STREAM',
+        obfuscation=obf_mode,
+        kdf_iters=heavy_iters,
+        argon2_time_cost=heavy_argon_time,
+        argon2_memory_cost=heavy_argon_mem,
+        argon2_parallelism=heavy_argon_par,
+        pack=pack_flag or None,
+        key_separation='v1',
+    )
     metadata_bytes = metadata_blob.encode('utf-8') if metadata_blob else b''
     aad = metadata_bytes if metadata_bytes else b''
     prefix_bytes = b''
@@ -547,8 +658,15 @@ def _aes_heavy_encode_path_stream(path: 'basefwx.pathlib.Path', password: str, r
     if reporter:
         reporter.update(file_index, 0.12, 'stream-setup', display_path, size_hint=estimated_hint)
     if use_master_effective:
-        kem_ciphertext, kem_shared = basefwx.ml_kem_768.encrypt(pubkey_bytes)
-        master_payload = kem_ciphertext
+        if master_selection.pq_public is not None:
+            kem_ciphertext, kem_shared = basefwx._kem_encrypt(
+                master_selection.pq_public
+            )
+            master_payload = kem_ciphertext
+        else:
+            master_payload, kem_shared = basefwx._ec_kem_enc(
+                master_selection.ec_public
+            )
         ephemeral_key = basefwx._kem_derive_key(kem_shared)
     else:
         master_payload = b''
@@ -561,8 +679,37 @@ def _aes_heavy_encode_path_stream(path: 'basefwx.pathlib.Path', password: str, r
         ephemeral_enc_user = user_salt + wrapped_ephemeral
     else:
         ephemeral_enc_user = b''
+    key_separation = (
+        basefwx._decode_metadata(metadata_blob).get('ENC-KSEP')
+        if metadata_blob
+        else None
+    )
+    if key_separation not in (None, '', 'v1'):
+        raise ValueError('Unsupported payload key-separation version')
+    use_derived_keys = key_separation == 'v1'
+    payload_aead_key = (
+        basefwx._hkdf_sha256(
+            ephemeral_key,
+            info=basefwx.FWXAES_PAYLOAD_AEAD_INFO,
+            length=32,
+        )
+        if use_derived_keys
+        else ephemeral_key
+    )
+    payload_obf_key = (
+        basefwx._hkdf_sha256(
+            ephemeral_key,
+            info=basefwx.FWXAES_PAYLOAD_OBF_INFO,
+            length=32,
+        )
+        if use_derived_keys
+        else None
+    )
     nonce = basefwx.os.urandom(basefwx.AEAD_NONCE_LEN)
-    encryptor = basefwx.Cipher(basefwx.algorithms.AES(ephemeral_key), basefwx.modes.GCM(nonce)).encryptor()
+    encryptor = basefwx.Cipher(
+        basefwx.algorithms.AES(payload_aead_key),
+        basefwx.modes.GCM(nonce),
+    ).encryptor()
     if aad:
         encryptor.authenticate_additional_data(aad)
     temp_dir = basefwx.tempfile.TemporaryDirectory(prefix='basefwx-stream-', dir=str(output_path.parent))
@@ -610,7 +757,28 @@ def _aes_heavy_encode_path_stream(path: 'basefwx.pathlib.Path', password: str, r
             if prefix_bytes:
                 _write_plain(prefix_bytes)
             _write_plain(stream_header_bytes)
-            basefwx._StreamObfuscator.encode_file(path, None, password, stream_salt, chunk_size=chunk_size, fast=fast_obf, forward_chunk=_write_plain, progress_cb=lambda done, total: _obf_progress(done, total))
+            if obfuscate_payload:
+                basefwx._StreamObfuscator.encode_file(
+                    path,
+                    None,
+                    password,
+                    stream_salt,
+                    chunk_size=chunk_size,
+                    fast=fast_obf,
+                    forward_chunk=_write_plain,
+                    progress_cb=lambda done, total: _obf_progress(done, total),
+                    key=payload_obf_key,
+                )
+            else:
+                processed_input = 0
+                with open(path, 'rb') as source:
+                    while True:
+                        chunk = source.read(chunk_size)
+                        if not chunk:
+                            break
+                        _write_plain(chunk)
+                        processed_input += len(chunk)
+                        _obf_progress(processed_input, input_size)
             tail = encryptor.finalize()
             if tail:
                 cipher_tmp.write(tail)
@@ -627,7 +795,6 @@ def _aes_heavy_encode_path_stream(path: 'basefwx.pathlib.Path', password: str, r
         cleanup_paths.remove(cipher_tmp_path)
         if strip_metadata:
             basefwx._apply_strip_attributes(output_path)
-            basefwx.os.chmod(output_path, 0)
         basefwx._remove_input(path, keep_input, output_path)
         if reporter:
             reporter.update(file_index, 1.0, 'done', output_path, size_hint=actual_hint)
@@ -639,6 +806,8 @@ def _aes_heavy_encode_path_stream(path: 'basefwx.pathlib.Path', password: str, r
         return (output_path, actual_size)
     finally:
         basefwx._del('ephemeral_key')
+        basefwx._del('payload_aead_key')
+        basefwx._del('payload_obf_key')
         basefwx._del('user_derived_key')
         basefwx._del('kem_shared')
         for temp_path in cleanup_paths:

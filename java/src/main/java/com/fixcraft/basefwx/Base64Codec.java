@@ -55,8 +55,13 @@ public final class Base64Codec {
             return new byte[0];
         }
 
+        String canonical = input;
+        if (input.indexOf('-') >= 0 || input.indexOf('_') >= 0) {
+            canonical = input.replace('-', '+').replace('_', '/');
+        }
+
         try {
-            return (hasWhitespace ? MIME_DECODER : DECODER).decode(input);
+            return (hasWhitespace ? MIME_DECODER : DECODER).decode(canonical);
         } catch (IllegalArgumentException e) {
             // Wrap with our own exception message for consistency
             throw new IllegalArgumentException("Invalid base64 payload", e);
@@ -115,10 +120,12 @@ public final class Base64Codec {
     }
 
     private static boolean isBase64Char(char ch) {
-        return (ch >= 'A' && ch <= 'Z')
+            return (ch >= 'A' && ch <= 'Z')
             || (ch >= 'a' && ch <= 'z')
             || (ch >= '0' && ch <= '9')
             || ch == '+'
-            || ch == '/';
+            || ch == '/'
+            || ch == '-'
+            || ch == '_';
     }
 }

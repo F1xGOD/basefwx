@@ -6359,7 +6359,7 @@ compare_speed_block "pb512file" "pb512file_py_total" "pb512file_pypy_total" "pb5
 compare_speed_block "kFMe" "kfme_py_total" "kfme_pypy_total" "kfme_cpp_total" "kfme_java_total"
 compare_speed_block "kFAe" "kfae_py_total" "kfae_pypy_total" "kfae_cpp_total" "kfae_java_total"
 
-# --- 3.7.0 plugin smoke -------------------------------------------------
+# --- plugin ABI smoke ----------------------------------------------------
 # Verifies the blackbox plugin ABI end-to-end (build + dlopen + ServiceLoader
 # + cross-runtime parity) WITHOUT re-running every existing crypto test
 # with-and-without a plugin attached — that would double the suite runtime
@@ -6367,7 +6367,7 @@ compare_speed_block "kFAe" "kfae_py_total" "kfae_pypy_total" "kfae_cpp_total" "k
 # AEAD pipeline it wraps; once it round-trips here, it round-trips in
 # any encryption pipeline that loads it. Hash-only methods (hash512,
 # uhash513, bi512) intentionally have no plugin integration path.
-SMOKE_LABEL="plugin smoke (3.7.0)"
+SMOKE_LABEL="plugin ABI smoke"
 if [[ -x "$ROOT/scripts/plugin-smoke.sh" ]]; then
     announce_step "$SMOKE_LABEL"
     smoke_start_ns=$(date +%s%N)

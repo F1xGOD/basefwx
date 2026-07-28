@@ -337,12 +337,11 @@ worked-examples table — or open an issue.
 ## What 3.7.0 ships
 
 3.7.0 ships the plugin core end-to-end: the ABI header, the C++/Java/Python
-loaders, the wire-format plugin tag (`plugin_id` + position bits), the
-example plugin, the `basefwx-plugin-verify` tool, and the
-`basefwx-plugin-build new <name>` scaffolder. The pieces in this directory
-that read like "design only" notes (the verifier, the JVM/Python bridges)
-are still being wired in this same release cycle — they're separate files
-in the source tree, not separate version bumps.
+Profile-A loaders, the wire-format plugin tag (`plugin_id` + position bits),
+the example plugins, and the end-to-end smoke runner. The native Java JNI
+bridge, Java/Python Profile-B parity, `basefwx-plugin-verify` implementation
+(only `tools/plugin-verifier/DESIGN.md` exists), and a plugin scaffolding CLI
+remain deferred.
 
 ABI breaks, if any, will come with a `BASEFWX_PLUGIN_API_VERSION` bump.
 Plugin authors should hardcode `BASEFWX_PLUGIN_API_VERSION` from the

@@ -176,19 +176,17 @@ Compare: <https://github.com/F1xGOD/basefwx/compare/v3.7.0...main>
   all-zero shared-secret rejection.
 
 ### Notes
-- These new primitives are **C++-only in 3.8.0-dev1**. Java and Python
-  mirrors remain pending and must not be claimed until their provider-specific
-  encodings and cross-runtime known-answer tests are implemented. Android is
-  outside this YUME desktop slice, but the parity gap is explicit rather than
-  silently skipped.
+- At the initial 3.8.0-dev1 baseline these primitives were C++-only. The
+  current `[Unreleased]` tree adds the Java/Python mirrors and shared
+  cross-runtime KATs described above. Android remains a separate consumer and
+  must update its hard-coded Java source sync list before claiming parity.
 
 ## [v3.7.0] - 2026-06-26
 
 Compare: <https://github.com/F1xGOD/basefwx/compare/v3.6.4...v3.7.0>
 
-> **Release status (2026-06-26):** fwxAES/CLI plugin loader and wire-format
-> plugin tag are implemented on `main`. Tag `v3.7.0` only after remote
-> `test_all.sh` passes.
+> **Release status:** `v3.7.0` was tagged on 2026-06-26. The fwxAES/CLI plugin
+> loader and wire-format plugin tag shipped in that release.
 
 > The audit-driven hardening that briefly sat under `[v3.6.5]` in working
 > trees is rolled into 3.7.0 alongside the new **blackbox plugin** ABI.

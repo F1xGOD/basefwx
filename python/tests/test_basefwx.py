@@ -42,6 +42,7 @@ except ModuleNotFoundError as exc:  # pragma: no cover - dependency missing
 else:
     _IMPORT_ERROR = None
 
+TEST_PASSWORD = "basefwx-test-password"
 
 MASTER_PQ_SECRET_B64 = (
     "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"
@@ -147,8 +148,8 @@ class BaseFWXUnitTests(unittest.TestCase):
 
     def test_pb512_roundtrip_without_master(self):
         original = "PQ Ready"
-        cipher = basefwx.pb512encode(original, "pw", use_master=False)
-        plain = basefwx.pb512decode(cipher, "pw", use_master=False)
+        cipher = basefwx.pb512encode(original, TEST_PASSWORD, use_master=False)
+        plain = basefwx.pb512decode(cipher, TEST_PASSWORD, use_master=False)
         self.assertEqual(plain, original)
 
     def test_pb512_producer_uses_standard_base64_alphabet(self):
@@ -168,8 +169,8 @@ class BaseFWXUnitTests(unittest.TestCase):
 
     def test_b512_roundtrip_without_master(self):
         original = "Reversible" * 2
-        cipher = basefwx.b512encode(original, "pw", use_master=False)
-        plain = basefwx.b512decode(cipher, "pw", use_master=False)
+        cipher = basefwx.b512encode(original, TEST_PASSWORD, use_master=False)
+        plain = basefwx.b512decode(cipher, TEST_PASSWORD, use_master=False)
         self.assertEqual(plain, original)
 
     def test_n10_roundtrip_text(self):
@@ -392,7 +393,7 @@ class BaseFWXUnitTests(unittest.TestCase):
             warnings.simplefilter("always")
             basefwx.MediaCipher.encrypt_media(
                 str(src),
-                "pw",
+                TEST_PASSWORD,
                 output=str(enc),
                 keep_input=True,
             )
@@ -410,7 +411,7 @@ class BaseFWXUnitTests(unittest.TestCase):
         enc = self.tmp_path / "jmg_profile_v2_enc.png"
         basefwx.MediaCipher.encrypt_media(
             str(src),
-            "pw",
+            TEST_PASSWORD,
             output=str(enc),
             keep_input=True,
             archive_original=False,
@@ -422,14 +423,14 @@ class BaseFWXUnitTests(unittest.TestCase):
         self.assertIsNotNone(trailer)
         key_blob, _payload = trailer
         self.assertTrue(key_blob.startswith(basefwx.JMG_KEY_MAGIC))
-        parsed = basefwx._jmg_parse_key_header(key_blob, "pw", use_master=True)
+        parsed = basefwx._jmg_parse_key_header(key_blob, TEST_PASSWORD, use_master=True)
         self.assertIsNotNone(parsed)
         _header_len, _base_key, _archive_key, _material, profile_id = parsed
         self.assertEqual(profile_id, basefwx.JMG_SECURITY_PROFILE_MAX)
 
     def test_jmg_key_header_v1_legacy_compat(self):
         mask_key, user_blob, master_blob, _ = basefwx._prepare_mask_key(
-            "pw",
+            TEST_PASSWORD,
             True,
             mask_info=basefwx.JMG_MASK_INFO,
             require_password=False,
@@ -443,7 +444,7 @@ class BaseFWXUnitTests(unittest.TestCase):
             + len(payload).to_bytes(4, "big")
             + payload
         )
-        parsed = basefwx._jmg_parse_key_header(header, "pw", use_master=True)
+        parsed = basefwx._jmg_parse_key_header(header, TEST_PASSWORD, use_master=True)
         self.assertIsNotNone(parsed)
         _header_len, _base_key, _archive_key, _material, profile_id = parsed
         self.assertEqual(profile_id, basefwx.JMG_SECURITY_PROFILE_LEGACY)
@@ -481,12 +482,12 @@ class BaseFWXUnitTests(unittest.TestCase):
         with redirect_stderr(stderr):
             basefwx.MediaCipher.encrypt_media(
                 str(src),
-                "pw",
+                TEST_PASSWORD,
                 output=str(enc),
                 keep_input=True,
                 archive_original=False,
             )
-            basefwx.MediaCipher.decrypt_media(str(enc), "pw", output=str(dec))
+            basefwx.MediaCipher.decrypt_media(str(enc), TEST_PASSWORD, output=str(dec))
         logs = stderr.getvalue()
         self.assertIn("[basefwx.hw] op=jMGe", logs)
         self.assertIn("[basefwx.hw] op=jMGd", logs)
@@ -531,7 +532,7 @@ class BaseFWXUnitTests(unittest.TestCase):
             basefwx.MediaCipher._scramble_video(
                 src,
                 out,
-                "pw",
+                TEST_PASSWORD,
                 keep_meta=False,
                 base_key=b"\x22" * 32,
                 hw_plan=plan,
@@ -579,13 +580,13 @@ class BaseFWXUnitTests(unittest.TestCase):
         payload = os.urandom(200_000)
         source = ReadIntoBytesIO(payload)
         encrypted = io.BytesIO()
-        basefwx.fwxAES_live_encrypt_stream(source, encrypted, "pw", use_master=False)
+        basefwx.fwxAES_live_encrypt_stream(source, encrypted, TEST_PASSWORD, use_master=False)
         self.assertTrue(source.request_sizes)
         self.assertEqual(source.request_sizes[0], basefwx.LIVE_STREAM_CHUNK_SIZE)
 
         encrypted_source = ReadIntoBytesIO(encrypted.getvalue())
         recovered = io.BytesIO()
-        basefwx.fwxAES_live_decrypt_stream(encrypted_source, recovered, "pw", use_master=False)
+        basefwx.fwxAES_live_decrypt_stream(encrypted_source, recovered, TEST_PASSWORD, use_master=False)
         self.assertTrue(encrypted_source.request_sizes)
         self.assertEqual(encrypted_source.request_sizes[0], basefwx.LIVE_STREAM_CHUNK_SIZE)
         self.assertEqual(recovered.getvalue(), payload)
@@ -597,12 +598,12 @@ class BaseFWXUnitTests(unittest.TestCase):
         dec = self.tmp_path / "jmg_dec.png"
         basefwx.MediaCipher.encrypt_media(
             str(src),
-            "pw",
+            TEST_PASSWORD,
             output=str(enc),
             keep_input=True,
             archive_original=True,
         )
-        basefwx.MediaCipher.decrypt_media(str(enc), "pw", output=str(dec))
+        basefwx.MediaCipher.decrypt_media(str(enc), TEST_PASSWORD, output=str(dec))
         self.assertEqual(dec.read_bytes(), original)
 
     def test_jmg_image_no_archive_roundtrip_valid_image(self):
@@ -613,7 +614,7 @@ class BaseFWXUnitTests(unittest.TestCase):
             warnings.simplefilter("always")
             basefwx.MediaCipher.encrypt_media(
                 str(src),
-                "pw",
+                TEST_PASSWORD,
                 output=str(enc),
                 keep_input=True,
                 archive_original=False,
@@ -622,7 +623,7 @@ class BaseFWXUnitTests(unittest.TestCase):
         self.assertIn(basefwx.IMAGECIPHER_KEY_TRAILER_MAGIC, enc.read_bytes())
         with warnings.catch_warnings(record=True) as caught_dec:
             warnings.simplefilter("always")
-            basefwx.MediaCipher.decrypt_media(str(enc), "pw", output=str(dec))
+            basefwx.MediaCipher.decrypt_media(str(enc), TEST_PASSWORD, output=str(dec))
         self.assertTrue(any("no-archive payload" in str(w.message) for w in caught_dec))
         self.assertTrue(dec.exists())
         opened = basefwx.Image.open(dec)
@@ -676,7 +677,7 @@ class BaseFWXUnitTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "jMG video mode is temporarily disabled"):
             basefwx.MediaCipher.encrypt_media(
                 str(src),
-                "pw",
+                TEST_PASSWORD,
                 output=str(self.tmp_path / "jmg_video_disabled_enc.mp4"),
                 keep_input=True,
                 archive_original=False,
@@ -803,7 +804,7 @@ class BaseFWXUnitTests(unittest.TestCase):
             basefwx.MediaCipher._unscramble_video(
                 src,
                 out,
-                "pw",
+                TEST_PASSWORD,
                 base_key=b"\x11" * 32,
             )
         self.assertTrue(out.exists())
@@ -811,7 +812,7 @@ class BaseFWXUnitTests(unittest.TestCase):
     def test_live_stream_roundtrip_chunked(self):
         payload = os.urandom(96 * 1024)
         chunks = [payload[i:i + 4096] for i in range(0, len(payload), 4096)]
-        encrypted_frames = basefwx.fwxAES_live_encrypt_chunks(chunks, "pw", use_master=False)
+        encrypted_frames = basefwx.fwxAES_live_encrypt_chunks(chunks, TEST_PASSWORD, use_master=False)
         encrypted_stream = b"".join(encrypted_frames)
         random.seed(1337)
         parts: list[bytes] = []
@@ -820,7 +821,7 @@ class BaseFWXUnitTests(unittest.TestCase):
             span = random.randint(1, 307)
             parts.append(encrypted_stream[cursor:cursor + span])
             cursor += span
-        recovered = b"".join(basefwx.fwxAES_live_decrypt_chunks(parts, "pw", use_master=False))
+        recovered = b"".join(basefwx.fwxAES_live_decrypt_chunks(parts, TEST_PASSWORD, use_master=False))
         self.assertEqual(recovered, payload)
 
     def test_ffmpeg_video_codec_args_clamps_huge_bitrate(self):
@@ -834,26 +835,26 @@ class BaseFWXUnitTests(unittest.TestCase):
 
     def test_live_stream_tamper_rejected(self):
         payload = os.urandom(12 * 1024)
-        enc = basefwx.LiveEncryptor("pw", use_master=False)
+        enc = basefwx.LiveEncryptor(TEST_PASSWORD, use_master=False)
         blob = enc.start() + enc.update(payload) + enc.finalize()
         frames = self._split_live_frames(blob)
         self.assertGreaterEqual(len(frames), 3)
         tampered_data_frame = bytearray(frames[1])
         tampered_data_frame[-1] ^= 0x01
         tampered_blob = frames[0] + bytes(tampered_data_frame) + frames[2]
-        dec = basefwx.LiveDecryptor("pw", use_master=False)
+        dec = basefwx.LiveDecryptor(TEST_PASSWORD, use_master=False)
         with self.assertRaises(ValueError):
             dec.update(tampered_blob)
 
     def test_live_stream_sequence_replay_rejected(self):
-        enc = basefwx.LiveEncryptor("pw", use_master=False)
+        enc = basefwx.LiveEncryptor(TEST_PASSWORD, use_master=False)
         blob = enc.start()
         blob += enc.update(b"A" * 1024)
         blob += enc.update(b"B" * 1024)
         blob += enc.finalize()
         frames = self._split_live_frames(blob)
         replay_blob = frames[0] + frames[1] + frames[1] + frames[2] + frames[3]
-        dec = basefwx.LiveDecryptor("pw", use_master=False)
+        dec = basefwx.LiveDecryptor(TEST_PASSWORD, use_master=False)
         with self.assertRaises(ValueError):
             dec.update(replay_blob)
 
@@ -861,10 +862,10 @@ class BaseFWXUnitTests(unittest.TestCase):
         payload = os.urandom(32 * 1024)
         source = io.BytesIO(payload)
         encrypted = io.BytesIO()
-        basefwx.fwxAES_live_encrypt_stream(source, encrypted, "pw", use_master=False, chunk_size=1024)
+        basefwx.fwxAES_live_encrypt_stream(source, encrypted, TEST_PASSWORD, use_master=False, chunk_size=1024)
         encrypted.seek(0)
         recovered = io.BytesIO()
-        basefwx.fwxAES_live_decrypt_stream(encrypted, recovered, "pw", use_master=False, chunk_size=777)
+        basefwx.fwxAES_live_decrypt_stream(encrypted, recovered, TEST_PASSWORD, use_master=False, chunk_size=777)
         self.assertEqual(recovered.getvalue(), payload)
 
     def test_live_ffmpeg_helpers_roundtrip(self):
@@ -905,8 +906,8 @@ class BaseFWXUnitTests(unittest.TestCase):
             "copy",
             str(dec),
         ]
-        basefwx.fwxAES_live_encrypt_ffmpeg(source_cmd, enc, "pw", use_master=False)
-        basefwx.fwxAES_live_decrypt_ffmpeg(enc, sink_cmd, "pw", use_master=False)
+        basefwx.fwxAES_live_encrypt_ffmpeg(source_cmd, enc, TEST_PASSWORD, use_master=False)
+        basefwx.fwxAES_live_decrypt_ffmpeg(enc, sink_cmd, TEST_PASSWORD, use_master=False)
         self.assertTrue(enc.exists())
         self.assertTrue(dec.exists())
         self.assertGreater(dec.stat().st_size, 44)
@@ -915,8 +916,8 @@ class BaseFWXUnitTests(unittest.TestCase):
 
     def test_aes_roundtrip_without_master(self):
         original = "Symmetric data"
-        blob = basefwx.encryptAES(original, "pw", use_master=False)
-        recovered = basefwx.decryptAES(blob, "pw", use_master=False)
+        blob = basefwx.encryptAES(original, TEST_PASSWORD, use_master=False)
+        recovered = basefwx.decryptAES(blob, TEST_PASSWORD, use_master=False)
         self.assertEqual(recovered, original)
 
     def test_cpp_ksep_v1_simple_payload_decodes(self):
@@ -1076,12 +1077,12 @@ class BaseFWXUnitTests(unittest.TestCase):
     def test_b512file_cycle(self):
         src = self.tmp_path / "note.txt"
         src.write_text("classified", encoding="utf-8")
-        result = basefwx.b512file(str(src), "pw", strip_metadata=True, use_master=False)
+        result = basefwx.b512file(str(src), TEST_PASSWORD, strip_metadata=True, use_master=False)
         self.assertEqual(result, "SUCCESS!")
         encoded = src.with_suffix('.fwx')
         self.assertTrue(encoded.exists())
         self.assertEqual(stat.S_IMODE(encoded.stat().st_mode), 0o600)
-        result = basefwx.b512file(str(encoded), "pw", strip_metadata=True, use_master=False)
+        result = basefwx.b512file(str(encoded), TEST_PASSWORD, strip_metadata=True, use_master=False)
         self.assertEqual(result, "SUCCESS!")
         restored = src
         self.assertTrue(restored.exists())
@@ -1091,12 +1092,12 @@ class BaseFWXUnitTests(unittest.TestCase):
     def test_aesfile_cycle_light(self):
         src = self.tmp_path / "data.bin"
         src.write_bytes(b"FWX\x00PQ")
-        result = basefwx.AESfile(str(src), "pw", light=True, strip_metadata=True, use_master=False)
+        result = basefwx.AESfile(str(src), TEST_PASSWORD, light=True, strip_metadata=True, use_master=False)
         self.assertEqual(result, "SUCCESS!")
         encoded = src.with_suffix('.fwx')
         self.assertTrue(encoded.exists())
         self.assertEqual(stat.S_IMODE(encoded.stat().st_mode), 0o600)
-        result = basefwx.AESfile(str(encoded), "pw", light=True, strip_metadata=True, use_master=False)
+        result = basefwx.AESfile(str(encoded), TEST_PASSWORD, light=True, strip_metadata=True, use_master=False)
         self.assertEqual(result, "SUCCESS!")
         restored = src
         self.assertEqual(stat.S_IMODE(restored.stat().st_mode), 0o600)
@@ -1193,22 +1194,22 @@ class BaseFWXUnitTests(unittest.TestCase):
     def test_cli_aes_master(self):
         src = self.tmp_path / "cli.txt"
         src.write_text("cli-power", encoding="utf-8")
-        result = self._run_cli("cryptin", "aes", str(src), "-p", "pw", "--no-master")
+        result = self._run_cli("cryptin", "aes", str(src), "-p", TEST_PASSWORD, "--no-master")
         self.assertEqual(result.returncode, 0, msg=result.stderr + result.stdout)
         encoded = src.with_suffix('.fwx')
         self.assertTrue(encoded.exists())
-        result = self._run_cli("cryptin", "aes", str(encoded), "-p", "pw", "--no-master")
+        result = self._run_cli("cryptin", "aes", str(encoded), "-p", TEST_PASSWORD, "--no-master")
         self.assertEqual(result.returncode, 0, msg=result.stderr + result.stdout)
         self.assertEqual(src.read_text(encoding="utf-8"), "cli-power")
 
     def test_cli_b512_strip(self):
         src = self.tmp_path / "reversible.md"
         src.write_text("### reversible", encoding="utf-8")
-        result = self._run_cli("cryptin", "512", str(src), "-p", "pw", "--strip")
+        result = self._run_cli("cryptin", "512", str(src), "-p", TEST_PASSWORD, "--strip")
         self.assertEqual(result.returncode, 0, msg=result.stderr + result.stdout)
         encoded = src.with_suffix('.fwx')
         self.assertTrue(encoded.exists())
-        result = self._run_cli("cryptin", "512", str(encoded), "-p", "pw", "--strip")
+        result = self._run_cli("cryptin", "512", str(encoded), "-p", TEST_PASSWORD, "--strip")
         self.assertEqual(result.returncode, 0, msg=result.stderr + result.stdout)
         self.assertEqual(src.read_text(encoding="utf-8"), "### reversible")
 
@@ -1263,7 +1264,7 @@ class BaseFWXUnitTests(unittest.TestCase):
         reporter = self._RecordingReporter()
         encoded_path, approx = basefwx._aes_heavy_encode_path(
             src,
-            "pw",
+            TEST_PASSWORD,
             reporter,
             file_index=0,
             strip_metadata=False,
@@ -1281,7 +1282,7 @@ class BaseFWXUnitTests(unittest.TestCase):
         decode_reporter = self._RecordingReporter()
         decoded_path, restored_len = basefwx._aes_heavy_decode_path(
             encoded_path,
-            "pw",
+            TEST_PASSWORD,
             decode_reporter,
             file_index=0,
             strip_metadata=False,
@@ -1297,7 +1298,7 @@ class BaseFWXUnitTests(unittest.TestCase):
 
         encoded_path, _ = basefwx._aes_heavy_encode_path(
             src,
-            "pw",
+            TEST_PASSWORD,
             strip_metadata=True,
             use_master=False,
         )
@@ -1328,7 +1329,7 @@ class BaseFWXUnitTests(unittest.TestCase):
             reporter = self._RecordingReporter()
             encoded_path, approx = basefwx._aes_heavy_encode_path(
                 src,
-                "pw",
+                TEST_PASSWORD,
                 reporter,
                 file_index=0,
                 strip_metadata=False,
@@ -1343,7 +1344,7 @@ class BaseFWXUnitTests(unittest.TestCase):
             decode_reporter = self._RecordingReporter()
             decoded_path, restored_len = basefwx._aes_heavy_decode_path(
                 encoded_path,
-                "pw",
+                TEST_PASSWORD,
                 decode_reporter,
                 file_index=0,
                 strip_metadata=False,
@@ -1362,7 +1363,7 @@ class BaseFWXUnitTests(unittest.TestCase):
 
         encoded_path, _ = basefwx._aes_heavy_encode_path(
             src,
-            "pw",
+            TEST_PASSWORD,
             strip_metadata=True,
             use_master=False,
         )
@@ -1376,7 +1377,7 @@ class BaseFWXUnitTests(unittest.TestCase):
         src.write_bytes(data)
         encoded_path, approx = basefwx._aes_light_encode_path(
             src,
-            "pw",
+            TEST_PASSWORD,
             None,
             0,
             strip_metadata=False,
@@ -1402,7 +1403,7 @@ class BaseFWXUnitTests(unittest.TestCase):
 
         decoded_path, restored_len = basefwx._aes_light_decode_path(
             encoded_path,
-            "pw",
+            TEST_PASSWORD,
             None,
             0,
             strip_metadata=False,
@@ -1418,7 +1419,7 @@ class BaseFWXUnitTests(unittest.TestCase):
         reporter = self._RecordingReporter()
         encoded_path, approx = basefwx._b512_encode_path(
             src,
-            "pw",
+            TEST_PASSWORD,
             reporter,
             file_index=0,
             total_files=1,
@@ -1434,7 +1435,7 @@ class BaseFWXUnitTests(unittest.TestCase):
         decode_reporter = self._RecordingReporter()
         decoded_path, restored_len = basefwx._b512_decode_path(
             encoded_path,
-            "pw",
+            TEST_PASSWORD,
             decode_reporter,
             file_index=0,
             strip_metadata=False,
@@ -1450,7 +1451,7 @@ class BaseFWXUnitTests(unittest.TestCase):
 
         encoded_path, _ = basefwx._b512_encode_path(
             src,
-            "pw",
+            TEST_PASSWORD,
             strip_metadata=True,
             use_master=False,
         )
@@ -1553,7 +1554,7 @@ class CryptographyIntegrationTests(unittest.TestCase):
     def test_no_master_cipher_requires_password(self):
         metadata = basefwx._build_metadata("UNIT", False, False)
         plaintext = f"{metadata}{basefwx.META_DELIM}sensitive"
-        blob = basefwx.encryptAES(plaintext, "pw", use_master=False, metadata_blob=metadata)
+        blob = basefwx.encryptAES(plaintext, TEST_PASSWORD, use_master=False, metadata_blob=metadata)
         with self.assertRaises(ValueError):
             basefwx.decryptAES(blob, "", use_master=True)
 

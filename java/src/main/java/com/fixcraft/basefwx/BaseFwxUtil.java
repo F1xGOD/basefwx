@@ -30,8 +30,10 @@ final class BaseFwxUtil {
             Path tempPath = Files.createTempFile(prefix, suffix, attr);
             return tempPath.toFile();
         } catch (UnsupportedOperationException e) {
-            return restrictTempFileToOwner(
-                    File.createTempFile(prefix, suffix));
+            throw new IOException(
+                    "Atomic owner-only temporary-file permissions"
+                    + " are not supported",
+                    e);
         }
     }
 
@@ -54,24 +56,11 @@ final class BaseFwxUtil {
             return Files.createTempFile(
                     parent, prefix, suffix, attr).toFile();
         } catch (UnsupportedOperationException exc) {
-            return restrictTempFileToOwner(
-                    File.createTempFile(
-                            prefix, suffix, parent.toFile()));
-        }
-    }
-
-    private static File restrictTempFileToOwner(File temp)
-            throws IOException {
-        boolean clearedRead = temp.setReadable(false, false);
-        boolean clearedWrite = temp.setWritable(false, false);
-        boolean ownerRead = temp.setReadable(true, true);
-        boolean ownerWrite = temp.setWritable(true, true);
-        if (!(clearedRead && clearedWrite && ownerRead && ownerWrite)) {
-            Files.deleteIfExists(temp.toPath());
             throw new IOException(
-                    "Unable to restrict temporary file to its owner");
+                    "Atomic owner-only temporary-file permissions"
+                    + " are not supported",
+                    exc);
         }
-        return temp;
     }
 
     static void commitAuthenticatedFile(

@@ -14,11 +14,17 @@
 [![Latest release](https://img.shields.io/github/v/release/F1xGOD/basefwx?style=flat&logo=github&logoColor=white&label=Release)](https://github.com/F1xGOD/basefwx/releases/latest)
 [![License](https://img.shields.io/github/license/F1xGOD/basefwx?style=flat&label=License)](https://github.com/F1xGOD/basefwx/blob/main/LICENCE)
 
-BaseFWX is a hybrid post-quantum + AEAD encryption toolkit for files and media. It ships in three implementations (Python, C++, Java) that share the same on-disk and on-wire formats, so a file you encrypt in one binds out the other two without conversion.
+BaseFWX is a hybrid post-quantum + AEAD encryption toolkit for files and media. It ships in three implementations (Python, C++, Java) that share the same on-disk and on-wire formats, so a file you encrypt in one decrypts in the other two without conversion.
+
+The version in this checkout is recorded in [`VERSION`](VERSION). This
+revision is the unreleased `3.8.0-dev1` development line; the latest tagged
+release is `v3.7.0`. See [CHANGELOG.md](CHANGELOG.md) for development changes
+and [SECURITY.md](SECURITY.md) for the supported-version policy.
 
 Repository policy:
 
-- `main` is the release branch; `DEV` is the integration branch.
+- `main` is the canonical development/release line; `DEV` is its integration
+  mirror.
 - It stays a monorepo. There are no language-specific long-lived branches.
 - Shared format and security changes have to keep Python / C++ / Java parity in one PR.
 

@@ -91,7 +91,7 @@ factor (PBKDF2 × 3.00; Argon2 default × 2.667) so we compare 3.6.3 to
 
 ### Overall (median bench, seconds)
 
-| Runtime | 3.6.3 rescaled to 3.6.4 KDF | 3.6.4 (current) | Net delta |
+| Runtime | 3.6.3 rescaled to 3.6.4 KDF | 3.6.4 (measured) | Net delta |
 | ------- | ---------------------------: | ---------------: | --------: |
 | C++     | 35.083 s                     | 15.536 s         | **−55.7 %** (faster) |
 | Java    | 60.613 s                     | 24.135 s         | **−60.2 %** (faster) |

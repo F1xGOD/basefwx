@@ -30,7 +30,8 @@ final class BaseFwxUtil {
             Path tempPath = Files.createTempFile(prefix, suffix, attr);
             return tempPath.toFile();
         } catch (UnsupportedOperationException e) {
-            return File.createTempFile(prefix, suffix);
+            return restrictTempFileToOwner(
+                    File.createTempFile(prefix, suffix));
         }
     }
 
@@ -53,17 +54,24 @@ final class BaseFwxUtil {
             return Files.createTempFile(
                     parent, prefix, suffix, attr).toFile();
         } catch (UnsupportedOperationException exc) {
-            File temp = File.createTempFile(
-                    prefix, suffix, parent.toFile());
-            if ((!temp.canRead() && !temp.setReadable(true, true))
-                    || (!temp.canWrite()
-                        && !temp.setWritable(true, true))) {
-                temp.delete();
-                throw new IOException(
-                        "Temporary file is not owner-usable");
-            }
-            return temp;
+            return restrictTempFileToOwner(
+                    File.createTempFile(
+                            prefix, suffix, parent.toFile()));
         }
+    }
+
+    private static File restrictTempFileToOwner(File temp)
+            throws IOException {
+        boolean clearedRead = temp.setReadable(false, false);
+        boolean clearedWrite = temp.setWritable(false, false);
+        boolean ownerRead = temp.setReadable(true, true);
+        boolean ownerWrite = temp.setWritable(true, true);
+        if (!(clearedRead && clearedWrite && ownerRead && ownerWrite)) {
+            Files.deleteIfExists(temp.toPath());
+            throw new IOException(
+                    "Unable to restrict temporary file to its owner");
+        }
+        return temp;
     }
 
     static void commitAuthenticatedFile(

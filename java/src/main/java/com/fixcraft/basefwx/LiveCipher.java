@@ -554,7 +554,6 @@ public final class LiveCipher {
             long availablePlaintext =
                     (long) ctLen - Constants.AEAD_TAG_LEN;
             if (plainLen < 0
-                    || availablePlaintext < 0
                     || (long) plainLen != availablePlaintext) {
                 throw new IllegalArgumentException(
                         "Live frame length mismatch");

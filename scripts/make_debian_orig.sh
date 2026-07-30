@@ -71,8 +71,10 @@ if [[ -z "${version}" || "${version}" == */* ]]; then
   exit 1
 fi
 
+archive_version="${version/-dev/~dev}"
+
 if [[ -z "${out}" ]]; then
-  out="${source_root}/../basefwx_${version}.orig.tar.xz"
+  out="${source_root}/../basefwx_${archive_version}.orig.tar.xz"
 fi
 out_parent="$(cd "$(dirname "${out}")" && pwd -P)"
 out="${out_parent}/$(basename "${out}")"
@@ -84,7 +86,7 @@ case "${out}" in
     ;;
 esac
 
-prefix="basefwx-${version}"
+prefix="basefwx-${archive_version}"
 
 if [[ -z "${SOURCE_DATE_EPOCH:-}" ]]; then
   SOURCE_DATE_EPOCH="$(git -C "${source_root}" log -1 --format=%ct)"

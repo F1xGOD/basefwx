@@ -44,10 +44,10 @@ Depends:
 Description: BaseFWX C++ cryptographic codec library (runtime)
  BaseFWX is a C++ library implementing the FixCraft cryptographic codec
  format, including AES-based encryption, Argon2id key derivation, and
- ML-KEM-768 post-quantum key encapsulation.
+ ML-KEM-768/1024 post-quantum key encapsulation.
  .
  This package contains the shared library required to run programs
- linked against libbasefwx. ML-KEM-768 support is enabled by the build
+ linked against libbasefwx. ML-KEM support is enabled by the build
  through the packaged liboqs dependency rather than a vendored static copy.
 
 Package: libbasefwx-dev
@@ -58,14 +58,11 @@ Depends:
  libbasefwx3 (= ${binary:Version}),
  libssl-dev,
  zlib1g-dev,
- liblzma-dev,
- libargon2-dev,
- liboqs-dev,
  ${misc:Depends}
 Description: BaseFWX C++ cryptographic codec library (development files)
  BaseFWX is a C++ library implementing the FixCraft cryptographic codec
  format, including AES-based encryption, Argon2id key derivation, and
- ML-KEM-768 post-quantum key encapsulation.
+ ML-KEM-768/1024 post-quantum key encapsulation.
  .
  This package contains the headers, the CMake package config, and the
  pkg-config file needed to build software against libbasefwx.

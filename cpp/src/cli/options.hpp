@@ -7,7 +7,7 @@
 #pragma once
 
 #include "basefwx/basefwx.hpp"
-#include "basefwx/cli/globals.hpp"
+#include "cli/globals.hpp"
 #include <cstddef>
 #include <string>
 

@@ -1,3 +1,14 @@
+basefwx (3.8.0~dev1-1) UNRELEASED; urgency=medium
+
+  * Package the 3.8 development API required by YUME 2.0-dev4, including
+    explicit-salt HKDF, X25519, and ML-KEM-1024 selection.
+  * Keep GPL command-line implementation and headers out of the LGPL shared
+    library and development-header package.
+  * Run the native CTest policy suite during Debian builds and tighten the
+    CMake package compatibility contract to the 3.8 minor line.
+
+ -- FixCraft Maintainers <debian@fixcraft.jp>  Wed, 29 Jul 2026 12:00:00 -0700
+
 basefwx (3.6.4-1) unstable; urgency=medium
 
   * Initial Debian packaging of the BaseFWX C++ codec library and CLI.

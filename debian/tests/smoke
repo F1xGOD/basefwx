@@ -11,4 +11,6 @@ test -e "/usr/lib/${multiarch}/libbasefwx.so.3"
 test -e "/usr/lib/${multiarch}/libbasefwx.so"
 test -r /usr/include/basefwx/basefwx.hpp
 test -r /usr/include/basefwx/plugin.h
+test ! -e /usr/include/basefwx/cli
+test ! -e /usr/include/basefwx/cli_colors.hpp
 pkg-config --exists basefwx

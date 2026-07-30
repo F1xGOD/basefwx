@@ -9,8 +9,19 @@ else
 fi
 cd "$workdir"
 
+prefix="${BASEFWX_TEST_PREFIX:-/usr}"
+multiarch="$(dpkg-architecture -qDEB_HOST_MULTIARCH)"
+if [ "$prefix" != "/usr" ]; then
+    unset PKG_CONFIG_PATH
+    export PKG_CONFIG_LIBDIR="${prefix}/lib/${multiarch}/pkgconfig:${prefix}/lib/pkgconfig:/usr/lib/${multiarch}/pkgconfig:/usr/lib/pkgconfig:/usr/share/pkgconfig"
+    export LD_LIBRARY_PATH="${prefix}/lib/${multiarch}:${prefix}/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
+fi
+
 cat > check.cpp <<'EOF'
 #include <basefwx/basefwx.hpp>
+#include <basefwx/crypto.hpp>
+#include <basefwx/pq.hpp>
+#include <basefwx/x25519.hpp>
 
 #include <iostream>
 #include <string>
@@ -22,6 +33,41 @@ int main() {
     if (decoded != value) {
         return 1;
     }
+
+    const basefwx::crypto::Bytes ikm{1, 2, 3, 4};
+    const basefwx::crypto::Bytes salt{5, 6, 7, 8};
+    auto derived = basefwx::crypto::HkdfSha256(
+        ikm, salt, "basefwx.package-consumer.v1", 32);
+    if (derived.size() != 32) {
+        return 2;
+    }
+
+    auto alice = basefwx::x25519::GenerateKeyPair();
+    auto bob = basefwx::x25519::GenerateKeyPair();
+    auto alice_shared = basefwx::x25519::DeriveSharedSecret(
+        alice.private_key, bob.public_key);
+    auto bob_shared = basefwx::x25519::DeriveSharedSecret(
+        bob.private_key, alice.public_key);
+    if (alice_shared != bob_shared) {
+        return 3;
+    }
+
+    auto mlkem = basefwx::pq::GenerateKeyPair(
+        basefwx::pq::KemAlgorithm::MlKem1024);
+    auto encapsulated = basefwx::pq::KemEncrypt(
+        basefwx::pq::KemAlgorithm::MlKem1024, mlkem.public_key);
+    auto decapsulated = basefwx::pq::KemDecrypt(
+        basefwx::pq::KemAlgorithm::MlKem1024,
+        mlkem.private_key,
+        encapsulated.ciphertext);
+    if (encapsulated.shared != decapsulated) {
+        return 4;
+    }
+
+    basefwx::crypto::SecureClear(derived);
+    basefwx::crypto::SecureClear(alice_shared);
+    basefwx::crypto::SecureClear(bob_shared);
+    basefwx::crypto::SecureClear(decapsulated);
     std::cout << encoded << '\n';
     return 0;
 }
@@ -35,11 +81,14 @@ mkdir cmake-check
 cat > cmake-check/CMakeLists.txt <<'EOF'
 cmake_minimum_required(VERSION 3.16)
 project(basefwx_packaging_check LANGUAGES CXX)
-find_package(basefwx CONFIG REQUIRED)
+find_package(basefwx 3.8 CONFIG REQUIRED)
+if(NOT basefwx_VERSION_FULL STREQUAL "3.8.0-dev1")
+    message(FATAL_ERROR "unexpected BaseFWX full version: ${basefwx_VERSION_FULL}")
+endif()
 add_executable(check ../check.cpp)
 target_link_libraries(check PRIVATE basefwx::basefwxcpp)
 EOF
 
-cmake -S cmake-check -B cmake-check/build
+cmake -S cmake-check -B cmake-check/build -DCMAKE_PREFIX_PATH="$prefix"
 cmake --build cmake-check/build --target check -- -j1
 ./cmake-check/build/check

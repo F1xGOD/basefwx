@@ -19,7 +19,9 @@ BaseFWX is a hybrid post-quantum + AEAD encryption toolkit for files and media. 
 The version in this checkout is recorded in [`VERSION`](VERSION). This
 revision is the unreleased `3.8.0-dev1` development line; the latest tagged
 release is `v3.7.0`. See [CHANGELOG.md](CHANGELOG.md) for development changes
-and [SECURITY.md](SECURITY.md) for the supported-version policy.
+and [SECURITY.md](SECURITY.md) for the supported-version policy. Native
+consumers should also read [ABI.md](ABI.md): the plugin C ABI and general C++
+library have intentionally different compatibility contracts.
 
 Repository policy:
 

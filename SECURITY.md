@@ -160,10 +160,13 @@ Sources for the master public key, in priority order:
    deployments. You generate your own ML-KEM-768 or ML-KEM-1024 keypair, keep the
    private key offline, and configure the public half via env or your
    own key-management tooling.
-2. ~~**Baked-in fallback**~~ — **removed in 3.7.0**. The baked-in
-   key literal, `BASEFWX_MASTER_PQ_ALLOW_BAKED`, and `ALLOW_BAKED_PUB`
-   have been removed from all three runtimes. Deployments must supply
-   their own key via option 1 above.
+2. **Operator-controlled build-time embedding** — the upstream maintainer key
+   literal and the runtime `BASEFWX_MASTER_PQ_ALLOW_BAKED` /
+   `ALLOW_BAKED_PUB` gates were removed in 3.7.0. Upstream artifacts contain
+   no key. A deployment may deliberately compile its own key through
+   `-DBASEFWX_MASTER_PQ_PUB_B64=...` (C++) or
+   `-Dbasefwx.master.pq.public.b64=...` (Java); this is configuration supplied
+   by that deployment, not a fallback controlled by BaseFWX.
 3. **None** — without either of the above, `useMaster=true` first
    considers a separately provisioned EC master public key. If neither
    master key is available, password-backed encryption can continue

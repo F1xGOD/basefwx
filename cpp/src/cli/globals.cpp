@@ -4,7 +4,7 @@
  * Licensed under the GNU General Public License v3.0 or later.
  */
 
-#include "basefwx/cli/globals.hpp"
+#include "cli/globals.hpp"
 
 #include "basefwx/env.hpp"
 

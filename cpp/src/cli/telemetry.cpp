@@ -4,7 +4,7 @@
  * Licensed under the GNU General Public License v3.0 or later.
  */
 
-#include "basefwx/cli/telemetry.hpp"
+#include "cli/telemetry.hpp"
 
 #include "basefwx/env.hpp"
 #include "basefwx/system_info.hpp"

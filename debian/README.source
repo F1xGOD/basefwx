@@ -7,6 +7,11 @@ The packaging builds three binary packages:
 * libbasefwx3: runtime shared library
 * libbasefwx-dev: headers, CMake config, and pkg-config metadata
 
+The installed development surface contains only the LGPL C++ library and
+plugin ABI headers. GPL command-line headers remain private under
+cpp/src/cli and are not shipped by libbasefwx-dev. See ABI.md for the
+separate plugin-C and C++ library compatibility contracts.
+
 The archive build defaults to packaged system dependencies only. OpenSSL,
 zlib, liblzma, libargon2, and liboqs are all declared in Build-Depends, and
 debian/rules builds with:
@@ -29,3 +34,5 @@ directory when testing on a distro that does not yet provide liboqs-dev:
 
 Then YUME can Build-Depend on libbasefwx-dev and let dpkg-shlibdeps produce
 the runtime dependency on libbasefwx3 automatically.
+The current 3.8 package also supplies debian/libbasefwx3.shlibs so binaries
+using the new protocol primitives require libbasefwx3 >= 3.8.0~dev1-1.

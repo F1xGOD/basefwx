@@ -4,11 +4,11 @@
  * Licensed under the GNU General Public License v3.0 or later.
  */
 
-#include "basefwx/cli/output.hpp"
+#include "cli/output.hpp"
 #include "basefwx/constants.hpp"
 #include "basefwx_build_info.hpp"
 #include "basefwx_build_stamp.hpp"
-#include "basefwx/cli_colors.hpp"
+#include "cli/colors.hpp"
 #include "basefwx/system_info.hpp"
 
 #include <array>

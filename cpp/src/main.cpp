@@ -7,7 +7,7 @@
 #include "basefwx/basefwx.hpp"
 #include "basefwx_build_info.hpp"
 #include "basefwx_build_stamp.hpp"
-#include "basefwx/cli_colors.hpp"
+#include "cli/colors.hpp"
 #include "basefwx/constants.hpp"
 #include "basefwx/env.hpp"
 #include "basefwx/format.hpp"
@@ -61,14 +61,14 @@
 #include <mach-o/dyld.h>
 #endif
 #endif
-#include "basefwx/cli/bench.hpp"
-#include "basefwx/cli/bench_memory.hpp"
-#include "basefwx/cli/globals.hpp"
-#include "basefwx/cli/inspect.hpp"
-#include "basefwx/cli/options.hpp"
-#include "basefwx/cli/output.hpp"
-#include "basefwx/cli/password.hpp"
-#include "basefwx/cli/telemetry.hpp"
+#include "cli/bench.hpp"
+#include "cli/bench_memory.hpp"
+#include "cli/globals.hpp"
+#include "cli/inspect.hpp"
+#include "cli/options.hpp"
+#include "cli/output.hpp"
+#include "cli/password.hpp"
+#include "cli/telemetry.hpp"
 #include "basefwx/plugin_loader.hpp"
 
 namespace {

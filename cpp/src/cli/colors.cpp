@@ -4,7 +4,7 @@
  * Licensed under the GNU General Public License v3.0 or later.
  */
 
-#include "basefwx/cli_colors.hpp"
+#include "cli/colors.hpp"
 
 #include <iostream>
 

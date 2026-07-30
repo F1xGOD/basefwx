@@ -4,9 +4,9 @@
  * Licensed under the GNU General Public License v3.0 or later.
  */
 
-#include "basefwx/cli/inspect.hpp"
-#include "basefwx/cli/globals.hpp"
-#include "basefwx/cli_colors.hpp"
+#include "cli/inspect.hpp"
+#include "cli/globals.hpp"
+#include "cli/colors.hpp"
 #include "basefwx/env.hpp"
 #include "basefwx/format.hpp"
 #include "basefwx/system_info.hpp"

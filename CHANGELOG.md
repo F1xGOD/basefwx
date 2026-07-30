@@ -127,6 +127,15 @@
   `pq=ml-kem-768|1024` instead of misleading `oqs=OFF`.
 
 ### Changed
+- **Native package boundary and ABI policy.** GPL CLI headers and color
+  implementation now live under `cpp/src/cli` and link only into the
+  executable; `libbasefwx.so.3` and installed headers remain LGPL. CMake
+  compatibility is limited to the same minor line, staged pkg-config/CMake
+  consumers exercise the 3.8 HKDF/X25519/ML-KEM-1024 API, and Debian shlibs
+  metadata requires the 3.8 runtime for binaries built against it.
+- **Debian development package.** The source version is
+  `3.8.0~dev1-1`, development orig archives use Debian's `~dev` ordering,
+  and package builds run the native CTest suite instead of skipping it.
 - **Phase D — file/wire parity.** Java pb512file Argon2-heavy +
   streaming/PQ master wrap (prefer PQ via `KeyWrap`/`PQ`); master-wrap
   defaults changed to off only for Python `encryptAES` / `decryptAES`,

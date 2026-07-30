@@ -74,14 +74,12 @@ def license_for(path: Path) -> str | None:
 
     if (
         rel.startswith("cpp/src/cli/")
-        or rel.startswith("cpp/include/basefwx/cli/")
+        or rel.startswith("cpp/cmake/")
         or rel.startswith("cpp/tools/")
     ):
         return BASEFWX_GPL_NEW
     if rel in {
-        "cpp/include/basefwx/cli_colors.hpp",
         "cpp/src/main.cpp",
-        "cpp/src/platform/cli_colors.cpp",
         "python/basefwx/runtime/_cli.py",
         "python/basefwx/__main__.py",
         "java/src/main/java/com/fixcraft/basefwx/cli/BaseFwxCli.java",

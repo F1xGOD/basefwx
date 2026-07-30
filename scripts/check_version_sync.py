@@ -26,6 +26,17 @@ def main() -> int:
             f"cpp/vcpkg.json version-string {vcpkg.get('version-string')!r} does not match VERSION {version!r}"
         )
 
+    cpp_constants = (repo_root / "cpp" / "include" / "basefwx" /
+                     "constants.hpp").read_text(encoding="utf-8")
+    cpp_match = re.search(
+        r'#define\s+BASEFWX_VERSION_STRING\s+"([^"]+)"', cpp_constants
+    )
+    if not cpp_match or cpp_match.group(1) != version:
+        found = cpp_match.group(1) if cpp_match else None
+        raise SystemExit(
+            f"constants.hpp fallback {found!r} does not match VERSION {version!r}"
+        )
+
     python_version = (repo_root / "python" / "VERSION").read_text(encoding="utf-8").strip()
     if python_version != version:
         raise SystemExit(f"python/VERSION {python_version!r} does not match VERSION {version!r}")
@@ -54,6 +65,18 @@ def main() -> int:
     changelog = (repo_root / "CHANGELOG.md").read_text(encoding="utf-8")
     if not re.search(rf"^## \[v{re.escape(version)}\](?:\s|$)", changelog, flags=re.MULTILINE):
         raise SystemExit(f"CHANGELOG.md does not contain a section for v{version}")
+
+    debian_changelog = (repo_root / "debian" / "changelog").read_text(
+        encoding="utf-8"
+    )
+    debian_match = re.match(r"basefwx \(([^)]+)\) ", debian_changelog)
+    expected_debian_version = version.replace("-dev", "~dev") + "-1"
+    if not debian_match or debian_match.group(1) != expected_debian_version:
+        found = debian_match.group(1) if debian_match else None
+        raise SystemExit(
+            f"debian/changelog version {found!r} does not match "
+            f"VERSION {version!r} ({expected_debian_version!r})"
+        )
 
     print(f"Version sync OK: {version}")
     return 0

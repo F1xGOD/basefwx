@@ -30,9 +30,7 @@ License: LGPL-3.0+
 Files:
  cpp/src/main.cpp
  cpp/src/cli/*
- cpp/include/basefwx/cli/*
- cpp/include/basefwx/cli_colors.hpp
- cpp/src/platform/cli_colors.cpp
+ cpp/cmake/*
  java/src/main/java/com/fixcraft/basefwx/cli/*
  java/src/main/java/com/fixcraft/basefwx/FwxAESBenchmark.java
  python/basefwx/__main__.py

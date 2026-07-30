@@ -6,7 +6,7 @@
 
 #pragma once
 
-#include "basefwx/cli/globals.hpp"
+#include "cli/globals.hpp"
 #include <string>
 #include <string_view>
 

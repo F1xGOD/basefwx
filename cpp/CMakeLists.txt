@@ -641,7 +641,6 @@ add_library(basefwxcpp
     src/media/imagecipher_media_support.cpp
     src/media/imagecipher_media_transform.cpp
     src/media/imagecipher_trailer.cpp
-    src/platform/cli_colors.cpp
     src/platform/env.cpp
     src/platform/secure_temp.cpp
     src/platform/system_info.cpp
@@ -761,6 +760,7 @@ if(BASEFWX_BUILD_CLI)
         src/cli/inspect.cpp
         src/cli/telemetry.cpp
         src/cli/options.cpp
+        src/cli/colors.cpp
     )
     add_dependencies(basefwx_cpp basefwx_cli_build_stamp)
     set_target_properties(basefwx_cpp PROPERTIES OUTPUT_NAME "basefwx")
@@ -768,6 +768,7 @@ if(BASEFWX_BUILD_CLI)
     target_include_directories(basefwx_cpp PRIVATE
         "${CMAKE_CURRENT_BINARY_DIR}/generated"
         "${CMAKE_CURRENT_SOURCE_DIR}/include"
+        "${CMAKE_CURRENT_SOURCE_DIR}/src"
     )
 endif()
 
@@ -794,6 +795,7 @@ if(BASEFWX_BUILD_TESTS AND BUILD_TESTING)
     )
     target_include_directories(bench_memory_policy_test PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/include"
+        "${CMAKE_CURRENT_SOURCE_DIR}/src"
     )
     add_test(NAME bench_memory_policy_test COMMAND bench_memory_policy_test)
 
@@ -805,6 +807,26 @@ if(BASEFWX_BUILD_TESTS AND BUILD_TESTING)
         "${CMAKE_CURRENT_SOURCE_DIR}/include"
     )
     add_test(NAME base64_compatibility_test COMMAND base64_compatibility_test)
+
+    if(BUILD_SHARED_LIBS AND UNIX AND CMAKE_NM)
+        add_test(NAME basefwx_core_abi_exports
+            COMMAND "${CMAKE_COMMAND}"
+                "-DBASEFWX_LIBRARY=$<TARGET_FILE:basefwxcpp>"
+                "-DBASEFWX_NM=${CMAKE_NM}"
+                -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/check_core_abi_exports.cmake"
+        )
+    endif()
+
+    if(BUILD_SHARED_LIBS AND UNIX AND EXISTS "/usr/bin/dpkg-architecture")
+        add_test(NAME basefwx_installed_consumer
+            COMMAND "${CMAKE_COMMAND}"
+                "-DBASEFWX_BUILD_DIR=${CMAKE_BINARY_DIR}"
+                "-DBASEFWX_BUILD_CONFIG=$<CONFIG>"
+                "-DBASEFWX_TEST_PREFIX=${CMAKE_BINARY_DIR}/test-install/basefwx-$<CONFIG>"
+                "-DBASEFWX_CONSUMER_TEST=${CMAKE_CURRENT_SOURCE_DIR}/../debian/tests/libbasefwx-dev"
+                -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/check_installed_consumer.cmake"
+        )
+    endif()
 endif()
 
 if(BASEFWX_BUILD_PROTOCOL_KAT_GEN)
@@ -939,6 +961,7 @@ if(BASEFWX_INSTALL)
     file(WRITE "${_basefwx_config_in}"
 "@PACKAGE_INIT@\n"
 "include(CMakeFindDependencyMacro)\n"
+"set(basefwx_VERSION_FULL \"${BASEFWX_PROJECT_VERSION}\")\n"
 "find_dependency(OpenSSL)\n"
 "find_dependency(ZLIB)\n"
 "include(\"\${CMAKE_CURRENT_LIST_DIR}/basefwxTargets.cmake\")\n"
@@ -951,7 +974,7 @@ if(BASEFWX_INSTALL)
     write_basic_package_version_file(
         "${CMAKE_CURRENT_BINARY_DIR}/basefwxConfigVersion.cmake"
         VERSION ${BASEFWX_NUMERIC_VERSION}
-        COMPATIBILITY SameMajorVersion
+        COMPATIBILITY SameMinorVersion
     )
     install(FILES
         "${CMAKE_CURRENT_BINARY_DIR}/basefwxConfig.cmake"
@@ -961,18 +984,21 @@ if(BASEFWX_INSTALL)
 
     # pkg-config file for non-CMake consumers.
     set(_basefwx_pc "${CMAKE_CURRENT_BINARY_DIR}/basefwx.pc")
+    set(_basefwx_pc_install_dir "/${CMAKE_INSTALL_LIBDIR}/pkgconfig")
+    file(RELATIVE_PATH BASEFWX_PC_PREFIX_FROM_PKGCONFIG
+        "${_basefwx_pc_install_dir}" "/")
     file(WRITE "${_basefwx_pc}"
-"prefix=${CMAKE_INSTALL_PREFIX}\n"
+"prefix=\${pcfiledir}/${BASEFWX_PC_PREFIX_FROM_PKGCONFIG}\n"
 "exec_prefix=\${prefix}\n"
-"libdir=${CMAKE_INSTALL_FULL_LIBDIR}\n"
-"includedir=${CMAKE_INSTALL_FULL_INCLUDEDIR}\n"
+"libdir=\${prefix}/${CMAKE_INSTALL_LIBDIR}\n"
+"includedir=\${prefix}/${CMAKE_INSTALL_INCLUDEDIR}\n"
 "\n"
 "Name: basefwx\n"
 "Description: BaseFWX C++ cryptographic codec library\n"
 "Version: ${BASEFWX_PROJECT_VERSION}\n"
 "Requires: openssl zlib\n"
 "Libs: -L\${libdir} -lbasefwx\n"
-"Cflags: -I\${includedir}\n"
+"Cflags: -I\${includedir} -DBASEFWX_HAS_ARGON2=${BASEFWX_HAS_ARGON2} -DBASEFWX_HAS_OQS=${BASEFWX_HAS_OQS} -DBASEFWX_HAS_LZMA=${BASEFWX_HAS_LZMA}\n"
 )
     install(FILES "${_basefwx_pc}"
         DESTINATION ${CMAKE_INSTALL_LIBDIR}/pkgconfig

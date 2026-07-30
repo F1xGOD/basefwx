@@ -4,7 +4,7 @@
  * Licensed under the GNU General Public License v3.0 or later.
  */
 
-#include "basefwx/cli/password.hpp"
+#include "cli/password.hpp"
 
 #ifdef _WIN32
 #include <conio.h>

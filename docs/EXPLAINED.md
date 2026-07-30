@@ -313,7 +313,10 @@ It uses the C++ BaseFWX library for inner crypto, not the BaseFWX CLI:
 For Debian-style YUME builds, `yume` should link against a packaged
 `libbasefwx3` runtime through `libbasefwx-dev`. This avoids using the
 bundled BaseFWX tree or vendored dependency directories inside the YUME
-source package.
+source package. The development package exposes the LGPL library headers,
+not the private GPL command-line headers. `ABI.md` defines the stable plugin
+C ABI and the narrower same-minor compatibility contract for the general
+C++ library.
 
 ## Debian Package Shape
 

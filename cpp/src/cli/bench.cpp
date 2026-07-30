@@ -4,7 +4,7 @@
  * Licensed under the GNU General Public License v3.0 or later.
  */
 
-#include "basefwx/cli/bench.hpp"
+#include "cli/bench.hpp"
 
 #include "basefwx/env.hpp"
 #include "basefwx/fwxaes.hpp"

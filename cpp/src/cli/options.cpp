@@ -4,7 +4,7 @@
  * Licensed under the GNU General Public License v3.0 or later.
  */
 
-#include "basefwx/cli/options.hpp"
+#include "cli/options.hpp"
 
 #include <cstdlib>
 #include <iostream>

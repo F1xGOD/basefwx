@@ -4,7 +4,7 @@
  * Licensed under the GNU General Public License v3.0 or later.
  */
 
-#include "basefwx/cli/bench_memory.hpp"
+#include "cli/bench_memory.hpp"
 
 #include <algorithm>
 #include <limits>

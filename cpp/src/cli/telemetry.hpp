@@ -6,7 +6,7 @@
 
 #pragma once
 
-#include "basefwx/cli/globals.hpp"
+#include "cli/globals.hpp"
 #include "basefwx/env.hpp"
 
 #include <array>

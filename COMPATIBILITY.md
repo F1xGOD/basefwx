@@ -323,7 +323,10 @@ Release builds use:
 
 ### Development
 - `BASEFWX_OBFUSCATE`: Enable/disable obfuscation
-- ~~`ALLOW_BAKED_PUB`~~: **Removed in 3.7.0.** The baked public key path has been removed; use `BASEFWX_MASTER_PQ_PUB` instead.
+- ~~`ALLOW_BAKED_PUB`~~: **Removed in 3.7.0.** Upstream artifacts no
+  longer contain a maintainer key. Use `BASEFWX_MASTER_PQ_PUB` at runtime or
+  deliberately supply the documented build-time embedding option for a
+  deployment-owned key.
 - `BASEFWX_MASTER_PQ_PUB`: Path to master PQ public key
 
 ## Architecture Support

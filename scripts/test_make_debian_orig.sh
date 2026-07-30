@@ -13,10 +13,10 @@ cleanup() {
 trap cleanup EXIT
 
 source_root="${tmp_root}/source"
-out="${tmp_root}/basefwx_3.8.0.orig.tar.xz"
+out="${tmp_root}/basefwx_3.8.0~dev1.orig.tar.xz"
 mkdir -p "${source_root}/cpp/src"
 
-printf '3.8.0\n' > "${source_root}/VERSION"
+printf '3.8.0-dev1\n' > "${source_root}/VERSION"
 printf 'public\n' > "${source_root}/cpp/src/keep.cpp"
 printf 'untracked public\n' > "${source_root}/UNTRACKED.md"
 printf '%s\n' \
@@ -66,7 +66,7 @@ git -C "${source_root}" init -q
 git -C "${source_root}" config user.name "BaseFWX Test"
 git -C "${source_root}" config user.email "basefwx-test@example.invalid"
 git -C "${source_root}" add VERSION .gitignore cpp/src/keep.cpp
-git -C "${source_root}" commit -qm initial
+git -C "${source_root}" -c commit.gpgsign=false commit -qm initial
 for private_path in "${ignored_paths[@]}"; do
   if ! git -C "${source_root}" check-ignore -q -- "${private_path}"; then
     echo "synthetic private fixture is not ignored: ${private_path}" >&2
@@ -80,9 +80,9 @@ SOURCE_DATE_EPOCH=1 \
   --output "${out}" >/dev/null
 
 listing="$(tar -tf "${out}")"
-grep -qx 'basefwx-3.8.0/VERSION' <<<"${listing}"
-grep -qx 'basefwx-3.8.0/cpp/src/keep.cpp' <<<"${listing}"
-grep -qx 'basefwx-3.8.0/UNTRACKED.md' <<<"${listing}"
+grep -qx 'basefwx-3.8.0~dev1/VERSION' <<<"${listing}"
+grep -qx 'basefwx-3.8.0~dev1/cpp/src/keep.cpp' <<<"${listing}"
+grep -qx 'basefwx-3.8.0~dev1/UNTRACKED.md' <<<"${listing}"
 
 high_risk_pattern='(^|/)(AI_gen|\.private|\.claude|\.codex|\.cursor|\.copilot|\.secrets|\.env(\.[^/]*)?|\.envrc|\.aider[^/]*)(/|$)|(^|/)(AGENTS\.md|AI_NOTES\.md|CLAUDE\.md|RULE\.md|\.cursorrules)$'
 if grep -Eqi "${high_risk_pattern}" <<<"${listing}"; then
@@ -91,7 +91,7 @@ if grep -Eqi "${high_risk_pattern}" <<<"${listing}"; then
   exit 1
 fi
 for private_path in "${ignored_paths[@]}"; do
-  if grep -Fqx "basefwx-3.8.0/${private_path}" <<<"${listing}"; then
+  if grep -Fqx "basefwx-3.8.0~dev1/${private_path}" <<<"${listing}"; then
     echo "orig tarball contains seeded private path: ${private_path}" >&2
     exit 1
   fi
@@ -107,7 +107,7 @@ git -C "${danger_root}" init -q
 git -C "${danger_root}" config user.name "BaseFWX Test"
 git -C "${danger_root}" config user.email "basefwx-test@example.invalid"
 git -C "${danger_root}" add VERSION config/runtime/.env.production
-git -C "${danger_root}" commit -qm initial
+git -C "${danger_root}" -c commit.gpgsign=false commit -qm initial
 if SOURCE_DATE_EPOCH=1 \
      "${repo_root}/scripts/make_debian_orig.sh" \
      --source-root "${danger_root}" --output "${danger_out}" \

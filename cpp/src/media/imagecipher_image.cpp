@@ -5,6 +5,7 @@
  */
 
 #include "imagecipher_internal.hpp"
+#include "../common/image_limits.hpp"
 
 #include "basefwx/basefwx.hpp"
 #include "basefwx/constants.hpp"
@@ -32,6 +33,7 @@
 #include <iostream>
 #include <limits>
 #include <map>
+#include <memory>
 #include <optional>
 #include <random>
 #include <chrono>
@@ -64,7 +66,7 @@ struct StbAllocHeader {
 };
 
 void* stb_malloc(size_t size) {
-    if (size == 0) {
+    if (size == 0 || size > std::numeric_limits<size_t>::max() - sizeof(StbAllocHeader)) {
         return nullptr;
     }
     size_t total = size + sizeof(StbAllocHeader);
@@ -82,6 +84,11 @@ void* stb_realloc(void* ptr, size_t new_size) {
         return stb_malloc(new_size);
     }
     if (new_size == 0) {
+        auto* base = static_cast<std::uint8_t*>(ptr) - sizeof(StbAllocHeader);
+        delete[] base;
+        return nullptr;
+    }
+    if (new_size > std::numeric_limits<size_t>::max() - sizeof(StbAllocHeader)) {
         return nullptr;
     }
     auto* base = static_cast<std::uint8_t*>(ptr) - sizeof(StbAllocHeader);
@@ -115,6 +122,7 @@ void stb_free(void* ptr) {
 #define STBIW_MALLOC(sz) stb_malloc(sz)
 #define STBIW_REALLOC(p, newsz) stb_realloc(p, newsz)
 #define STBIW_FREE(p) stb_free(p)
+#define STBI_MAX_DIMENSIONS 32768
 #define STB_IMAGE_IMPLEMENTATION
 #define STBI_FAILURE_USERMSG
 #include "stb_image.h"
@@ -140,6 +148,21 @@ void stb_free(void* ptr) {
 #endif
 
 namespace basefwx::imagecipher::internal {
+
+namespace {
+
+constexpr std::size_t kMaxImageInputBytes = 256u << 20;
+constexpr std::size_t kMaxDecodedImageBytes = 512u << 20;
+
+struct StbiImageDeleter {
+    void operator()(stbi_uc* pixels) const noexcept {
+        stbi_image_free(pixels);
+    }
+};
+
+using StbiImage = std::unique_ptr<stbi_uc, StbiImageDeleter>;
+
+}  // namespace
 
 struct Xoroshiro128Plus {
     std::uint64_t s0 = 0;
@@ -179,6 +202,10 @@ struct ImageBuffer {
 };
 
 ImageBuffer DecodeImage(const Bytes& blob, const std::filesystem::path& path_hint) {
+    if (blob.size() > kMaxImageInputBytes) {
+        throw std::runtime_error("Image input exceeds 256 MiB limit: "
+                                 + path_hint.string());
+    }
     int width = 0;
     int height = 0;
     int channels_in_file = 0;
@@ -194,20 +221,29 @@ ImageBuffer DecodeImage(const Bytes& blob, const std::filesystem::path& path_hin
     } else {
         target_channels = 3;
     }
+    basefwx::internal::CheckedDecodedImageBytes(
+        width,
+        height,
+        target_channels,
+        kMaxDecodedImageBytes,
+        "Image input");
 
     int loaded_channels = 0;
-    unsigned char* data = stbi_load_from_memory(blob.data(), static_cast<int>(blob.size()),
-                                                &width, &height, &loaded_channels,
-                                                target_channels);
+    StbiImage data(stbi_load_from_memory(blob.data(), static_cast<int>(blob.size()),
+                                         &width, &height, &loaded_channels,
+                                         target_channels));
     if (!data) {
         const char* reason = stbi_failure_reason();
         std::string msg = reason ? reason : "unknown error";
         throw std::runtime_error("Failed to decode image: " + msg);
     }
-    std::size_t total = static_cast<std::size_t>(width) * static_cast<std::size_t>(height)
-                        * static_cast<std::size_t>(target_channels);
-    Bytes pixels(data, data + total);
-    stbi_image_free(data);
+    const std::size_t total = basefwx::internal::CheckedDecodedImageBytes(
+        width,
+        height,
+        target_channels,
+        kMaxDecodedImageBytes,
+        "Decoded image");
+    Bytes pixels(data.get(), data.get() + total);
 
     ImageBuffer buffer;
     buffer.width = width;

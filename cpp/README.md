@@ -4,6 +4,12 @@ This C++ implementation is wire-compatible with BaseFWX 3.6.4 and covers the
 current CLI/library surface used in release builds, including fwxAES, jMG, kFM,
 and the shared codec families.
 
+Active development now targets mathematically grounded, high-performance C++
+cryptographic primitives. The image-, audio-, and video-specific kFM/kFA/jMG
+codecs remain available for 3.7.0+ compatibility, but are retired from routine
+maintenance after this change. Only security, correctness, and compatibility
+fixes are planned for those codecs.
+
 ## Build
 
 ```bash
@@ -98,7 +104,8 @@ data instead of being mislabeled as a corrupted BaseFWX container.
 - Use `jmge --archive` when you explicitly want the encrypted original payload appended for exact restore.
 - `--no-log` suppresses telemetry/progress/warnings while preserving primary outputs/errors.
 - `--verbose` adds a hardware routing reason line.
-- jMG video is temporarily disabled by default unless `BASEFWX_ENABLE_JMG_VIDEO=1`.
+- jMG video remains disabled by default;
+  `BASEFWX_ENABLE_JMG_VIDEO=1` exists for compatibility use.
 - Current C++ codec support covers b256/b512/pb512 plus b512file/pb512file
   (AES-heavy) and fwxaes. Argon2id + ML-KEM-768 support is enabled when the
   dependencies are installed.

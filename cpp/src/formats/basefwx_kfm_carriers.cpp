@@ -5,6 +5,7 @@
  */
 
 #include "basefwx_kfm_internal.hpp"
+#include "../common/image_limits.hpp"
 
 #include "basefwx/basefwx.hpp"
 #include "basefwx/crypto.hpp"
@@ -18,6 +19,7 @@
 #include <cstring>
 #include <filesystem>
 #include <limits>
+#include <memory>
 #include <optional>
 #include <random>
 #include <stdexcept>
@@ -29,6 +31,21 @@
 #include "stb_image_write.h"
 
 namespace basefwx::internal {
+
+namespace {
+
+constexpr std::size_t kMaxKfmDecodedImageBytes =
+    kKfmMaxPayload + (16u << 20);
+
+struct StbiImageDeleter {
+    void operator()(stbi_uc* pixels) const noexcept {
+        stbi_image_free(pixels);
+    }
+};
+
+using StbiImage = std::unique_ptr<stbi_uc, StbiImageDeleter>;
+
+}  // namespace
 
 std::uint16_t Rotl16(std::uint16_t value, unsigned int shift) {
     shift &= 15u;
@@ -582,17 +599,32 @@ std::vector<std::uint8_t> ReadPngCarrierBytes(const std::filesystem::path& path)
     int width = 0;
     int height = 0;
     int channels = 0;
-    stbi_uc* raw = stbi_load(path.string().c_str(), &width, &height, &channels, 0);
+    if (!stbi_info(path.string().c_str(), &width, &height, &channels)) {
+        std::string reason = stbi_failure_reason() ? stbi_failure_reason() : "unknown";
+        throw std::runtime_error("Failed to inspect PNG carrier: " + reason);
+    }
+    CheckedDecodedImageBytes(
+        width,
+        height,
+        channels,
+        kMaxKfmDecodedImageBytes,
+        "PNG carrier");
+    StbiImage raw(stbi_load(path.string().c_str(), &width, &height, &channels, 0));
     if (!raw || width <= 0 || height <= 0 || channels <= 0) {
         std::string reason = stbi_failure_reason() ? stbi_failure_reason() : "unknown";
         throw std::runtime_error("Failed to load PNG carrier: " + reason);
     }
 
-    auto mapped = TryDecodeMappedPngCarrier(raw, width, height, channels);
+    CheckedDecodedImageBytes(
+        width,
+        height,
+        channels,
+        kMaxKfmDecodedImageBytes,
+        "Decoded PNG carrier");
+    auto mapped = TryDecodeMappedPngCarrier(raw.get(), width, height, channels);
     std::vector<std::uint8_t> out = mapped.has_value()
         ? *mapped
-        : LegacyReadPngCarrierBytes(raw, width, height, channels);
-    stbi_image_free(raw);
+        : LegacyReadPngCarrierBytes(raw.get(), width, height, channels);
     return out;
 }
 

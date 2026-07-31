@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import io
+import stat
 import tempfile
 import unittest
 from pathlib import Path
@@ -46,6 +47,27 @@ class MasterKeyPolicyTests(unittest.TestCase):
             self.assertTrue(_primitives._env_enabled_value(value), value)
         for value in (None, "", "0", "false", "off", "garbage"):
             self.assertFalse(_primitives._env_enabled_value(value), value)
+
+    def test_mutable_secret_clear_zeros_storage(self):
+        secret = bytearray(b"sensitive")
+        self.assertIsNone(_primitives._clear_secret(secret))
+        self.assertEqual(secret, bytearray(len(secret)))
+
+    @unittest.skipIf(os.name == "nt", "POSIX mode assertion")
+    def test_ec_keypair_is_published_with_safe_modes(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            public_path = root / "master.pub"
+            private_path = root / "master.pem"
+            old_umask = os.umask(0)
+            try:
+                _master_key._write_ec_keypair(public_path, private_path)
+            finally:
+                os.umask(old_umask)
+
+            self.assertEqual(stat.S_IMODE(private_path.stat().st_mode), 0o600)
+            self.assertEqual(stat.S_IMODE(public_path.stat().st_mode), 0o644)
+            self.assertFalse(list(root.glob(".*.tmp")))
 
     def test_explicit_private_key_environment_path_wins(self):
         with tempfile.TemporaryDirectory() as temp_dir:

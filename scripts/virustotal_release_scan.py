@@ -21,7 +21,7 @@ import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
-from urllib import error, request
+from urllib import error, parse, request
 
 
 VT_API = "https://www.virustotal.com/api/v3"
@@ -53,6 +53,16 @@ class VtClient:
         data: bytes | None = None,
         content_type: str | None = None,
     ) -> dict[str, Any]:
+        parsed_url = parse.urlsplit(url)
+        if (
+            parsed_url.scheme != "https"
+            or parsed_url.hostname != "www.virustotal.com"
+            or parsed_url.port not in (None, 443)
+            or parsed_url.username is not None
+            or parsed_url.password is not None
+            or not parsed_url.path.startswith("/api/v3/")
+        ):
+            raise ValueError("VirusTotal request URL must use the official HTTPS API")
         hdrs = {"accept": "application/json", "x-apikey": self.api_key}
         if content_type:
             hdrs["content-type"] = content_type
@@ -61,7 +71,7 @@ class VtClient:
             self._rate_limit()
             req = request.Request(url, data=data, headers=hdrs, method=method)
             try:
-                with request.urlopen(req, timeout=300) as resp:
+                with request.urlopen(req, timeout=300) as resp:  # nosec B310
                     payload = resp.read().decode("utf-8")
                     return json.loads(payload) if payload else {}
             except error.HTTPError as exc:

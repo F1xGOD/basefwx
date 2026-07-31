@@ -6,11 +6,21 @@
 
 from __future__ import annotations
 
+from typing import BinaryIO, NamedTuple
+
 from ._b512_common import basefwx
 from ._b512_obfuscation import (
     _estimate_aead_blob_size,
     _resolve_payload_length_from_file_size,
 )
+
+
+def _remove_if_exists(path: str) -> None:
+    try:
+        basefwx.os.remove(path)
+    except FileNotFoundError:
+        return
+
 
 def _b512_encode_path(path: 'basefwx.pathlib.Path', password: str, reporter: 'basefwx._ProgressReporter'=None, file_index: int=0, total_files: int=1, strip_metadata: bool=False, use_master: bool=True, master_pubkey: 'basefwx.typing.Optional[bytes]'=None, pack_flag: str='', output_path: 'basefwx.typing.Optional[basefwx.pathlib.Path]'=None, display_path: 'basefwx.typing.Optional[basefwx.pathlib.Path]'=None, keep_input: bool=False) -> 'basefwx.typing.Tuple[basefwx.pathlib.Path, int]':
     basefwx._ensure_existing_file(path)
@@ -26,7 +36,6 @@ def _b512_encode_path(path: 'basefwx.pathlib.Path', password: str, reporter: 'ba
     master_selection = basefwx._select_master_key(
         use_master and (not strip_metadata), master_pubkey
     )
-    pubkey_bytes = master_selection.pq_public
     use_master_effective = master_selection.used_master
     heavy_iters = basefwx.HEAVY_PBKDF2_ITERATIONS
     heavy_argon_time = basefwx.HEAVY_ARGON2_TIME_COST if basefwx.hash_secret_raw is not None else None
@@ -96,7 +105,6 @@ def _b512_encode_path_stream(path: 'basefwx.pathlib.Path', password: str, report
     master_selection = basefwx._select_master_key(
         use_master and (not strip_metadata), master_pubkey
     )
-    pubkey_bytes = master_selection.pq_public
     use_master_effective = master_selection.used_master
     stream_salt = basefwx._StreamObfuscator.generate_salt()
     ext_bytes = (path.suffix or '').encode('utf-8')
@@ -115,8 +123,19 @@ def _b512_encode_path_stream(path: 'basefwx.pathlib.Path', password: str, report
     stream_header.extend(ext_bytes)
     stream_header_bytes = bytes(stream_header)
     plaintext_len = len(prefix_bytes) + len(stream_header_bytes) + input_size
-    mask_key, user_blob, master_blob, _ = basefwx._prepare_mask_key(password, use_master_effective, mask_info=basefwx.B512_FILE_MASK_INFO, require_password=not use_master_effective, aad=b'b512file', master_selection=master_selection)
-    aead_key = basefwx._hkdf_sha256(mask_key, info=basefwx.B512_AEAD_INFO)
+    mask_key = None
+    aead_key = None
+    try:
+        mask_key_bytes, user_blob, master_blob, _ = basefwx._prepare_mask_key(password, use_master_effective, mask_info=basefwx.B512_FILE_MASK_INFO, require_password=not use_master_effective, aad=b'b512file', master_selection=master_selection)
+        mask_key = bytearray(mask_key_bytes)
+        mask_key_bytes = None
+        aead_key = bytearray(
+            basefwx._hkdf_sha256(mask_key, info=basefwx.B512_AEAD_INFO)
+        )
+    except BaseException:
+        mask_key = basefwx._clear_secret(mask_key)
+        aead_key = basefwx._clear_secret(aead_key)
+        raise
     len_user = len(user_blob)
     len_master = len(master_blob)
     estimated_payload_len = 4 + metadata_len + basefwx.AEAD_NONCE_LEN + plaintext_len + basefwx.AEAD_TAG_LEN
@@ -193,16 +212,11 @@ def _b512_encode_path_stream(path: 'basefwx.pathlib.Path', password: str, report
                 print(f'{output_path.name}: approx output size {human}')
         result = (output_path, actual_size)
     finally:
+        mask_key = basefwx._clear_secret(mask_key)
+        aead_key = basefwx._clear_secret(aead_key)
         for temp_path in cleanup_paths:
-            try:
-                basefwx.os.remove(temp_path)
-            except FileNotFoundError:
-                pass
+            _remove_if_exists(temp_path)
         temp_dir.cleanup()
-    basefwx._del('mask_key')
-    basefwx._del('aead_key')
-    basefwx._del('user_blob')
-    basefwx._del('master_blob')
     if result is None:
         raise RuntimeError('Streaming b512 encode failed')
     return result
@@ -376,182 +390,348 @@ def _b512_decode_path(path: 'basefwx.pathlib.Path', password: str, reporter: 'ba
     basefwx._del('decoded_bytes')
     return (target, output_len)
 
+
+class _B512StreamEnvelope(NamedTuple):
+    user_blob: bytes
+    master_blob: bytes
+    metadata_bytes: bytes
+    metadata: dict
+    nonce: bytes
+    tag: bytes
+    body_length: int
+
+
+def _read_required(handle: BinaryIO, length: int, message: str) -> bytes:
+    data = handle.read(length)
+    if len(data) != length:
+        raise ValueError(message)
+    return data
+
+
+def _read_b512_stream_envelope(
+    handle: BinaryIO,
+    path: 'basefwx.pathlib.Path',
+    input_size: int,
+    metadata_preview: dict,
+    metadata_blob_preview: str,
+) -> _B512StreamEnvelope:
+    len_user = int.from_bytes(
+        _read_required(handle, 4, 'Ciphertext payload truncated'),
+        'big',
+    )
+    if len_user > basefwx.LENGTH_PREFIXED_MAX or len_user > input_size - handle.tell():
+        raise ValueError('Ciphertext user key transport length invalid')
+    user_blob = _read_required(handle, len_user, 'Ciphertext payload truncated')
+
+    len_master = int.from_bytes(
+        _read_required(handle, 4, 'Ciphertext payload truncated'),
+        'big',
+    )
+    if len_master > basefwx.LENGTH_PREFIXED_MAX or len_master > input_size - handle.tell():
+        raise ValueError('Ciphertext master key transport length invalid')
+    if len_user + len_master > basefwx.LENGTH_PREFIXED_MAX:
+        raise ValueError('Ciphertext key transport header exceeds 64 MiB cap')
+    master_blob = _read_required(handle, len_master, 'Ciphertext payload truncated')
+
+    len_payload = int.from_bytes(
+        _read_required(handle, 4, 'Ciphertext payload truncated'),
+        'big',
+    )
+    len_payload = basefwx._resolve_payload_length_from_file_size(
+        path,
+        len_user,
+        len_master,
+        len_payload,
+    )
+    minimum_payload = 4 + basefwx.AEAD_NONCE_LEN + basefwx.AEAD_TAG_LEN
+    if len_payload < minimum_payload:
+        raise ValueError('Ciphertext payload truncated')
+
+    metadata_len = int.from_bytes(
+        _read_required(handle, 4, 'Ciphertext payload truncated'),
+        'big',
+    )
+    if (
+        metadata_len > basefwx.METADATA_MAX
+        or metadata_len > len_payload - 4
+        or metadata_len > input_size - handle.tell()
+    ):
+        raise ValueError('Ciphertext metadata length invalid')
+    if len_user + len_master + metadata_len > basefwx.LENGTH_PREFIXED_MAX:
+        raise ValueError('Ciphertext header exceeds 64 MiB cap')
+    metadata_bytes = _read_required(
+        handle,
+        metadata_len,
+        'Ciphertext payload truncated',
+    )
+
+    metadata_blob = metadata_blob_preview
+    metadata = metadata_preview
+    if metadata_blob:
+        if metadata_bytes != metadata_blob.encode('utf-8'):
+            raise ValueError('Metadata integrity mismatch detected')
+    else:
+        try:
+            metadata_blob = metadata_bytes.decode('utf-8') if metadata_bytes else ''
+        except UnicodeDecodeError:
+            metadata_blob = ''
+        metadata = basefwx._decode_metadata(metadata_blob)
+
+    nonce = _read_required(
+        handle,
+        basefwx.AEAD_NONCE_LEN,
+        'Ciphertext payload truncated',
+    )
+    body_length = (
+        len_payload
+        - 4
+        - metadata_len
+        - basefwx.AEAD_NONCE_LEN
+        - basefwx.AEAD_TAG_LEN
+    )
+    if body_length < 0:
+        raise ValueError('Ciphertext payload truncated')
+    body_offset = handle.tell()
+    handle.seek(body_length, basefwx.os.SEEK_CUR)
+    tag = _read_required(
+        handle,
+        basefwx.AEAD_TAG_LEN,
+        'Ciphertext payload truncated',
+    )
+    handle.seek(body_offset)
+    return _B512StreamEnvelope(
+        user_blob,
+        master_blob,
+        metadata_bytes,
+        metadata,
+        nonce,
+        tag,
+        body_length,
+    )
+
+
+def _decrypt_b512_stream_body(
+    handle: BinaryIO,
+    envelope: _B512StreamEnvelope,
+    password: str,
+    use_master: bool,
+    temp_dir: str,
+    cleanup_paths: 'basefwx.typing.List[str]',
+    reporter: 'basefwx._ProgressReporter',
+    file_index: int,
+    path: 'basefwx.pathlib.Path',
+) -> str:
+    mask_key = None
+    aead_key = None
+    try:
+        mask_key_bytes = basefwx._recover_mask_key_from_blob(
+            envelope.user_blob,
+            envelope.master_blob,
+            password,
+            use_master,
+            mask_info=basefwx.B512_FILE_MASK_INFO,
+            aad=b'b512file',
+            legacy_user_aad=basefwx.B512_AEAD_INFO,
+        )
+        mask_key = bytearray(mask_key_bytes)
+        mask_key_bytes = None
+        aead_key = bytearray(
+            basefwx._hkdf_sha256(mask_key, info=basefwx.B512_AEAD_INFO)
+        )
+        decryptor = basefwx.Cipher(
+            basefwx.algorithms.AES(aead_key),
+            basefwx.modes.GCM(envelope.nonce, envelope.tag),
+        ).decryptor()
+        if envelope.metadata_bytes:
+            decryptor.authenticate_additional_data(envelope.metadata_bytes)
+        if reporter:
+            reporter.update(file_index, 0.35, 'seal', path)
+        with basefwx.tempfile.NamedTemporaryFile(
+            'w+b',
+            dir=temp_dir,
+            delete=False,
+        ) as plain_tmp:
+            cleanup_paths.append(plain_tmp.name)
+            remaining = envelope.body_length
+            processed = 0
+            while remaining > 0:
+                take = min(basefwx.STREAM_CHUNK_SIZE, remaining)
+                chunk = _read_required(handle, take, 'Ciphertext truncated')
+                plain_chunk = decryptor.update(chunk)
+                if plain_chunk:
+                    plain_tmp.write(plain_chunk)
+                remaining -= take
+                processed += take
+                if reporter:
+                    fraction = 0.35 + 0.25 * (
+                        processed / envelope.body_length
+                        if envelope.body_length
+                        else 1.0
+                    )
+                    reporter.update(file_index, fraction, 'seal', path)
+            final_chunk = decryptor.finalize()
+            if final_chunk:
+                plain_tmp.write(final_chunk)
+            return plain_tmp.name
+    finally:
+        mask_key = basefwx._clear_secret(mask_key)
+        aead_key = basefwx._clear_secret(aead_key)
+
+
+def _restore_b512_plaintext_stream(
+    plaintext_path: str,
+    envelope: _B512StreamEnvelope,
+    password: str,
+    use_master: bool,
+    temp_dir: str,
+    cleanup_paths: 'basefwx.typing.List[str]',
+    reporter: 'basefwx._ProgressReporter',
+    file_index: int,
+    path: 'basefwx.pathlib.Path',
+) -> 'tuple[str, int, bytes]':
+    with open(plaintext_path, 'rb') as plain_handle:
+        if envelope.metadata_bytes:
+            expected_prefix = envelope.metadata_bytes
+            prefix = _read_required(
+                plain_handle,
+                len(expected_prefix),
+                'Metadata integrity mismatch detected',
+            )
+            if prefix != expected_prefix:
+                raise ValueError('Metadata integrity mismatch detected')
+            delimiter = _read_required(
+                plain_handle,
+                len(basefwx.META_DELIM.encode('utf-8')),
+                'Malformed streaming payload: missing metadata delimiter',
+            )
+            if delimiter != basefwx.META_DELIM.encode('utf-8'):
+                raise ValueError('Malformed streaming payload: missing metadata delimiter')
+        stream_magic = _read_required(
+            plain_handle,
+            len(basefwx.STREAM_MAGIC),
+            'Malformed streaming payload: magic mismatch',
+        )
+        if stream_magic != basefwx.STREAM_MAGIC:
+            raise ValueError('Malformed streaming payload: magic mismatch')
+        chunk_size_value = int.from_bytes(
+            _read_required(
+                plain_handle,
+                4,
+                'Malformed streaming payload: missing chunk size',
+            ),
+            'big',
+        )
+        if chunk_size_value <= 0 or chunk_size_value > 16 << 20:
+            chunk_size_value = basefwx.STREAM_CHUNK_SIZE
+        original_size = int.from_bytes(
+            _read_required(
+                plain_handle,
+                8,
+                'Malformed streaming payload: missing original size',
+            ),
+            'big',
+        )
+        stream_salt = _read_required(
+            plain_handle,
+            basefwx._StreamObfuscator._SALT_LEN,
+            'Malformed streaming payload: missing salt',
+        )
+        ext_len = int.from_bytes(
+            _read_required(
+                plain_handle,
+                2,
+                'Malformed streaming payload: missing extension length',
+            ),
+            'big',
+        )
+        ext_bytes = _read_required(
+            plain_handle,
+            ext_len,
+            'Malformed streaming payload: truncated extension',
+        )
+        if not password and not use_master:
+            raise ValueError('Password required for streaming b512 decode')
+        fast_obf = (envelope.metadata.get('ENC-OBF') or 'yes').lower() == 'fast'
+        decoder = basefwx._StreamObfuscator.for_password(
+            password,
+            stream_salt,
+            fast=fast_obf,
+        )
+        with basefwx.tempfile.NamedTemporaryFile(
+            'w+b',
+            dir=temp_dir,
+            delete=False,
+        ) as clear_tmp:
+            cleanup_paths.append(clear_tmp.name)
+            processed = 0
+            while processed < original_size:
+                to_read = min(chunk_size_value, original_size - processed)
+                chunk = _read_required(
+                    plain_handle,
+                    to_read,
+                    'Streaming payload truncated',
+                )
+                plain_chunk = decoder.decode_chunk(chunk)
+                clear_tmp.write(plain_chunk)
+                processed += len(plain_chunk)
+                if reporter:
+                    fraction = 0.7 + 0.2 * (
+                        processed / original_size if original_size else 1.0
+                    )
+                    reporter.update(file_index, fraction, 'deobfuscate', path)
+            if plain_handle.read(1):
+                raise ValueError(
+                    'Streaming payload contained unexpected trailing data'
+                )
+            return clear_tmp.name, original_size, ext_bytes
+
+
 def _b512_decode_path_stream(path: 'basefwx.pathlib.Path', password: str, reporter: 'basefwx._ProgressReporter'=None, file_index: int=0, strip_metadata: bool=False, use_master: bool=True, meta_preview: 'basefwx.typing.Optional[basefwx.typing.Dict[str, basefwx.typing.Any]]'=None, metadata_blob_preview: str='', *, input_size: 'basefwx.typing.Optional[int]'=None) -> 'basefwx.typing.Tuple[basefwx.pathlib.Path, int]':
     if not basefwx.ENABLE_B512_AEAD:
         raise RuntimeError('Streaming b512 decode requires AEAD mode')
     basefwx._ensure_existing_file(path)
-    basefwx.os.chmod(path, 384)
+    basefwx.os.chmod(path, 0o600)
     input_size = input_size if input_size is not None else path.stat().st_size
-    meta = meta_preview or {}
-    metadata_blob = metadata_blob_preview or ''
-    use_master_effective = use_master and (not strip_metadata)
-    if meta.get('ENC-MASTER') == 'no':
+    metadata_preview = meta_preview or {}
+    use_master_effective = use_master and not strip_metadata
+    if metadata_preview.get('ENC-MASTER') == 'no':
         use_master_effective = False
-    temp_dir = basefwx.tempfile.TemporaryDirectory(prefix='basefwx-b512-dec-', dir=str(path.parent))
+    temp_dir = basefwx.tempfile.TemporaryDirectory(
+        prefix='basefwx-b512-dec-',
+        dir=str(path.parent),
+    )
     cleanup_paths: 'basefwx.typing.List[str]' = []
-    plaintext_path: 'basefwx.typing.Optional[str]' = None
-    decoded_path: 'basefwx.typing.Optional[str]' = None
-    chunk_size = basefwx.STREAM_CHUNK_SIZE
     try:
         with open(path, 'rb') as handle:
-            len_user_bytes = handle.read(4)
-            if len(len_user_bytes) < 4:
-                raise ValueError('Ciphertext payload truncated')
-            len_user = int.from_bytes(len_user_bytes, 'big')
-            if len_user > basefwx.LENGTH_PREFIXED_MAX or len_user > input_size - handle.tell():
-                raise ValueError('Ciphertext user key transport length invalid')
-            user_blob = handle.read(len_user)
-            if len(user_blob) != len_user:
-                raise ValueError('Ciphertext payload truncated')
-            len_master_bytes = handle.read(4)
-            if len(len_master_bytes) < 4:
-                raise ValueError('Ciphertext payload truncated')
-            len_master = int.from_bytes(len_master_bytes, 'big')
-            if len_master > basefwx.LENGTH_PREFIXED_MAX or len_master > input_size - handle.tell():
-                raise ValueError('Ciphertext master key transport length invalid')
-            if len_user + len_master > basefwx.LENGTH_PREFIXED_MAX:
-                raise ValueError(
-                    'Ciphertext key transport header exceeds 64 MiB cap'
-                )
-            master_blob = handle.read(len_master)
-            if len(master_blob) != len_master:
-                raise ValueError('Ciphertext payload truncated')
-            len_payload_bytes = handle.read(4)
-            if len(len_payload_bytes) < 4:
-                raise ValueError('Ciphertext payload truncated')
-            len_payload = int.from_bytes(len_payload_bytes, 'big')
-            len_payload = basefwx._resolve_payload_length_from_file_size(path, len_user, len_master, len_payload)
-            if len_payload < 4 + basefwx.AEAD_NONCE_LEN + basefwx.AEAD_TAG_LEN:
-                raise ValueError('Ciphertext payload truncated')
-            metadata_len_bytes = handle.read(4)
-            if len(metadata_len_bytes) < 4:
-                raise ValueError('Ciphertext payload truncated')
-            metadata_len = int.from_bytes(metadata_len_bytes, 'big')
-            if (
-                metadata_len > basefwx.METADATA_MAX
-                or metadata_len > len_payload - 4
-                or metadata_len > input_size - handle.tell()
-            ):
-                raise ValueError('Ciphertext metadata length invalid')
-            if (
-                len_user + len_master + metadata_len
-                > basefwx.LENGTH_PREFIXED_MAX
-            ):
-                raise ValueError('Ciphertext header exceeds 64 MiB cap')
-            metadata_bytes = handle.read(metadata_len)
-            if len(metadata_bytes) != metadata_len:
-                raise ValueError('Ciphertext payload truncated')
-            if metadata_blob:
-                if metadata_bytes != metadata_blob.encode('utf-8'):
-                    raise ValueError('Metadata integrity mismatch detected')
-            else:
-                try:
-                    metadata_blob = metadata_bytes.decode('utf-8') if metadata_bytes else ''
-                except UnicodeDecodeError:
-                    metadata_blob = ''
-                meta = basefwx._decode_metadata(metadata_blob)
-            nonce = handle.read(basefwx.AEAD_NONCE_LEN)
-            if len(nonce) != basefwx.AEAD_NONCE_LEN:
-                raise ValueError('Ciphertext payload truncated')
-            cipher_body_len = len_payload - 4 - metadata_len - basefwx.AEAD_NONCE_LEN - basefwx.AEAD_TAG_LEN
-            if cipher_body_len < 0:
-                raise ValueError('Ciphertext payload truncated')
-            cipher_body_start = handle.tell()
-            handle.seek(cipher_body_len, basefwx.os.SEEK_CUR)
-            tag = handle.read(basefwx.AEAD_TAG_LEN)
-            if len(tag) != basefwx.AEAD_TAG_LEN:
-                raise ValueError('Ciphertext payload truncated')
-            handle.seek(cipher_body_start)
-            mask_key = basefwx._recover_mask_key_from_blob(user_blob, master_blob, password, use_master_effective, mask_info=basefwx.B512_FILE_MASK_INFO, aad=b'b512file', legacy_user_aad=basefwx.B512_AEAD_INFO)
-            aead_key = basefwx._hkdf_sha256(mask_key, info=basefwx.B512_AEAD_INFO)
-            decryptor = basefwx.Cipher(basefwx.algorithms.AES(aead_key), basefwx.modes.GCM(nonce, tag)).decryptor()
-            if metadata_bytes:
-                decryptor.authenticate_additional_data(metadata_bytes)
-            if reporter:
-                reporter.update(file_index, 0.35, 'seal', path)
-            with basefwx.tempfile.NamedTemporaryFile('w+b', dir=temp_dir.name, delete=False) as plain_tmp:
-                cleanup_paths.append(plain_tmp.name)
-                plaintext_path = plain_tmp.name
-                remaining = cipher_body_len
-                processed = 0
-                while remaining > 0:
-                    take = min(chunk_size, remaining)
-                    chunk = handle.read(take)
-                    if len(chunk) != take:
-                        raise ValueError('Ciphertext truncated')
-                    plain_chunk = decryptor.update(chunk)
-                    if plain_chunk:
-                        plain_tmp.write(plain_chunk)
-                    remaining -= take
-                    processed += take
-                    if reporter:
-                        fraction = 0.35 + 0.25 * (processed / cipher_body_len if cipher_body_len else 1.0)
-                        reporter.update(file_index, fraction, 'seal', path)
-                final_chunk = decryptor.finalize()
-                if final_chunk:
-                    plain_tmp.write(final_chunk)
-        basefwx._del('mask_key')
-        basefwx._del('aead_key')
-        basefwx._del('user_blob')
-        basefwx._del('master_blob')
-        if plaintext_path is None:
-            raise RuntimeError('Streaming b512 decode failed to produce plaintext')
-        with open(plaintext_path, 'rb') as plain_handle:
-            if metadata_bytes:
-                expected_prefix = metadata_bytes
-                prefix = plain_handle.read(len(expected_prefix))
-                if prefix != expected_prefix:
-                    raise ValueError('Metadata integrity mismatch detected')
-                delim_bytes = basefwx.META_DELIM.encode('utf-8')
-                delim = plain_handle.read(len(delim_bytes))
-                if delim != delim_bytes:
-                    raise ValueError('Malformed streaming payload: missing metadata delimiter')
-            stream_magic = plain_handle.read(len(basefwx.STREAM_MAGIC))
-            if stream_magic != basefwx.STREAM_MAGIC:
-                raise ValueError('Malformed streaming payload: magic mismatch')
-            chunk_size_bytes = plain_handle.read(4)
-            if len(chunk_size_bytes) != 4:
-                raise ValueError('Malformed streaming payload: missing chunk size')
-            chunk_size_value = int.from_bytes(chunk_size_bytes, 'big')
-            if chunk_size_value <= 0 or chunk_size_value > 16 << 20:
-                chunk_size_value = basefwx.STREAM_CHUNK_SIZE
-            original_size_bytes = plain_handle.read(8)
-            if len(original_size_bytes) != 8:
-                raise ValueError('Malformed streaming payload: missing original size')
-            original_size = int.from_bytes(original_size_bytes, 'big')
-            stream_salt = plain_handle.read(basefwx._StreamObfuscator._SALT_LEN)
-            if len(stream_salt) != basefwx._StreamObfuscator._SALT_LEN:
-                raise ValueError('Malformed streaming payload: missing salt')
-            ext_len_bytes = plain_handle.read(2)
-            if len(ext_len_bytes) != 2:
-                raise ValueError('Malformed streaming payload: missing extension length')
-            ext_len = int.from_bytes(ext_len_bytes, 'big')
-            ext_bytes = plain_handle.read(ext_len)
-            if len(ext_bytes) != ext_len:
-                raise ValueError('Malformed streaming payload: truncated extension')
-            if not password and (not use_master_effective):
-                raise ValueError('Password required for streaming b512 decode')
-            obf_hint = (meta.get('ENC-OBF') or 'yes').lower()
-            fast_obf = obf_hint == 'fast'
-            decoder = basefwx._StreamObfuscator.for_password(password, stream_salt, fast=fast_obf)
-            with basefwx.tempfile.NamedTemporaryFile('w+b', dir=temp_dir.name, delete=False) as clear_tmp:
-                cleanup_paths.append(clear_tmp.name)
-                decoded_path = clear_tmp.name
-                processed = 0
-                while processed < original_size:
-                    to_read = min(chunk_size_value, original_size - processed)
-                    chunk = plain_handle.read(to_read)
-                    if len(chunk) != to_read:
-                        raise ValueError('Streaming payload truncated')
-                    plain_chunk = decoder.decode_chunk(chunk)
-                    clear_tmp.write(plain_chunk)
-                    processed += len(plain_chunk)
-                    if reporter:
-                        fraction = 0.7 + 0.2 * (processed / original_size if original_size else 1.0)
-                        reporter.update(file_index, fraction, 'deobfuscate', path)
-                leftover = plain_handle.read(1)
-                if leftover:
-                    raise ValueError('Streaming payload contained unexpected trailing data')
+            envelope = _read_b512_stream_envelope(
+                handle,
+                path,
+                input_size,
+                metadata_preview,
+                metadata_blob_preview or '',
+            )
+            plaintext_path = _decrypt_b512_stream_body(
+                handle,
+                envelope,
+                password,
+                use_master_effective,
+                temp_dir.name,
+                cleanup_paths,
+                reporter,
+                file_index,
+                path,
+            )
+        decoded_path, original_size, ext_bytes = _restore_b512_plaintext_stream(
+            plaintext_path,
+            envelope,
+            password,
+            use_master_effective,
+            temp_dir.name,
+            cleanup_paths,
+            reporter,
+            file_index,
+            path,
+        )
         target = path.with_suffix('')
         ext_text = ''
         if ext_bytes:
@@ -561,9 +741,7 @@ def _b512_decode_path_stream(path: 'basefwx.pathlib.Path', password: str, report
                 ext_text = ''
             if ext_text:
                 target = target.with_suffix(ext_text)
-        pack_flag = basefwx._pack_flag_from_meta(meta, ext_text)
-        if decoded_path is None:
-            raise RuntimeError('Missing decoded payload')
+        pack_flag = basefwx._pack_flag_from_meta(envelope.metadata, ext_text)
         basefwx.os.replace(decoded_path, target)
         cleanup_paths.remove(decoded_path)
         basefwx.os.remove(path)
@@ -582,11 +760,9 @@ def _b512_decode_path_stream(path: 'basefwx.pathlib.Path', password: str, report
         return (target, output_len)
     finally:
         for temp_path in cleanup_paths:
-            try:
-                basefwx.os.remove(temp_path)
-            except FileNotFoundError:
-                pass
+            _remove_if_exists(temp_path)
         temp_dir.cleanup()
+
 
 def _aes_heavy_encode_path_stream(path: 'basefwx.pathlib.Path', password: str, reporter: 'basefwx._ProgressReporter'=None, file_index: int=0, strip_metadata: bool=False, use_master: bool=True, master_pubkey: 'basefwx.typing.Optional[bytes]'=None, pack_flag: str='', output_path: 'basefwx.typing.Optional[basefwx.pathlib.Path]'=None, display_path: 'basefwx.typing.Optional[basefwx.pathlib.Path]'=None, *, input_size: 'basefwx.typing.Optional[int]'=None, keep_input: bool=False) -> 'basefwx.typing.Tuple[basefwx.pathlib.Path, int]':
     basefwx._ensure_existing_file(path)
@@ -604,7 +780,6 @@ def _aes_heavy_encode_path_stream(path: 'basefwx.pathlib.Path', password: str, r
     master_selection = basefwx._select_master_key(
         use_master and (not strip_metadata), master_pubkey
     )
-    pubkey_bytes = master_selection.pq_public
     use_master_effective = master_selection.used_master
     kdf_used = basefwx._resolve_kdf_label(None)
     heavy_argon_time = basefwx.HEAVY_ARGON2_TIME_COST if basefwx.hash_secret_raw is not None else None
@@ -811,10 +986,7 @@ def _aes_heavy_encode_path_stream(path: 'basefwx.pathlib.Path', password: str, r
         basefwx._del('user_derived_key')
         basefwx._del('kem_shared')
         for temp_path in cleanup_paths:
-            try:
-                basefwx.os.remove(temp_path)
-            except FileNotFoundError:
-                pass
+            _remove_if_exists(temp_path)
         temp_dir.cleanup()
 
 def b512file_encode(file: str, code: str, strip_metadata: bool=False, use_master: bool=True, keep_input: bool=False):

@@ -127,6 +127,14 @@
   `pq=ml-kem-768|1024` instead of misleading `oqs=OFF`.
 
 ### Changed
+- **Media codec retirement.** The image-, audio-, and video-specific
+  kFM/kFA/jMG codecs remain available in the 3.7.0+ compatibility line,
+  including decode support for existing data, but retire from active
+  development after this change. Future work is limited to security,
+  correctness, and compatibility fixes; no new formats, features, or
+  performance work is planned. Active development shifts to mathematically
+  grounded, high-performance C++ cryptographic primitives. This is a
+  maintenance-status change, not a wire-format or API removal.
 - **Native package boundary and ABI policy.** GPL CLI headers and color
   implementation now live under `cpp/src/cli` and link only into the
   executable; `libbasefwx.so.3` and installed headers remain LGPL. CMake

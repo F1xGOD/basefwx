@@ -656,17 +656,26 @@ announce_step() {
     fi
 }
 
-run_with_heartbeat() {
-    local label="$1"
-    shift
-    local start_s=$SECONDS
-    usage_cpu_percent >/dev/null 2>&1 || true
-    if (( PROGRESS_INTERVAL <= 0 )); then
-        "$@" >>"$LOG" 2>&1
-        return $?
+terminate_background_step() {
+    local pid="$1"
+    local isolated_group="$2"
+    local signal="$3"
+    if (( isolated_group == 1 )); then
+        local pgid
+        pgid="$(ps -o pgid= -p "$pid" 2>/dev/null | tr -d '[:space:]')"
+        if [[ "$pgid" == "$pid" ]]; then
+            kill "-$signal" -- "-$pid" 2>/dev/null || true
+            return
+        fi
     fi
-    "$@" >>"$LOG" 2>&1 &
-    local pid=$!
+    kill "-$signal" "$pid" 2>/dev/null || true
+}
+
+monitor_background_step() {
+    local label="$1"
+    local pid="$2"
+    local isolated_group="$3"
+    local start_s="$4"
     local next_tick=$((start_s + PROGRESS_INTERVAL))
     local timed_out=0
     while kill -0 "$pid" 2>/dev/null; do
@@ -679,9 +688,9 @@ run_with_heartbeat() {
         if (( STEP_TIMEOUT_SECS > 0 && elapsed >= STEP_TIMEOUT_SECS )); then
             printf "  %s %s%s%s TIMEOUT after %ds (limit=%ds) — killing\n" \
                 "$EMOJI_PROGRESS" "$RED" "$label" "$RESET" "$elapsed" "$STEP_TIMEOUT_SECS"
-            kill -TERM "$pid" 2>/dev/null
+            terminate_background_step "$pid" "$isolated_group" TERM
             sleep 2
-            kill -KILL "$pid" 2>/dev/null
+            terminate_background_step "$pid" "$isolated_group" KILL
             timed_out=1
             break
         fi
@@ -709,6 +718,24 @@ run_with_heartbeat() {
     return $rc
 }
 
+run_with_heartbeat() {
+    local label="$1"
+    shift
+    local start_s=$SECONDS
+    usage_cpu_percent >/dev/null 2>&1 || true
+    if (( PROGRESS_INTERVAL <= 0 )); then
+        "$@" >>"$LOG" 2>&1
+        return $?
+    fi
+    # Job control gives the background shell/function its own process group,
+    # so a timeout can terminate compiler/Gradle/FFmpeg descendants as well.
+    set -m
+    "$@" >>"$LOG" 2>&1 &
+    local pid=$!
+    set +m
+    monitor_background_step "$label" "$pid" 1 "$start_s"
+}
+
 run_with_heartbeat_capture() {
     local label="$1"
     local output_file="$2"
@@ -719,43 +746,11 @@ run_with_heartbeat_capture() {
         "$@" >"$output_file" 2>>"$LOG"
         return $?
     fi
+    set -m
     "$@" >"$output_file" 2>>"$LOG" &
     local pid=$!
-    local next_tick=$((start_s + PROGRESS_INTERVAL))
-    local timed_out=0
-    while kill -0 "$pid" 2>/dev/null; do
-        sleep 1
-        local now=$SECONDS
-        local elapsed=$((now - start_s))
-        if (( STEP_TIMEOUT_SECS > 0 && elapsed >= STEP_TIMEOUT_SECS )); then
-            printf "  %s %s%s%s TIMEOUT after %ds (limit=%ds) — killing\n" \
-                "$EMOJI_PROGRESS" "$RED" "$label" "$RESET" "$elapsed" "$STEP_TIMEOUT_SECS"
-            kill -TERM "$pid" 2>/dev/null
-            sleep 2
-            kill -KILL "$pid" 2>/dev/null
-            timed_out=1
-            break
-        fi
-        if (( now >= next_tick )); then
-            if kill -0 "$pid" 2>/dev/null; then
-                local usage_line
-                usage_line="$(usage_snapshot)"
-                if [[ -n "$usage_line" ]]; then
-                    printf "  %s %s%s%s (%ds elapsed) | %s\n" "$EMOJI_PROGRESS" "$YELLOW" "$label" "$RESET" "$elapsed" "$usage_line"
-                else
-                    printf "  %s %s%s%s (%ds elapsed)\n" "$EMOJI_PROGRESS" "$YELLOW" "$label" "$RESET" "$elapsed"
-                fi
-            fi
-            next_tick=$((next_tick + PROGRESS_INTERVAL))
-        fi
-    done
-    wait "$pid" 2>/dev/null
-    local rc=$?
-    if (( timed_out == 1 )); then
-        FAILURES+=("$label (timed out after ${STEP_TIMEOUT_SECS}s)")
-        return 124
-    fi
-    return $rc
+    set +m
+    monitor_background_step "$label" "$pid" 1 "$start_s"
 }
 
 cooldown() {
@@ -4156,8 +4151,8 @@ if [[ "$RUN_JAVA_TESTS" == "1" ]]; then
     fi
 fi
 
-# reversible no-password methods
-for method in "${TEXT_NOPASS_METHODS[@]}"; do
+# reversible text methods
+for method in "${TEXT_NOPASS_METHODS[@]}" "${TEXT_PASS_METHODS[@]}"; do
     if [[ "$RUN_PY_TESTS" == "1" ]]; then
         py_out="$OUT_DIR/${method}_py.txt"
         time_cmd "${method}_py_correct" "$PYTHON_BIN" "$PY_HELPER" text-roundtrip "$method" "$TEXT_ORIG" "$py_out" "$PW"
@@ -4192,41 +4187,8 @@ for method in "${TEXT_NOPASS_METHODS[@]}"; do
     fi
 done
 
-# reversible password methods
+# wrong-password rejection only applies to password methods
 for method in "${TEXT_PASS_METHODS[@]}"; do
-    if [[ "$RUN_PY_TESTS" == "1" ]]; then
-        py_out="$OUT_DIR/${method}_py.txt"
-        time_cmd "${method}_py_correct" "$PYTHON_BIN" "$PY_HELPER" text-roundtrip "$method" "$TEXT_ORIG" "$py_out" "$PW"
-        add_verify "$TEXT_ORIG" "$py_out"
-    fi
-    if [[ "$RUN_PYPY_TESTS" == "1" && "$PYPY_AVAILABLE" == "1" ]]; then
-        pypy_out="$OUT_DIR/${method}_pypy.txt"
-        time_cmd "${method}_pypy_correct" "$PYPY_BIN" "$PY_HELPER" text-roundtrip "$method" "$TEXT_ORIG" "$pypy_out" "$PW"
-        add_verify "$TEXT_ORIG" "$pypy_out"
-    fi
-
-    if [[ "$RUN_CPP_TESTS" == "1" ]]; then
-        cpp_out="$OUT_DIR/${method}_cpp.txt"
-        if (( CPP_AVAILABLE == 1 )); then
-            cooldown "${method}_py_to_cpp_correct"
-            time_cmd "${method}_cpp_correct" cpp_text_roundtrip "$method" "$TEXT_ORIG" "$cpp_out" "$PW"
-            add_verify "$TEXT_ORIG" "$cpp_out"
-        else
-            FAILURES+=("${method}_cpp_correct (cpp unavailable)")
-        fi
-    fi
-
-    if [[ "$RUN_JAVA_TESTS" == "1" ]]; then
-        java_out="$OUT_DIR/${method}_java.txt"
-        if (( JAVA_AVAILABLE == 1 )); then
-            cooldown "${method}_cpp_to_java_correct"
-            time_cmd "${method}_java_correct" java_text_roundtrip "$method" "$TEXT_ORIG" "$java_out" "$PW"
-            add_verify "$TEXT_ORIG" "$java_out"
-        else
-            FAILURES+=("${method}_java_correct (java unavailable)")
-        fi
-    fi
-
     if [[ "$SKIP_WRONG" != "1" ]]; then
         if [[ "$RUN_PY_TESTS" == "1" ]]; then
             time_cmd "${method}_py_wrong" "$PYTHON_BIN" "$PY_HELPER" text-wrong "$method" "$TEXT_ORIG" "$PW" "$BAD_PW"

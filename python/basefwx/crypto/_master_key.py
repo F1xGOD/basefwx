@@ -57,6 +57,41 @@ def _read_key_file_bytes(path: 'basefwx.pathlib.Path') -> bytes:
     return data
 
 
+def _atomic_write_key_file(
+    path: 'basefwx.pathlib.Path',
+    data: bytes,
+    mode: int,
+) -> None:
+    """Publish key material atomically with its final permissions."""
+    path = basefwx.pathlib.Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor = -1
+    temp_path = None
+    try:
+        descriptor, temp_name = basefwx.tempfile.mkstemp(
+            prefix=f'.{path.name}.',
+            suffix='.tmp',
+            dir=str(path.parent),
+        )
+        temp_path = basefwx.pathlib.Path(temp_name)
+        if hasattr(basefwx.os, 'fchmod'):
+            basefwx.os.fchmod(descriptor, mode)
+        else:  # pragma: no cover - Windows fallback
+            basefwx.os.chmod(temp_path, mode)
+        with basefwx.os.fdopen(descriptor, 'wb') as handle:
+            descriptor = -1
+            handle.write(data)
+            handle.flush()
+            basefwx.os.fsync(handle.fileno())
+        basefwx.os.replace(temp_path, path)
+        temp_path = None
+    finally:
+        if descriptor >= 0:
+            basefwx.os.close(descriptor)
+        if temp_path is not None:
+            temp_path.unlink(missing_ok=True)
+
+
 def _decode_pubkey_bytes(raw: bytes) -> bytes:
     """Best-effort decoding pipeline supporting raw/zlib/base64 inputs."""
     if not raw:
@@ -143,10 +178,16 @@ def _load_master_ec_public() -> 'basefwx.typing.Optional[basefwx.ec.EllipticCurv
         public_key = private_key.public_key()
         if not pub_path.exists():
             try:
-                pub_path.write_bytes(public_key.public_bytes(encoding=basefwx.serialization.Encoding.PEM, format=basefwx.serialization.PublicFormat.SubjectPublicKeyInfo))
-                basefwx.os.chmod(pub_path, 420)
-            except Exception:
-                pass
+                _atomic_write_key_file(
+                    pub_path,
+                    public_key.public_bytes(
+                        encoding=basefwx.serialization.Encoding.PEM,
+                        format=basefwx.serialization.PublicFormat.SubjectPublicKeyInfo,
+                    ),
+                    0o644,
+                )
+            except OSError:
+                return public_key
         return public_key
     return None
 
@@ -173,18 +214,8 @@ def _write_ec_keypair(public_path: 'basefwx.pathlib.Path', private_path: 'basefw
     public_key = private_key.public_key()
     private_bytes = private_key.private_bytes(encoding=basefwx.serialization.Encoding.PEM, format=basefwx.serialization.PrivateFormat.PKCS8, encryption_algorithm=basefwx.serialization.NoEncryption())
     public_bytes = public_key.public_bytes(encoding=basefwx.serialization.Encoding.PEM, format=basefwx.serialization.PublicFormat.SubjectPublicKeyInfo)
-    private_path.parent.mkdir(parents=True, exist_ok=True)
-    public_path.parent.mkdir(parents=True, exist_ok=True)
-    private_path.write_bytes(private_bytes)
-    public_path.write_bytes(public_bytes)
-    try:
-        basefwx.os.chmod(private_path, 384)
-    except Exception:
-        pass
-    try:
-        basefwx.os.chmod(public_path, 420)
-    except Exception:
-        pass
+    _atomic_write_key_file(private_path, private_bytes, 0o600)
+    _atomic_write_key_file(public_path, public_bytes, 0o644)
     return (public_key, private_key)
 
 

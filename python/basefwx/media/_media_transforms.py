@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 from ._media_shared import basefwx
+from ._process_pipeline import _VideoProcessPipeline
 
 
 class _MediaTransformMixin:
@@ -23,8 +24,9 @@ class _MediaTransformMixin:
                 shuffled = blocks[perm_arr]
                 out_arr = shuffled.reshape(blocks_y, blocks_x, block_size, block_size, channels).transpose(0, 2, 1, 3, 4).reshape(height, width, channels)
                 return out_arr.tobytes()
-            except Exception:
-                pass
+            except (IndexError, OverflowError, TypeError, ValueError) as acceleration_error:
+                # Optional acceleration failed; use the equivalent scalar path.
+                del acceleration_error
         out = bytearray(len(frame))
         for dest_idx in range(total_blocks):
             src_idx = perm[dest_idx]
@@ -56,8 +58,9 @@ class _MediaTransformMixin:
                 restored = blocks[inv]
                 out_arr = restored.reshape(blocks_y, blocks_x, block_size, block_size, channels).transpose(0, 2, 1, 3, 4).reshape(height, width, channels)
                 return out_arr.tobytes()
-            except Exception:
-                pass
+            except (IndexError, OverflowError, TypeError, ValueError) as acceleration_error:
+                # Optional acceleration failed; use the equivalent scalar path.
+                del acceleration_error
         out = bytearray(len(frame))
         for dest_idx in range(total_blocks):
             src_idx = perm[dest_idx]
@@ -91,8 +94,9 @@ class _MediaTransformMixin:
                 arr = basefwx.np.frombuffer(block, dtype=basefwx.np.dtype('<u2'))
                 shuffled = arr[basefwx.np.asarray(perm, dtype=basefwx.np.intp)]
                 return shuffled.tobytes() + tail
-            except Exception:
-                pass
+            except (IndexError, OverflowError, TypeError, ValueError) as acceleration_error:
+                # Optional acceleration failed; use the equivalent scalar path.
+                del acceleration_error
         out = bytearray(len(block))
         for dest_idx, src_idx in enumerate(perm):
             src_off = src_idx * 2
@@ -118,8 +122,9 @@ class _MediaTransformMixin:
                 out_arr = basefwx.np.empty(samples, dtype=basefwx.np.dtype('<u2'))
                 out_arr[basefwx.np.asarray(perm, dtype=basefwx.np.intp)] = arr
                 return out_arr.tobytes() + tail
-            except Exception:
-                pass
+            except (IndexError, OverflowError, TypeError, ValueError) as acceleration_error:
+                # Optional acceleration failed; use the equivalent scalar path.
+                del acceleration_error
         out = bytearray(len(block))
         for dest_idx, src_idx in enumerate(perm):
             src_off = src_idx * 2
@@ -170,8 +175,10 @@ class _MediaTransformMixin:
                     raw_frames: 'list[bytes]' = []
                     for _ in range(group_frames):
                         data = src.read(frame_size)
-                        if not data or len(data) < frame_size:
+                        if not data:
                             break
+                        if len(data) < frame_size:
+                            raise ValueError('Raw video input contains a truncated frame')
                         raw_frames.append(data)
                     if not raw_frames:
                         break
@@ -247,8 +254,10 @@ class _MediaTransformMixin:
                     scrambled_frames: 'list[bytes]' = []
                     for _ in range(group_frames):
                         data = src.read(frame_size)
-                        if not data or len(data) < frame_size:
+                        if not data:
                             break
+                        if len(data) < frame_size:
+                            raise ValueError('Raw video input contains a truncated frame')
                         scrambled_frames.append(data)
                     if not scrambled_frames:
                         break
@@ -309,18 +318,6 @@ class _MediaTransformMixin:
         return bytes(out)
 
     @staticmethod
-    def _drain_process_stderr(proc: 'basefwx.subprocess.Popen[bytes]') -> str:
-        try:
-            if proc.stderr is None:
-                return ''
-            data = proc.stderr.read()
-            if not data:
-                return ''
-            return data.decode('utf-8', 'replace')
-        except Exception:
-            return ''
-
-    @staticmethod
     def _scramble_video_stream(decode_cmd: 'list[str]', encode_cmd: 'list[str]', width: int, height: int, fps: float, base_key: bytes, *, security_profile: int=0, progress_cb: 'basefwx.typing.Optional[basefwx.typing.Callable[[float], None]]'=None, workers: 'basefwx.typing.Optional[int]'=None, use_gpu_pixels: bool=False, gpu_pixels_strict: bool=False, total_frames_hint: int=0) -> None:
         frame_size = width * height * 3
         if frame_size <= 0:
@@ -334,10 +331,12 @@ class _MediaTransformMixin:
         frame_block_label = basefwx.MediaCipher._jmg_profile_label(b'jmg-fblk', security_profile)
         frame_group_label = basefwx.MediaCipher._jmg_profile_label(b'jmg-fgrp', security_profile)
         video_mask_bits = basefwx.MediaCipher._jmg_video_mask_bits(security_profile)
-        decode_proc = basefwx.subprocess.Popen([str(part) for part in decode_cmd], stdout=basefwx.subprocess.PIPE, stderr=basefwx.subprocess.PIPE)
-        encode_proc = basefwx.subprocess.Popen([str(part) for part in encode_cmd], stdin=basefwx.subprocess.PIPE, stderr=basefwx.subprocess.PIPE)
+        pipeline = None
         cancelled = False
         try:
+            pipeline = _VideoProcessPipeline(decode_cmd, encode_cmd)
+            decode_proc = pipeline.decoder
+            encode_proc = pipeline.encoder
             frame_index = 0
             group_index = 0
             processed_frames = 0
@@ -382,8 +381,8 @@ class _MediaTransformMixin:
                         encode_proc.stdin.write(frames[idx])
                     except (BrokenPipeError, OSError) as exc:
                         if isinstance(exc, BrokenPipeError) or getattr(exc, 'errno', None) == 32:
-                            encode_rc = encode_proc.wait()
-                            encode_err = basefwx.MediaCipher._drain_process_stderr(encode_proc)
+                            encode_rc = pipeline.wait_encoder()
+                            encode_err = pipeline.encoder_error
                             raise RuntimeError(encode_err.strip() or f'ffmpeg video encode pipe closed unexpectedly (rc={encode_rc})') from None
                         raise
                 processed_frames += len(frames)
@@ -393,10 +392,9 @@ class _MediaTransformMixin:
                 group_index += 1
             if encode_proc.stdin is not None:
                 encode_proc.stdin.close()
-            decode_rc = decode_proc.wait()
-            encode_rc = encode_proc.wait()
-            decode_err = basefwx.MediaCipher._drain_process_stderr(decode_proc)
-            encode_err = basefwx.MediaCipher._drain_process_stderr(encode_proc)
+            decode_rc, encode_rc = pipeline.wait()
+            decode_err = pipeline.decoder_error
+            encode_err = pipeline.encoder_error
             if decode_rc != 0:
                 raise RuntimeError(decode_err.strip() or 'ffmpeg video decode failed')
             if encode_rc != 0:
@@ -409,22 +407,12 @@ class _MediaTransformMixin:
             cancelled = True
             raise
         finally:
+            if pipeline is not None:
+                pipeline.close()
             if executor and (not cancelled):
                 executor.shutdown(wait=True)
             if executor and cancelled:
                 executor.shutdown(wait=False, cancel_futures=True)
-            with basefwx.contextlib.suppress(Exception):
-                if decode_proc.poll() is None:
-                    decode_proc.terminate()
-            with basefwx.contextlib.suppress(Exception):
-                if encode_proc.poll() is None:
-                    encode_proc.terminate()
-            with basefwx.contextlib.suppress(Exception):
-                if decode_proc.poll() is None:
-                    decode_proc.kill()
-            with basefwx.contextlib.suppress(Exception):
-                if encode_proc.poll() is None:
-                    encode_proc.kill()
 
     @staticmethod
     def _unscramble_video_stream(decode_cmd: 'list[str]', encode_cmd: 'list[str]', width: int, height: int, fps: float, base_key: bytes, *, security_profile: int=0, progress_cb: 'basefwx.typing.Optional[basefwx.typing.Callable[[float], None]]'=None, workers: 'basefwx.typing.Optional[int]'=None, use_gpu_pixels: bool=False, gpu_pixels_strict: bool=False, total_frames_hint: int=0) -> None:
@@ -440,10 +428,12 @@ class _MediaTransformMixin:
         frame_block_label = basefwx.MediaCipher._jmg_profile_label(b'jmg-fblk', security_profile)
         frame_group_label = basefwx.MediaCipher._jmg_profile_label(b'jmg-fgrp', security_profile)
         video_mask_bits = basefwx.MediaCipher._jmg_video_mask_bits(security_profile)
-        decode_proc = basefwx.subprocess.Popen([str(part) for part in decode_cmd], stdout=basefwx.subprocess.PIPE, stderr=basefwx.subprocess.PIPE)
-        encode_proc = basefwx.subprocess.Popen([str(part) for part in encode_cmd], stdin=basefwx.subprocess.PIPE, stderr=basefwx.subprocess.PIPE)
+        pipeline = None
         cancelled = False
         try:
+            pipeline = _VideoProcessPipeline(decode_cmd, encode_cmd)
+            decode_proc = pipeline.decoder
+            encode_proc = pipeline.encoder
             frame_index = 0
             group_index = 0
             processed_frames = 0
@@ -491,8 +481,8 @@ class _MediaTransformMixin:
                         encode_proc.stdin.write(frame)
                     except (BrokenPipeError, OSError) as exc:
                         if isinstance(exc, BrokenPipeError) or getattr(exc, 'errno', None) == 32:
-                            encode_rc = encode_proc.wait()
-                            encode_err = basefwx.MediaCipher._drain_process_stderr(encode_proc)
+                            encode_rc = pipeline.wait_encoder()
+                            encode_err = pipeline.encoder_error
                             raise RuntimeError(encode_err.strip() or f'ffmpeg video encode pipe closed unexpectedly (rc={encode_rc})') from None
                         raise
                 processed_frames += len(restored)
@@ -502,10 +492,9 @@ class _MediaTransformMixin:
                 group_index += 1
             if encode_proc.stdin is not None:
                 encode_proc.stdin.close()
-            decode_rc = decode_proc.wait()
-            encode_rc = encode_proc.wait()
-            decode_err = basefwx.MediaCipher._drain_process_stderr(decode_proc)
-            encode_err = basefwx.MediaCipher._drain_process_stderr(encode_proc)
+            decode_rc, encode_rc = pipeline.wait()
+            decode_err = pipeline.decoder_error
+            encode_err = pipeline.encoder_error
             if decode_rc != 0:
                 raise RuntimeError(decode_err.strip() or 'ffmpeg video decode failed')
             if encode_rc != 0:
@@ -518,22 +507,12 @@ class _MediaTransformMixin:
             cancelled = True
             raise
         finally:
+            if pipeline is not None:
+                pipeline.close()
             if executor and (not cancelled):
                 executor.shutdown(wait=True)
             if executor and cancelled:
                 executor.shutdown(wait=False, cancel_futures=True)
-            with basefwx.contextlib.suppress(Exception):
-                if decode_proc.poll() is None:
-                    decode_proc.terminate()
-            with basefwx.contextlib.suppress(Exception):
-                if encode_proc.poll() is None:
-                    encode_proc.terminate()
-            with basefwx.contextlib.suppress(Exception):
-                if decode_proc.poll() is None:
-                    decode_proc.kill()
-            with basefwx.contextlib.suppress(Exception):
-                if encode_proc.poll() is None:
-                    encode_proc.kill()
 
     @staticmethod
     def _scramble_audio_raw(raw_in: 'basefwx.pathlib.Path', raw_out: 'basefwx.pathlib.Path', sample_rate: int, channels: int, base_key: bytes, *, security_profile: int=0, progress_cb: 'basefwx.typing.Optional[basefwx.typing.Callable[[float], None]]'=None, workers: 'basefwx.typing.Optional[int]'=None) -> None:

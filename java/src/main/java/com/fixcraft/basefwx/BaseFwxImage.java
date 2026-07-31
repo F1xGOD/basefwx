@@ -500,10 +500,19 @@ public final class BaseFwxImage {
             pcm[i + 1] = (byte) ((sample >> 8) & 0xFF);
         }
         try (ByteArrayOutputStream out = new ByteArrayOutputStream(44 + pcm.length)) {
-            out.write('R'); out.write('I'); out.write('F'); out.write('F');
+            out.write('R');
+            out.write('I');
+            out.write('F');
+            out.write('F');
             writeU32LE(out, 36L + pcm.length);
-            out.write('W'); out.write('A'); out.write('V'); out.write('E');
-            out.write('f'); out.write('m'); out.write('t'); out.write(' ');
+            out.write('W');
+            out.write('A');
+            out.write('V');
+            out.write('E');
+            out.write('f');
+            out.write('m');
+            out.write('t');
+            out.write(' ');
             writeU32LE(out, 16);
             writeU16LE(out, 1);
             writeU16LE(out, 1);
@@ -511,7 +520,10 @@ public final class BaseFwxImage {
             writeU32LE(out, KFM_AUDIO_RATE * 2L);
             writeU16LE(out, 2);
             writeU16LE(out, 16);
-            out.write('d'); out.write('a'); out.write('t'); out.write('a');
+            out.write('d');
+            out.write('a');
+            out.write('t');
+            out.write('a');
             writeU32LE(out, pcm.length);
             out.write(pcm);
             return out.toByteArray();

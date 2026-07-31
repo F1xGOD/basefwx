@@ -31,6 +31,15 @@
   X25519) with C++/liboqs KATs under `testdata/protocol_kats/`. See
   `CHANGELOG.md` / `COMPATIBILITY.md`.
 
+### Retired media codecs
+
+The image-, audio-, and video-specific kFM/kFA/jMG codecs remain available for
+compatibility in the 3.7.0+ line, but are retired from routine feature and
+performance maintenance after the current unreleased change. Security,
+correctness, and existing-data compatibility issues in the latest release
+remain in scope under this policy. Active development targets mathematically
+grounded, high-performance C++ cryptographic primitives.
+
 ### Historical: What's New in 3.6.4
 
 For the full write-up — KDF cost table, security-normalized
@@ -310,6 +319,15 @@ values above the ceiling fail before any KDF work. The ceiling is
 twice the shared 2,000,000-iteration heavy writer profile, is aligned
 with YUME's protocol-side ceiling, and bounds unauthenticated CPU
 amplification without changing the writer default.
+
+### Native image decode bounds
+
+The C++ image paths treat encoded media as untrusted input. The jMG image
+decoder rejects encoded inputs above 256 MiB, decoded images above 512 MiB,
+or either dimension above 32768 pixels. The kFM PNG carrier path permits its
+documented 1 GiB payload ceiling plus framing overhead, but applies the same
+checked dimension multiplication before processing pixels. These checks live
+outside the vendored `stb_image` source so upstream updates remain auditable.
 
 ---
 

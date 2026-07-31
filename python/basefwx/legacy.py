@@ -425,6 +425,8 @@ class basefwx:
 
     _del = staticmethod(_prim._del)
 
+    _clear_secret = staticmethod(_prim._clear_secret)
+
     _hkdf = staticmethod(_prim._hkdf)
 
     _splitmix64 = staticmethod(_prim._splitmix64)

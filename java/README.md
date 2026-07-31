@@ -95,14 +95,23 @@ On platforms without AES-NI or with weaker JCA implementations the gap is wider;
 
 
 ## Scope (v1)
+
+The image-, audio-, and video-specific kFM/kFA/jMG codecs in this scope are
+retired compatibility surfaces after this change. They remain available in the
+3.7.0+ line, but receive only security, correctness, and compatibility fixes.
+Active development now targets mathematically grounded, high-performance C++
+cryptographic primitives.
+
 - fwxAES raw encrypt/decrypt (PBKDF2 or Argon2id KDF + optional ML-KEM-768/1024 / EC master-key wrap)
 - fwxAES streaming encrypt/decrypt (InputStream/OutputStream)
 - fwxAES live packet streaming encrypt/decrypt (frame-based, transport-agnostic)
-- jMG media cipher for images/audio (video path is temporarily disabled by default unless `BASEFWX_ENABLE_JMG_VIDEO=1`)
+- retired jMG compatibility cipher for images/audio (video remains disabled by
+  default; `BASEFWX_ENABLE_JMG_VIDEO=1` exists for compatibility use)
 - b512 / pb512 encode/decode (PBKDF2 or Argon2id + optional ML-KEM-768/1024 / EC master-key wrap)
 - b256 encode/decode (deprecated; still decodes)
 - n10 numeric encode/decode (text + bytes/file helpers)
-- kFM carrier transforms (auto media/audio encode + strict carrier decode)
+- retired kFM/kFA compatibility transforms (auto media/audio encode + strict
+  carrier decode)
 - b64 encode/decode
 - hash512 / uhash513 (uhash513 deprecated)
 - a512 encode/decode (deprecated)
@@ -190,7 +199,8 @@ Notes:
 - `--no-archive` stores only key material (`JMG1`) instead of a full embedded original payload (`JMG0`), so decode output may not be byte-identical.
 - `--no-log` suppresses telemetry/warnings while preserving primary outputs/errors.
 - `--verbose` prints additional hardware routing reason lines.
-- jMG video is disabled by default unless `BASEFWX_ENABLE_JMG_VIDEO=1`.
+- jMG video remains disabled by default;
+  `BASEFWX_ENABLE_JMG_VIDEO=1` exists for compatibility use.
 - `kFMd` only decodes BaseFWX carriers and refuses plain WAV/PNG/MP3/M4A inputs (Java: `BaseFwxImage.kFMd`).
 
 ## Cross-compat notes

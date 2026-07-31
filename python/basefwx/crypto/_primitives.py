@@ -240,6 +240,7 @@ def _human_readable_size(num_bytes: int) -> str:
 
 
 def _del(varname: str) -> None:
+    """Legacy best-effort reference drop; do not use as a memory wipe."""
     try:
         frame = sys._getframe(1)
     except Exception:
@@ -249,6 +250,15 @@ def _del(varname: str) -> None:
             frame.f_locals[varname] = None
     except Exception:
         pass
+
+
+def _clear_secret(value):
+    """Zero mutable secret storage and drop the caller's reference via assignment."""
+    if isinstance(value, bytearray):
+        value[:] = b'\x00' * len(value)
+    elif isinstance(value, memoryview) and not value.readonly:
+        value[:] = b'\x00' * value.nbytes
+    return None
 
 
 def _hkdf(info: bytes, key: bytes, length: int=32) -> bytes:
@@ -416,9 +426,18 @@ def hash512(string: str):
 def uhash513(string: str):
     sti = string
     if os.getenv('BASEFWX_UHASH_LEGACY') == '1':
-        return hashlib.sha256(_lazy_b512encode(hashlib.sha512(hashlib.sha1(hashlib.sha256(sti.encode('utf-8')).hexdigest().encode('utf-8')).hexdigest().encode('utf-8')).hexdigest(), hashlib.sha512(sti.encode('utf-8')).hexdigest()).encode('utf-8')).hexdigest()
+        input_bytes = sti.encode('utf-8')
+        first_digest = hashlib.sha256(input_bytes).hexdigest().encode('utf-8')
+        compatibility_sha1 = hashlib.sha1(
+            first_digest,
+            usedforsecurity=False,
+        ).hexdigest().encode('utf-8')
+        chained_digest = hashlib.sha512(compatibility_sha1).hexdigest()
+        input_digest = hashlib.sha512(input_bytes).hexdigest()
+        encoded = _lazy_b512encode(chained_digest, input_digest)
+        return hashlib.sha256(encoded.encode('utf-8')).hexdigest()
     h1 = hashlib.sha256(sti.encode('utf-8')).hexdigest()
-    h2 = hashlib.sha1(h1.encode('utf-8')).hexdigest()
+    h2 = hashlib.sha1(h1.encode('utf-8'), usedforsecurity=False).hexdigest()
     h3 = hashlib.sha512(h2.encode('utf-8')).hexdigest()
     h4 = hashlib.sha512(sti.encode('utf-8')).hexdigest()
     return hashlib.sha256((h3 + h4).encode('utf-8')).hexdigest()

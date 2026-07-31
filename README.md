@@ -14,7 +14,18 @@
 [![Latest release](https://img.shields.io/github/v/release/F1xGOD/basefwx?style=flat&logo=github&logoColor=white&label=Release)](https://github.com/F1xGOD/basefwx/releases/latest)
 [![License](https://img.shields.io/github/license/F1xGOD/basefwx?style=flat&label=License)](https://github.com/F1xGOD/basefwx/blob/main/LICENCE)
 
-BaseFWX is a hybrid post-quantum + AEAD encryption toolkit for files and media. It ships in three implementations (Python, C++, Java) that share the same on-disk and on-wire formats, so a file you encrypt in one decrypts in the other two without conversion.
+BaseFWX is a cross-runtime post-quantum + AEAD encryption toolkit. Active
+development now centers on mathematically grounded, high-performance C++
+cryptographic primitives. Python and Java remain part of the compatibility
+surface, and the three implementations share the same established on-disk and
+on-wire formats.
+
+The image-, audio-, and video-specific kFM/kFA/jMG codecs are retained for
+compatibility with existing callers and data, but are retired from active
+development after this change. They receive security, correctness, and
+compatibility fixes only: no new media formats, features, or performance work
+is planned. Retirement does not remove their APIs or existing format support
+from the 3.7.0+ line.
 
 The version in this checkout is recorded in [`VERSION`](VERSION). This
 revision is the unreleased `3.8.0-dev1` development line; the latest tagged
@@ -44,8 +55,8 @@ What's in the box:
 - fwxAES file format with an optional normalize wrapper that hides bytes in zero-width Unicode markers
 - A packetized live-stream API so fwxAES works inside ffmpeg/SIP/transport pipes
 - b512 / pb512 reversible encodings and file modes
-- kFM media-carrier codecs: embed bytes in PNG or WAV files, strict decode on the way back
-- jMG media cipher for images and audio. Video is temporarily disabled by default; set `BASEFWX_ENABLE_JMG_VIDEO=1` to opt in.
+- Retired compatibility codecs: kFM/kFA media carriers and the jMG
+  image/audio/video cipher
 - C++ and Java libraries + CLIs that read and write the same formats as the Python module
 
 Quick Start
@@ -57,6 +68,7 @@ python -m basefwx cryptin aes-light file.bin -p "password" --strip
 python -m basefwx cryptin aes-light file.bin.fwx -p "password"
 python -m basefwx n10-enc "hello"
 python -m basefwx n10-dec "<digits>"
+# Retired compatibility commands:
 python -m basefwx kFMe photo.png -o photo.wav            # image/media -> audio carrier
 python -m basefwx kFMe track.mp3 -o track.png --bw       # audio -> image carrier
 python -m basefwx kFMd photo.wav -o photo-restored.png   # strict decode
@@ -66,6 +78,9 @@ python -m basefwx cryptin fwxaes video.mp4 -p "password" --archive  # exact-rest
 ```
 
 Notes:
+- kFM/kFA/jMG are retired compatibility surfaces. Existing APIs and formats
+  remain available, but only security, correctness, and compatibility fixes
+  are planned.
 - `kFMd` only decodes BaseFWX carriers; it refuses plain WAV/PNG/MP3/M4A files.
 - `kFAe` / `kFAd` remain available as deprecated aliases to `kFMe` / `kFMd`.
 - Release support policy is single-version: only the latest release is maintained; all older releases are immediately unsupported.
@@ -76,7 +91,8 @@ Notes:
   Disable with `BASEFWX_PROGRESS_TELEMETRY=0`.
 - Python `n10` was optimized for large payloads, but compiled runtimes (C++/Java) are still expected to benchmark faster for very large text workloads.
 - C++/Java CLI global flags: `--no-log` (suppress non-essential logs) and `--verbose` (show hardware routing reasons).
-- jMG video is disabled by default in Python/C++/Java; set `BASEFWX_ENABLE_JMG_VIDEO=1` to re-enable temporarily.
+- jMG video remains disabled by default in Python/C++/Java;
+  `BASEFWX_ENABLE_JMG_VIDEO=1` exists for compatibility use.
 - Canonical release assets are architecture-qualified only; alias artifacts without arch suffixes are intentionally not published.
 - Every GitHub release includes detached signatures, checksum files, and `release-manifest.json`.
 
@@ -125,7 +141,7 @@ fwxAES_live_decrypt_ffmpeg(
 )
 ```
 
-Hardware acceleration (Python jMG):
+Retired compatibility controls (Python jMG):
 - `BASEFWX_HWACCEL=auto` (default), `nvenc`, `qsv`, `vaapi`, or `off`
 - `BASEFWX_HWACCEL_STRICT=1` to fail instead of CPU fallback when requested accel is unavailable
 

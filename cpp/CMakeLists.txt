@@ -389,6 +389,12 @@ if(ARGON2_FOUND)
         if(EXISTS "${_basefwx_argon2_entry}")
             list(APPEND _basefwx_argon2_resolved "${_basefwx_argon2_entry}")
         elseif(_basefwx_argon2_entry MATCHES "^-l(.+)$")
+            # find_library caches by variable name. Clear this private probe
+            # before every distinct pkg-config entry; otherwise a later
+            # configure can reuse the result for rt/dl and silently drop
+            # libargon2 from the transitive link interface.
+            unset(_basefwx_argon2_lib)
+            unset(_basefwx_argon2_lib CACHE)
             find_library(_basefwx_argon2_lib
                 NAMES "${CMAKE_MATCH_1}"
                 HINTS ${_basefwx_argon2_lib_hints}
@@ -399,6 +405,8 @@ if(ARGON2_FOUND)
                 list(APPEND _basefwx_argon2_resolved "${_basefwx_argon2_entry}")
             endif()
         elseif(NOT _basefwx_argon2_entry STREQUAL "")
+            unset(_basefwx_argon2_lib)
+            unset(_basefwx_argon2_lib CACHE)
             find_library(_basefwx_argon2_lib
                 NAMES "${_basefwx_argon2_entry}"
                 HINTS ${_basefwx_argon2_lib_hints}

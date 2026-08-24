@@ -46,14 +46,18 @@ fwxAES-only flags:
 Examples:
 
 ```
-python -m basefwx cryptin aes-light secret.bin -p "pass" --strip
-python -m basefwx cryptin aes-light secret.bin.fwx -p "pass"
+python -m basefwx cryptin aes-light secret.bin -p "correct-horse-battery" --strip
+python -m basefwx cryptin aes-light secret.bin.fwx -p "correct-horse-battery"
 
-python -m basefwx cryptin fwxaes photo.jpg -p "pass"
-python -m basefwx cryptin fwxaes track.m4a -p "pass" --keep-meta
-python -m basefwx cryptin fwxaes track.m4a -p "pass"            # default no-archive
-python -m basefwx cryptin fwxaes track.m4a -p "pass" --archive  # exact-restore trailer
+python -m basefwx cryptin fwxaes photo.jpg -p "correct-horse-battery"
+python -m basefwx cryptin fwxaes track.m4a -p "correct-horse-battery" --keep-meta
+python -m basefwx cryptin fwxaes track.m4a -p "correct-horse-battery"            # default no-archive
+python -m basefwx cryptin fwxaes track.m4a -p "correct-horse-battery" --archive  # exact-restore trailer
 ```
+
+`--strip` is not available when b512 or AES-heavy file encryption selects the
+streaming container. The stream marker is required for unambiguous decode
+dispatch, so the encoder rejects that combination before creating output.
 
 n10 helpers:
 
@@ -281,8 +285,8 @@ Example live audio pipe (C++):
 
 ```bash
 ffmpeg -hide_banner -loglevel error -i input.m4a -vn -ac 1 -ar 16000 -f wav pipe:1 \
-  | cpp/build/basefwx fwxaes-live-enc - -p password --no-master --out - \
-  | cpp/build/basefwx fwxaes-live-dec - -p password --no-master --out - > restored.wav
+  | cpp/build/basefwx fwxaes-live-enc - -p correct-horse-battery --no-master --out - \
+  | cpp/build/basefwx fwxaes-live-dec - -p correct-horse-battery --no-master --out - > restored.wav
 ```
 
 ## C++ API

@@ -136,20 +136,24 @@ static String peekMetadataBlob(File input) {
                 return "";
             }
             int metaLen = readU32(in, "Ciphertext payload truncated");
-            if (metaLen < 0 || (long) metaLen > payloadLength - 4L) {
-                throw new IllegalArgumentException(
-                        "Ciphertext metadata length invalid");
+            final long threeLengthPrefixes = 3L * 4L;
+            long headerLength = (long) lenUser + lenMaster + metaLen;
+            // Simple AEAD payloads begin with a random nonce. Treat its first
+            // four bytes only as a possible stream-metadata length, and let
+            // the authenticated simple decoder validate non-stream files.
+            if (metaLen <= 0
+                    || (long) metaLen > payloadLength - 4L
+                    || metaLen > Constants.METADATA_MAX
+                    || headerLength > Constants.LENGTH_PREFIXED_MAX
+                            - threeLengthPrefixes) {
+                return "";
             }
-            requireHeaderLengthTotal(
-                    (long) lenUser + lenMaster + metaLen);
             requireBoundedFileLength(
                     input, payloadOffset + 4L, metaLen,
                     Constants.METADATA_MAX, "metadata");
-            if (metaLen == 0) {
-                return "";
-            }
             byte[] meta = readExactBytes(in, metaLen, "Ciphertext payload truncated");
-            return new String(meta, StandardCharsets.UTF_8);
+            String metadataBlob = new String(meta, StandardCharsets.UTF_8);
+            return isStreamMode(metadataBlob) ? metadataBlob : "";
         } catch (IOException exc) {
             throw new IllegalStateException("Failed to preview ciphertext metadata", exc);
         }

@@ -26,6 +26,7 @@ exit 0
 EOF
 chmod +x "$FAKE_JAVA"
 
+unset BASEFWX_BENCH_MEMORY_LIMIT_BYTES
 basefwx_java_select_default_bench_flags "$FAKE_JAVA"
 joined=" ${BASEFWX_JAVA_BENCH_FLAGS[*]} "
 
@@ -34,6 +35,19 @@ joined=" ${BASEFWX_JAVA_BENCH_FLAGS[*]} "
 [[ "$joined" != *" -XX:+UseAESCTRIntrinsics "* ]]
 [[ "$joined" == *" -XX:InitialRAMFraction=5 "* ]]
 [[ "$joined" == *" -XX:MaxRAMFraction=2 "* ]]
+[[ "$joined" == *" -XX:+UseAESIntrinsics "* ]]
+[[ "$joined" == *" -XX:+UseGHASHIntrinsics "* ]]
+
+BASEFWX_BENCH_MEMORY_LIMIT_BYTES=$((1024 * 1024 * 1024)) \
+    basefwx_java_select_default_bench_flags "$FAKE_JAVA"
+joined=" ${BASEFWX_JAVA_BENCH_FLAGS[*]} "
+
+[[ "$joined" != *" -XX:InitialRAMPercentage=20 "* ]]
+[[ "$joined" != *" -XX:MaxRAMPercentage=75 "* ]]
+[[ "$joined" != *" -XX:InitialRAMFraction=5 "* ]]
+[[ "$joined" != *" -XX:MaxRAMFraction=2 "* ]]
+[[ "$joined" == *" -Xms128m "* ]]
+[[ "$joined" == *" -Xmx512m "* ]]
 [[ "$joined" == *" -XX:+UseAESIntrinsics "* ]]
 [[ "$joined" == *" -XX:+UseGHASHIntrinsics "* ]]
 

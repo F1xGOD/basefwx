@@ -135,6 +135,10 @@ std::string Pb512EncodeFileStream(const std::filesystem::path& input,
                                   const FileOptions& options,
                                   const basefwx::pb512::KdfOptions& kdf,
                                   std::string_view pack_flag) {
+    if (options.strip_metadata) {
+        throw std::invalid_argument(
+            "Streaming pb512 encode requires metadata for format dispatch");
+    }
     std::string resolved = basefwx::ResolvePassword(password);
     const std::uint32_t heavy_pbkdf2_iterations =
         basefwx::constants::HeavyPbkdf2Iterations();

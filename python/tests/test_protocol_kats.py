@@ -93,6 +93,30 @@ class ProtocolKatTests(unittest.TestCase):
             shared2 = _pq.kem_decrypt(priv, ct)
             self.assertEqual(shared, shared2)
 
+    def test_current_pqcrypto_api_is_adapted(self):
+        class CurrentApi:
+            PUBLIC_KEY_SIZE = 3
+            SECRET_KEY_SIZE = 4
+            CIPHERTEXT_SIZE = 5
+
+            @staticmethod
+            def keygen():
+                return b"pub", b"priv"
+
+            @staticmethod
+            def encaps(public_key):
+                return public_key + b"ct", b"shared"
+
+            @staticmethod
+            def decaps(private_key, ciphertext):
+                return private_key + ciphertext
+
+        adapted = _pq._adapt_module(CurrentApi)
+        self.assertIsNotNone(adapted)
+        self.assertEqual(adapted.generate_keypair(), (b"pub", b"priv"))
+        self.assertEqual(adapted.encrypt(b"pub"), (b"pubct", b"shared"))
+        self.assertEqual(adapted.decrypt(b"priv", b"ct"), b"privct")
+
     def test_public_protocol_building_exports(self):
         expected = {
             "current_kem_algorithm",

@@ -123,7 +123,37 @@ Known gaps (not “missing PQ/Argon2” overall):
 - Java SPI plugins are Profile A only (no keyed / `POS_RAW` / native `.so` JNI bridge yet)
 - LZMA/XZ container support remains native/Python-only
 ## Build
-Use Gradle if available:
+
+### Toolchain requirements
+
+There is no Gradle wrapper in this repo, so `gradle` resolves to whatever is on
+your `PATH`. That makes the Gradle/JDK pairing your responsibility. The
+repository is tested with its installed Gradle 4.4.1 package on JDK 11 and 21;
+that does not imply that every upstream Gradle 4.x distribution supports the
+same hosts.
+
+Gradle's test executor installs a `SecurityManager`, which JDK 24 removed
+(JEP 486). On JDK 24+ an old Gradle compiles cleanly and then fails the moment
+tests start, with:
+
+```
+java.lang.UnsupportedOperationException: Setting a Security Manager is not supported
+```
+
+The failure is in Gradle, not in BaseFWX — with the currently tested Gradle
+4.4.1 package, `gradle build -x test` still succeeds on JDK 25. If you hit it,
+either point `JAVA_HOME` at a tested JDK 11 or 21 for the test run:
+
+```
+JAVA_HOME=/path/to/jdk-21 gradle test
+```
+
+or use a Gradle new enough to support your JDK. Sources target Java 8
+(`sourceCompatibility`/`targetCompatibility` = 1.8), so a newer JDK is only
+ever a build/test host, never a floor for consumers.
+
+### Gradle
+
 ```
 cd java
 gradle build

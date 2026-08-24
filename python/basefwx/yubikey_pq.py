@@ -200,9 +200,9 @@ class YubiKeyPQKeyStore:
         credential_id, salt, secret = self._register_resident_credential(label)
         wrap_key = self._derive_wrap_key(credential_id, salt, secret=secret)
         nonce = secrets.token_bytes(self.AES_NONCE_BYTES)
-        from pqcrypto.kem import ml_kem_768
+        from .crypto import _pq
 
-        public_key, private_key = ml_kem_768.generate_keypair()
+        public_key, private_key = _pq.generate_kem_keypair(_pq.ALG_768)
         aesgcm = AESGCM(wrap_key)
         ciphertext = aesgcm.encrypt(nonce, private_key, None)
         return StoredPQKey(

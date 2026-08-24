@@ -547,6 +547,41 @@ public class SecurityPolicyTest {
     }
 
     @Test
+    public void metadataPreviewOnlyDispatchesAuthenticatedStreamCandidates()
+            throws Exception {
+        byte[] noncePayload = new byte[
+                4 + Constants.AEAD_NONCE_LEN + Constants.AEAD_TAG_LEN];
+        Arrays.fill(noncePayload, 0, 4, (byte) 0xFF);
+        byte[] packedNonceCandidate = Format.packLengthPrefixed(Arrays.asList(
+                new byte[0], new byte[0], noncePayload));
+        File nonceCandidate = tmp.newFile("simple-nonce-candidate.fwx");
+        Files.write(nonceCandidate.toPath(), packedNonceCandidate);
+        assertEquals("", FileCodecs.peekMetadataBlob(nonceCandidate));
+
+        File trailingCandidate = tmp.newFile("trailing-container-data.fwx");
+        Files.write(
+                trailingCandidate.toPath(),
+                Arrays.copyOf(packedNonceCandidate, packedNonceCandidate.length + 1));
+        try {
+            FileCodecs.peekMetadataBlob(trailingCandidate);
+            fail("length-prefixed container with trailing data was accepted");
+        } catch (IllegalArgumentException expected) {
+            assertTrue(expected.getMessage().contains("remaining file"));
+        }
+
+        File nonStreamCandidate =
+                tmp.newFile("non-stream-metadata-candidate.fwx");
+        Files.write(
+                nonStreamCandidate.toPath(),
+                maliciousLengthPrefixedBlob(null, 1));
+        assertEquals("", FileCodecs.peekMetadataBlob(nonStreamCandidate));
+
+        File streamCandidate = tmp.newFile("stream-metadata-candidate.fwx");
+        Files.write(streamCandidate.toPath(), maliciousStreamingFile(1));
+        assertTrue(FileCodecs.peekMetadataBlob(streamCandidate).length() > 0);
+    }
+
+    @Test
     public void argonMetadataDecimalGrammarIsStrict() {
         assertEquals(
                 Integer.valueOf(Constants.ARGON2_TIME_COST_MAX),
@@ -1113,7 +1148,13 @@ public class SecurityPolicyTest {
     }
 
     @Test
-    public void shortArgonParallelismHardensToFourInBothPaths() {
+    public void shortPasswordStepUpProfileIsFrozenAndApplied() {
+        assertEquals(12, Constants.SHORT_PASSWORD_MIN);
+        assertEquals(1000000, Constants.SHORT_PBKDF2_ITERS);
+        assertEquals(5, Constants.SHORT_ARGON2_TIME_COST);
+        assertEquals(1 << 17, Constants.SHORT_ARGON2_MEMORY_KIB);
+        assertEquals(4, Constants.SHORT_ARGON2_PARALLELISM);
+
         KeyWrap.KdfOptions options =
                 new KeyWrap.KdfOptions("argon2id", 1);
         options.argon2TimeCost = Constants.ARGON2_TIME_COST;

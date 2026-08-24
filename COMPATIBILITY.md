@@ -101,6 +101,44 @@ encapsulation, KDF work, or output creation. This is a shared wire and
 resource-safety boundary, not a recommendation to replace Argon2id with
 the highest permitted PBKDF2 count.
 
+### Local KDF iteration overrides: known behavioral divergence
+
+The peer ceiling above is enforced identically everywhere. The *local*
+environment overrides that set a runtime's own iteration counts
+(`BASEFWX_HEAVY_PBKDF2_ITERS`, `BASEFWX_USER_KDF_ITERS`,
+`BASEFWX_FWXAES_PBKDF2_ITERS`) are **not** a shared wire contract and are
+not normalized across runtimes or across every legacy consumer:
+
+| Value | C++ | Java | Python |
+| --- | --- | --- | --- |
+| `0` | ignored, default applies | wrapped codecs reject later; legacy media clamps to its floor | ignored, default applies |
+| negative | heavy/fwxAES reject; legacy media parsing falls back or caps | wrapped codecs reject later; legacy media clamps to its floor | ignored, default applies |
+| `> 4000000` | heavy/fwxAES reject; legacy media can use the local value | wrapped codecs reject later; legacy media can use the local value | wrapped codecs reject later; legacy media can use the local value |
+| non-numeric | ignored, default applies | ignored, default applies | ignored, default applies |
+
+Wrapped codecs and fwxAES/live paths still enforce `1..4_000_000` before
+derivation. Historical image/media password derivation treats
+`BASEFWX_USER_KDF_ITERS` as trusted local configuration and does not apply
+the peer ceiling; this cannot be triggered by ciphertext metadata, but an
+excessive operator-supplied value can make local work unexpectedly expensive.
+
+The practical consequences for operators:
+
+* Do not use `0` to mean "default"; unset the variable instead.
+* Keep production overrides in `1..4_000_000`. Values above the peer
+  ceiling are unsupported even where a legacy local-media path currently
+  accepts them.
+
+This is recorded as an accepted divergence rather than a defect. These
+variables are local tuning knobs, not a common environment-variable contract.
+Formats such as legacy fwxAES that carry an iteration field serialize the
+writer's resolved value; media formats whose iteration count is implicit still
+require matching configuration to decrypt. Operators should therefore use the
+shared defaults for portable output. Normalizing the overrides would require
+declaring a single env contract across subsystems that currently treat
+`BASEFWX_TEST_KDF_ITERS` and `BASEFWX_USER_KDF*` with deliberately different
+strictness.
+
 ### AES-heavy payload key separation
 
 New non-stripped AES-heavy simple and direct-stream writers in C++,

@@ -29,10 +29,6 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 import numpy as np
-try:
-    from pqcrypto.kem import ml_kem_768
-except Exception:  # pragma: no cover - optional dependency
-    ml_kem_768 = None
 
 try:
     from basefwx.main import basefwx
@@ -41,6 +37,10 @@ except ModuleNotFoundError as exc:  # pragma: no cover - dependency missing
     _IMPORT_ERROR = exc
 else:
     _IMPORT_ERROR = None
+
+ml_kem_768 = getattr(basefwx, "ml_kem_768", None)
+if getattr(ml_kem_768, "CIPHERTEXT_SIZE", 0) == 0:
+    ml_kem_768 = None
 
 TEST_PASSWORD = "basefwx-test-password"
 
@@ -1357,19 +1357,19 @@ class BaseFWXUnitTests(unittest.TestCase):
         for temp_path in created_dirs:
             self.assertFalse(os.path.exists(temp_path))
 
-    def test_aes_heavy_stream_strip_output_is_owner_usable(self):
+    def test_aes_heavy_stream_strip_is_rejected_before_output(self):
         src = self.tmp_path / "heavy-stream.bin"
         src.write_bytes(b"\0" * (basefwx.STREAM_THRESHOLD + 1))
 
-        encoded_path, _ = basefwx._aes_heavy_encode_path(
-            src,
-            TEST_PASSWORD,
-            strip_metadata=True,
-            use_master=False,
-        )
-
-        self.assertEqual(
-            stat.S_IMODE(encoded_path.stat().st_mode), 0o600)
+        with self.assertRaisesRegex(ValueError, "requires metadata"):
+            basefwx._aes_heavy_encode_path(
+                src,
+                TEST_PASSWORD,
+                strip_metadata=True,
+                use_master=False,
+            )
+        self.assertTrue(src.exists())
+        self.assertFalse(src.with_suffix(".fwx").exists())
 
     def test_aes_light_large_no_obfuscation(self):
         src = self.tmp_path / "large.bin"
@@ -1445,19 +1445,19 @@ class BaseFWXUnitTests(unittest.TestCase):
         self.assertEqual(decoded_path.read_bytes(), data)
         self.assertIn("deobfuscate", decode_reporter.phases)
 
-    def test_b512_stream_strip_output_is_owner_usable(self):
+    def test_b512_stream_strip_is_rejected_before_output(self):
         src = self.tmp_path / "b512-stream.bin"
         src.write_bytes(b"\0" * (basefwx.STREAM_THRESHOLD + 1))
 
-        encoded_path, _ = basefwx._b512_encode_path(
-            src,
-            TEST_PASSWORD,
-            strip_metadata=True,
-            use_master=False,
-        )
-
-        self.assertEqual(
-            stat.S_IMODE(encoded_path.stat().st_mode), 0o600)
+        with self.assertRaisesRegex(ValueError, "requires metadata"):
+            basefwx._b512_encode_path(
+                src,
+                TEST_PASSWORD,
+                strip_metadata=True,
+                use_master=False,
+            )
+        self.assertTrue(src.exists())
+        self.assertFalse(src.with_suffix(".fwx").exists())
 
 
 @unittest.skipIf(basefwx is None, f"dependency unavailable: {_IMPORT_ERROR}")
@@ -1487,11 +1487,11 @@ class CryptographyIntegrationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             src = Path(tmpdir, "example.txt")
             src.write_text(plain_text, encoding="utf-8")
-            result = basefwx.AESfile(src, "p@ssw0rd", light=True, strip_metadata=False, use_master=False)
+            result = basefwx.AESfile(src, TEST_PASSWORD, light=True, strip_metadata=False, use_master=False)
             self.assertEqual(result, "SUCCESS!")
             enc_path = src.with_suffix('.fwx')
             self.assertTrue(enc_path.exists())
-            result = basefwx.AESfile(enc_path, "p@ssw0rd", light=True, strip_metadata=False, use_master=False)
+            result = basefwx.AESfile(enc_path, TEST_PASSWORD, light=True, strip_metadata=False, use_master=False)
             self.assertEqual(result, "SUCCESS!")
             restored = Path(tmpdir, "example.txt")
             self.assertTrue(restored.exists())
@@ -1502,11 +1502,11 @@ class CryptographyIntegrationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             src = Path(tmpdir, "blob.bin")
             src.write_bytes(payload)
-            result = basefwx.AESfile(src, "p@ssw0rd", light=False, strip_metadata=False, use_master=False)
+            result = basefwx.AESfile(src, TEST_PASSWORD, light=False, strip_metadata=False, use_master=False)
             self.assertEqual(result, "SUCCESS!")
             enc_path = src.with_suffix('.fwx')
             self.assertTrue(enc_path.exists())
-            result = basefwx.AESfile(enc_path, "p@ssw0rd", light=False, strip_metadata=False, use_master=False)
+            result = basefwx.AESfile(enc_path, TEST_PASSWORD, light=False, strip_metadata=False, use_master=False)
             self.assertEqual(result, "SUCCESS!")
             restored = Path(tmpdir, "blob.bin")
             self.assertTrue(restored.exists())
@@ -1516,7 +1516,7 @@ class CryptographyIntegrationTests(unittest.TestCase):
         metadata = basefwx._build_metadata("UNIT", False, False)
         self.assertTrue(metadata)
         plaintext = f"{metadata}{basefwx.META_DELIM}payload"
-        blob = basefwx.encryptAES(plaintext, "secret", use_master=False, metadata_blob=metadata)
+        blob = basefwx.encryptAES(plaintext, TEST_PASSWORD, use_master=False, metadata_blob=metadata)
         offset = 0
         user_len = int.from_bytes(blob[offset:offset + 4], 'big')
         offset += 4 + user_len
@@ -1529,7 +1529,7 @@ class CryptographyIntegrationTests(unittest.TestCase):
         payload[4] ^= 0x01
         tampered_blob = blob[:offset + 4] + bytes(payload) + blob[offset + 4 + payload_len:]
         with self.assertRaises(ValueError):
-            basefwx.decryptAES(tampered_blob, "secret", use_master=False)
+            basefwx.decryptAES(tampered_blob, TEST_PASSWORD, use_master=False)
 
     def test_master_only_roundtrip(self):
         if ml_kem_768 is None:
@@ -1566,16 +1566,16 @@ class CryptographyIntegrationTests(unittest.TestCase):
             src = Path(tmpdir, "note.bin")
             original = os.urandom(512)
             src.write_bytes(original)
-            result = basefwx.b512file(src, "s3cret!", strip_metadata=False, use_master=False)
+            result = basefwx.b512file(src, TEST_PASSWORD, strip_metadata=False, use_master=False)
             self.assertEqual(result, "SUCCESS!")
             enc_path = src.with_suffix('.fwx')
             self.assertTrue(enc_path.exists())
-            result = basefwx.b512file(enc_path, "s3cret!", strip_metadata=False, use_master=False)
+            result = basefwx.b512file(enc_path, TEST_PASSWORD, strip_metadata=False, use_master=False)
             self.assertEqual(result, "SUCCESS!")
             restored = Path(tmpdir, "note.bin")
             self.assertTrue(restored.exists())
             self.assertEqual(restored.read_bytes(), original)
-            result = basefwx.b512file(restored, "s3cret!", strip_metadata=False, use_master=False)
+            result = basefwx.b512file(restored, TEST_PASSWORD, strip_metadata=False, use_master=False)
             self.assertEqual(result, "SUCCESS!")
             enc_path = restored.with_suffix('.fwx')
             blob = enc_path.read_bytes()
@@ -1583,7 +1583,7 @@ class CryptographyIntegrationTests(unittest.TestCase):
             tampered_ct = bytearray(ct_blob)
             tampered_ct[-1] ^= 0x01
             enc_path.write_bytes(basefwx._pack_length_prefixed(user_blob, master_blob, bytes(tampered_ct)))
-            result = basefwx.b512file(enc_path, "s3cret!", strip_metadata=False, use_master=False)
+            result = basefwx.b512file(enc_path, TEST_PASSWORD, strip_metadata=False, use_master=False)
             self.assertEqual(result, "FAIL!")
 
     def test_nonce_uniqueness_smoke(self):
@@ -1665,8 +1665,8 @@ class CryptographyIntegrationTests(unittest.TestCase):
         metadata = basefwx._build_metadata("OBF-FAST", False, False)
         text = "Z" * (256 * 1024)
         payload = f"{metadata}{basefwx.META_DELIM}{text}"
-        blob = basefwx.encryptAES(payload, "fastpass", use_master=False, metadata_blob=metadata)
-        result = basefwx.decryptAES(blob, "fastpass", use_master=False)
+        blob = basefwx.encryptAES(payload, TEST_PASSWORD, use_master=False, metadata_blob=metadata)
+        result = basefwx.decryptAES(blob, TEST_PASSWORD, use_master=False)
         self.assertEqual(result, payload)
 
     def test_obf_entropy(self):

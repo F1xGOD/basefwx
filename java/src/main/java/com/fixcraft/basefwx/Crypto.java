@@ -460,6 +460,12 @@ public final class Crypto {
                                               byte[] out,
                                               int outOff,
                                               byte[] aad) {
+        requireAesGcmInputs(key, iv);
+        requireSlice(plaintext, plainOff, plainLen, "plaintext");
+        if (plainLen > Integer.MAX_VALUE - Constants.AEAD_TAG_LEN) {
+            throw new IllegalArgumentException("AES-GCM output length overflow");
+        }
+        requireSlice(out, outOff, plainLen + Constants.AEAD_TAG_LEN, "output");
         // If the caller pinned the native backend, do the whole encrypt in one
         // JNI call with zero-copy heap-array access. This is dramatically
         // cheaper than the legacy update()/doFinal() bridge which allocated
@@ -557,6 +563,11 @@ public final class Crypto {
         return Arrays.copyOf(out, Math.max(0, written));
     }
 
+    /**
+     * Decrypts an authenticated ciphertext slice into {@code out}. Invalid
+     * slices fail before backend dispatch; authentication failure does not
+     * publish plaintext into the caller's output buffer.
+     */
     public static int aesGcmDecryptWithIvInto(byte[] key,
                                               byte[] iv,
                                               byte[] ciphertext,
@@ -565,6 +576,12 @@ public final class Crypto {
                                               byte[] out,
                                               int outOff,
                                               byte[] aad) {
+        requireAesGcmInputs(key, iv);
+        requireSlice(ciphertext, ctOff, ctLen, "ciphertext");
+        if (ctLen < Constants.AEAD_TAG_LEN) {
+            throw new IllegalArgumentException("AEAD payload too short");
+        }
+        requireSlice(out, outOff, ctLen - Constants.AEAD_TAG_LEN, "output");
         if (CryptoBackends.get().isNative() && NativeCryptoBackend.isAvailable()) {
             int n = NativeCryptoBackend.aesGcmDecryptOneShot(key, iv, aad,
                                                              ciphertext, ctOff, ctLen,
@@ -577,6 +594,7 @@ public final class Crypto {
             throw new AuthenticationException(
                     "Bad password or corrupted payload");
         }
+        byte[] staged = new byte[ctLen - Constants.AEAD_TAG_LEN];
         try {
             Cipher cipher = AES_GCM_DEC.get();
             GCMParameterSpec spec = new GCMParameterSpec(Constants.AEAD_TAG_LEN * 8, iv);
@@ -590,7 +608,9 @@ public final class Crypto {
             
             // For small data, use direct byte[] arrays to avoid DirectByteBuffer copy overhead
             if (ctLen < DIRECT_BUF_THRESHOLD) {
-                return cipher.doFinal(ciphertext, ctOff, ctLen, out, outOff);
+                int written = cipher.doFinal(ciphertext, ctOff, ctLen, staged, 0);
+                System.arraycopy(staged, 0, out, outOff, written);
+                return written;
             }
             
             // GCM decryption: Must process ALL ciphertext before plaintext (authentication)
@@ -605,17 +625,45 @@ public final class Crypto {
                 outBuf.clear();
                 int written = cipher.doFinal(inBuf, outBuf);
                 outBuf.flip();
-                outBuf.get(out, outOff, written);
+                outBuf.get(staged, 0, written);
+                System.arraycopy(staged, 0, out, outOff, written);
                 return written;
             } else {
                 // Large data: byte[] fallback (can't use chunked DirectByteBuffer for GCM decrypt output)
-                return cipher.doFinal(ciphertext, ctOff, ctLen, out, outOff);
+                int written = cipher.doFinal(ciphertext, ctOff, ctLen, staged, 0);
+                System.arraycopy(staged, 0, out, outOff, written);
+                return written;
             }
         } catch (AEADBadTagException exc) {
             throw new AuthenticationException(
                     "Bad password or corrupted payload", exc);
         } catch (GeneralSecurityException exc) {
             throw new IllegalArgumentException("Bad password or corrupted payload", exc);
+        } finally {
+            Arrays.fill(staged, (byte) 0);
+        }
+    }
+
+    private static void requireAesGcmInputs(byte[] key, byte[] iv) {
+        if (key == null) {
+            throw new IllegalArgumentException("AES-GCM key must not be null");
+        }
+        if (key.length != 16 && key.length != 24 && key.length != 32) {
+            throw new IllegalArgumentException("AES-GCM key must be 16, 24, or 32 bytes");
+        }
+        if (iv == null || iv.length == 0) {
+            throw new IllegalArgumentException("AES-GCM IV is required");
+        }
+    }
+
+    private static void requireSlice(byte[] buffer, int offset, int length, String name) {
+        if (buffer == null) {
+            throw new IllegalArgumentException(name + " buffer must not be null");
+        }
+        // Subtraction form is overflow-safe for every int offset/length pair.
+        if (offset < 0 || length < 0 || offset > buffer.length
+                || length > buffer.length - offset) {
+            throw new IllegalArgumentException("Invalid " + name + " buffer bounds");
         }
     }
 

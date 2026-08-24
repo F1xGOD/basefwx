@@ -94,6 +94,10 @@ def _b512_encode_path(path: 'basefwx.pathlib.Path', password: str, reporter: 'ba
 def _b512_encode_path_stream(path: 'basefwx.pathlib.Path', password: str, reporter: 'basefwx._ProgressReporter'=None, file_index: int=0, total_files: int=1, strip_metadata: bool=False, use_master: bool=True, master_pubkey: 'basefwx.typing.Optional[bytes]'=None, pack_flag: str='', output_path: 'basefwx.typing.Optional[basefwx.pathlib.Path]'=None, display_path: 'basefwx.typing.Optional[basefwx.pathlib.Path]'=None, *, input_size: 'basefwx.typing.Optional[int]'=None, keep_input: bool=False) -> 'basefwx.typing.Tuple[basefwx.pathlib.Path, int]':
     basefwx._ensure_existing_file(path)
     basefwx._ensure_size_limit(path)
+    if strip_metadata:
+        raise ValueError(
+            'Streaming b512 encode requires metadata for format dispatch'
+        )
     display_path = display_path or path
     output_path = output_path or path.with_suffix('.fwx')
     input_size = input_size if input_size is not None else path.stat().st_size
@@ -767,6 +771,10 @@ def _b512_decode_path_stream(path: 'basefwx.pathlib.Path', password: str, report
 def _aes_heavy_encode_path_stream(path: 'basefwx.pathlib.Path', password: str, reporter: 'basefwx._ProgressReporter'=None, file_index: int=0, strip_metadata: bool=False, use_master: bool=True, master_pubkey: 'basefwx.typing.Optional[bytes]'=None, pack_flag: str='', output_path: 'basefwx.typing.Optional[basefwx.pathlib.Path]'=None, display_path: 'basefwx.typing.Optional[basefwx.pathlib.Path]'=None, *, input_size: 'basefwx.typing.Optional[int]'=None, keep_input: bool=False) -> 'basefwx.typing.Tuple[basefwx.pathlib.Path, int]':
     basefwx._ensure_existing_file(path)
     basefwx._ensure_size_limit(path)
+    if strip_metadata:
+        raise ValueError(
+            'Streaming AES-heavy encode requires metadata for format dispatch'
+        )
     heavy_iters = basefwx.HEAVY_PBKDF2_ITERATIONS
     basefwx._require_peer_pbkdf2_within_limits(heavy_iters)
     display_path = display_path or path
@@ -1022,8 +1030,7 @@ def b512file(files: 'basefwx.typing.Union[str, basefwx.pathlib.Path, basefwx.typ
             try:
                 if not path.exists():
                     if reporter:
-                        reporter.update(idx, 0.0, 'missing', path)
-                        reporter.finalize_file(idx, path)
+                        reporter.fail_file(idx, path, 'error: input file not found')
                     return (str(path), 'FAIL!')
                 if path.suffix.lower() == '.fwx' and path.is_file():
                     basefwx._b512_decode_path(path, resolved_password, reporter, idx, len(paths), strip_metadata, decode_use_master)
@@ -1042,8 +1049,7 @@ def b512file(files: 'basefwx.typing.Union[str, basefwx.pathlib.Path, basefwx.typ
                 return (str(path), 'SUCCESS!')
             except Exception as exc:
                 if reporter:
-                    reporter.update(idx, 0.0, f'error: {exc}', path)
-                    reporter.finalize_file(idx, path)
+                    reporter.fail_file(idx, path, f'error: {exc}')
                 return (str(path), 'FAIL!')
 
         def _process_without_reporter(path: 'basefwx.pathlib.Path') -> tuple[str, str]:

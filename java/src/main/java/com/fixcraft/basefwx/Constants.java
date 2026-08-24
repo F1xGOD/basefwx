@@ -38,6 +38,9 @@ public final class Constants {
     public static final boolean TEST_KDF_OVERRIDE = TEST_KDF_ITERS != null;
     public static final int FWXAES_PBKDF2_ITERS = resolveFwxAesIters();
 
+    // Compatibility profile: these short-password step-up values are implicit
+    // in existing key-wrap blobs. They are not serialized and must remain
+    // stable for old ciphertext and cross-runtime decryption.
     public static final int SHORT_PASSWORD_MIN = 12;
     public static final int SHORT_PBKDF2_ITERS = 1000000;
 
@@ -58,7 +61,6 @@ public final class Constants {
     public static final int ARGON2_TIME_COST = 4;
     public static final int ARGON2_MEMORY_KIB = 1 << 16;        // 64 MiB
     public static final int ARGON2_PARALLELISM = defaultArgon2Parallelism();
-    // Short-password (<12 char) step-up to match C++ kShortArgon2*.
     public static final int SHORT_ARGON2_TIME_COST = 5;
     public static final int SHORT_ARGON2_MEMORY_KIB = 1 << 17;  // 128 MiB
     public static final int SHORT_ARGON2_PARALLELISM = 4;

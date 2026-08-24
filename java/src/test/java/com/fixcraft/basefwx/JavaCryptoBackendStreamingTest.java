@@ -17,7 +17,11 @@ public class JavaCryptoBackendStreamingTest {
     @Test
     public void decryptsPayloadLargerThanStreamingOutputBuffer() throws Exception {
         byte[] key = new byte[32];
-        byte[] nonce = new byte[Constants.AEAD_NONCE_LEN];
+        // SunJCE rejects reinitializing an encryption Cipher with a key/nonce
+        // pair already used in the same worker. Other AES-GCM tests use the
+        // all-zero pair, so generate a fresh nonce here just as production
+        // callers must.
+        byte[] nonce = Crypto.randomBytes(Constants.AEAD_NONCE_LEN);
         byte[] aad = "basefwx.test.streaming-aead.v1"
                 .getBytes(StandardCharsets.US_ASCII);
         byte[] plaintext = new byte[3 * Constants.STREAM_CHUNK_SIZE + 37];

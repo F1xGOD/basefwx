@@ -53,6 +53,13 @@ Bytes AesGcmEncrypt(const Bytes& key, const Bytes& plaintext, const Bytes& aad);
 Bytes AesGcmDecrypt(const Bytes& key, const Bytes& blob, const Bytes& aad);
 Bytes AesGcmEncryptWithIv(const Bytes& key, const Bytes& iv, const Bytes& plaintext, const Bytes& aad);
 Bytes AesGcmDecryptWithIv(const Bytes& key, const Bytes& iv, const Bytes& blob, const Bytes& aad);
+// Returns owned plaintext from a ciphertext slice. The private result buffer
+// is wiped if authentication fails and is released to the caller on success.
+Bytes AesGcmDecryptWithIvOwned(const Bytes& key,
+                               const Bytes& iv,
+                               const std::uint8_t* blob,
+                               std::size_t blob_len,
+                               const Bytes& aad);
 std::size_t AesGcmEncryptWithIvInto(const Bytes& key,
                                     const Bytes& iv,
                                     const std::uint8_t* plaintext,
@@ -60,6 +67,8 @@ std::size_t AesGcmEncryptWithIvInto(const Bytes& key,
                                     const Bytes& aad,
                                     std::uint8_t* out,
                                     std::size_t out_len);
+// Decrypts into private staging storage and copies to `out` only after the
+// GCM tag verifies. Authentication failure therefore leaves `out` unchanged.
 std::size_t AesGcmDecryptWithIvInto(const Bytes& key,
                                     const Bytes& iv,
                                     const std::uint8_t* blob,

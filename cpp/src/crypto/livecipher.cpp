@@ -421,18 +421,16 @@ Bytes LiveDecryptor::DecryptDataFrame(std::uint64_t sequence,
     }
     Bytes nonce = NonceForSequence(nonce_prefix_, sequence);
     Bytes aad = LiveAad(basefwx::constants::kLiveFrameTypeData, sequence, plain_len);
-    Bytes plain(expected_plain);
+    Bytes plain;
     try {
-        std::size_t written = basefwx::crypto::AesGcmDecryptWithIvInto(
+        plain = basefwx::crypto::AesGcmDecryptWithIvOwned(
             key_,
             nonce,
             ct,
             ct_len,
-            aad,
-            plain.data(),
-            plain.size()
+            aad
         );
-        if (written != expected_plain) {
+        if (plain.size() != expected_plain) {
             throw std::runtime_error("Live frame length mismatch");
         }
     } catch (const std::exception&) {
@@ -449,25 +447,19 @@ void LiveDecryptor::DecryptFinFrame(std::uint64_t sequence,
     }
     Bytes nonce = NonceForSequence(nonce_prefix_, sequence);
     Bytes aad = LiveAad(basefwx::constants::kLiveFrameTypeFin, sequence, 0);
-    std::size_t expected_plain = body_len - basefwx::constants::kAeadTagLen;
-    Bytes plain(expected_plain);
-    std::uint8_t dummy = 0;
-    std::uint8_t* out = expected_plain > 0 ? plain.data() : &dummy;
-    std::size_t written = 0;
+    Bytes plain;
     try {
-        written = basefwx::crypto::AesGcmDecryptWithIvInto(
+        plain = basefwx::crypto::AesGcmDecryptWithIvOwned(
             key_,
             nonce,
             body,
             body_len,
-            aad,
-            out,
-            expected_plain
+            aad
         );
     } catch (const std::exception&) {
         throw std::runtime_error("Live FIN authentication failed");
     }
-    if (written != 0) {
+    if (!plain.empty()) {
         throw std::runtime_error("Live FIN frame carries unexpected payload");
     }
     finished_ = true;

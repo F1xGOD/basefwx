@@ -754,8 +754,7 @@ def AESfile(files: 'basefwx.typing.Union[str, basefwx.pathlib.Path, basefwx.typi
             try:
                 if not path.exists():
                     if reporter:
-                        reporter.update(idx, 0.0, 'missing', path)
-                        reporter.finalize_file(idx, path)
+                        reporter.fail_file(idx, path, 'error: input file not found')
                     return (str(path), 'FAIL!')
                 if path.suffix.lower() == '.fwx' and path.is_file():
                     if light:
@@ -780,13 +779,11 @@ def AESfile(files: 'basefwx.typing.Union[str, basefwx.pathlib.Path, basefwx.typi
                 return (str(path), 'SUCCESS!')
             except KeyboardInterrupt:
                 if reporter:
-                    reporter.update(idx, 0.0, 'cancelled', path)
-                    reporter.finalize_file(idx, path)
+                    reporter.fail_file(idx, path, 'cancelled')
                 raise
             except Exception as exc:
                 if reporter:
-                    reporter.update(idx, 0.0, f'error: {exc}', path)
-                    reporter.finalize_file(idx, path)
+                    reporter.fail_file(idx, path, f'error: {exc}')
                 return (str(path), 'FAIL!')
 
         def _process_without_reporter(path: 'basefwx.pathlib.Path') -> tuple[str, str]:
@@ -842,8 +839,7 @@ def AESfile(files: 'basefwx.typing.Union[str, basefwx.pathlib.Path, basefwx.typi
                             future.cancel()
                             idx, rest_path = meta
                             if reporter and idx is not None:
-                                reporter.update(idx, 0.0, 'cancelled', rest_path)
-                                reporter.finalize_file(idx, rest_path)
+                                reporter.fail_file(idx, rest_path, 'cancelled')
                             results[str(rest_path)] = 'CANCELLED'
                     executor.shutdown(wait=False, cancel_futures=True)
                     if len(paths) == 1:
@@ -865,8 +861,7 @@ def AESfile(files: 'basefwx.typing.Union[str, basefwx.pathlib.Path, basefwx.typi
                     key = str(rest_path)
                     if key not in results:
                         if reporter:
-                            reporter.update(idx, 0.0, 'cancelled', rest_path)
-                            reporter.finalize_file(idx, rest_path)
+                            reporter.fail_file(idx, rest_path, 'cancelled')
                         results[key] = 'CANCELLED'
                 if len(paths) == 1:
                     return 'CANCELLED'

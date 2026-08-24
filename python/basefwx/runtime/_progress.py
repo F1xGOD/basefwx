@@ -59,10 +59,12 @@ class _ProgressReporter:
             import colorama
             self._has_colors = True
             self._green = colorama.Fore.GREEN
+            self._red = colorama.Fore.RED
             self._reset = colorama.Fore.RESET
         except ImportError:
             self._has_colors = False
             self._green = ''
+            self._red = ''
             self._reset = ''
         term = basefwx.os.getenv('TERM')
         self._supports_ansi = self._is_tty and (basefwx.os.name != 'nt' or self._has_colors or basefwx.os.getenv('WT_SESSION') or basefwx.os.getenv('ANSICON') or (term and term != 'dumb'))
@@ -411,6 +413,59 @@ class _ProgressReporter:
             line1 = line1.replace('\n', ' ')
             line2 = line2.replace('\n', ' ')
             self._write(line1, line2, force=force)
+
+    def fail_file(self, file_index: int, path: 'basefwx.pathlib.Path', reason: str) -> None:
+        """Close out a file that did not complete, preserving why.
+
+        finalize_file() always renders "100% phase: done" plus a green check,
+        so calling it on an error path overwrites the reason the caller just
+        reported and tells the user the file succeeded. Failed and cancelled
+        files end here instead: the bar stays unfilled and the reason survives
+        on the final line.
+        """
+        with self._lock:
+            self._last_fraction[file_index] = 0.0
+            overall_fraction = sum(self._last_fraction.values()) / self.total_files
+            overall = self._render_bar(overall_fraction)
+            label = path.name if path else ''
+            percent_overall = f'{overall_fraction * 100:3.0f}%'
+            completed_files = sum((1 for frac in self._last_fraction.values() if frac >= 1.0))
+            status_text = f'{completed_files}/{self.total_files} files'
+            label_text = f' [{label}]' if label else ''
+            telemetry_text = self._telemetry_snapshot(force=True)
+            telemetry_suffix = f' | {telemetry_text}' if telemetry_text else ''
+            failure_indicator = f'{self._red}✗{self._reset}' if self._has_colors else '✗'
+            full_reason = ' '.join((reason or 'failed').split())
+            # The reason is the only thing worth keeping on a failed line, so
+            # fit it here rather than letting _write() truncate it away: that
+            # helper preserves the trailing "[name]" and cuts the prefix, which
+            # is exactly backwards when the prefix carries the diagnosis.
+            prefix = f'File    {failure_indicator} '
+            # len(prefix) counts any ANSI bytes too, which is what _write's own
+            # width check compares against, so budget against the same measure.
+            budget = self._term_width - len(prefix) - len(label_text)
+            if budget < 8:
+                label_text = ''
+                budget = self._term_width - len(prefix)
+            reason_text = full_reason
+            elided = len(reason_text) > budget
+            if elided:
+                reason_text = reason_text[:max(1, budget - 1)] + '…'
+            line1 = f'Overall {overall} {percent_overall} {status_text}{telemetry_suffix}'
+            line2 = f'{prefix}{reason_text}{label_text}'
+            self._write(line1, line2, force=True)
+            try:
+                self.stream.write('\n')
+                # A truncated diagnosis is worse than useless — repeat the full
+                # text below the bars, where it is free to wrap.
+                if elided:
+                    self.stream.write(f'{full_reason}{label_text}\n')
+                self.stream.flush()
+            except Exception:
+                print()
+                if elided:
+                    print(f'{full_reason}{label_text}')
+            self._printed = False
 
     def finalize_file(self, file_index: int, path: 'basefwx.pathlib.Path', *, size_hint: 'basefwx.typing.Optional[basefwx.typing.Tuple[int, int]]'=None) -> None:
         with self._lock:

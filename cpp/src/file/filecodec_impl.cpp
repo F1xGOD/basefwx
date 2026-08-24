@@ -753,18 +753,31 @@ std::optional<std::string> PeekMetadataBlob(const std::filesystem::path& input) 
         len_payload,
         std::numeric_limits<std::uint32_t>::max(),
         "payload");
+    if (static_cast<std::uint64_t>(len_payload)
+        != RemainingFileBytes(input, preview)) {
+        throw std::runtime_error(
+            "Ciphertext payload length does not match remaining file");
+    }
     std::uint32_t metadata_len = 0;
     if (!read_u32(metadata_len)) {
         return std::nullopt;
     }
-    if (metadata_len > len_payload - 4u) {
-        throw std::runtime_error(
-            "Ciphertext metadata length invalid");
-    }
-    RequireHeaderLengthTotal(
+    constexpr std::uint64_t kThreeLengthPrefixes = 3u * 4u;
+    const std::uint64_t header_len =
         static_cast<std::uint64_t>(len_user)
         + len_master
-        + metadata_len);
+        + metadata_len;
+    // The simple AEAD container starts its payload with a random nonce, so
+    // these four bytes are only a stream-metadata *candidate*.  Reject an
+    // impossible candidate softly and let the authenticated simple decoder
+    // decide whether the file is valid.
+    if (metadata_len == 0
+        || metadata_len > len_payload - 4u
+        || metadata_len > constants::kMetadataMax
+        || header_len
+            > constants::kLengthPrefixedMax - kThreeLengthPrefixes) {
+        return std::nullopt;
+    }
     RequireAvailableLength(
         input,
         preview,
@@ -778,7 +791,20 @@ std::optional<std::string> PeekMetadataBlob(const std::filesystem::path& input) 
             return std::nullopt;
         }
     }
-    return ToString(metadata_bytes);
+    std::string metadata_blob = ToString(metadata_bytes);
+    std::string mode = metadata::GetValue(
+        metadata::Decode(metadata_blob), "ENC-MODE");
+    std::transform(
+        mode.begin(),
+        mode.end(),
+        mode.begin(),
+        [](unsigned char value) {
+            return static_cast<char>(std::toupper(value));
+        });
+    if (mode != "STREAM") {
+        return std::nullopt;
+    }
+    return metadata_blob;
 }
 
 }  // namespace basefwx::filecodec::internal

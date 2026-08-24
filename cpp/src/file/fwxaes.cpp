@@ -648,20 +648,16 @@ Bytes DecryptRaw(const Bytes& blob, const std::string& password, const Options& 
             )};
         Bytes key = basefwx::crypto::HkdfSha256(
             mask_key.bytes(), basefwx::constants::kFwxAesKeyInfo, 32);
-        Bytes plaintext(ct_len - basefwx::constants::kAeadTagLen);
         basefwx::crypto::SecretGuard guard;
         guard.Add(resolved);
         guard.Add(key);
-        std::size_t written = basefwx::crypto::AesGcmDecryptWithIvInto(
+        Bytes plaintext = basefwx::crypto::AesGcmDecryptWithIvOwned(
             key,
             iv,
             ciphertext.data(),
             ct_len,
-            kAadVec,
-            plaintext.data(),
-            plaintext.size()
+            kAadVec
         );
-        plaintext.resize(written);
         return finish_plaintext(plaintext);
     }
     basefwx::keywrap::RequirePeerPbkdf2WithinLimits(iters);
@@ -685,20 +681,16 @@ Bytes DecryptRaw(const Bytes& blob, const std::string& password, const Options& 
         ct_len = static_cast<std::uint32_t>(ciphertext.size());
     }
     Bytes key = basefwx::crypto::Pbkdf2HmacSha256(resolved, salt, iters, 32);
-    Bytes plaintext(ct_len - basefwx::constants::kAeadTagLen);
     basefwx::crypto::SecretGuard guard;
     guard.Add(resolved);
     guard.Add(key);
-    std::size_t written = basefwx::crypto::AesGcmDecryptWithIvInto(
+    Bytes plaintext = basefwx::crypto::AesGcmDecryptWithIvOwned(
         key,
         iv,
         ciphertext.data(),
         ct_len,
-        kAadVec,
-        plaintext.data(),
-        plaintext.size()
+        kAadVec
     );
-    plaintext.resize(written);
     return finish_plaintext(plaintext);
 }
 

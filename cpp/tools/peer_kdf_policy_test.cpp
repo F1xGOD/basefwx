@@ -237,6 +237,14 @@ int main() {
         constexpr std::uint32_t max =
             basefwx::constants::kPeerPbkdf2IterationsMax;
         basefwx::keywrap::RequirePeerPbkdf2WithinLimits(max);
+        if (basefwx::constants::kShortPasswordMin != 12
+            || basefwx::constants::kShortPbkdf2Iterations != 1000000
+            || basefwx::constants::kShortArgon2TimeCost != 5
+            || basefwx::constants::kShortArgon2MemoryCost != (1u << 17)
+            || basefwx::constants::kShortArgon2Parallelism != 4) {
+            throw std::runtime_error(
+                "implicit short-password KDF compatibility profile changed");
+        }
         {
             basefwx::metadata::MetadataMap absent;
             if (basefwx::filecodec::internal::UsesDerivedPayloadKeys(
@@ -526,6 +534,95 @@ int main() {
             "exceeds maximum");
 
         ScopedTempDirectory temp_dir;
+        {
+            const auto source = temp_dir.path() / "stripped-stream.bin";
+            basefwx::filecodec::internal::WriteFileBytes(
+                source, Bytes{0x01, 0x02, 0x03});
+            basefwx::filecodec::FileOptions options;
+            options.keep_input = true;
+            options.strip_metadata = true;
+            options.stream_threshold = 1;
+            options.use_master = false;
+            basefwx::pb512::KdfOptions kdf;
+            kdf.label = "pbkdf2";
+            kdf.pbkdf2_iterations = 1;
+            ExpectReject(
+                [&]() {
+                    (void)basefwx::filecodec::B512EncodeFile(
+                        source.string(), "correct-password", options, kdf);
+                },
+                "stripped b512 stream authoring",
+                "requires metadata");
+            ExpectReject(
+                [&]() {
+                    (void)basefwx::filecodec::Pb512EncodeFile(
+                        source.string(), "correct-password", options, kdf);
+                },
+                "stripped pb512 stream authoring",
+                "requires metadata");
+            auto output = source;
+            output.replace_extension(".fwx");
+            if (std::filesystem::exists(output)) {
+                throw std::runtime_error(
+                    "rejected stripped stream left ciphertext output");
+            }
+        }
+        {
+            Bytes nonce_payload(
+                4u
+                    + basefwx::constants::kAeadNonceLen
+                    + basefwx::constants::kAeadTagLen,
+                0);
+            std::fill_n(nonce_payload.begin(), 4, 0xff);
+            const auto nonce_candidate =
+                temp_dir.path() / "simple-nonce-candidate.fwx";
+            basefwx::filecodec::internal::WriteFileBytes(
+                nonce_candidate,
+                basefwx::format::PackLengthPrefixed(
+                    {{}, {}, nonce_payload}));
+            if (basefwx::filecodec::internal::PeekMetadataBlob(
+                    nonce_candidate).has_value()) {
+                throw std::runtime_error(
+                    "simple AEAD nonce was misclassified as stream metadata");
+            }
+
+            Bytes trailing = basefwx::filecodec::internal::ReadFileBytes(
+                nonce_candidate);
+            trailing.push_back(0x00);
+            const auto trailing_candidate =
+                temp_dir.path() / "trailing-container-data.fwx";
+            basefwx::filecodec::internal::WriteFileBytes(
+                trailing_candidate, trailing);
+            ExpectReject(
+                [&]() {
+                    (void)basefwx::filecodec::internal::PeekMetadataBlob(
+                        trailing_candidate);
+                },
+                "length-prefixed container with trailing bytes",
+                "does not match remaining file");
+
+            const auto non_stream_candidate =
+                temp_dir.path() / "non-stream-metadata-candidate.fwx";
+            basefwx::filecodec::internal::WriteFileBytes(
+                non_stream_candidate,
+                MaliciousSimpleFileCodecBlob(1));
+            if (basefwx::filecodec::internal::PeekMetadataBlob(
+                    non_stream_candidate).has_value()) {
+                throw std::runtime_error(
+                    "non-stream metadata was accepted as stream metadata");
+            }
+
+            const auto stream_candidate =
+                temp_dir.path() / "stream-metadata-candidate.fwx";
+            basefwx::filecodec::internal::WriteFileBytes(
+                stream_candidate,
+                MaliciousStreamingFileCodecBlob(1));
+            if (!basefwx::filecodec::internal::PeekMetadataBlob(
+                    stream_candidate).has_value()) {
+                throw std::runtime_error(
+                    "valid stream metadata was not detected");
+            }
+        }
         {
             const Bytes expected{
                 0x00, 0x11, 0x22, 0x33, 0x44, 0x55};

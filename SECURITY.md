@@ -304,6 +304,86 @@ new APIs; wipe `byte[]` password buffers after use. `String`
 passwords cannot be wiped — treat that as a known limitation of
 the legacy surface, not a reason to add more `String` password APIs.
 
+**Minimum password length:** encryption entry points reject
+passwords shorter than 10 UTF-8 bytes
+(`kMinimumPasswordLength` / `MINIMUM_PASSWORD_LENGTH` /
+`basefwx.MINIMUM_PASSWORD_LENGTH`). The check is enforced by
+`RequireStrongPasswordForEncryption` (C++
+`cpp/src/formats/basefwx.cpp`), `PasswordPolicy.requireStrongPassword`
+(Java), and `_require_strong_password_for_encryption` (Python
+`python/basefwx/crypto/_kdf.py`), and applies on **encrypt only** —
+decrypt never rejects a short password, so existing blobs stay
+readable. Two deliberate carve-outs:
+
+* An **empty** password is exempt. Master-key-only encryption passes
+  `""` and is gated separately by the master-key checks; the length
+  floor would otherwise make that mode unreachable.
+* Testing builds bypass the floor when a test KDF override is active
+  (`BASEFWX_TESTING=1` plus `BASEFWX_TEST_KDF_ITERS` in Python/Java, a
+  `BASEFWX_TESTING` compile-time build in C++).
+
+Overrides, honored identically in all three runtimes:
+
+* `BASEFWX_ALLOW_WEAK_PASSWORD=1` (also `true` / `yes` / `on`) skips
+  the check entirely.
+* `BASEFWX_MIN_PASSWORD_LEN=<n>` replaces the floor; `0` disables it.
+  Negative and unparseable values are ignored and the 10-byte default
+  stands.
+
+Neither override changes anything on the wire — the floor is a local
+authoring policy, not a format constraint, so a blob written with a
+short password is indistinguishable from any other and decrypts
+normally on runtimes that did not set the override.
+
+**Short-password KDF step-up (load-bearing, not on the wire):**
+independently of the floor above, passwords shorter than 12 UTF-8
+bytes (`kShortPasswordMin` / `SHORT_PASSWORD_MIN`) are hardened at
+derivation time: PBKDF2 iterations are raised to at least 1,000,000
+and Argon2id costs to at least t=5 / m=128 MiB / p=4. This is a
+`max()` against the caller's parameters, never a reduction
+(`HardenKdfOptions` in C++ `cpp/src/crypto/keywrap.cpp`,
+`FileCodecKdf.hardenArgon2Params` in Java,
+`_harden_kdf_params` in Python `python/basefwx/crypto/_kdf.py`).
+
+The stepped-up costs are **not** recorded in metadata. An AES-LIGHT
+blob written with a short password carries no `ENC-ARGON2-*` fields
+at all; decrypt re-derives the same costs by applying the identical
+step-up rule to the password the caller supplied. Round-tripping
+therefore depends on encrypt and decrypt agreeing on these constants
+by construction rather than by negotiation.
+
+That makes the step-up constants part of the compatibility contract
+even though they never appear on the wire:
+
+> Changing `SHORT_PASSWORD_MIN`, `SHORT_PBKDF2_ITERATIONS`, or any
+> `SHORT_ARGON2_*` value in **any** runtime silently makes every
+> existing short-password blob undecryptable everywhere. The failure
+> surfaces as an AEAD tag mismatch — reported as *"incorrect password
+> or tampering"* — so it is indistinguishable from a genuinely wrong
+> password and will not be recognised as a regression.
+
+Treat these five constants as frozen. A future profile change has to
+be negotiated on the wire (a new `ENC-KDF`-style label or an explicit
+`ENC-ARGON2-*` record written by the encoder), not applied by editing
+the constants.
+
+All three runtimes pin the literal values, so an edit fails a test
+rather than shipping quietly:
+
+* Python: `test_short_password_stepup_constants_are_frozen` in
+  `python/tests/test_password_policy.py`, alongside two tests that
+  capture the mechanism (short-password blobs carry no `ENC-ARGON2-*`)
+  and the failure mode (a bumped constant makes an existing blob
+  report *"incorrect password"*).
+* C++: the profile check in `cpp/tools/peer_kdf_policy_test.cpp`.
+* Java: `shortPasswordStepUpProfileIsFrozenAndApplied` in
+  `SecurityPolicyTest`.
+
+C++ hardens parallelism against its own `kShortArgon2Parallelism`
+rather than `DefaultArgon2Parallelism()`, so retuning the general
+`kArgon2Parallelism` default cannot silently drift the short-password
+profile away from Java and Python.
+
 **Peer Argon2 costs:** decrypt paths that honor `ENC-ARGON2-TC` /
 `ENC-ARGON2-MEM` / `ENC-ARGON2-PAR` from blob metadata fail closed
 when values exceed the shared maxima

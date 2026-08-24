@@ -107,7 +107,7 @@ basefwx::pb512::KdfOptions HardenKdfOptions(const std::string& password,
     hardened.argon2_memory_cost = std::max(hardened.argon2_memory_cost,
                                            basefwx::constants::kShortArgon2MemoryCost);
     hardened.argon2_parallelism = std::max(hardened.argon2_parallelism,
-                                           basefwx::constants::DefaultArgon2Parallelism());
+                                           basefwx::constants::kShortArgon2Parallelism);
     return hardened;
 }
 

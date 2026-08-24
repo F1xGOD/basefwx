@@ -2715,6 +2715,9 @@ fi
 if ! "$ROOT/scripts/test_make_debian_orig.sh" >>"$LOG" 2>&1; then
     FAILURES+=("make_debian_orig_privacy")
 fi
+if ! "$ROOT/scripts/test_java_bench_flags.sh" >>"$LOG" 2>&1; then
+    FAILURES+=("java_bench_flag_policy")
+fi
 if ! "$PYTHON_BIN" "$ROOT/scripts/gen_protocol_kats.py" \
      --check-copies >>"$LOG" 2>&1; then
     FAILURES+=("protocol_kat_copy_check")
@@ -4616,7 +4619,7 @@ if [[ "$RUN_CPP_TESTS_ORIG" == "1" ]]; then
         RUN_CPP_TESTS_ORIG=0
     elif ! ctest --test-dir "$ROOT/cpp/build" \
              --output-on-failure \
-             -R '^(peer_kdf_policy_test|bench_memory_policy_test|base64_compatibility_test)$' \
+             -R '^(peer_kdf_policy_test|bench_memory_policy_test|base64_compatibility_test|crypto_api_safety_test)$' \
              >>"$LOG" 2>&1; then
         FAILURES+=("cpp_internal_policy_tests")
     elif ! "$ROOT/scripts/test_cmake_subdirectory.sh" \

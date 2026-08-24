@@ -13,6 +13,7 @@
 
 #include <openssl/evp.h>
 #include <openssl/err.h>
+#include <openssl/crypto.h>
 
 #if defined(BASEFWX_JNI_HAS_ARGON2) && BASEFWX_JNI_HAS_ARGON2
 #include <argon2.h>
@@ -21,6 +22,8 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <limits>
+#include <vector>
 
 namespace {
 
@@ -40,6 +43,17 @@ const EVP_CIPHER* gcm_cipher_for_key(int key_len) {
 }
 
 constexpr int kTagLen = 16;
+
+bool valid_array_prefix(JNIEnv* env, jarray array, jint length) {
+    return array != nullptr && length >= 0
+        && length <= env->GetArrayLength(array);
+}
+
+bool valid_array_slice(JNIEnv* env, jarray array, jint offset, jint length) {
+    if (array == nullptr || offset < 0 || length < 0) return false;
+    const jsize size = env->GetArrayLength(array);
+    return offset <= size && length <= size - offset;
+}
 
 const unsigned char* direct_bytes(JNIEnv* env, jobject buf) {
     if (buf == nullptr) return nullptr;
@@ -198,7 +212,15 @@ Java_com_fixcraft_basefwx_NativeCryptoBackend_nativeAesGcmEncryptOneShot(
     if (keyArr == nullptr || ivArr == nullptr || inArr == nullptr || outArr == nullptr) {
         return -1;
     }
-    if (outCap < inLen + kTagLen) return -1;
+    if (!valid_array_prefix(env, keyArr, keyLen)
+        || !valid_array_prefix(env, ivArr, ivLen)
+        || (aadArr == nullptr ? aadLen != 0 : !valid_array_prefix(env, aadArr, aadLen))
+        || !valid_array_slice(env, inArr, inOff, inLen)
+        || !valid_array_slice(env, outArr, outOff, outCap)
+        || inLen > std::numeric_limits<jint>::max() - kTagLen
+        || outCap < inLen + kTagLen) {
+        return -1;
+    }
 
     const EVP_CIPHER* cipher = gcm_cipher_for_key(keyLen);
     if (!cipher) return -1;
@@ -288,6 +310,7 @@ Java_com_fixcraft_basefwx_NativeCryptoBackend_nativeAesGcmEncryptOneShot(
 }
 
 // One-shot AES-GCM decrypt. Ciphertext layout: [ct ... | 16-byte tag].
+// Plaintext is staged outside the Java output array until the tag verifies.
 // Returns plaintext length (ct - tag) on success, -1 on auth failure or error.
 JNIEXPORT jint JNICALL
 Java_com_fixcraft_basefwx_NativeCryptoBackend_nativeAesGcmDecryptOneShot(
@@ -301,7 +324,14 @@ Java_com_fixcraft_basefwx_NativeCryptoBackend_nativeAesGcmDecryptOneShot(
     if (keyArr == nullptr || ivArr == nullptr || inArr == nullptr || outArr == nullptr) {
         return -1;
     }
-    if (inLen < kTagLen) return -1;
+    if (!valid_array_prefix(env, keyArr, keyLen)
+        || !valid_array_prefix(env, ivArr, ivLen)
+        || (aadArr == nullptr ? aadLen != 0 : !valid_array_prefix(env, aadArr, aadLen))
+        || !valid_array_slice(env, inArr, inOff, inLen)
+        || !valid_array_slice(env, outArr, outOff, outCap)
+        || inLen < kTagLen) {
+        return -1;
+    }
     int ct_len = inLen - kTagLen;
     if (outCap < ct_len) return -1;
 
@@ -349,11 +379,22 @@ Java_com_fixcraft_basefwx_NativeCryptoBackend_nativeAesGcmDecryptOneShot(
         }
     }
 
-    jbyte* in  = static_cast<jbyte*>(env->GetPrimitiveArrayCritical(inArr,  nullptr));
-    jbyte* out = static_cast<jbyte*>(env->GetPrimitiveArrayCritical(outArr, nullptr));
-    if (!in || !out) {
-        if (in)  env->ReleasePrimitiveArrayCritical(inArr,  in,  JNI_ABORT);
-        if (out) env->ReleasePrimitiveArrayCritical(outArr, out, JNI_ABORT);
+    std::vector<unsigned char> staged;
+    try {
+        staged.resize(static_cast<std::size_t>(ct_len));
+    } catch (...) {
+        EVP_CIPHER_CTX_free(ctx);
+        return -1;
+    }
+    auto cleanse_staged = [&staged]() {
+        if (!staged.empty()) {
+            OPENSSL_cleanse(staged.data(), staged.size());
+        }
+    };
+
+    jbyte* in = static_cast<jbyte*>(env->GetPrimitiveArrayCritical(inArr, nullptr));
+    if (!in) {
+        cleanse_staged();
         EVP_CIPHER_CTX_free(ctx);
         return -1;
     }
@@ -362,7 +403,7 @@ Java_com_fixcraft_basefwx_NativeCryptoBackend_nativeAesGcmDecryptOneShot(
     if (ct_len > 0) {
         update_ok = EVP_CipherUpdate(
             ctx,
-            reinterpret_cast<unsigned char*>(out) + outOff,
+            staged.data(),
             &written,
             reinterpret_cast<const unsigned char*>(in) + inOff,
             ct_len);
@@ -377,10 +418,24 @@ Java_com_fixcraft_basefwx_NativeCryptoBackend_nativeAesGcmDecryptOneShot(
     if (update_ok && tag_set_ok) {
         final_ok = EVP_CipherFinal_ex(ctx, dummy, &trailing);
     }
-    env->ReleasePrimitiveArrayCritical(outArr, out, final_ok ? 0 : JNI_ABORT);
     env->ReleasePrimitiveArrayCritical(inArr,  in,  JNI_ABORT);
     EVP_CIPHER_CTX_free(ctx);
-    if (!update_ok || !tag_set_ok || !final_ok) return -1;
+    if (!update_ok || !tag_set_ok || !final_ok) {
+        cleanse_staged();
+        return -1;
+    }
+
+    jbyte* out = static_cast<jbyte*>(env->GetPrimitiveArrayCritical(outArr, nullptr));
+    if (!out) {
+        cleanse_staged();
+        return -1;
+    }
+    if (written > 0) {
+        std::memcpy(reinterpret_cast<unsigned char*>(out) + outOff,
+                    staged.data(), static_cast<std::size_t>(written));
+    }
+    env->ReleasePrimitiveArrayCritical(outArr, out, 0);
+    cleanse_staged();
     return written + trailing;
 }
 

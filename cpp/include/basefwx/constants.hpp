@@ -37,10 +37,14 @@ inline constexpr std::uint32_t kPeerPbkdf2IterationsMax = 4000000;
 inline constexpr std::uint64_t kLengthPrefixedMax = 64ull * 1024ull * 1024ull;
 inline constexpr std::uint64_t kMetadataMax = 1ull * 1024ull * 1024ull;
 inline constexpr std::size_t kMinimumPasswordLength = 10;
+// Compatibility profile: these short-password step-up values are implicit in
+// existing key-wrap blobs. They are not serialized and must remain stable for
+// old ciphertext and cross-runtime decryption.
 inline constexpr std::size_t kShortPasswordMin = 12;
 inline constexpr std::size_t kShortPbkdf2Iterations = 1000000;
 inline constexpr std::uint32_t kShortArgon2TimeCost = 5;
 inline constexpr std::uint32_t kShortArgon2MemoryCost = 1u << 17;
+inline constexpr std::uint32_t kShortArgon2Parallelism = 4;
 
 inline constexpr std::uint32_t kHeavyPbkdf2Iterations = 2000000;
 inline constexpr std::uint32_t kHeavyArgon2TimeCost = 6;

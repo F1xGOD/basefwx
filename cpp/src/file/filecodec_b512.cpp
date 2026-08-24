@@ -132,6 +132,10 @@ std::string B512EncodeFileStream(const std::filesystem::path& input,
                                  const FileOptions& options,
                                  const basefwx::pb512::KdfOptions& kdf,
                                  std::string_view pack_flag) {
+    if (options.strip_metadata) {
+        throw std::invalid_argument(
+            "Streaming b512 encode requires metadata for format dispatch");
+    }
     std::string resolved = basefwx::ResolvePassword(password);
     if (resolved.empty()) {
         throw std::runtime_error("Password required for streaming b512 encode");

@@ -64,8 +64,8 @@ Quick Start
 
 ```bash
 pip install basefwx
-python -m basefwx cryptin aes-light file.bin -p "password" --strip
-python -m basefwx cryptin aes-light file.bin.fwx -p "password"
+python -m basefwx cryptin aes-light file.bin -p "correct-horse-battery" --strip
+python -m basefwx cryptin aes-light file.bin.fwx -p "correct-horse-battery"
 python -m basefwx n10-enc "hello"
 python -m basefwx n10-dec "<digits>"
 # Retired compatibility commands:
@@ -73,11 +73,21 @@ python -m basefwx kFMe photo.png -o photo.wav            # image/media -> audio 
 python -m basefwx kFMe track.mp3 -o track.png --bw       # audio -> image carrier
 python -m basefwx kFMd photo.wav -o photo-restored.png   # strict decode
 python -m basefwx kFMd track.png -o track-restored.mp3
-python -m basefwx cryptin fwxaes video.mp4 -p "password"            # Python default: no-archive
-python -m basefwx cryptin fwxaes video.mp4 -p "password" --archive  # exact-restore trailer
+python -m basefwx cryptin fwxaes video.mp4 -p "correct-horse-battery"            # Python default: no-archive
+python -m basefwx cryptin fwxaes video.mp4 -p "correct-horse-battery" --archive  # exact-restore trailer
 ```
 
 Notes:
+- Encryption requires a password of at least 10 UTF-8 bytes. This is enforced
+  on encrypt only — existing blobs with shorter passwords still decrypt.
+  Override with `BASEFWX_ALLOW_WEAK_PASSWORD=1`, or set a different floor with
+  `BASEFWX_MIN_PASSWORD_LEN=<n>` (`0` disables it). Passwords under 12 bytes
+  additionally get a more expensive KDF profile. See
+  [SECURITY.md](SECURITY.md#crypto-helper-boundaries) for both rules.
+- `--strip` is rejected when b512/AES-heavy file encoding selects the
+  streaming container. Streaming decode needs the public `ENC-MODE=STREAM`
+  marker for safe format dispatch; omitting it would create an unreadable
+  ciphertext rather than a metadata-free stream.
 - kFM/kFA/jMG are retired compatibility surfaces. Existing APIs and formats
   remain available, but only security, correctness, and compatibility fixes
   are planned.
@@ -112,13 +122,13 @@ carrier = kFMe("input.mp3", output="input.png", bw_mode=True)
 restored = kFMd("input.png", output="restored.mp3")
 
 # jMG Python default is no-archive (smaller, non-byte-identical restore)
-jMGe("clip.m4a", "password", output="clip.small.m4a")
-jMGe("cover.png", "password", output="cover.exact.png", archive_original=True)
-jMGd("clip.small.m4a", "password", output="clip.out.m4a")
+jMGe("clip.m4a", "correct-horse-battery", output="clip.small.m4a")
+jMGe("cover.png", "correct-horse-battery", output="cover.exact.png", archive_original=True)
+jMGd("clip.small.m4a", "correct-horse-battery", output="clip.out.m4a")
 
 # Live packetized stream encryption/decryption
-enc = LiveEncryptor("password", use_master=False)
-dec = LiveDecryptor("password", use_master=False)
+enc = LiveEncryptor("correct-horse-battery", use_master=False)
+dec = LiveDecryptor("correct-horse-battery", use_master=False)
 wire = [enc.start(), enc.update(b"chunk-1"), enc.update(b"chunk-2"), enc.finalize()]
 plain_chunks = []
 for packet in wire:
@@ -130,13 +140,13 @@ from basefwx import fwxAES_live_encrypt_ffmpeg, fwxAES_live_decrypt_ffmpeg
 fwxAES_live_encrypt_ffmpeg(
     ["ffmpeg", "-hide_banner", "-loglevel", "error", "-i", "input.m4a", "-f", "matroska", "-c", "copy", "-"],
     "stream.live.fwx",
-    "password",
+    "correct-horse-battery",
     use_master=False,
 )
 fwxAES_live_decrypt_ffmpeg(
     "stream.live.fwx",
     ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-f", "matroska", "-i", "-", "-c", "copy", "restored.mkv"],
-    "password",
+    "correct-horse-battery",
     use_master=False,
 )
 ```

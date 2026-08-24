@@ -15,14 +15,14 @@ ALG_768 = "ml-kem-768"
 ALG_1024 = "ml-kem-1024"
 
 try:
-    from pqcrypto.kem import ml_kem_768 as _ml_kem_768
+    from pqcrypto.kem import ml_kem_768 as _raw_ml_kem_768
 except Exception:  # pragma: no cover
-    _ml_kem_768 = None
+    _raw_ml_kem_768 = None
 
 try:
-    from pqcrypto.kem import ml_kem_1024 as _ml_kem_1024
+    from pqcrypto.kem import ml_kem_1024 as _raw_ml_kem_1024
 except Exception:  # pragma: no cover
-    _ml_kem_1024 = None
+    _raw_ml_kem_1024 = None
 
 
 class _PQUnavailable:
@@ -41,6 +41,49 @@ class _PQUnavailable:
     @staticmethod
     def decrypt(_private_key, _ciphertext):
         raise RuntimeError("pqcrypto is required for PQ operations (pip install pqcrypto)")
+
+
+class _PQModuleAdapter:
+    """Normalize the two public pqcrypto KEM APIs used in the wild.
+
+    pqcrypto historically exported generate_keypair/encrypt/decrypt. Newer
+    releases expose the same operations as keygen/encaps/decaps. BaseFWX keeps
+    its stable internal interface while accepting either installed backend.
+    """
+
+    def __init__(self, module):
+        self._module = module
+        self.CIPHERTEXT_SIZE = module.CIPHERTEXT_SIZE
+        self.PUBLIC_KEY_SIZE = module.PUBLIC_KEY_SIZE
+        self.SECRET_KEY_SIZE = module.SECRET_KEY_SIZE
+
+    def generate_keypair(self):
+        return self._module.keygen()
+
+    def encrypt(self, public_key):
+        return self._module.encaps(public_key)
+
+    def decrypt(self, private_key, ciphertext):
+        return self._module.decaps(private_key, ciphertext)
+
+    def __getattr__(self, name):
+        return getattr(self._module, name)
+
+
+def _adapt_module(module):
+    if module is None:
+        return None
+    legacy_api = ("generate_keypair", "encrypt", "decrypt")
+    if all(callable(getattr(module, name, None)) for name in legacy_api):
+        return module
+    current_api = ("keygen", "encaps", "decaps")
+    if all(callable(getattr(module, name, None)) for name in current_api):
+        return _PQModuleAdapter(module)
+    return None
+
+
+_ml_kem_768 = _adapt_module(_raw_ml_kem_768)
+_ml_kem_1024 = _adapt_module(_raw_ml_kem_1024)
 
 
 def _normalize_alg(name: Optional[str]) -> Optional[str]:

@@ -816,6 +816,15 @@ if(BASEFWX_BUILD_TESTS AND BUILD_TESTING)
     )
     add_test(NAME base64_compatibility_test COMMAND base64_compatibility_test)
 
+    add_executable(crypto_api_safety_test
+        tools/crypto_api_safety_test.cpp
+    )
+    target_link_libraries(crypto_api_safety_test PRIVATE basefwxcpp)
+    target_include_directories(crypto_api_safety_test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/include"
+    )
+    add_test(NAME crypto_api_safety_test COMMAND crypto_api_safety_test)
+
     if(BUILD_SHARED_LIBS AND UNIX AND CMAKE_NM)
         add_test(NAME basefwx_core_abi_exports
             COMMAND "${CMAKE_COMMAND}"

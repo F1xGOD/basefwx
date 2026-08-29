@@ -93,9 +93,29 @@
   never trigger the compatibility retry.
 - **Orig-tar privacy.** Debian orig archives now use Git-known
   tracked/unignored files only and fail closed on private AI/agent/tool
-  state or secret-path names at any depth.
+  state or secret-path names at any depth. Frozen qualification snapshots may
+  supply the exact NUL-delimited, sorted Git-visible source manifest instead
+  of copying repository metadata; unsafe, duplicate, unsorted, missing, and
+  secret-named members still fail before archive publication.
 
 ### Added
+- **ChaCha20-Poly1305 explicit-nonce one-shot (C++ only).**
+  `basefwx::crypto::ChaCha20Poly1305EncryptWithIv` and
+  `ChaCha20Poly1305DecryptWithIvOwned` add the RFC 8439 AEAD alongside the
+  existing AES-GCM helpers, for callers that must keep an established
+  ChaCha20-Poly1305 at-rest format. The key is 32 bytes and the nonce
+  exactly 12 — unlike AES-GCM this construction has one legal nonce size,
+  so a merely non-empty IV is rejected. The encrypted form is
+  `ciphertext || 16-byte tag` with no framing; the caller owns nonce
+  storage. AAD is explicit and may be empty, which RFC 8439 defines as
+  absorbing zero AAD bytes and is therefore byte-identical to a producer
+  that never supplies AAD. Plaintext is staged in `SecureBytes` and
+  released only after the Poly1305 tag verifies, so a forgery publishes
+  nothing and raises `AuthenticationError`; length errors are reported as
+  `std::runtime_error` / `std::length_error` before any narrowing to the
+  OpenSSL `int` width. Covered by the RFC 8439 §2.8.2 known-answer vector
+  plus fixed empty-AAD fixtures in `crypto_api_safety_test`.
+  **Java and Python parity is not claimed** — see COMPATIBILITY.md.
 - **Phase 0 — protocol KATs.** `scripts/gen_protocol_kats.py` +
   `cpp/tools/protocol_kat_gen.cpp` emit shared repository fixtures under
   `testdata/protocol_kats/` (HKDF, X25519, ML-KEM-768/1024). The
@@ -127,6 +147,13 @@
   `pq=ml-kem-768|1024` instead of misleading `oqs=OFF`.
 
 ### Changed
+- **Bounded, active-surface benchmark matrix.** Parallel fwxAES timing now
+  applies the existing payload-memory worker cap consistently to Python, C++,
+  and Java instead of launching one whole-file operation per CPU. Java's
+  fwxAES worker failures are propagated to the benchmark process. Retired
+  b256 and kFM/kFA/jMG performance rows no longer run by default; set
+  `BASEFWX_BENCH_RETIRED=1` for an explicit compatibility-performance run.
+  Focused correctness and existing-data compatibility coverage is unchanged.
 - **Media codec retirement.** The image-, audio-, and video-specific
   kFM/kFA/jMG codecs remain available in the 3.7.0+ compatibility line,
   including decode support for existing data, but retire from active

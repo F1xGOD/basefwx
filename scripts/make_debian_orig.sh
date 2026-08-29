@@ -7,16 +7,19 @@ set -euo pipefail
 
 usage() {
   cat <<'EOF'
-Usage: make_debian_orig.sh [--source-root PATH] [--output PATH]
+Usage: make_debian_orig.sh [--source-root PATH] [--source-manifest PATH] [--output PATH]
 
 Create a reproducible Debian orig tarball without repository-private or
 generated files. Options are primarily intended for packaging tests; the
-defaults package the current BaseFWX checkout beside the repository.
+defaults package the current BaseFWX checkout beside the repository. A
+NUL-delimited, sorted, unique source manifest may replace Git discovery for a
+frozen source snapshot; SOURCE_DATE_EPOCH must then be supplied explicitly.
 EOF
 }
 
 script_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source_root="${script_root}"
+source_manifest=""
 out=""
 
 while (($# > 0)); do
@@ -29,6 +32,11 @@ while (($# > 0)); do
     --output)
       (($# >= 2)) || { echo "--output requires a path" >&2; exit 2; }
       out="$2"
+      shift 2
+      ;;
+    --source-manifest)
+      (($# >= 2)) || { echo "--source-manifest requires a path" >&2; exit 2; }
+      source_manifest="$2"
       shift 2
       ;;
     --help|-h)
@@ -54,15 +62,24 @@ if [[ ! -f "${source_root}/VERSION" ]]; then
   exit 1
 fi
 
-if ! git -C "${source_root}" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-  echo "source root must be a Git work tree so archive membership is auditable" >&2
-  exit 1
-fi
-git_root="$(git -C "${source_root}" rev-parse --show-toplevel)"
-git_root="$(cd "${git_root}" && pwd -P)"
-if [[ "${git_root}" != "${source_root}" ]]; then
-  echo "source root must be the Git work-tree root: ${source_root}" >&2
-  exit 1
+if [[ -n "${source_manifest}" ]]; then
+  if [[ -L "${source_manifest}" || ! -f "${source_manifest}" ]]; then
+    echo "source manifest must be a regular non-symlink file: ${source_manifest}" >&2
+    exit 1
+  fi
+  source_manifest_parent="$(cd "$(dirname "${source_manifest}")" && pwd -P)"
+  source_manifest="${source_manifest_parent}/$(basename "${source_manifest}")"
+else
+  if ! git -C "${source_root}" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    echo "source root must be a Git work tree or use --source-manifest for an auditable frozen snapshot" >&2
+    exit 1
+  fi
+  git_root="$(git -C "${source_root}" rev-parse --show-toplevel)"
+  git_root="$(cd "${git_root}" && pwd -P)"
+  if [[ "${git_root}" != "${source_root}" ]]; then
+    echo "source root must be the Git work-tree root: ${source_root}" >&2
+    exit 1
+  fi
 fi
 version="$(tr -d '[:space:]' < "${source_root}/VERSION")"
 
@@ -89,6 +106,10 @@ esac
 prefix="basefwx-${archive_version}"
 
 if [[ -z "${SOURCE_DATE_EPOCH:-}" ]]; then
+  if [[ -n "${source_manifest}" ]]; then
+    echo "SOURCE_DATE_EPOCH is required with --source-manifest" >&2
+    exit 1
+  fi
   SOURCE_DATE_EPOCH="$(git -C "${source_root}" log -1 --format=%ct)"
 fi
 if [[ ! "${SOURCE_DATE_EPOCH}" =~ ^[0-9]+$ ]]; then
@@ -106,12 +127,28 @@ cleanup() {
 }
 trap cleanup EXIT
 
-git ls-files --cached --others --exclude-standard -z \
-  | LC_ALL=C sort -z > "${manifest}"
+if [[ -n "${source_manifest}" ]]; then
+  cp -- "${source_manifest}" "${manifest}"
+else
+  git ls-files --cached --others --exclude-standard -z \
+    | LC_ALL=C sort -z > "${manifest}"
+fi
+if [[ ! -s "${manifest}" ]]; then
+  echo "source manifest must not be empty" >&2
+  exit 1
+fi
+if [[ "$(tail -c 1 -- "${manifest}" | od -An -tx1 | tr -d '[:space:]')" != "00" ]] \
+   || ! LC_ALL=C sort -z -c -u -- "${manifest}"; then
+  echo "source manifest must be NUL-delimited, sorted, and unique" >&2
+  exit 1
+fi
 
 while IFS= read -r -d '' path; do
-  if [[ -z "${path}" || "${path}" == /* || "${path}" == ../* || "${path}" == */../* ]]; then
-    echo "unsafe Git archive path: ${path}" >&2
+  if [[ -z "${path}" || "${path}" == /* || "${path}" == "." || "${path}" == ".." \
+        || "${path}" == ./* || "${path}" == */./* || "${path}" == */. \
+        || "${path}" == ../* || "${path}" == */../* || "${path}" == */.. \
+        || "${path}" == *//* ]]; then
+    echo "unsafe source archive path: ${path}" >&2
     exit 1
   fi
   lower_path="${path,,}"
@@ -122,7 +159,7 @@ while IFS= read -r -d '' path; do
     exit 1
   fi
   if [[ ! -f "${path}" && ! -L "${path}" ]]; then
-    echo "Git archive member is not a file or symlink: ${path}" >&2
+    echo "source archive member is not a file or symlink: ${path}" >&2
     exit 1
   fi
 done < "${manifest}"

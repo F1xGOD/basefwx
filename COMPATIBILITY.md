@@ -10,6 +10,42 @@
 | Python | ✅ (`argon2-cffi` is a hard dependency; `basefwx[argon2]` remains a no-op extra for old install scripts) | ✅ via `pqcrypto` | ✅ | ✅ | Feature-complete scripting/runtime path. |
 | Java | ✅ since 3.7.0 (BouncyCastle `Argon2BytesGenerator`; libargon2 JNI optional) | ✅ keywrap (BouncyCastle ML-KEM-768/1024; EC fallback only when PQ pub not configured) | ❌ | ✅ | Argon2id user-KDF wrap on fwxAES / b512 / pb512file / KeyWrap. Peer `ENC-ARGON2-*` costs fail closed above shared maxima. |
 
+### ChaCha20-Poly1305 explicit-nonce helper: C++ only, no parity claim
+
+`ChaCha20Poly1305EncryptWithIv` / `ChaCha20Poly1305DecryptWithIvOwned`
+are public on **C++ only**. Java and Python have no ChaCha20-Poly1305
+surface and none is claimed or planned by this change.
+
+This is a deliberate exception to the parity expectation below, and the
+rationale is deliberately narrow: the helper exists so a downstream
+consumer can keep an **existing at-rest ChaCha20-Poly1305 record format**
+that predates BaseFWX ownership of the primitive. It is not part of the
+named 3.8 protocol-building surface, it is not used to build any
+cross-runtime wire or file format, and no BaseFWX format reads or writes
+it. Nothing in the C++/Java/Python interoperability matrix depends on it,
+so its absence elsewhere cannot produce a cross-runtime decode failure —
+which is what the parity rule exists to prevent. The precedent for a
+capability living in one runtime is already in the matrix above (LZMA/XZ
+is C++/Python only).
+
+If a future BaseFWX format or a second-runtime consumer adopts this
+primitive, that change acquires the full parity obligation: Java and
+Python implementations plus shared KAT fixtures under
+`testdata/protocol_kats/`. Adding it to a format without doing so would
+be the actual compatibility break.
+
+Correctness is pinned by the RFC 8439 §2.8.2 known-answer vector in
+`cpp/tools/crypto_api_safety_test.cpp` rather than by a cross-runtime
+comparison, so the implementation is anchored to the published standard
+even without a second runtime to agree with.
+
+The BaseFWX fixtures cannot substitute for a consumer's own stored-record
+gate. A consumer adopting this helper must decrypt a fixed pre-migration
+record through its migrated caller and prove new output is byte-identical
+before publishing its dependency update. The initial YUME integration carries
+that separate relay-persistence regression; it remains YUME evidence rather
+than a cross-runtime BaseFWX parity claim.
+
 ### 3.8.0-dev1 protocol-building API parity
 
 Explicit-salt HKDF, ML-KEM-768 / ML-KEM-1024 selection with

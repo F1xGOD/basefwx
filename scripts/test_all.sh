@@ -25,6 +25,8 @@ set -- "${BASEFWX_GUARDS_REMAINING_ARGS[@]}"
 bench_guards_apply
 # shellcheck source=lib/java_bench_flags.sh
 source "$ROOT/scripts/lib/java_bench_flags.sh"
+# shellcheck source=lib/benchmark_policy.sh
+source "$ROOT/scripts/lib/benchmark_policy.sh"
 
 USE_VENV="${USE_VENV:-1}"
 VENV_DIR="${VENV_DIR:-$ROOT/.venv}"
@@ -2717,6 +2719,9 @@ if ! "$ROOT/scripts/test_make_debian_orig.sh" >>"$LOG" 2>&1; then
 fi
 if ! "$ROOT/scripts/test_java_bench_flags.sh" >>"$LOG" 2>&1; then
     FAILURES+=("java_bench_flag_policy")
+fi
+if ! "$ROOT/scripts/test_benchmark_policy.sh" >>"$LOG" 2>&1; then
+    FAILURES+=("retired_benchmark_policy")
 fi
 if ! "$PYTHON_BIN" "$ROOT/scripts/gen_protocol_kats.py" \
      --check-copies >>"$LOG" 2>&1; then
@@ -5486,7 +5491,9 @@ case "$BENCH_FWXAES_MODE" in
         ;;
 esac
 
-BENCH_TEXT_METHODS=("b256" "b512" "pb512" "b64" "a512" "n10")
+basefwx_benchmark_configure_methods
+BENCH_RETIRED="$BASEFWX_BENCH_RETIRED_ENABLED"
+BENCH_TEXT_METHODS=("${BASEFWX_BENCH_TEXT_METHODS[@]}")
 BENCH_HASH_METHODS=("hash512" "uhash513" "bi512")  # b1024 retired in 3.6.5
 
 BENCH_LANGS=()
@@ -5504,6 +5511,7 @@ if [[ "$RUN_JAVA_TESTS" == "1" && "$JAVA_AVAILABLE" == "1" ]]; then
 fi
 
 log "BENCH_FWXAES_MODE: $BENCH_FWXAES_MODE"
+log "BENCH_RETIRED: $BENCH_RETIRED"
 log "BENCH_PARALLEL: $BENCH_PARALLEL"
 log "BENCH_ALL_CORES: $BENCH_ALL_CORES"
 log "BENCH_WORKERS: $BASEFWX_BENCH_WORKERS"
@@ -5539,10 +5547,12 @@ for idx in "${!BENCH_LANGS[@]}"; do
             if [[ "$BENCH_FWXAES_MODE" == "par" ]]; then
                 time_cmd_bench "fwxaes_py_par_light" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_HEAVY" \
                     BASEFWX_BENCH_ITERS="$BENCH_ITERS_HEAVY" \
+                    BASEFWX_BENCH_WORKERS="$BENCH_FILE_WORKERS" \
                     BASEFWX_TEST_KDF_ITERS="$FWXAES_LIGHT_KDF_ITERS" \
                     "$PYTHON_BIN" "$PY_HELPER" bench-fwxaes-par "$BENCH_BYTES_FILE" "$PW"
                 time_cmd_bench "fwxaes_py_par" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_HEAVY" \
                     BASEFWX_BENCH_ITERS="$BENCH_ITERS_HEAVY" \
+                    BASEFWX_BENCH_WORKERS="$BENCH_FILE_WORKERS" \
                     "$PYTHON_BIN" "$PY_HELPER" bench-fwxaes-par "$BENCH_BYTES_FILE" "$PW"
             else
                 time_cmd_bench "fwxaes_py_correct_light" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_HEAVY" \
@@ -5595,25 +5605,29 @@ for idx in "${!BENCH_LANGS[@]}"; do
                 BASEFWX_BENCH_WORKERS="$BENCH_FILE_WORKERS" \
                 BASEFWX_BENCH_AN7_WORKERS=1 \
                 "$PYTHON_BIN" "$PY_HELPER" bench-dean7 "$BENCH_BYTES_FILE" "$PW"
-            for jmg_file in "${JMG_CASES[@]}"; do
-                time_cmd_bench "jmg_py_${jmg_file%.*}" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_FILE" \
-                    BASEFWX_BENCH_ITERS="$BENCH_ITERS_FILE" \
-                    BASEFWX_BENCH_WORKERS="$BENCH_FILE_WORKERS" \
-                    "$PYTHON_BIN" "$PY_HELPER" bench-jmg "$ORIG_DIR/$jmg_file" "$PW"
-            done
-            BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_FILE" BASEFWX_BENCH_ITERS="$BENCH_ITERS_FILE" \
-                time_cmd_bench "kfme_py_total" bench_kf_roundtrip "kfme" "py" "$BENCH_KFM_FILE"
-            BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_FILE" BASEFWX_BENCH_ITERS="$BENCH_ITERS_FILE" \
-                time_cmd_bench "kfae_py_total" bench_kf_roundtrip "kfae" "py" "$BENCH_KFM_FILE"
+            if (( BENCH_RETIRED == 1 )); then
+                for jmg_file in "${JMG_CASES[@]}"; do
+                    time_cmd_bench "jmg_py_${jmg_file%.*}" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_FILE" \
+                        BASEFWX_BENCH_ITERS="$BENCH_ITERS_FILE" \
+                        BASEFWX_BENCH_WORKERS="$BENCH_FILE_WORKERS" \
+                        "$PYTHON_BIN" "$PY_HELPER" bench-jmg "$ORIG_DIR/$jmg_file" "$PW"
+                done
+                BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_FILE" BASEFWX_BENCH_ITERS="$BENCH_ITERS_FILE" \
+                    time_cmd_bench "kfme_py_total" bench_kf_roundtrip "kfme" "py" "$BENCH_KFM_FILE"
+                BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_FILE" BASEFWX_BENCH_ITERS="$BENCH_ITERS_FILE" \
+                    time_cmd_bench "kfae_py_total" bench_kf_roundtrip "kfae" "py" "$BENCH_KFM_FILE"
+            fi
             ;;
         pypy)
             if [[ "$BENCH_FWXAES_MODE" == "par" ]]; then
                 time_cmd_bench "fwxaes_pypy_par_light" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_HEAVY" \
                     BASEFWX_BENCH_ITERS="$BENCH_ITERS_HEAVY" \
+                    BASEFWX_BENCH_WORKERS="$BENCH_FILE_WORKERS" \
                     BASEFWX_TEST_KDF_ITERS="$FWXAES_LIGHT_KDF_ITERS" \
                     "$PYPY_BIN" "$PY_HELPER" bench-fwxaes-par "$BENCH_BYTES_FILE" "$PW"
                 time_cmd_bench "fwxaes_pypy_par" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_HEAVY" \
                     BASEFWX_BENCH_ITERS="$BENCH_ITERS_HEAVY" \
+                    BASEFWX_BENCH_WORKERS="$BENCH_FILE_WORKERS" \
                     "$PYPY_BIN" "$PY_HELPER" bench-fwxaes-par "$BENCH_BYTES_FILE" "$PW"
             else
                 time_cmd_bench "fwxaes_pypy_correct_light" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_HEAVY" \
@@ -5658,25 +5672,29 @@ for idx in "${!BENCH_LANGS[@]}"; do
                 BASEFWX_BENCH_WORKERS="$BENCH_FILE_WORKERS" \
                 BASEFWX_BENCH_AN7_WORKERS=1 \
                 "$PYPY_BIN" "$PY_HELPER" bench-dean7 "$BENCH_BYTES_FILE" "$PW"
-            for jmg_file in "${JMG_CASES[@]}"; do
-                time_cmd_bench "jmg_pypy_${jmg_file%.*}" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_FILE" \
-                    BASEFWX_BENCH_ITERS="$BENCH_ITERS_FILE" \
-                    BASEFWX_BENCH_WORKERS="$BENCH_FILE_WORKERS" \
-                    "$PYPY_BIN" "$PY_HELPER" bench-jmg "$ORIG_DIR/$jmg_file" "$PW"
-            done
-            BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_FILE" BASEFWX_BENCH_ITERS="$BENCH_ITERS_FILE" \
-                time_cmd_bench "kfme_pypy_total" bench_kf_roundtrip "kfme" "pypy" "$BENCH_KFM_FILE"
-            BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_FILE" BASEFWX_BENCH_ITERS="$BENCH_ITERS_FILE" \
-                time_cmd_bench "kfae_pypy_total" bench_kf_roundtrip "kfae" "pypy" "$BENCH_KFM_FILE"
+            if (( BENCH_RETIRED == 1 )); then
+                for jmg_file in "${JMG_CASES[@]}"; do
+                    time_cmd_bench "jmg_pypy_${jmg_file%.*}" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_FILE" \
+                        BASEFWX_BENCH_ITERS="$BENCH_ITERS_FILE" \
+                        BASEFWX_BENCH_WORKERS="$BENCH_FILE_WORKERS" \
+                        "$PYPY_BIN" "$PY_HELPER" bench-jmg "$ORIG_DIR/$jmg_file" "$PW"
+                done
+                BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_FILE" BASEFWX_BENCH_ITERS="$BENCH_ITERS_FILE" \
+                    time_cmd_bench "kfme_pypy_total" bench_kf_roundtrip "kfme" "pypy" "$BENCH_KFM_FILE"
+                BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_FILE" BASEFWX_BENCH_ITERS="$BENCH_ITERS_FILE" \
+                    time_cmd_bench "kfae_pypy_total" bench_kf_roundtrip "kfae" "pypy" "$BENCH_KFM_FILE"
+            fi
             ;;
         cpp)
             if [[ "$BENCH_FWXAES_MODE" == "par" ]]; then
                 time_cmd_bench "fwxaes_cpp_par_light" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_HEAVY" \
                     BASEFWX_BENCH_ITERS="$BENCH_ITERS_HEAVY" \
+                    BASEFWX_BENCH_WORKERS="$BENCH_FILE_WORKERS" \
                     BASEFWX_TEST_KDF_ITERS="$FWXAES_LIGHT_KDF_ITERS" \
                     "$CPP_BIN" bench-fwxaes-par "$BENCH_BYTES_FILE" "$PW" --no-master
                 time_cmd_bench "fwxaes_cpp_par" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_HEAVY" \
                     BASEFWX_BENCH_ITERS="$BENCH_ITERS_HEAVY" \
+                    BASEFWX_BENCH_WORKERS="$BENCH_FILE_WORKERS" \
                     "$CPP_BIN" bench-fwxaes-par "$BENCH_BYTES_FILE" "$PW" --no-master
             else
                 time_cmd_bench "fwxaes_cpp_correct_light" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_HEAVY" \
@@ -5740,25 +5758,27 @@ for idx in "${!BENCH_LANGS[@]}"; do
                 BASEFWX_BENCH_ITERS="$BENCH_ITERS_FILE" \
                 BASEFWX_BENCH_WORKERS=1 \
                 "$CPP_BIN" bench-dean7 "$BENCH_BYTES_FILE" "$PW" --no-master
-            for jmg_file in "${JMG_CASES[@]}"; do
-                time_cmd_bench "jmg_cpp_${jmg_file%.*}" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_FILE" \
-                    BASEFWX_BENCH_ITERS="$BENCH_ITERS_FILE" \
-                    BASEFWX_BENCH_WORKERS="$BENCH_FILE_WORKERS" \
-                    "$CPP_BIN" bench-jmg "$ORIG_DIR/$jmg_file" "$PW" --no-master
-            done
-            if (( NVIDIA_HWACCEL_AVAILABLE == 1 )) \
-                && [[ "$JMG_VIDEO_CASES_ENABLED" == "1" || "$JMG_VIDEO_CASES_ENABLED" == "true" || "$JMG_VIDEO_CASES_ENABLED" == "yes" || "$JMG_VIDEO_CASES_ENABLED" == "on" ]] \
-                && [[ -f "$ORIG_DIR/jmg_sample.mp4" ]]; then
-                time_cmd_bench "jmg_cpp_gpu_jmg_sample_mp4" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_FILE" \
-                    BASEFWX_BENCH_ITERS="$BENCH_ITERS_FILE" \
-                    BASEFWX_BENCH_WORKERS="$BENCH_FILE_WORKERS" \
-                    BASEFWX_HWACCEL=nvenc \
-                    "$CPP_BIN" bench-jmg "$ORIG_DIR/jmg_sample.mp4" "$PW" --no-master
+            if (( BENCH_RETIRED == 1 )); then
+                for jmg_file in "${JMG_CASES[@]}"; do
+                    time_cmd_bench "jmg_cpp_${jmg_file%.*}" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_FILE" \
+                        BASEFWX_BENCH_ITERS="$BENCH_ITERS_FILE" \
+                        BASEFWX_BENCH_WORKERS="$BENCH_FILE_WORKERS" \
+                        "$CPP_BIN" bench-jmg "$ORIG_DIR/$jmg_file" "$PW" --no-master
+                done
+                if (( NVIDIA_HWACCEL_AVAILABLE == 1 )) \
+                    && [[ "$JMG_VIDEO_CASES_ENABLED" == "1" || "$JMG_VIDEO_CASES_ENABLED" == "true" || "$JMG_VIDEO_CASES_ENABLED" == "yes" || "$JMG_VIDEO_CASES_ENABLED" == "on" ]] \
+                    && [[ -f "$ORIG_DIR/jmg_sample.mp4" ]]; then
+                    time_cmd_bench "jmg_cpp_gpu_jmg_sample_mp4" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_FILE" \
+                        BASEFWX_BENCH_ITERS="$BENCH_ITERS_FILE" \
+                        BASEFWX_BENCH_WORKERS="$BENCH_FILE_WORKERS" \
+                        BASEFWX_HWACCEL=nvenc \
+                        "$CPP_BIN" bench-jmg "$ORIG_DIR/jmg_sample.mp4" "$PW" --no-master
+                fi
+                BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_FILE" BASEFWX_BENCH_ITERS="$BENCH_ITERS_FILE" \
+                    time_cmd_bench "kfme_cpp_total" bench_kf_roundtrip "kfme" "cpp" "$BENCH_KFM_FILE"
+                BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_FILE" BASEFWX_BENCH_ITERS="$BENCH_ITERS_FILE" \
+                    time_cmd_bench "kfae_cpp_total" bench_kf_roundtrip "kfae" "cpp" "$BENCH_KFM_FILE"
             fi
-            BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_FILE" BASEFWX_BENCH_ITERS="$BENCH_ITERS_FILE" \
-                time_cmd_bench "kfme_cpp_total" bench_kf_roundtrip "kfme" "cpp" "$BENCH_KFM_FILE"
-            BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_FILE" BASEFWX_BENCH_ITERS="$BENCH_ITERS_FILE" \
-                time_cmd_bench "kfae_cpp_total" bench_kf_roundtrip "kfae" "cpp" "$BENCH_KFM_FILE"
             ;;
         java)
             if [[ "$BENCH_FWXAES_MODE" == "par" ]]; then
@@ -5766,10 +5786,12 @@ for idx in "${!BENCH_LANGS[@]}"; do
                 # JVM startup is NOT included, but JIT warmup is (fairest comparison)
                 time_cmd_bench "fwxaes_java_par_light" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_JAVA_FWXAES" \
                     BASEFWX_BENCH_ITERS="$BENCH_ITERS_HEAVY" \
+                    BASEFWX_BENCH_WORKERS="$BENCH_FILE_WORKERS" \
                     BASEFWX_TEST_KDF_ITERS="$FWXAES_LIGHT_KDF_ITERS" \
                     "$JAVA_BIN" "${JAVA_BENCH_FLAGS_ARR[@]}" -jar "$JAVA_JAR" bench-fwxaes-par "$BENCH_BYTES_FILE" "$PW" --no-master
                 time_cmd_bench "fwxaes_java_par" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_JAVA_FWXAES" \
                     BASEFWX_BENCH_ITERS="$BENCH_ITERS_HEAVY" \
+                    BASEFWX_BENCH_WORKERS="$BENCH_FILE_WORKERS" \
                     "$JAVA_BIN" "${JAVA_BENCH_FLAGS_ARR[@]}" -jar "$JAVA_JAR" bench-fwxaes-par "$BENCH_BYTES_FILE" "$PW" --no-master
             else
                 # Use increased warmup for Java to ensure JIT compilation reaches steady state
@@ -5819,16 +5841,18 @@ for idx in "${!BENCH_LANGS[@]}"; do
                 BASEFWX_BENCH_ITERS="$BENCH_ITERS_FILE" \
                 BASEFWX_BENCH_WORKERS=1 \
                 "$JAVA_BIN" "${JAVA_BENCH_FLAGS_ARR[@]}" -jar "$JAVA_JAR" bench-dean7 "$BENCH_BYTES_FILE" "$PW" --no-master
-            for jmg_file in "${JMG_CASES[@]}"; do
-                time_cmd_bench "jmg_java_${jmg_file%.*}" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_FILE_JAVA" \
-                    BASEFWX_BENCH_ITERS="$BENCH_ITERS_FILE" \
-                    BASEFWX_BENCH_WORKERS="$BENCH_FILE_WORKERS" \
-                    "$JAVA_BIN" "${JAVA_BENCH_FLAGS_ARR[@]}" -jar "$JAVA_JAR" bench-jmg "$ORIG_DIR/$jmg_file" "$PW" --no-master
-            done
-            BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_FILE_JAVA" BASEFWX_BENCH_ITERS="$BENCH_ITERS_FILE" \
-                time_cmd_bench "kfme_java_total" bench_kf_roundtrip "kfme" "java" "$BENCH_KFM_FILE"
-            BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_FILE_JAVA" BASEFWX_BENCH_ITERS="$BENCH_ITERS_FILE" \
-                time_cmd_bench "kfae_java_total" bench_kf_roundtrip "kfae" "java" "$BENCH_KFM_FILE"
+            if (( BENCH_RETIRED == 1 )); then
+                for jmg_file in "${JMG_CASES[@]}"; do
+                    time_cmd_bench "jmg_java_${jmg_file%.*}" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_FILE_JAVA" \
+                        BASEFWX_BENCH_ITERS="$BENCH_ITERS_FILE" \
+                        BASEFWX_BENCH_WORKERS="$BENCH_FILE_WORKERS" \
+                        "$JAVA_BIN" "${JAVA_BENCH_FLAGS_ARR[@]}" -jar "$JAVA_JAR" bench-jmg "$ORIG_DIR/$jmg_file" "$PW" --no-master
+                done
+                BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_FILE_JAVA" BASEFWX_BENCH_ITERS="$BENCH_ITERS_FILE" \
+                    time_cmd_bench "kfme_java_total" bench_kf_roundtrip "kfme" "java" "$BENCH_KFM_FILE"
+                BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_FILE_JAVA" BASEFWX_BENCH_ITERS="$BENCH_ITERS_FILE" \
+                    time_cmd_bench "kfae_java_total" bench_kf_roundtrip "kfae" "java" "$BENCH_KFM_FILE"
+            fi
             ;;
     esac
     if (( idx < ${#BENCH_LANGS[@]} - 1 )); then
@@ -6041,7 +6065,6 @@ BENCH_METHODS=(
     "fwxAES-light|${FWXAES_LIGHT_PY_KEY}|${FWXAES_LIGHT_PYPY_KEY}|${FWXAES_LIGHT_CPP_KEY}|${FWXAES_LIGHT_JAVA_KEY}"
     "fwxAES|${FWXAES_PY_KEY}|${FWXAES_PYPY_KEY}|${FWXAES_CPP_KEY}|${FWXAES_JAVA_KEY}"
     "fwxAES-live|fwxaes_live_py_total|fwxaes_live_pypy_total|fwxaes_live_cpp_total|fwxaes_live_java_total"
-    "b256|b256_py_correct|b256_pypy_correct|b256_cpp_correct|b256_java_correct"
     "b512|b512_py_correct|b512_pypy_correct|b512_cpp_correct|b512_java_correct"
     "pb512|pb512_py_correct|pb512_pypy_correct|pb512_cpp_correct|pb512_java_correct"
     "b64|b64_py_correct|b64_pypy_correct|b64_cpp_correct|b64_java_correct"
@@ -6054,9 +6077,14 @@ BENCH_METHODS=(
     "pb512file|pb512file_py_total|pb512file_pypy_total|pb512file_cpp_total|pb512file_java_total"
     "an7|an7_py_total|an7_pypy_total|an7_cpp_total|an7_java_total"
     "dean7|dean7_py_total|dean7_pypy_total|dean7_cpp_total|dean7_java_total"
-    "kFMe|kfme_py_total|kfme_pypy_total|kfme_cpp_total|kfme_java_total"
-    "kFAe|kfae_py_total|kfae_pypy_total|kfae_cpp_total|kfae_java_total"
 )
+if (( BENCH_RETIRED == 1 )); then
+    BENCH_METHODS+=(
+        "b256|b256_py_correct|b256_pypy_correct|b256_cpp_correct|b256_java_correct"
+        "kFMe|kfme_py_total|kfme_pypy_total|kfme_cpp_total|kfme_java_total"
+        "kFAe|kfae_py_total|kfae_pypy_total|kfae_cpp_total|kfae_java_total"
+    )
+fi
 
 overall_summary() {
     local py_sum py_count py_base_sum
@@ -6293,7 +6321,6 @@ printf "\nTiming summary (native):\n"
 compare_speed_block "fwxAES-light" "$FWXAES_LIGHT_PY_KEY" "$FWXAES_LIGHT_PYPY_KEY" "$FWXAES_LIGHT_CPP_KEY" "$FWXAES_LIGHT_JAVA_KEY"
 compare_speed_block "fwxAES" "$FWXAES_PY_KEY" "$FWXAES_PYPY_KEY" "$FWXAES_CPP_KEY" "$FWXAES_JAVA_KEY"
 compare_speed_block "fwxAES-live" "fwxaes_live_py_total" "fwxaes_live_pypy_total" "fwxaes_live_cpp_total" "fwxaes_live_java_total"
-compare_speed_block "b256" "b256_py_correct" "b256_pypy_correct" "b256_cpp_correct" "b256_java_correct"
 compare_speed_block "b512" "b512_py_correct" "b512_pypy_correct" "b512_cpp_correct" "b512_java_correct"
 compare_speed_block "pb512" "pb512_py_correct" "pb512_pypy_correct" "pb512_cpp_correct" "pb512_java_correct"
 compare_speed_block "b64" "b64_py_correct" "b64_pypy_correct" "b64_cpp_correct" "b64_java_correct"
@@ -6321,8 +6348,11 @@ if [[ "$RUN_JAVA_TESTS" == "1" && -z "${TIMES[b512file_java_total]-}" ]]; then
 fi
 compare_speed_block "b512file" "b512file_py_total" "b512file_pypy_total" "b512file_cpp_total" "b512file_java_total"
 compare_speed_block "pb512file" "pb512file_py_total" "pb512file_pypy_total" "pb512file_cpp_total" "pb512file_java_total"
-compare_speed_block "kFMe" "kfme_py_total" "kfme_pypy_total" "kfme_cpp_total" "kfme_java_total"
-compare_speed_block "kFAe" "kfae_py_total" "kfae_pypy_total" "kfae_cpp_total" "kfae_java_total"
+if (( BENCH_RETIRED == 1 )); then
+    compare_speed_block "b256" "b256_py_correct" "b256_pypy_correct" "b256_cpp_correct" "b256_java_correct"
+    compare_speed_block "kFMe" "kfme_py_total" "kfme_pypy_total" "kfme_cpp_total" "kfme_java_total"
+    compare_speed_block "kFAe" "kfae_py_total" "kfae_pypy_total" "kfae_cpp_total" "kfae_java_total"
+fi
 
 # --- plugin ABI smoke ----------------------------------------------------
 # Verifies the blackbox plugin ABI end-to-end (build + dlopen + ServiceLoader

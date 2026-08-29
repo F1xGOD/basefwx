@@ -62,6 +62,52 @@ for private_path in "${ignored_paths[@]}"; do
   printf 'private\n' > "${source_root}/${private_path}"
 done
 
+snapshot_root="${tmp_root}/snapshot"
+snapshot_manifest="${tmp_root}/snapshot.manifest"
+snapshot_out="${tmp_root}/snapshot.orig.tar.xz"
+mkdir -p "${snapshot_root}/cpp/src"
+cp -- "${source_root}/VERSION" "${snapshot_root}/VERSION"
+cp -- "${source_root}/UNTRACKED.md" "${snapshot_root}/UNTRACKED.md"
+cp -- "${source_root}/cpp/src/keep.cpp" "${snapshot_root}/cpp/src/keep.cpp"
+printf '%s\0' 'UNTRACKED.md' 'VERSION' 'cpp/src/keep.cpp' > "${snapshot_manifest}"
+
+if SOURCE_DATE_EPOCH=1 \
+     "${repo_root}/scripts/make_debian_orig.sh" \
+     --source-root "${snapshot_root}" --output "${snapshot_out}" \
+     >/dev/null 2>"${tmp_root}/snapshot-no-manifest.stderr"; then
+  echo "orig tarball accepted a non-Git snapshot without an explicit manifest" >&2
+  exit 1
+fi
+grep -Fq 'use --source-manifest for an auditable frozen snapshot' \
+  "${tmp_root}/snapshot-no-manifest.stderr"
+
+SOURCE_DATE_EPOCH=1 \
+  "${repo_root}/scripts/make_debian_orig.sh" \
+  --source-root "${snapshot_root}" --source-manifest "${snapshot_manifest}" \
+  --output "${snapshot_out}" >/dev/null
+snapshot_listing="$(tar -tf "${snapshot_out}")"
+grep -qx 'basefwx-3.8.0~dev1/VERSION' <<<"${snapshot_listing}"
+grep -qx 'basefwx-3.8.0~dev1/cpp/src/keep.cpp' <<<"${snapshot_listing}"
+grep -qx 'basefwx-3.8.0~dev1/UNTRACKED.md' <<<"${snapshot_listing}"
+
+mkdir -p "${snapshot_root}/config/runtime"
+printf 'secret\n' > "${snapshot_root}/config/runtime/.env.production"
+printf '%s\0' \
+  'UNTRACKED.md' 'VERSION' 'config/runtime/.env.production' 'cpp/src/keep.cpp' \
+  > "${tmp_root}/snapshot-secret.manifest"
+if SOURCE_DATE_EPOCH=1 \
+     "${repo_root}/scripts/make_debian_orig.sh" \
+     --source-root "${snapshot_root}" \
+     --source-manifest "${tmp_root}/snapshot-secret.manifest" \
+     --output "${tmp_root}/snapshot-secret.orig.tar.xz" \
+     >/dev/null 2>"${tmp_root}/snapshot-secret.stderr"; then
+  echo "manifest-driven orig tarball accepted a high-risk secret path" >&2
+  exit 1
+fi
+grep -Fq \
+  'refusing to archive high-risk private path: config/runtime/.env.production' \
+  "${tmp_root}/snapshot-secret.stderr"
+
 git -C "${source_root}" init -q
 git -C "${source_root}" config user.name "BaseFWX Test"
 git -C "${source_root}" config user.email "basefwx-test@example.invalid"
@@ -128,9 +174,17 @@ if [[ -e "${danger_out}" ]]; then
 fi
 
 live_out="${tmp_root}/live.orig.tar.xz"
+live_args=(--source-root "${repo_root}" --output "${live_out}")
+if ! git -C "${repo_root}" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  if [[ -z "${BASEFWX_SOURCE_MANIFEST:-}" ]]; then
+    echo "live orig privacy check requires Git metadata or BASEFWX_SOURCE_MANIFEST" >&2
+    exit 1
+  fi
+  live_args+=(--source-manifest "${BASEFWX_SOURCE_MANIFEST}")
+fi
 SOURCE_DATE_EPOCH=1 \
   "${repo_root}/scripts/make_debian_orig.sh" \
-  --source-root "${repo_root}" --output "${live_out}" >/dev/null
+  "${live_args[@]}" >/dev/null
 live_listing="$(tar -tf "${live_out}")"
 if grep -Eqi "${high_risk_pattern}" <<<"${live_listing}"; then
   echo "live orig tarball contains an ignored/private path" >&2

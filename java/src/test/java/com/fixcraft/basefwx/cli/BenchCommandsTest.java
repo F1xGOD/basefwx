@@ -102,4 +102,22 @@ public class BenchCommandsTest {
             pool.shutdownNow();
         }
     }
+
+    @Test
+    public void parallelWorkerErrorPropagates() {
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        try {
+            BenchCommands.runParallel(pool, 2, workerId -> {
+                if (workerId == 1) {
+                    throw new OutOfMemoryError("worker heap exhausted");
+                }
+                return 1L;
+            });
+            fail("expected worker error");
+        } catch (OutOfMemoryError expected) {
+            assertEquals("worker heap exhausted", expected.getMessage());
+        } finally {
+            pool.shutdownNow();
+        }
+    }
 }

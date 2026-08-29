@@ -259,13 +259,17 @@ final class BenchCommands {
         int iters = benchIters();
         byte[] data = readAllBytes(input);
         byte[] benchPassBytes = BaseFwx.resolvePasswordBytes(benchPassFinal, useMasterFlag);
-        long ns = benchMedian(warmup, iters, () -> {
-            byte[] blob = BaseFwx.fwxAesEncryptRawBytes(data, benchPassBytes, useMasterFlag);
-            byte[] plain = BaseFwx.fwxAesDecryptRawBytes(blob, benchPassBytes, useMasterFlag);
-            BENCH_SINK ^= plain.length;
-        });
-        System.out.println("BENCH_NS=" + ns);
-        return 0;
+        try {
+            long ns = benchMedian(warmup, iters, () -> {
+                byte[] blob = BaseFwx.fwxAesEncryptRawBytes(data, benchPassBytes, useMasterFlag);
+                byte[] plain = BaseFwx.fwxAesDecryptRawBytes(blob, benchPassBytes, useMasterFlag);
+                BENCH_SINK ^= plain.length;
+            });
+            System.out.println("BENCH_NS=" + ns);
+            return 0;
+        } finally {
+            Arrays.fill(benchPassBytes, (byte) 0);
+        }
     }
 
     private static int benchFwxaesPar(String[] args, int argc, boolean useMaster) {
@@ -284,14 +288,22 @@ final class BenchCommands {
         byte[] benchPassBytes = BaseFwx.resolvePasswordBytes(benchPassFinal, useMasterFlag);
         ExecutorService pool = Executors.newFixedThreadPool(workers);
         try {
+            BenchWorker worker = (idx) -> {
+                byte[] blob = BaseFwx.fwxAesEncryptRawBytes(
+                        data, benchPassBytes, useMasterFlag);
+                byte[] plain = BaseFwx.fwxAesDecryptRawBytes(
+                        blob, benchPassBytes, useMasterFlag);
+                BENCH_SINK ^= plain.length;
+                return plain.length;
+            };
             for (int i = 0; i < warmup; i++) {
-                benchFwxaesParallel(pool, workers, data, benchPassBytes, useMasterFlag);
+                runParallel(pool, workers, worker);
             }
             long[] samples = new long[iters];
             long bytesPerRun = 0;
             for (int i = 0; i < iters; i++) {
                 long start = System.nanoTime();
-                bytesPerRun = benchFwxaesParallel(pool, workers, data, benchPassBytes, useMasterFlag);
+                bytesPerRun = runParallel(pool, workers, worker);
                 long end = System.nanoTime();
                 samples[i] = end - start;
             }
@@ -308,6 +320,7 @@ final class BenchCommands {
             return 0;
         } finally {
             pool.shutdown();
+            Arrays.fill(benchPassBytes, (byte) 0);
         }
     }
 
@@ -967,33 +980,4 @@ final class BenchCommands {
         }
     }
 
-    private static long benchFwxaesParallel(ExecutorService pool,
-                                            int workers,
-                                            byte[] data,
-                                            byte[] password,
-                                            boolean useMaster) {
-        CountDownLatch latch = new CountDownLatch(workers);
-        final long[] totalBytes = new long[1];
-        for (int i = 0; i < workers; i++) {
-            pool.execute(() -> {
-                try {
-                    byte[] blob = BaseFwx.fwxAesEncryptRawBytes(data, password, useMaster);
-                    byte[] plain = BaseFwx.fwxAesDecryptRawBytes(blob, password, useMaster);
-                    BENCH_SINK ^= plain.length;
-                    synchronized (totalBytes) {
-                        totalBytes[0] += plain.length;
-                    }
-                } finally {
-                    latch.countDown();
-                }
-            });
-        }
-        try {
-            latch.await();
-        } catch (InterruptedException exc) {
-            Thread.currentThread().interrupt();
-            throw new RuntimeException("Parallel benchmark interrupted", exc);
-        }
-        return totalBytes[0];
-    }
 }

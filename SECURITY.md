@@ -40,6 +40,11 @@ correctness, and existing-data compatibility issues in the latest release
 remain in scope under this policy. Active development targets mathematically
 grounded, high-performance C++ cryptographic primitives.
 
+Routine benchmark runs omit those media codecs and retired b256. An explicit
+`BASEFWX_BENCH_RETIRED=1` enables their performance rows for a compatibility
+investigation. This benchmark policy does not remove their focused security,
+correctness, or existing-data compatibility coverage.
+
 ### Historical: What's New in 3.6.4
 
 For the full write-up — KDF cost table, security-normalized
@@ -297,6 +302,37 @@ and AAD labels as the helpers (`kAeadNonceLen` / `AEAD_NONCE_LEN` =
 12, `kAeadTagLen` / `AEAD_TAG_LEN` = 16). New one-shot crypto must
 not invent a parallel `EVP_*` / `Cipher.getInstance` path outside
 the helpers.
+
+**Caller-supplied nonces are the caller's obligation.** The
+explicit-nonce forms — `AesGcmEncryptWithIv` and, since 3.8.0-dev1,
+`ChaCha20Poly1305EncryptWithIv` — do not and cannot check nonce
+uniqueness, because they see one call at a time. Reusing a nonce under
+the same key is catastrophic for both constructions, and in both cases
+the damage exceeds confidentiality: two messages under one key/nonce
+pair leak the XOR of their plaintexts, and the repeated authenticator
+input additionally permits recovery of the authentication key —
+the Poly1305 one-time key for ChaCha20-Poly1305, and `H` via the
+Joux "forbidden attack" for AES-GCM — which yields forgeries. Neither
+construction degrades gracefully; treat nonce reuse as a full break of
+both secrecy and integrity.
+
+Randomness is not by itself proof of uniqueness. A 12-byte nonce drawn
+from `RandomBytes(kAeadNonceLen)` collides with birthday probability
+roughly `q^2 / 2^97` after `q` messages under one key, so the usual
+ceiling is **2^32 encryptions per key** (NIST SP 800-38D §8.3 imposes
+exactly this limit for random GCM IVs; the same arithmetic governs
+ChaCha20-Poly1305). A deterministic counter that provably never repeats
+for the lifetime of the key is stronger where the caller can persist
+one. Either way the obligation is the caller's: budget the number of
+messages per key, and rotate the key before the budget is spent rather
+than after. Prefer the nonce-generating `AesGcmEncrypt` unless an
+established stored format forces the explicit form.
+
+`ChaCha20Poly1305DecryptWithIvOwned` stages decrypted bytes in
+`SecureBytes` and returns them only after the Poly1305 tag verifies, so
+a failed authentication publishes no attacker-influenced plaintext to
+the caller. It is C++ only; see COMPATIBILITY.md for why no Java or
+Python parity is claimed.
 
 Password inputs on the Java public API still arrive as `String` in
 several entry points (historical). Prefer `byte[]` / `char[]` for

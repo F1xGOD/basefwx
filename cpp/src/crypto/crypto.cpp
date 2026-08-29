@@ -130,6 +130,100 @@ std::size_t DecryptAesGcmWithIvValidated(const Bytes& key,
     return static_cast<std::size_t>(total_len);
 }
 
+// IETF ChaCha20-Poly1305 accepts exactly one nonce size, so the shared
+// key/IV check is stricter than the AES-GCM equivalent and cannot reuse
+// ValidateAesGcmDecryptInput (which admits any non-empty IV).
+void ValidateChaCha20Poly1305Key(const Bytes& key, const Bytes& iv) {
+    if (key.size() != 32) {
+        throw std::runtime_error("ChaCha20-Poly1305 expects 32-byte key");
+    }
+    if (iv.size() != constants::kAeadNonceLen) {
+        throw std::runtime_error("ChaCha20-Poly1305 expects 12-byte nonce");
+    }
+}
+
+std::size_t ValidateChaCha20Poly1305DecryptInput(const Bytes& key,
+                                                 const Bytes& iv,
+                                                 const std::uint8_t* blob,
+                                                 std::size_t blob_len,
+                                                 const Bytes& aad) {
+    ValidateChaCha20Poly1305Key(key, iv);
+    if (blob_len < constants::kAeadTagLen) {
+        throw std::runtime_error("ChaCha20-Poly1305 blob too short");
+    }
+    const std::size_t ct_len = blob_len - constants::kAeadTagLen;
+    EnsureEvpIntLength(aad.size(), "ChaCha20-Poly1305 AAD is too large");
+    EnsureEvpIntLength(ct_len, "ChaCha20-Poly1305 ciphertext is too large");
+    EnsureReadable(blob, blob_len, "ChaCha20-Poly1305 ciphertext buffer is null");
+    return ct_len;
+}
+
+std::size_t DecryptChaCha20Poly1305WithIvValidated(const Bytes& key,
+                                                   const Bytes& iv,
+                                                   const std::uint8_t* blob,
+                                                   std::size_t ct_len,
+                                                   const Bytes& aad,
+                                                   std::uint8_t* out,
+                                                   std::size_t out_capacity) {
+    const std::uint8_t* tag = blob + ct_len;
+    std::uint8_t* decrypt_out = out;
+
+    using detail::UniqueCipherCtx;
+    UniqueCipherCtx ctx(EVP_CIPHER_CTX_new());
+    if (!ctx) {
+        throw std::runtime_error("ChaCha20-Poly1305 context allocation failed");
+    }
+    // As in the encrypt direction, keep OpenSSL's per-chunk int lengths but
+    // accumulate the offset in size_t and bound it against the real staging
+    // capacity. The exact-length check below separately enforces that this
+    // cipher emits no final plaintext.
+    int out_len_int = 0;
+    std::size_t total_len = 0;
+    const auto advance = [&total_len, out_capacity](
+                             int produced, const char* message) {
+        if (produced < 0 ||
+            total_len > out_capacity ||
+            static_cast<std::size_t>(produced) >
+                out_capacity - total_len) {
+            throw std::runtime_error(message);
+        }
+        total_len += static_cast<std::size_t>(produced);
+    };
+
+    Ensure(EVP_DecryptInit_ex(ctx.get(), EVP_chacha20_poly1305(), nullptr,
+                              nullptr, nullptr) == 1,
+           "ChaCha20-Poly1305 init failed");
+    Ensure(EVP_CIPHER_CTX_ctrl(ctx.get(), EVP_CTRL_AEAD_SET_IVLEN,
+                               static_cast<int>(iv.size()), nullptr) == 1,
+           "ChaCha20-Poly1305 set iv length failed");
+    Ensure(EVP_DecryptInit_ex(ctx.get(), nullptr, nullptr, key.data(),
+                              iv.data()) == 1,
+           "ChaCha20-Poly1305 set key failed");
+    if (!aad.empty()) {
+        Ensure(EVP_DecryptUpdate(ctx.get(), nullptr, &out_len_int, aad.data(),
+                                 static_cast<int>(aad.size())) == 1,
+               "ChaCha20-Poly1305 aad failed");
+    }
+    if (ct_len > 0) {
+        Ensure(EVP_DecryptUpdate(ctx.get(), decrypt_out, &out_len_int, blob,
+                                 static_cast<int>(ct_len)) == 1,
+               "ChaCha20-Poly1305 decrypt failed");
+        advance(out_len_int, "ChaCha20-Poly1305 decrypt overran its buffer");
+    }
+    Ensure(EVP_CIPHER_CTX_ctrl(ctx.get(), EVP_CTRL_AEAD_SET_TAG,
+                               static_cast<int>(constants::kAeadTagLen),
+                               const_cast<std::uint8_t*>(tag)) == 1,
+           "ChaCha20-Poly1305 set tag failed");
+    if (EVP_DecryptFinal_ex(ctx.get(), decrypt_out + total_len,
+                            &out_len_int) != 1) {
+        throw AuthenticationError("ChaCha20-Poly1305 auth failed");
+    }
+    advance(out_len_int, "ChaCha20-Poly1305 final overran its buffer");
+    Ensure(total_len == ct_len,
+           "ChaCha20-Poly1305 plaintext length mismatch");
+    return total_len;
+}
+
 }  // namespace
 
 Bytes RandomBytes(std::size_t size) {
@@ -588,6 +682,101 @@ std::size_t AesGcmDecryptWithIvInto(const Bytes& key,
         std::memcpy(out, staged.data(), written);
     }
     return written;
+}
+
+Bytes ChaCha20Poly1305EncryptWithIv(const Bytes& key,
+                                    const Bytes& iv,
+                                    const Bytes& plaintext,
+                                    const Bytes& aad) {
+    ValidateChaCha20Poly1305Key(key, iv);
+    EnsureEvpIntLength(aad.size(), "ChaCha20-Poly1305 AAD is too large");
+    EnsureEvpIntLength(plaintext.size(),
+                       "ChaCha20-Poly1305 plaintext is too large");
+    if (plaintext.size() >
+        std::numeric_limits<std::size_t>::max() - constants::kAeadTagLen) {
+        throw std::length_error("ChaCha20-Poly1305 output length overflow");
+    }
+
+    using detail::UniqueCipherCtx;
+    UniqueCipherCtx ctx(EVP_CIPHER_CTX_new());
+    if (!ctx) {
+        throw std::runtime_error("ChaCha20-Poly1305 context allocation failed");
+    }
+
+    Bytes out(plaintext.size() + constants::kAeadTagLen);
+    // OpenSSL reports each chunk length as int, but the running offset must
+    // not be an int: a plaintext at the INT_MAX admission limit fills the
+    // whole positive int range, so appending the 16-byte tag to an int total
+    // would be signed overflow. Accumulate in size_t and bound every advance
+    // against the real buffer instead.
+    int out_len_int = 0;
+    std::size_t total_len = 0;
+    const auto advance = [&out, &total_len](int produced, const char* message) {
+        if (produced < 0 ||
+            total_len > out.size() ||
+            static_cast<std::size_t>(produced) > out.size() - total_len) {
+            throw std::runtime_error(message);
+        }
+        total_len += static_cast<std::size_t>(produced);
+    };
+
+    Ensure(EVP_EncryptInit_ex(ctx.get(), EVP_chacha20_poly1305(), nullptr,
+                              nullptr, nullptr) == 1,
+           "ChaCha20-Poly1305 init failed");
+    Ensure(EVP_CIPHER_CTX_ctrl(ctx.get(), EVP_CTRL_AEAD_SET_IVLEN,
+                               static_cast<int>(iv.size()), nullptr) == 1,
+           "ChaCha20-Poly1305 set iv length failed");
+    Ensure(EVP_EncryptInit_ex(ctx.get(), nullptr, nullptr, key.data(),
+                              iv.data()) == 1,
+           "ChaCha20-Poly1305 set key failed");
+    if (!aad.empty()) {
+        Ensure(EVP_EncryptUpdate(ctx.get(), nullptr, &out_len_int, aad.data(),
+                                 static_cast<int>(aad.size())) == 1,
+               "ChaCha20-Poly1305 aad failed");
+    }
+    if (!plaintext.empty()) {
+        Ensure(EVP_EncryptUpdate(ctx.get(), out.data(), &out_len_int,
+                                 plaintext.data(),
+                                 static_cast<int>(plaintext.size())) == 1,
+               "ChaCha20-Poly1305 encrypt failed");
+        advance(out_len_int, "ChaCha20-Poly1305 encrypt overran its buffer");
+    }
+    Ensure(EVP_EncryptFinal_ex(ctx.get(), out.data() + total_len,
+                               &out_len_int) == 1,
+           "ChaCha20-Poly1305 final failed");
+    advance(out_len_int, "ChaCha20-Poly1305 final overran its buffer");
+    Ensure(total_len <= out.size() - constants::kAeadTagLen,
+           "ChaCha20-Poly1305 has no room for the tag");
+    Ensure(EVP_CIPHER_CTX_ctrl(ctx.get(), EVP_CTRL_AEAD_GET_TAG,
+                               static_cast<int>(constants::kAeadTagLen),
+                               out.data() + total_len) == 1,
+           "ChaCha20-Poly1305 get tag failed");
+    total_len += constants::kAeadTagLen;
+
+    out.resize(total_len);
+    return out;
+}
+
+Bytes ChaCha20Poly1305DecryptWithIvOwned(const Bytes& key,
+                                         const Bytes& iv,
+                                         const std::uint8_t* blob,
+                                         std::size_t blob_len,
+                                         const Bytes& aad) {
+    const std::size_t ct_len = ValidateChaCha20Poly1305DecryptInput(
+        key, iv, blob, blob_len, aad);
+    // OpenSSL emits ChaCha20 keystream output from EVP_DecryptUpdate before
+    // EVP_DecryptFinal_ex checks the Poly1305 tag. Stage it privately so a
+    // forgery cannot publish attacker-chosen plaintext to the caller.
+    // Reserve tag-length slack for EVP_DecryptFinal_ex. ChaCha20-Poly1305 is
+    // specified to emit no final plaintext, but checking that invariant only
+    // after a call into OpenSSL is not memory-safe unless the callee has room
+    // to violate it. The exact-length check above still rejects any output
+    // other than `ct_len` before Release().
+    SecureBytes plaintext{Bytes(blob_len)};
+    const std::size_t written = DecryptChaCha20Poly1305WithIvValidated(
+        key, iv, blob, ct_len, aad, plaintext.data(), plaintext.size());
+    plaintext.bytes().resize(written);
+    return plaintext.Release();
 }
 
 Bytes AeadEncrypt(const Bytes& key, const Bytes& plaintext, const Bytes& aad) {

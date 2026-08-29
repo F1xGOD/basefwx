@@ -91,6 +91,10 @@ Notes:
 - kFM/kFA/jMG are retired compatibility surfaces. Existing APIs and formats
   remain available, but only security, correctness, and compatibility fixes
   are planned.
+- Routine benchmarks exclude retired b256 and kFM/kFA/jMG performance rows.
+  Set `BASEFWX_BENCH_RETIRED=1` only when those compatibility surfaces need an
+  explicit performance run; their focused correctness coverage remains
+  separate.
 - `kFMd` only decodes BaseFWX carriers; it refuses plain WAV/PNG/MP3/M4A files.
 - `kFAe` / `kFAd` remain available as deprecated aliases to `kFMe` / `kFMd`.
 - Release support policy is single-version: only the latest release is maintained; all older releases are immediately unsupported.

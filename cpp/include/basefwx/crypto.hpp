@@ -76,6 +76,30 @@ std::size_t AesGcmDecryptWithIvInto(const Bytes& key,
                                     const Bytes& aad,
                                     std::uint8_t* out,
                                     std::size_t out_len);
+
+// IETF ChaCha20-Poly1305 (RFC 8439) one-shot AEAD with a caller-supplied
+// nonce. The key must be 32 bytes and the IV exactly 12; unlike AES-GCM this
+// construction has no other legal nonce size, so a short or long IV is
+// rejected rather than passed to OpenSSL.
+//
+// The encrypted form is `ciphertext || 16-byte tag` with no framing: the
+// caller owns nonce storage and association. AAD is explicit and may be
+// empty, which RFC 8439 defines as absorbing zero AAD bytes -- byte-identical
+// to a caller that never supplies AAD at all.
+Bytes ChaCha20Poly1305EncryptWithIv(const Bytes& key,
+                                    const Bytes& iv,
+                                    const Bytes& plaintext,
+                                    const Bytes& aad);
+// Returns owned plaintext from a `ciphertext || tag` slice. The result is
+// staged in private wiping storage and released to the caller only after the
+// Poly1305 tag verifies; authentication failure publishes nothing and throws
+// AuthenticationError.
+Bytes ChaCha20Poly1305DecryptWithIvOwned(const Bytes& key,
+                                         const Bytes& iv,
+                                         const std::uint8_t* blob,
+                                         std::size_t blob_len,
+                                         const Bytes& aad);
+
 Bytes AesCtrTransform(const Bytes& key, const Bytes& iv, const Bytes& data);
 // In-place CTR transform that avoids the std::vector zero-fill in the
 // out-of-place form (which was ~0.5 GB/s of pure memset on the an7 hot

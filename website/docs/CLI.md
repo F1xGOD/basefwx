@@ -98,7 +98,7 @@ Notes:
   1024 for wrapping and authenticated `ENC-KEM` metadata; recovery selects
   by private-key/ciphertext size. Default generation remains `ml-kem-768`.
   Upstream ships with
-  **no** baked master public key — provision via `BASEFWX_MASTER_PQ_PUB`
+  no baked master public key. Provision one through `BASEFWX_MASTER_PQ_PUB`
   or a build-time `-DBASEFWX_MASTER_PQ_PUB_B64=…` /
   `-Dbasefwx.master.pq.public.b64=…` opt-in.
 - Explicit-salt HKDF and X25519 helpers are public multi-lang APIs
@@ -109,7 +109,7 @@ Notes:
   `FWX1` headers. A compatibility build also recognizes kFM PNG/WAV carriers,
   including legacy `kFAe` output.
 - When a file is not recognized as BaseFWX, the C++ CLI reports a heuristic guess (`unknown`, random-like, or a simple format hint) instead of only saying "corrupted container".
-- New encrypt operations reject passwords shorter than 10 characters unless `BASEFWX_ALLOW_WEAK_PASSWORD=1` is set.
+- New encrypt operations reject passwords shorter than 10 UTF-8 bytes unless `BASEFWX_ALLOW_WEAK_PASSWORD=1` is set.
 - Default user KDF targets are hardened to `PBKDF2=600000` / `Argon2id=4 x 64 MiB`, and heavy-mode payloads advertise `PBKDF2=2000000` / `Argon2id=6 x 256 MiB`.
 - Support policy is single-version: only the latest release is maintained; all older releases are immediately unsupported.
 - Python `n10` is optimized for large payloads, but C++/Java remain faster in heavy benchmark runs.
@@ -329,7 +329,7 @@ Notes:
 - Java CLI global flags: `--verbose|-v`, `--no-log`.
 - `--no-log` suppresses telemetry/warnings while preserving primary outputs/errors.
 - The Java module includes Argon2id (BouncyCastle, optional libargon2 JNI) and ML-KEM-768/1024 master wrap (BouncyCastle PQC). LZMA is not available. See `COMPATIBILITY.md`.
-- C++ CLI plugin flags: `--plugin <path>`, `--plugin-id <hex>`, `--plugin-pos pre|post`, `--plugin-config <file>` (Profile A PRE/POST). Keyed/`POS_RAW` host wiring is incomplete — see `examples/plugins/THREAT_MODEL.md`.
+- C++ CLI plugin flags: `--plugin <path>`, `--plugin-id <hex>`, `--plugin-pos pre|post`, `--plugin-config <file>` (Profile A PRE/POST). Keyed/`POS_RAW` host wiring is incomplete. See `examples/plugins/THREAT_MODEL.md`.
 
 ## Java API
 

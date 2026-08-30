@@ -18,7 +18,8 @@
 | **CLI master-key opt-in tightened** | C++ CLI requires `--with-master` explicitly to engage the master-key path; richer version/build reporting. |
 | **Java build hygiene** | CLI / version-packaging regressions fixed, release and CI builds stay green. |
 
-The full security-policy section lives in [SECURITY.md](SECURITY.md);
+The full security-policy section lives in the
+[3.6.4 security policy](https://github.com/F1xGOD/basefwx/blob/ace398bf9f0d32e5c84ede5b49af5d2141193b27/SECURITY.md);
 this document focuses on **what changed in 3.6.4 and what it costs**.
 
 ---
@@ -212,7 +213,7 @@ layer. AES-256 + hardened Argon2id / PBKDF2 is the right tool for the
 password-only case; ML-KEM is the right tool when a second,
 independent secret (the master private key) exists.
 
-See [SECURITY.md → Optional: ML-KEM-768 master-key wrap](SECURITY.md#optional-ml-kem-768-master-key-wrap-off-by-default) for
+See [the 3.6.4 optional ML-KEM-768 master-key wrap policy](https://github.com/F1xGOD/basefwx/blob/ace398bf9f0d32e5c84ede5b49af5d2141193b27/SECURITY.md#optional-ml-kem-768-master-key-wrap-off-by-default) for
 the full opt-in picture.
 
 ---
@@ -238,7 +239,7 @@ the full opt-in picture.
 
 ## 7. Upgrade checklist
 
-1. Read [SECURITY.md → What's New in 3.6.4](SECURITY.md#whats-new-in-364) for the policy summary.
+1. Read [the 3.6.4 security-policy summary](https://github.com/F1xGOD/basefwx/blob/ace398bf9f0d32e5c84ede5b49af5d2141193b27/SECURITY.md#whats-new-in-364).
 2. Decide whether to re-encrypt sensitive archives under the new
    defaults. Old blobs still decrypt; only re-encryption picks up the
    hardened KDF parameters.

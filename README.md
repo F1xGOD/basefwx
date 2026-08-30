@@ -1,196 +1,137 @@
-<h1 align="center">
-<img src="https://raw.githubusercontent.com/f1xgod/basefwx/main/src/ui/basefwx.svg" width="300">
-</h1><br>
+# BaseFWX
 
-[![PyPI](https://img.shields.io/pypi/v/basefwx?style=flat&logo=pypi&logoColor=white&label=PyPI)](https://pypi.org/project/basefwx/)
-[![Downloads](https://img.shields.io/pypi/dm/basefwx?style=flat&logo=pypi&logoColor=white&label=downloads)](https://pypi.org/project/basefwx/)
-[![Python](https://img.shields.io/pypi/pyversions/basefwx?style=flat&logo=python&logoColor=white)](https://pypi.org/project/basefwx/)
-[![Platforms](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey?style=flat)](https://github.com/F1xGOD/basefwx/releases/latest)
+BaseFWX is an authenticated-encryption library and command-line tool for C++,
+Python, and Java. The maintained runtimes share the same file, text, and live
+stream formats.
 
-[![CI](https://img.shields.io/github/actions/workflow/status/F1xGOD/basefwx/ci.yml?branch=main&style=flat&logo=githubactions&logoColor=white&label=CI)](https://github.com/F1xGOD/basefwx/actions/workflows/ci.yml)
-[![Memleak](https://img.shields.io/github/actions/workflow/status/F1xGOD/basefwx/leak-detect.yml?branch=main&style=flat&logo=githubactions&logoColor=white&label=Memleak)](https://github.com/F1xGOD/basefwx/actions/workflows/leak-detect.yml)
-[![CodeQL](https://img.shields.io/github/actions/workflow/status/F1xGOD/basefwx/codeql.yml?branch=main&style=flat&logo=github&logoColor=white&label=CodeQL)](https://github.com/F1xGOD/basefwx/actions/workflows/codeql.yml)
+The version of this checkout is stored in [VERSION](VERSION). A development
+checkout may be newer than the latest published release. Only the latest
+release receives security and bug fixes.
 
-[![Latest release](https://img.shields.io/github/v/release/F1xGOD/basefwx?style=flat&logo=github&logoColor=white&label=Release)](https://github.com/F1xGOD/basefwx/releases/latest)
-[![License](https://img.shields.io/github/license/F1xGOD/basefwx?style=flat&label=License)](https://github.com/F1xGOD/basefwx/blob/main/LICENCE)
+- Website and downloads: <https://basefwx.fixcraft.jp>
+- Source: <https://github.com/F1xGOD/basefwx>
+- Issues: <https://github.com/F1xGOD/basefwx/issues>
+- Security reports: [SECURITY.md](SECURITY.md)
 
-BaseFWX is a cross-runtime post-quantum + AEAD encryption toolkit. Active
-development now centers on mathematically grounded, high-performance C++
-cryptographic primitives. Python and Java remain part of the compatibility
-surface, and the three implementations share the same established on-disk and
-on-wire formats.
+## Maintained formats
 
-The b256/A512/Bi512/Uhash513 text codecs and the image-, audio-, and
-video-specific kFM/kFA/jMG codecs are retired. Default C++, Java, and Python
-artifacts do not compile or package their implementations, commands, tests, or
-benchmarks. Existing callers and data can use an explicitly enabled
-compatibility artifact; that profile preserves the established APIs and bytes,
-but receives only security, correctness, and existing-data compatibility fixes.
-No new retired formats, features, performance work, or benchmark rows are
-planned.
+- `fwxAES` encrypts files and byte streams with AES-256-GCM.
+- `b512` and `pb512` write authenticated text and file containers.
+- The live stream API authenticates ordered packets for use inside a transport
+  or media pipe.
+- `n10` is a reversible numeric encoding. It is not encryption.
 
-The version in this checkout is recorded in [`VERSION`](VERSION). This
-revision is the unreleased `3.8.0-dev1` development line; the latest tagged
-release is `v3.7.0`. See [CHANGELOG.md](CHANGELOG.md) for development changes
-and [SECURITY.md](SECURITY.md) for the supported-version policy. Native
-consumers should also read [ABI.md](ABI.md): the plugin C ABI and general C++
-library have intentionally different compatibility contracts.
+BaseFWX can derive password keys with Argon2id or PBKDF2. An optional master
+recovery path wraps a random content key with ML-KEM-768 or ML-KEM-1024.
+Password and master recovery are independent unlock paths when both are
+present.
 
-Repository policy:
+BaseFWX does not implement an “AES-512” cipher. Historical `aes512` names are
+aliases for a heavier KDF profile around AES-256-GCM.
 
-- `main` is the canonical development/release line; `DEV` is its integration
-  mirror.
-- It stays a monorepo. There are no language-specific long-lived branches.
-- Shared format and security changes have to keep Python / C++ / Java parity in one PR.
+The size-preserving obfuscation step can remove obvious plaintext structure,
+but it is not a substitute for encryption. The AEAD tag is what authenticates
+the payload and its bound metadata.
 
-- Website: https://basefwx.fixcraft.jp
-- Documentation: https://basefwx.fixcraft.jp/docs/CLI
-- Source code: https://github.com/F1xGOD/basefwx
-- Contributing: https://basefwx.fixcraft.jp/docs/CONTRIBUTING
-- Bug reports: https://github.com/F1xGOD/basefwx/issues
-- Report a security vulnerability: https://basefwx.fixcraft.jp/docs/SECURITY_MODEL
-
-What's in the box:
-
-- AES-256-GCM payloads with optional ML-KEM-768/1024 master-key wrapping
-- Password-based encryption via Argon2id (recommended) or PBKDF2
-- fwxAES file format with an optional normalize wrapper that hides bytes in zero-width Unicode markers
-- A packetized live-stream API so fwxAES works inside ffmpeg/SIP/transport pipes
-- b512 / pb512 authenticated text encodings (v3 AES-256-GCM) and file modes
-- Optional retired-data compatibility artifacts for b256/A512/Bi512/Uhash513,
-  kFM/kFA carriers, and jMG
-- C++ and Java libraries + CLIs that read and write the same formats as the Python module
-
-Quick Start
------------
+## Install and try the Python CLI
 
 ```bash
-pip install basefwx
-python -m basefwx cryptin aes-light file.bin -p "correct-horse-battery" --strip
+python -m pip install basefwx
+python -m basefwx cryptin aes-light file.bin -p "correct-horse-battery"
 python -m basefwx cryptin aes-light file.bin.fwx -p "correct-horse-battery"
-python -m basefwx n10-enc "hello"
-python -m basefwx n10-dec "<digits>"
 ```
 
-Notes:
-- Encryption requires a password of at least 10 UTF-8 bytes. This is enforced
-  on encrypt only — existing blobs with shorter passwords still decrypt.
-  Override with `BASEFWX_ALLOW_WEAK_PASSWORD=1`, or set a different floor with
-  `BASEFWX_MIN_PASSWORD_LEN=<n>` (`0` disables it). Passwords under 12 bytes
-  additionally get a more expensive KDF profile. See
-  [SECURITY.md](SECURITY.md#crypto-helper-boundaries) for both rules.
-- `--strip` is rejected when b512/AES-heavy file encoding selects the
-  streaming container. Streaming decode needs the public `ENC-MODE=STREAM`
-  marker for safe format dispatch; omitting it would create an unreadable
-  ciphertext rather than a metadata-free stream.
-- Default artifacts exclude b256/A512/Bi512/Uhash513, jMG/kFM/kFA, and Pillow.
-  To read existing retired data, build and run a compatibility profile as shown
-  below. The historical switch remains named `BASEFWX_ENABLE_RETIRED_MEDIA` so
-  existing build automation keeps working.
-- New b512/pb512 text output is authenticated payload v3 and canonical
-  standard base64. Version 2 text payloads were malleable and are rejected by
-  default; `BASEFWX_ALLOW_LEGACY_TEXT_V2=1` is a trusted-data recovery switch,
-  not a normal compatibility setting. Cosmetic token-map output is opt-in
-  with `BASEFWX_OBFUSCATE_CODECS=1`.
-- b512file writers always use the outer AES-256-GCM container. The old
-  unauthenticated writer mode is retired; raw historical files require
-  `BASEFWX_ALLOW_LEGACY_B512FILE_RAW=1` only while recovering trusted data.
-- Benchmarks exercise only maintained methods. Compatibility mode restores
-  exact-byte and decode qualification for retired methods, but does not restore
-  their benchmark rows.
-- Release support policy is single-version: only the latest release is maintained; all older releases are immediately unsupported.
-- CLI progress now includes live system telemetry (CPU/GPU/RAM/I/O/TEMP when available).
-  Disable with `BASEFWX_PROGRESS_TELEMETRY=0`.
-- Python `n10` was optimized for large payloads, but compiled runtimes (C++/Java) are still expected to benchmark faster for very large text workloads.
-- C++/Java CLI global flags: `--no-log` (suppress non-essential logs) and `--verbose` (show hardware routing reasons).
-- Canonical release assets are architecture-qualified only; alias artifacts without arch suffixes are intentionally not published.
-- Every GitHub release includes detached signatures, checksum files, and `release-manifest.json`.
+For unattended use, load the password from an owner-readable file instead of
+putting it in the process arguments:
 
-Python API quick refs:
+```bash
+python -m basefwx cryptin fwxaes file.bin \
+  -p file://$HOME/.config/basefwx/password
+```
+
+New encryption rejects passwords shorter than the configured minimum. An
+environment switch can lower that check for controlled compatibility work, but
+it should not be a deployment default. See [SECURITY.md](SECURITY.md).
+
+## Python streaming example
 
 ```python
-from basefwx import n10encode, n10decode, n10encode_bytes, n10decode_bytes
-from basefwx import LiveEncryptor, LiveDecryptor
+from basefwx import fwxAES_encrypt_stream, fwxAES_decrypt_stream
 
-digits = n10encode("hello")
-text = n10decode(digits)
-blob_digits = n10encode_bytes(b"\x00\x01\x02")
-blob = n10decode_bytes(blob_digits)
+with open("input.bin", "rb") as source, open("output.fwx", "wb") as target:
+    fwxAES_encrypt_stream(source, target, "correct-horse-battery")
 
-# Live packetized stream encryption/decryption
-enc = LiveEncryptor("correct-horse-battery", use_master=False)
-dec = LiveDecryptor("correct-horse-battery", use_master=False)
-wire = [enc.start(), enc.update(b"chunk-1"), enc.update(b"chunk-2"), enc.finalize()]
-plain_chunks = []
-for packet in wire:
-    plain_chunks.extend(dec.update(packet))
-dec.finalize()
-
-# ffmpeg pipe helpers for live media transport
-from basefwx import fwxAES_live_encrypt_ffmpeg, fwxAES_live_decrypt_ffmpeg
-fwxAES_live_encrypt_ffmpeg(
-    ["ffmpeg", "-hide_banner", "-loglevel", "error", "-i", "input.m4a", "-f", "matroska", "-c", "copy", "-"],
-    "stream.live.fwx",
-    "correct-horse-battery",
-    use_master=False,
-)
-fwxAES_live_decrypt_ffmpeg(
-    "stream.live.fwx",
-    ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-f", "matroska", "-i", "-", "-c", "copy", "restored.mkv"],
-    "correct-horse-battery",
-    use_master=False,
-)
+with open("output.fwx", "rb") as source, open("restored.bin", "wb") as target:
+    fwxAES_decrypt_stream(source, target, "correct-horse-battery")
 ```
 
-Retired-media compatibility is source-build-only and must be selected before
-Python imports BaseFWX. A default wheel does not contain these modules, so an
-environment variable cannot turn them back on afterward:
+Use `LiveEncryptor` and `LiveDecryptor` when the caller needs authenticated,
+ordered packets instead of a complete file. The live format does not provide
+retransmission, jitter buffering, or clock synchronization. Those belong to
+the transport around it.
+
+## C++ and Java
+
+The C++ library and CLI build with CMake:
 
 ```bash
-BASEFWX_ENABLE_RETIRED_MEDIA=1 \
-  python -m pip install './python[retired-media]'
-BASEFWX_ENABLE_RETIRED_MEDIA=1 \
-  python -m basefwx kFMd existing-carrier.wav -o restored.bin
+cmake -S cpp -B cpp/build -DCMAKE_BUILD_TYPE=Release
+cmake --build cpp/build --parallel
+ctest --test-dir cpp/build --output-on-failure
 ```
 
-Compatibility-only details:
-
-- `kFMd` refuses plain WAV/PNG/MP3/M4A files; it decodes BaseFWX carriers only.
-- `kFAe` / `kFAd` remain deprecated aliases to `kFMe` / `kFMd`.
-- `BASEFWX_KFM_ACCEL=auto|cuda|cpu` selects kFM acceleration.
-- `BASEFWX_HWACCEL=auto|nvenc|qsv|vaapi|off` selects jMG acceleration.
-- jMG video additionally requires `BASEFWX_ENABLE_JMG_VIDEO=1`.
-
-Optional extras:
+The Java module builds with Gradle:
 
 ```bash
-pip install basefwx[argon2]
+cd java
+gradle test
+gradle jar
 ```
 
-The `argon2` extra is a compatibility no-op; Argon2 is already a required
-dependency. The `retired-media` extra installs Pillow but does not by itself
-add retired code to a default wheel.
+The [CLI reference](https://basefwx.fixcraft.jp/docs/CLI/) has C++, Python,
+and Java commands and API examples. [COMPATIBILITY.md](COMPATIBILITY.md) states
+which algorithms and containers are byte-compatible across runtimes.
 
-Documentation
--------------
+## Compatibility and recovery
 
-- [Docs home (HTML)](https://basefwx.fixcraft.jp)
+The default artifacts contain the maintained formats only. Historical
+b256/A512/Bi512/Uhash513 text methods and the kFM/kFA/jMG media paths are
+available only in an explicitly built recovery profile. Use that profile to
+read existing data, then re-encrypt it with a maintained format.
+
+Legacy recovery switches are opt-in and should be scoped to trusted old data:
+
+- unauthenticated text payload v2
+- raw historical b512file input
+- legacy AES-CBC decryption
+- retired media and text codecs
+
+Authentication failure in a recognized current container does not fall back to
+a legacy parser. [COMPATIBILITY.md](COMPATIBILITY.md) lists the exact switches
+and [SECURITY.md](SECURITY.md) explains their risk.
+
+The general C++ library follows a pre-stable source-compatibility policy. The
+plugin ABI has its own frozen C contract. Native consumers must read
+[ABI.md](ABI.md) before depending on either boundary.
+
+## Documentation
+
 - [BaseFWX explained](docs/EXPLAINED.md)
-- [BaseFWX CLI manual page](docs/man/basefwx.1)
-- [BaseFWX library overview manual page](docs/man/basefwx.7)
-- [CLI and usage](https://basefwx.fixcraft.jp/docs/CLI)
-- [Security model](https://basefwx.fixcraft.jp/docs/SECURITY_MODEL)
-- [Testing and benchmarks](https://basefwx.fixcraft.jp/docs/TESTING)
-- [Contributing and code of conduct](https://basefwx.fixcraft.jp/docs/CONTRIBUTING)
-- [Java module](https://basefwx.fixcraft.jp/docs/CLI#java-cli)
-- [Compatibility matrix](https://github.com/F1xGOD/basefwx/blob/main/COMPATIBILITY.md)
+- [CLI and API reference](https://basefwx.fixcraft.jp/docs/CLI/)
+- [Security model](https://basefwx.fixcraft.jp/docs/SECURITY_MODEL/)
+- [Compatibility](COMPATIBILITY.md)
+- [Native and plugin ABI](ABI.md)
+- [Testing](https://basefwx.fixcraft.jp/docs/TESTING/)
+- [Contributing](CONTRIBUTING.md)
+- [Changelog](CHANGELOG.md)
 
-License
--------
+Public automation context is isolated under [docs/agents/](docs/agents/).
+It is not required to use the library.
 
-BaseFWX uses a split license: core library/API/runtime and plugin ABI/SPI
-surfaces are LGPL-3.0-or-later, standalone CLI/tools/benchmarks/scripts are
-GPL-3.0-or-later, and example plugin templates are MIT OR Apache-2.0.
-The root [LICENCE](LICENCE) file contains the canonical LGPL-3.0 text for
-GitHub/license-scanner detection; see [LICENSING.md](LICENSING.md) for the
-full split policy and [LICENSES/](LICENSES/) for the other canonical texts.
+## License
+
+BaseFWX uses a split license. The core library, runtime APIs, and plugin ABI/SPI
+are LGPL-3.0-or-later. Standalone tools, CLIs, benchmarks, and project scripts
+are GPL-3.0-or-later. Example plugin templates are MIT OR Apache-2.0.
+
+See [LICENSING.md](LICENSING.md) and [LICENSES/](LICENSES/) for the exact terms.

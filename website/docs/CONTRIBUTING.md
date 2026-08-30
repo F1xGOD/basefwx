@@ -6,25 +6,30 @@ permalink: /docs/CONTRIBUTING/
 
 # Contributing
 
-Thanks for helping improve BASEFWX.
+Use [GitHub Issues](https://github.com/F1xGOD/basefwx/issues) for reproducible
+bugs and focused feature proposals. Discuss a format, security, ABI, or broad
+cross-runtime change before implementing it.
 
-## Ways to Contribute
+BaseFWX keeps C++, Python, and Java in one repository. A shared format change
+must update every affected runtime and the shared known-answer tests in the same
+pull request. Runtime-specific APIs must say so in the public contract.
 
-- Report bugs or request features via GitHub Issues.
-- Submit pull requests for fixes or improvements.
-- Review PRs or help validate releases.
-- Improve documentation and examples.
+Before opening a pull request:
 
-## Getting Started
+1. Keep the change scoped and explain the compatibility boundary.
+2. Add negative tests for invalid input and authentication failure.
+3. Run the focused tests, then the cross-runtime or packaging suite required by
+   the changed surface.
+4. Update the README, CLI reference, compatibility page, ABI page, or security
+   page when their contract changes.
+5. Check that no keys, generated encrypted files, machine logs, or private task
+   notes entered the diff.
 
-1) Open an issue to discuss larger changes.
-2) Keep changes focused and well-documented.
-3) Add or update tests when behavior changes.
+The full repository policy and build details are in
+[CONTRIBUTING.md](https://github.com/F1xGOD/basefwx/blob/main/CONTRIBUTING.md).
 
-## Code of Conduct
+## Security reports
 
-Be respectful and constructive. We want a welcoming, professional community.
-
-## Security Issues
-
-Please do not open public issues for vulnerabilities. See `SECURITY.md`.
+Do not open a public issue for a suspected vulnerability. Follow the private
+reporting instructions in
+[SECURITY.md](https://github.com/F1xGOD/basefwx/blob/main/SECURITY.md).

@@ -1,407 +1,120 @@
-# BaseFWX Explained
+# BaseFWX explained
 
-This document explains what BaseFWX does, how the main container and stream
-shapes fit together, and where the C++ library sits when YUME uses it. The
-diagrams are plain ASCII so the same content can be reused in a future
-`man basefwx` page.
+BaseFWX turns plaintext into an authenticated container that C++, Python, and
+Java can read. Its current formats use standard cryptographic primitives and a
+versioned envelope. This page gives the working model without duplicating the
+CLI or byte-level reference.
 
-BaseFWX is a cryptographic codec toolkit. It protects files and byte streams.
-It is not a transport by itself and it does not provide anonymity by itself.
-Applications such as YUME use BaseFWX as an inner crypto and encoding layer.
+## File encryption
 
-## Diagram Style
-
-Every diagram uses the same fixed-width box shape. The format is stable in
-terminals, Markdown, and man pages.
+The `fwxAES` path has four steps:
 
 ```text
-+--------------------------------+
-|  PROCESS                       |
-|  detail                        |
-+--------------------------------+
-
---->   normal data movement
-===>   encrypted or authenticated BaseFWX data
-...>   optional carrier, wrapper, or outer application
+plaintext
+   |
+   | optional compression and reversible obfuscation
+   v
+random content key + nonce
+   |
+   | AES-256-GCM, with format metadata in AAD
+   v
+ciphertext + authentication tag
+   |
+   | password wrap and optional ML-KEM master wrap
+   v
+versioned BaseFWX container
 ```
 
-## Basic Mental Model
+AES-GCM encrypts the payload and authenticates the metadata bound to it. A
+reader verifies the tag before it publishes plaintext. A wrong password,
+changed header, truncated body, or changed tag fails decryption.
 
-Most BaseFWX operations have four visible parts:
+Obfuscation runs inside the authenticated container. It can change byte
+patterns, but it does not add cryptographic protection and should not be used
+without AEAD.
 
-```text
-+--------------------------------+
-|  CALLER                        |
-|  CLI / library / YUME          |
-+--------------------------------+
-        |
-        | password, bytes, options
-        v
-+--------------------------------+
-|  BASEFWX CORE                  |
-|  KDF, keys, AEAD, metadata     |
-+--------------------------------+
-        |
-        | encrypted container
-        v
-+--------------------------------+
-|  OUTPUT FORMAT                 |
-|  file, packet, media carrier   |
-+--------------------------------+
-        |
-        | stored or transported
-        v
-+--------------------------------+
-|  DECODER                       |
-|  verifies before release       |
-+--------------------------------+
-```
+## Unlock paths
 
-The caller gives BaseFWX plaintext bytes and a password or key context.
-BaseFWX derives or unwraps encryption keys, encrypts and authenticates the
-payload, then writes a format that another BaseFWX implementation can parse.
+A container can have a password path, a master-key path, or both.
 
-On decode, BaseFWX reads the format metadata, derives or unwraps the same
-keys, verifies the authenticated data, then returns plaintext only after the
-checks pass.
+The password path derives a wrapping key with Argon2id or PBKDF2. The format
+stores the KDF choice and its bounded parameters. Current encryption enforces a
+minimum password length unless the caller explicitly changes that policy.
 
-## What BaseFWX Provides
+The optional master path uses an ML-KEM public key to wrap the same random
+content key. It is a recovery mechanism, not a second encryption pass over the
+file. The matching private key should be kept separately from ordinary user
+data.
 
-BaseFWX includes several related codec families:
+When both paths exist, either valid path can recover the content key. Strict-PQ
+mode can reject EC fallback for master recovery. It does not remove an intact,
+independent password path from an existing dual-wrapped container.
 
-- `fwxAES`: AES-GCM file encryption with metadata and optional wrappers.
-- `pb512` / `b512`: authenticated AES-256-GCM text payloads with password or
-  optional master-key wrapping, plus related file modes.
-- `livecipher`: packetized stream encryption for pipe and transport use.
-- `keywrap`: password and master-key wrapping helpers.
-- `pq`: ML-KEM-768/1024 key encapsulation when liboqs support is enabled.
-- `n10`, `b512`: maintained reversible text and binary encodings.
+## Text and file codecs
 
-b256/A512/Bi512/Uhash513 and the kFM/kFA/jMG media codecs are not in this list,
-because a default build does not contain retired methods. See
-[Retired compatibility formats](#retired-compatibility-formats).
+`b512` and `pb512` are Base64-oriented authenticated formats. Current text
+writers include a version, plaintext length, nonce, AES-256-GCM ciphertext,
+and tag. Separate HKDF and AAD domains prevent a payload from being silently
+reinterpreted as the other codec.
 
-The C++ package exports the shared library as `libbasefwx.so.4`, headers
-under `basefwx/`, a CMake package named `basefwx`, and a `basefwx.pc`
-pkg-config file.
+File writers use an authenticated outer container. Current authentication
+failures never downgrade into the old raw parser. Legacy input is available
+only through a recovery switch for trusted old data.
 
-## File Encryption Flow
+`n10` converts bytes to decimal text and back. It is useful where only digits
+can be carried, but it provides no secrecy or authentication.
 
-The normal file path is a container pipeline:
+## Live streams
 
-```text
-+--------------------------------+
-|  PLAINTEXT FILE                |
-|  bytes from disk or stdin      |
-+--------------------------------+
-        |
-        v
-+--------------------------------+
-|  KDF AND KEY SETUP             |
-|  Argon2id or PBKDF2            |
-+--------------------------------+
-        |
-        v
-+--------------------------------+
-|  AEAD ENCRYPTION               |
-|  AES-256-GCM + metadata        |
-+--------------------------------+
-        |
-        | ===>
-        v
-+--------------------------------+
-|  BASEFWX CONTAINER             |
-|  FWX1 / heavy / encoded form   |
-+--------------------------------+
-```
+The live API emits a header followed by authenticated packets. Each packet
+binds its type, sequence number, and plaintext length as AAD. Receivers reject
+replay and out-of-order input.
 
-`fwxAES` is the direct encrypted-file mode. Heavy modes increase KDF cost
-and use compatible BaseFWX wrappers for stronger password-hardening choices.
-Metadata is authenticated with the payload, so tampering is detected during
-decode.
+This gives frame-level confidentiality and authentication. It does not resend
+lost data, reorder packets, synchronize clocks, or smooth playback. A network
+protocol or media pipeline must provide those behaviors.
 
-## Key Setup
+## Cross-runtime compatibility
 
-BaseFWX separates password hardening, optional post-quantum wrapping, and
-payload encryption:
+Shared containers are a contract across C++, Python, and Java. A format or
+security change must update the runtimes and shared known-answer tests in the
+same change unless the API is explicitly documented as runtime-specific.
 
-```text
-+--------------------------------+
-|  USER SECRET                   |
-|  password or passphrase        |
-+--------------------------------+
-        |
-        | KDF
-        v
-+--------------------------------+
-|  USER KEY                      |
-|  Argon2id / PBKDF2 output      |
-+--------------------------------+
-        |
-        | optional master wrap
-        v
-+--------------------------------+
-|  PAYLOAD KEY                   |
-|  used by AES-GCM               |
-+--------------------------------+
-        |
-        | ===>
-        v
-+--------------------------------+
-|  AUTHENTICATED PAYLOAD         |
-|  ciphertext + tag              |
-+--------------------------------+
-```
+The plugin ABI is different. It is a frozen C boundary with its own version and
+wire tag. The general C++ library is still pre-stable and can change at a minor
+release. See [ABI.md](../ABI.md) and [COMPATIBILITY.md](../COMPATIBILITY.md).
 
-When ML-KEM support is enabled, BaseFWX can use post-quantum encapsulation
-for master-key handling. Builds that do not have liboqs still keep the
-non-PQ formats available, but they cannot produce or consume PQ-required
-containers.
+## Retired formats
 
-## Container Shape
+The default artifacts exclude the old media carriers and retired text codecs.
+Their code exists only in a source-built compatibility profile so existing data
+can be recovered. That profile does not make the formats suitable for new
+data, and it does not restore performance work or new features for them.
 
-At a high level, encrypted file containers carry authenticated metadata and
-encrypted payload bytes:
+After recovery, write the plaintext into `fwxAES`, authenticated `b512`, or
+another maintained format. The compatibility page lists the build switch and
+the legacy decode switches.
 
-```text
-+----------------------------------------------------------------------+
-|  BASEFWX ENCRYPTED CONTAINER                                         |
-|                                                                      |
-|  magic/version | KDF parameters | wrap data | metadata | ciphertext  |
-|                                                                      |
-|  metadata is authenticated; payload releases after verification      |
-+----------------------------------------------------------------------+
-```
+## Failure model
 
-Exact byte layout depends on the selected codec family. Stable public APIs
-should be used to read and write containers instead of hand-parsing fields.
+BaseFWX treats these cases differently:
 
-## Live Stream Flow
+- An unknown prefix is not automatically a corrupted BaseFWX file.
+- A recognized container with a bad tag is an authentication failure.
+- A missing optional backend is a capability error.
+- A disabled legacy format stays disabled until the caller explicitly enables
+  its recovery policy.
 
-Live mode is for pipes and real-time transports:
+Callers should preserve those distinctions. Do not catch an authentication
+failure and try a looser parser or unauthenticated mode.
 
-```text
-+--------------------------------+
-|  PRODUCER                      |
-|  file, ffmpeg, app bytes       |
-+--------------------------------+
-        |
-        v
-+--------------------------------+
-|  LIVE ENCRYPTOR                |
-|  start, update, finalize       |
-+--------------------------------+
-        |
-        | ===>
-        v
-+--------------------------------+
-|  LIVE PACKETS                  |
-|  ordered AES-GCM frames        |
-+--------------------------------+
-        |
-        v
-+--------------------------------+
-|  LIVE DECRYPTOR                |
-|  verifies packet sequence      |
-+--------------------------------+
-```
+## Use in YUME
 
-The live API emits packetized `LIVE` frames. This keeps memory bounded and
-lets an outer program move encrypted chunks through a pipe, socket, or
-transport. The receiver must process the stream in order and finalize it
-before treating the stream as complete.
+YUME pins a specific BaseFWX commit and consumes selected C++ primitives and
+storage helpers. YUME owns its network wire format, authentication transcript,
+ratchet policy, permissions, and C ABI. A BaseFWX version change does not change
+those YUME contracts unless YUME makes and tests that change explicitly.
 
-## Retired Compatibility Formats
-
-b256, A512, Bi512, Uhash513, and the kFM/kFA/jMG media codecs are retired. A
-default build does not compile or package their code, commands, tests, or
-benchmarks, so none of this section describes a default artifact.
-
-They live in a compatibility build, configured with
-`-DBASEFWX_ENABLE_RETIRED_MEDIA=ON` for C++ and the matching
-`BASEFWX_ENABLE_RETIRED_MEDIA=1` for Java and Python. The historical switch
-name remains for build-script compatibility. That profile has one job: reading
-retired data you already have. It preserves the historical APIs, formats, and
-bytes unchanged, and receives security, correctness, and existing-data
-compatibility fixes only.
-
-Because the switch selects what gets compiled, it cannot re-enable these
-formats in an artifact built without them. Use a compatibility artifact of the
-same BaseFWX version that wrote the file.
-
-For new media, use `fwxAES`. A media file is bytes, and `fwxAES` gives those
-bytes the same AEAD guarantees it gives any other file.
-
-The two shapes below are recorded so existing files stay readable and
-diagnosable.
-
-### kFM and kFA carriers
-
-Carrier modes are wrappers around protected data. They are not security by
-themselves; the encryption comes from the BaseFWX container inside the carrier.
-
-```text
-+--------------------------------+
-|  INPUT DATA                    |
-|  file, audio, image            |
-+--------------------------------+
-        |
-        v
-+--------------------------------+
-|  BASEFWX PAYLOAD               |
-|  encrypted or encoded bytes    |
-+--------------------------------+
-        |
-        | ...>
-        v
-+--------------------------------+
-|  CARRIER FORMAT                |
-|  PNG / WAV / media output      |
-+--------------------------------+
-        |
-        v
-+--------------------------------+
-|  STRICT DECODER                |
-|  accepts BaseFWX carriers      |
-+--------------------------------+
-```
-
-`kFMe` picks a carrier shape from the input type and writes BaseFWX carrier
-files. `kFMd` decodes them strictly and rejects ordinary media that BaseFWX did
-not produce. `kFAe` and `kFAd` are deprecated aliases for the PNG-only path.
-
-### jMG media cipher
-
-```text
-+--------------------------------+
-|  MEDIA INPUT                   |
-|  image, audio, video path      |
-+--------------------------------+
-        |
-        v
-+--------------------------------+
-|  TRANSCODE OR COPY PATH        |
-|  optional ffmpeg/hw accel      |
-+--------------------------------+
-        |
-        v
-+--------------------------------+
-|  JMG TRAILER                   |
-|  key-only or archive payload   |
-+--------------------------------+
-        |
-        | ===>
-        v
-+--------------------------------+
-|  MEDIA OUTPUT                  |
-|  smaller or exact restore      |
-+--------------------------------+
-```
-
-The key-only path keeps output small. The archive path appends the encrypted
-original so decode can restore it exactly. Video support was gated by build and
-runtime flags on top of the compatibility profile.
-
-🫡 b256 has been retired since BaseFWX 3.7.0. It was the first BaseFWX
-encoding method, born in V1 back when this was a proof of concept and not yet a
-project. Existing data still decodes through the compatibility profile, but
-for new work, it's time to go. ❤️
-
-## YUME Integration
-
-YUME is a **separate sibling project** (not shipped in this repository).
-It uses the C++ BaseFWX library for inner crypto, not the BaseFWX CLI:
-
-```text
-+--------------------------------+
-|  YUME STREAM                   |
-|  logical app connection        |
-+--------------------------------+
-        |
-        v
-+--------------------------------+
-|  BASEFWX INNER CRYPTO          |
-|  AES / Argon2id / ML-KEM       |
-+--------------------------------+
-        |
-        | ===>
-        v
-+--------------------------------+
-|  YUME CARRIER                  |
-|  TLS 1.3 + YUME frames         |
-+--------------------------------+
-        |
-        v
-+--------------------------------+
-|  YUMED SERVER                  |
-|  unwraps inner stream data     |
-+--------------------------------+
-```
-
-For Debian-style YUME builds, `yume` should link against a packaged
-`libbasefwx4` runtime through `libbasefwx-dev`. This avoids using the
-bundled BaseFWX tree or vendored dependency directories inside the YUME
-source package. The development package exposes the LGPL library headers,
-not the private GPL command-line headers. `ABI.md` defines the stable plugin
-C ABI and the narrower same-minor compatibility contract for the general
-C++ library.
-
-## Debian Package Shape
-
-The intended package split is:
-
-```text
-+--------------------------------+
-|  basefwx                       |
-|  command-line frontend         |
-+--------------------------------+
-        |
-        v
-+--------------------------------+
-|  libbasefwx4                   |
-|  runtime shared library        |
-+--------------------------------+
-        ^
-        |
-+--------------------------------+
-|  libbasefwx-dev                |
-|  headers and build metadata    |
-+--------------------------------+
-        ^
-        |
-+--------------------------------+
-|  yume                          |
-|  links to libbasefwx.so.4      |
-+--------------------------------+
-```
-
-Local development builds may use a prepared vendor liboqs staging directory
-to keep ML-KEM-768/1024 available. Debian archive builds should use a normal
-packaged `liboqs-dev` dependency instead of embedding or copying liboqs into
-BaseFWX.
-
-The Debian packaging in this tree ships the C++ CLI, shared library, and
-development files as separate binary packages from one source package. It
-does not install the Python or Java modules; those can remain separate
-packages if they are needed later.
-
-## Failure Model
-
-BaseFWX should fail closed:
-
-- Wrong password: authentication fails and plaintext is not released.
-- Changed ciphertext: authentication fails.
-- Missing PQ support: PQ-required operations fail instead of silently
-  downgrading.
-- Truncated live stream: finalization fails or reports an incomplete stream.
-- Non-carrier media, in a compatibility build: strict carrier decoders reject
-  it.
-
-Callers should treat decode errors as integrity failures unless they have a
-format-specific reason to do otherwise.
-
-## Man Page Reuse
-
-This file is intentionally written in short sections with fixed-width
-diagrams. The `basefwx(7)` overview page reuses the same diagram style inside
-roff `.nf` / `.fi` blocks without changing box widths.
+The required BaseFWX revision is recorded in YUME's
+`config/dependencies.json`. The repositories keep separate Git histories and
+release boundaries.

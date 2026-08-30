@@ -3,8 +3,8 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>BaseFWX secure toolkit</title>
-    <meta name="description" content="BaseFWX secrecy-first crypto toolkit for C++, Python, and Java: downloads, signatures, hashes, and VirusTotal results.">
+    <title>BaseFWX: cryptographic container engine</title>
+    <meta name="description" content="Download and verify BaseFWX artifacts, inspect its authenticated container stages, and read the cross-runtime documentation.">
     <link rel="icon" type="image/svg+xml" href="assets/basefwx-white.svg">
     <link rel="stylesheet" href="assets/site.css">
     <script src="assets/site.js" defer></script>
@@ -18,11 +18,11 @@
             <span class="brand-cutout" aria-hidden="true"></span>
           </div>
           <div>
-            <div class="brand-name">FixCraft</div>
-            <div class="brand-sub">BaseFWX secure toolkit</div>
+            <div class="brand-name">BaseFWX</div>
+            <div class="brand-sub">A FixCraft cryptographic engine</div>
           </div>
         </div>
-        <nav>
+        <nav aria-label="Primary navigation">
           <a href="#downloads">Downloads</a>
           <a href="hashes/">Hashes</a>
           <a href="#integrity">Integrity</a>
@@ -33,51 +33,68 @@
         </nav>
       </header>
 
+      <main>
       <section class="hero" id="top">
         <div>
-          <div class="chip">Secrecy-first crypto toolkit (C++ / Python / Java)</div>
+          <div class="hero-status"><span aria-hidden="true"></span>C++, Python, and Java write shared authenticated formats</div>
           <h1>BaseFWX</h1>
           <p>
-            BaseFWX is a cryptographic codec library for C++, Python, and Java. It wraps keys with ML-KEM,
-            encrypts with AES-256-GCM, and writes the same container formats (fwxAES, b512, pb512) from all
-            three runtimes. This portal tracks signed binaries, hashes, and VirusTotal results for each release.
+            BaseFWX wraps keys with ML-KEM and encrypts payloads with AES-256-GCM. Its C++, Python,
+            and Java runtimes share the fwxAES, b512, and pb512 formats. This portal publishes the
+            release trail needed to download, inspect, and verify each artifact.
           </p>
           <div class="cta-row">
             <a class="btn" id="download-cta" href="https://github.com/F1xGOD/basefwx/releases" target="_blank" rel="noopener">Download CLI</a>
             <a class="btn secondary" href="https://github.com/F1xGOD/basefwx#readme" target="_blank" rel="noopener">Read README</a>
-            <a class="btn secondary" href="docs/CLI/">CLI Reference</a>
+            <a class="btn secondary" href="docs/CLI/">CLI reference</a>
           </div>
         </div>
         <div class="hero-panel" id="release-card">
           <div>
             <div class="meta">Latest release</div>
-            <div class="panel-title" id="release-version">Loading...</div>
+            <div class="panel-title" id="release-version">Release metadata requires JavaScript</div>
             <div class="meta-row">
-              <span id="release-date">Fetching date</span>
-              <span id="release-assets">0 assets</span>
+              <span id="release-date">Use GitHub Releases for current files</span>
+              <span id="release-assets"></span>
             </div>
           </div>
           <div class="panel-foot">
             <a class="btn secondary" id="release-link" href="https://github.com/F1xGOD/basefwx/releases" target="_blank" rel="noopener">View on GitHub</a>
           </div>
         </div>
+        <noscript>
+          <div class="notice">Downloads stay disabled without live release metadata. Use the GitHub Releases link above.</div>
+        </noscript>
+
+        <figure class="field-strip" aria-label="Layout of a BaseFWX encrypted container">
+          <figcaption class="field-strip-label">Anatomy of a BaseFWX container</figcaption>
+          <div class="field-strip-track">
+            <span class="field field-magic"><b>FWX1</b><i>magic</i></span>
+            <span class="field field-kdf"><b>KDF</b><i>parameters</i></span>
+            <span class="field field-wrap"><b>WRAP</b><i>key material</i></span>
+            <span class="field field-meta"><b>META</b><i>authenticated</i></span>
+            <span class="field field-payload"><b>CIPHERTEXT</b><i>AES-256-GCM</i></span>
+            <span class="field field-tag"><b>TAG</b><i>16 bytes</i></span>
+          </div>
+          <div class="field-strip-note">Metadata is authenticated alongside the payload. Plaintext is released only after the tag verifies.</div>
+        </figure>
       </section>
 
       <section id="downloads">
-        <div class="section-title">Download CLI</div>
-        <p class="section-lead">Direct links to signed binaries. Full SHA256/MD5 values are listed on the dedicated hashes page.</p>
+        <h2 class="section-title">Download the CLI</h2>
+        <p class="section-lead">Direct links to release binaries and detached signatures. Use SHA-256 for integrity checks.</p>
         <div class="download-grid">
           <article class="download-card" data-os="linux">
             <span class="chip">Linux</span>
             <h3>basefwx Linux CLI</h3>
             <p class="section-lead">Arch-specific Linux release binaries with full crypto support and detached signatures.</p>
             <div class="link-row">
-              <a class="btn" data-download="linux-amd64" href="#">Download amd64</a>
-              <a class="btn secondary" data-download="linux-arm64" href="#">Download arm64</a>
+              <a class="btn disabled" data-download="linux-amd64" aria-disabled="true" tabindex="-1">Download amd64</a>
+              <a class="btn secondary disabled" data-download="linux-arm64" aria-disabled="true" tabindex="-1">Download arm64</a>
             </div>
             <div class="link-row">
-              <a data-asset="linux-amd64.sig" href="#">Signature amd64</a>
-              <a data-asset="linux-arm64.sig" href="#">Signature arm64</a>
+              <a class="disabled" data-asset="linux-amd64.sig" aria-disabled="true" tabindex="-1">Signature amd64</a>
+              <a class="disabled" data-asset="linux-arm64.sig" aria-disabled="true" tabindex="-1">Signature arm64</a>
             </div>
             <div class="link-row">
               <a href="hashes/#linux">SHA256 + MD5</a>
@@ -88,12 +105,12 @@
             <h3>basefwx Windows CLI</h3>
             <p class="section-lead">Arch-specific Windows release bundles with the required runtime DLLs and the same detached-signature flow.</p>
             <div class="link-row">
-              <a class="btn" data-download="windows-amd64" href="#">Download amd64 bundle</a>
-              <a class="btn secondary" data-download="windows-x86" href="#">Download x86 bundle</a>
+              <a class="btn disabled" data-download="windows-amd64" aria-disabled="true" tabindex="-1">Download amd64 bundle</a>
+              <a class="btn secondary disabled" data-download="windows-x86" aria-disabled="true" tabindex="-1">Download x86 bundle</a>
             </div>
             <div class="link-row">
-              <a data-asset="windows-amd64.sig" href="#">Signature amd64</a>
-              <a data-asset="windows-x86.sig" href="#">Signature x86</a>
+              <a class="disabled" data-asset="windows-amd64.sig" aria-disabled="true" tabindex="-1">Signature amd64</a>
+              <a class="disabled" data-asset="windows-x86.sig" aria-disabled="true" tabindex="-1">Signature x86</a>
             </div>
             <div class="link-row">
               <a href="hashes/#windows">SHA256 + MD5</a>
@@ -104,12 +121,12 @@
             <h3>basefwx macOS CLI</h3>
             <p class="section-lead">Separate Intel and Apple Silicon binaries with OpenSSL 3, Argon2, and PQ support.</p>
             <div class="link-row">
-              <a class="btn" data-download="mac-amd64" href="#">Download amd64</a>
-              <a class="btn secondary" data-download="mac-arm64" href="#">Download arm64</a>
+              <a class="btn disabled" data-download="mac-amd64" aria-disabled="true" tabindex="-1">Download amd64</a>
+              <a class="btn secondary disabled" data-download="mac-arm64" aria-disabled="true" tabindex="-1">Download arm64</a>
             </div>
             <div class="link-row">
-              <a data-asset="mac-amd64.sig" href="#">Signature amd64</a>
-              <a data-asset="mac-arm64.sig" href="#">Signature arm64</a>
+              <a class="disabled" data-asset="mac-amd64.sig" aria-disabled="true" tabindex="-1">Signature amd64</a>
+              <a class="disabled" data-asset="mac-arm64.sig" aria-disabled="true" tabindex="-1">Signature arm64</a>
             </div>
             <div class="link-row">
               <a href="hashes/#mac">SHA256 + MD5</a>
@@ -120,8 +137,8 @@
             <h3>basefwx-java.jar</h3>
             <p class="section-lead">Java artifact for JVM projects using BaseFWX formats.</p>
             <div class="link-row">
-              <a class="btn" data-download="java" href="#">Download</a>
-              <a data-asset="java.sig" href="#">Signature</a>
+              <a class="btn disabled" data-download="java" aria-disabled="true" tabindex="-1">Download</a>
+              <a class="disabled" data-asset="java.sig" aria-disabled="true" tabindex="-1">Signature</a>
             </div>
             <div class="link-row">
               <a href="hashes/#java">SHA256 + MD5</a>
@@ -131,29 +148,29 @@
       </section>
 
       <section id="integrity">
-        <div class="section-title">Integrity and Verification</div>
+        <h2 class="section-title">Integrity and verification</h2>
         <p class="section-lead">Verify every download with hashes and detached signatures.</p>
         <div class="grid">
           <div class="card">
-            <h4>GPG Signatures</h4>
+            <h3>GPG signatures</h3>
             <p>Detached signatures are published for every binary.</p>
-            <div class="hash-block" style="margin-top:12px;">
+            <div class="hash-block hash-block-spaced">
               <div class="hash-title">Verify</div>
               <div class="hash-value">gpg --verify basefwx-linux-amd64.sig basefwx-linux-amd64</div>
             </div>
           </div>
           <div class="card">
-            <h4>SHA256 + MD5</h4>
-            <p>Hashes are published in the release assets and mirrored here.</p>
-            <div class="hash-block" style="margin-top:12px;">
+            <h3>SHA-256 checksums</h3>
+            <p>Release assets include SHA-256 checksums. MD5 values remain on the hash page for file identification, not security verification.</p>
+            <div class="hash-block hash-block-spaced">
               <div class="hash-title">Check</div>
               <div class="hash-value">sha256sum -c basefwx-linux-amd64.sha256</div>
             </div>
           </div>
           <div class="card">
-            <h4>Reproducible release trail</h4>
+            <h3>Reproducible release trail</h3>
             <p>Artifacts are built, signed, and verified automatically on release.</p>
-            <div class="hash-block" style="margin-top:12px;">
+            <div class="hash-block hash-block-spaced">
               <div class="hash-title">Pipeline</div>
               <div class="hash-value">build → sign → verify → publish</div>
             </div>
@@ -162,15 +179,15 @@
       </section>
 
       <section id="virustotal">
-        <div class="section-title">VirusTotal Results</div>
-        <p class="section-lead">Public VirusTotal report links for each release binary. Engine verdicts are on VirusTotal — not summarized here.</p>
-        <div class="link-row" style="margin-bottom:12px;">
+        <h2 class="section-title">VirusTotal reports</h2>
+        <p class="section-lead">Links to the public report for each release binary. Read engine results on VirusTotal.</p>
+        <div class="link-row link-row-after-lead">
           <a href="https://www.virustotal.com" target="_blank" rel="noopener">VirusTotal official site</a>
         </div>
-        <div style="margin-bottom:16px;" id="vt-summary" class="status-pill ok">Loading VirusTotal results...</div>
-        <div class="link-row" style="margin-bottom:16px;">
-          <a id="vt-results-text" href="https://raw.githubusercontent.com/F1xGOD/basefwx/refs/heads/DEV/website/results/virustotal-latest.txt" target="_blank" rel="noopener">Download results.txt</a>
-          <a id="vt-results-json" href="https://raw.githubusercontent.com/F1xGOD/basefwx/refs/heads/DEV/website/results/virustotal-latest.json" target="_blank" rel="noopener">Raw JSON</a>
+        <div id="vt-summary" class="status-pill status-pill-spaced warn">VirusTotal metadata requires JavaScript.</div>
+        <div class="link-row link-row-spaced">
+          <a id="vt-results-text" href="https://github.com/F1xGOD/basefwx/releases" target="_blank" rel="noopener">Release scan report</a>
+          <a id="vt-results-json" href="https://github.com/F1xGOD/basefwx/releases" target="_blank" rel="noopener">Release scan JSON</a>
         </div>
         <div class="table-scroll">
           <table class="vt-table" id="vt-table">
@@ -182,7 +199,7 @@
             </thead>
             <tbody>
               <tr>
-                <td colspan="2" class="mono">Waiting for results...</td>
+                <td colspan="2" class="mono">No results loaded.</td>
               </tr>
             </tbody>
           </table>
@@ -190,55 +207,60 @@
       </section>
 
       <section id="docs">
-        <div class="section-title">Docs</div>
+        <h2 class="section-title">Docs</h2>
         <div class="grid">
-          <a class="card" href="docs/RELEASE-NOTES-3.6.4/">
-            <h4>Release notes 3.6.4</h4>
-            <p>KDF hardening, security-normalized speedup vs 3.6.3, JNI AES-GCM, AN7/DEAN7, PQ stance.</p>
+          <a class="card" href="https://github.com/F1xGOD/basefwx/blob/main/docs/EXPLAINED.md" target="_blank" rel="noopener">
+            <h3>BaseFWX explained</h3>
+            <p>The container, unlock paths, live streams, compatibility, and failure model.</p>
           </a>
           <a class="card" href="docs/CLI/">
-            <h4>CLI and Usage</h4>
+            <h3>CLI and usage</h3>
             <p>Commands, flags, and master-key workflows.</p>
           </a>
           <a class="card" href="docs/CLI/#java-cli">
-            <h4>Java Module</h4>
+            <h3>Java module</h3>
             <p>JVM usage with byte-compatible formats shared across C++, Python, and Java.</p>
           </a>
           <a class="card" href="docs/SECURITY_MODEL/">
-            <h4>Security Model</h4>
+            <h3>Security model</h3>
             <p>Threat model, key paths, and AEAD details.</p>
           </a>
+          <a class="card" href="https://github.com/F1xGOD/basefwx/blob/main/COMPATIBILITY.md" target="_blank" rel="noopener">
+            <h3>Compatibility</h3>
+            <p>Cross-runtime formats, retired-data recovery, and unsupported paths.</p>
+          </a>
           <a class="card" href="docs/TESTING/">
-            <h4>Testing</h4>
-            <p>Fast modes, fixtures, and CI parity.</p>
+            <h3>Testing</h3>
+            <p>Correctness suites, benchmark modes, and measurement limits.</p>
           </a>
           <a class="card" href="docs/CONTRIBUTING/">
-            <h4>Contributing</h4>
+            <h3>Contributing</h3>
             <p>How to propose changes and report issues.</p>
           </a>
         </div>
       </section>
 
       <section id="support">
-        <div class="section-title">Support</div>
+        <h2 class="section-title">Support</h2>
         <div class="grid">
           <a class="card" href="https://github.com/F1xGOD/basefwx/issues">
-            <h4>Issues</h4>
+            <h3>Issues</h3>
             <p>Report bugs or request features.</p>
           </a>
           <a class="card" href="https://github.com/F1xGOD/basefwx/blob/main/SECURITY.md" target="_blank" rel="noopener">
-            <h4>Security</h4>
+            <h3>Security</h3>
             <p>Responsible disclosure guidance.</p>
           </a>
           <a class="card" href="https://discord.gg/6d3QxXnzbV">
-            <h4>Discord</h4>
+            <h3>Discord</h3>
             <p>Community chat and updates.</p>
           </a>
         </div>
       </section>
+      </main>
 
       <footer>
-        FixCraft BaseFWX Documentation and Release Portal
+        FixCraft BaseFWX &middot; documentation and release files
       </footer>
     </div>
   </body>

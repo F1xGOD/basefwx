@@ -48,10 +48,10 @@ const assetMap = {
 };
 
 const benchLanguages = [
-  { key: "python", label: "Python", emoji: "🐍" },
-  { key: "pypy", label: "PyPy", emoji: "🥭" },
-  { key: "cpp", label: "C++", emoji: "⚙️" },
-  { key: "java", label: "Java", emoji: "☕" }
+  { key: "python", label: "Python" },
+  { key: "pypy", label: "PyPy" },
+  { key: "cpp", label: "C++" },
+  { key: "java", label: "Java" }
 ];
 
 const setText = (id, value) => {
@@ -99,8 +99,15 @@ const setLink = (selector, url) => {
     el.setAttribute("target", "_blank");
     el.setAttribute("rel", "noopener");
     el.classList.remove("disabled");
+    el.removeAttribute("aria-disabled");
+    el.removeAttribute("tabindex");
   } else {
-    el.href = "#";
+    el.removeAttribute("href");
+    el.removeAttribute("target");
+    el.removeAttribute("rel");
+    el.classList.add("disabled");
+    el.setAttribute("aria-disabled", "true");
+    el.setAttribute("tabindex", "-1");
   }
 };
 
@@ -111,10 +118,22 @@ const setAssetLinkElement = (el, url) => {
     el.setAttribute("target", "_blank");
     el.setAttribute("rel", "noopener");
     el.classList.remove("disabled");
+    el.removeAttribute("aria-disabled");
+    el.removeAttribute("tabindex");
   } else {
-    el.href = "#";
+    el.removeAttribute("href");
+    el.removeAttribute("target");
+    el.removeAttribute("rel");
     el.classList.add("disabled");
+    el.setAttribute("aria-disabled", "true");
+    el.setAttribute("tabindex", "-1");
   }
+};
+
+const initDisabledLinks = () => {
+  document.querySelectorAll('a[aria-disabled="true"]').forEach((el) => {
+    setAssetLinkElement(el, null);
+  });
 };
 
 const fetchLatestRelease = async () => {
@@ -153,15 +172,32 @@ const setHashText = (selector, value) => {
   if (canTruncate) {
     el.classList.add("truncated");
     el.style.cursor = "pointer";
-    el.onclick = function (e) {
-      e.preventDefault();
+    el.setAttribute("role", "button");
+    el.setAttribute("tabindex", "0");
+    el.setAttribute("aria-expanded", "false");
+    const toggle = function () {
       const expanded = this.classList.toggle("expanded");
+      this.setAttribute("aria-expanded", String(expanded));
       this.textContent = expanded ? this.dataset.fullHash || "" : (this.dataset.fullHash || "").slice(0, HASH_COLLAPSED_LEN);
+    };
+    el.onclick = function (event) {
+      event.preventDefault();
+      toggle.call(this);
+    };
+    el.onkeydown = function (event) {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        toggle.call(this);
+      }
     };
   } else {
     el.classList.remove("truncated");
     el.style.cursor = "default";
     el.onclick = null;
+    el.onkeydown = null;
+    el.removeAttribute("role");
+    el.removeAttribute("tabindex");
+    el.removeAttribute("aria-expanded");
   }
 };
 
@@ -177,20 +213,20 @@ const formatNs = (ns, epsilon) => {
 
 const deltaInfo = (baseNs, otherNs, epsilon) => {
   if (!Number.isFinite(baseNs) || !Number.isFinite(otherNs) || baseNs <= 0 || otherNs <= 0) {
-    return { label: "❓ Not measurable (below timer resolution)", className: "delta-na" };
+    return { label: "Not measurable (below timer resolution)", className: "delta-na" };
   }
   if (baseNs < epsilon || otherNs < epsilon) {
-    return { label: "❓ Not measurable (below timer resolution)", className: "delta-na" };
+    return { label: "Not measurable (below timer resolution)", className: "delta-na" };
   }
   const absDiff = Math.abs(otherNs - baseNs);
   if (absDiff < epsilon) {
-    return { label: "🔵 Same (±0.00%)", className: "delta-same" };
+    return { label: "Same (±0.00%)", className: "delta-same" };
   }
   const isFaster = otherNs < baseNs;
   const pct = isFaster ? (baseNs / otherNs - 1) * 100 : (otherNs / baseNs - 1) * 100;
   const pctLabel = Math.abs(pct).toFixed(2);
   return {
-    label: isFaster ? `⚡ Faster (+${pctLabel}%)` : `🐌 Slower (−${pctLabel}%)`,
+    label: isFaster ? `Faster (+${pctLabel}%)` : `Slower (−${pctLabel}%)`,
     className: isFaster ? "delta-fast" : "delta-slow"
   };
 };
@@ -239,7 +275,7 @@ const renderBenchTable = (tableBody, timesByLang, epsilon) => {
       : deltaInfo(baseNs, ns, epsilon);
     const row = document.createElement("tr");
     row.innerHTML = `
-      <td class="bench-runtime">${lang.emoji} ${lang.label}</td>
+      <td class="bench-runtime">${lang.label}</td>
       <td class="mono">${formatNs(ns, epsilon)}</td>
       <td><span class="${delta.className}">${delta.label}</span></td>
     `;
@@ -312,8 +348,9 @@ const classifyLifecycle = (label) => {
 const renderHeavinessChip = (label) => {
   const cls = classifyHeaviness(label);
   if (!cls) return "";
-  const tooltip = (cls.notes || cls.explanation || "").replace(/"/g, "&quot;");
-  return `<span class="chip heaviness heaviness-${cls.level}" title="${tooltip}" aria-label="Heaviness: ${cls.label}. ${tooltip}">${cls.label}</span>`;
+  const tooltip = escapeHtml(cls.notes || cls.explanation || "");
+  const level = /^[a-z]+$/.test(cls.level) ? cls.level : "unknown";
+  return `<span class="chip heaviness heaviness-${level}" title="${tooltip}" aria-label="Heaviness: ${escapeHtml(cls.label)}. ${tooltip}">${escapeHtml(cls.label)}</span>`;
 };
 
 const renderLifecycleChip = (label) => {
@@ -321,8 +358,9 @@ const renderLifecycleChip = (label) => {
   if (!cls) return "";
   const since = cls.since ? ` since ${cls.since}` : "";
   const visible = `${cls.label}${since}`;
-  const tooltip = (cls.notes || cls.explanation || "").replace(/"/g, "&quot;");
-  return `<span class="chip lifecycle lifecycle-${cls.status}" title="${tooltip}" aria-label="${cls.label}${since}. ${tooltip}">${visible}</span>`;
+  const tooltip = escapeHtml(cls.notes || cls.explanation || "");
+  const status = /^[a-z-]+$/.test(cls.status) ? cls.status : "unknown";
+  return `<span class="chip lifecycle lifecycle-${status}" title="${tooltip}" aria-label="${escapeHtml(cls.label)}${escapeHtml(since)}. ${tooltip}">${escapeHtml(visible)}</span>`;
 };
 
 const renderBenchDetails = async (container, tests, epsilon) => {
@@ -332,7 +370,7 @@ const renderBenchDetails = async (container, tests, epsilon) => {
     return;
   }
   // Make sure the heaviness manifest is loaded BEFORE the forEach
-  // runs — otherwise the chip helpers see `heavinessManifest === null`
+  // runs. Otherwise the chip helpers see `heavinessManifest === null`
   // and return empty strings, and the page renders without chips.
   // The fetch is one-shot (subsequent calls hit the cached promise),
   // so the await is free after first load.
@@ -343,13 +381,13 @@ const renderBenchDetails = async (container, tests, epsilon) => {
     details.className = "bench-detail";
     const summary = document.createElement("summary");
     // Layout: lifecycle (deprecated/retired) prefixes the LEFT span next
-    // to the label — slate gray, attention-grabbing where the eye lands
+    // to the label. Slate gray draws attention where the eye lands
     // first. Heaviness (low/medium/high/extreme) suffixes the RIGHT span
-    // next to the timing — warm-palette colored, sits with the
+    // next to the timing. Its warm palette sits with the
     // operational data. This split also avoids the visual clash that
     // existed when both chips appeared adjacent with similar yellow tones.
     summary.innerHTML = `
-      <span>${renderLifecycleChip(entry.label)}${entry.label}</span>
+      <span>${renderLifecycleChip(entry.label)}${escapeHtml(entry.label)}</span>
       <span class="bench-summary">${baseNs ? `Python ${formatNs(baseNs, epsilon)}` : "Python n/a"}${renderHeavinessChip(entry.label)}</span>
     `;
     details.appendChild(summary);
@@ -371,12 +409,28 @@ const renderBenchDetails = async (container, tests, epsilon) => {
   });
 };
 
-const getResultsBases = (tag) => {
-  const devBase = `https://raw.githubusercontent.com/${repo}/DEV/website/results`;
-  return {
-    primary: devBase,
-    fallback: devBase
-  };
+let pinnedResultsBasePromise = null;
+
+const getPinnedResultsBase = async () => {
+  if (!pinnedResultsBasePromise) {
+    pinnedResultsBasePromise = fetch(`https://api.github.com/repos/${repo}/commits/DEV`, {
+      headers: { Accept: "application/vnd.github+json" },
+      cache: "no-store"
+    })
+      .then((response) => {
+        if (!response.ok) throw new Error("results revision fetch failed");
+        return response.json();
+      })
+      .then((data) => {
+        const revision = String(data.sha || "");
+        if (!/^[a-f0-9]{40}$/i.test(revision)) {
+          throw new Error("invalid results revision");
+        }
+        return `https://raw.githubusercontent.com/${repo}/${revision}/website/results`;
+      })
+      .catch(() => "");
+  }
+  return pinnedResultsBasePromise;
 };
 
 const loadRelease = async () => {
@@ -400,14 +454,19 @@ const loadRelease = async () => {
       const sigAsset = assetLookup.get(values.sig);
       setLink(`[data-download="${key}"]`, binAsset ? binAsset.browser_download_url : null);
       setLink(`[data-asset="${key}.sig"]`, sigAsset ? sigAsset.browser_download_url : null);
-      setHashText(`${key}.sha256`, "Loading...");
-      setHashText(`${key}.md5`, "Loading...");
+      setHashText(`${key}.sha256`, "Loading…");
+      setHashText(`${key}.md5`, "Loading…");
     });
     applyAssetLinks(assetLookup);
   } catch (err) {
     setText("release-version", "Release data unavailable");
     setText("release-date", "Check GitHub for details");
-    setText("release-assets", "-");
+    setText("release-assets", "");
+    Object.entries(assetMap).forEach(([key]) => {
+      setLink(`[data-download="${key}"]`, null);
+      setLink(`[data-asset="${key}.sig"]`, null);
+    });
+    applyAssetLinks(new Map());
   }
 };
 
@@ -433,7 +492,6 @@ const loadHashFiles = async () => {
     const assets = data.assets || [];
     const assetLookup = new Map(assets.map((asset) => [asset.name, asset]));
     applyAssetLinks(assetLookup);
-    const resultsBases = getResultsBases(latestReleaseTag);
     const localBase = getResultsLocalBase();
 
     await Promise.all(
@@ -448,11 +506,7 @@ const loadHashFiles = async () => {
           node.textContent = "Missing release asset";
           return;
         }
-        const candidates = [
-          `${resultsBases.primary}/${assetName}`,
-          `${resultsBases.fallback}/${assetName}`,
-          `${localBase}${assetName}`
-        ];
+        const candidates = [asset.browser_download_url, `${localBase}${assetName}`];
         try {
           let response = null;
           for (const candidate of candidates) {
@@ -483,13 +537,14 @@ const loadVirusTotal = async () => {
   const summary = document.getElementById("vt-summary");
   const tableBody = document.querySelector("#vt-table tbody");
   try {
-    const resultsBases = getResultsBases(latestReleaseTag);
+    const pinnedBase = await getPinnedResultsBase();
     const localBase = getResultsLocalBase();
+    const releaseAssets = Array.isArray(latestReleaseData?.assets) ? latestReleaseData.assets : [];
+    const releaseReport = releaseAssets.find((asset) => asset.name === "virustotal-results.json");
     const candidates = [
-      `${resultsBases.primary}/virustotal-latest.json`,
-      latestReleaseTag ? `${resultsBases.primary}/virustotal-${latestReleaseTag}.json` : "",
-      `${resultsBases.fallback}/virustotal-latest.json`,
-      latestReleaseTag ? `${resultsBases.fallback}/virustotal-${latestReleaseTag}.json` : "",
+      releaseReport?.browser_download_url || "",
+      pinnedBase && latestReleaseTag ? `${pinnedBase}/virustotal-${latestReleaseTag}.json` : "",
+      latestReleaseTag ? `${localBase}virustotal-${latestReleaseTag}.json` : "",
       `${localBase}virustotal-latest.json`
     ].filter(Boolean);
 
@@ -512,37 +567,45 @@ const loadVirusTotal = async () => {
     const data = await response.json();
     const files = data.files || [];
 
+    if (latestReleaseTag && data.release_tag && data.release_tag !== latestReleaseTag) {
+      throw new Error("VirusTotal report does not match the latest release");
+    }
+
     summary.textContent = `Links generated ${new Date(data.generated_at).toLocaleString()} for ${data.release_tag || "latest"}. Review each report on VirusTotal.`;
     summary.className = "status-pill ok";
 
     tableBody.innerHTML = "";
     const reportLink = (file) => {
+      let candidate = "";
       if (file.gui_url) {
-        return file.gui_url;
-      }
-      const sha = file.scanned_sha256 || file.sha256;
-      if (sha) {
-        return `https://www.virustotal.com/gui/file/${sha}`;
-      }
-      if (file.item_url) {
+        candidate = file.gui_url;
+      } else if (/^[a-f0-9]{64}$/i.test(file.scanned_sha256 || file.sha256 || "")) {
+        candidate = `https://www.virustotal.com/gui/file/${file.scanned_sha256 || file.sha256}`;
+      } else if (file.item_url) {
         const match = file.item_url.match(/\/files\/([^/?]+)/);
         if (match) {
-          return `https://www.virustotal.com/gui/file/${match[1]}`;
+          candidate = `https://www.virustotal.com/gui/file/${encodeURIComponent(match[1])}`;
         }
       }
-      return "";
+      try {
+        const url = new URL(candidate);
+        const allowedHosts = new Set(["www.virustotal.com", "virustotal.com"]);
+        return url.protocol === "https:" && allowedHosts.has(url.hostname) ? url.href : "";
+      } catch (_err) {
+        return "";
+      }
     };
 
     files.forEach((file) => {
       const row = document.createElement("tr");
       const link = reportLink(file);
-      const label = file.name || "";
+      const label = escapeHtml(file.name || "");
       const pending = file.status && file.status !== "submitted" && file.status !== "completed";
       row.innerHTML = `
         <td class="mono">${label}</td>
         <td>${
           link
-            ? `<a class="vt-btn" href="${link}" target="_blank" rel="noopener">View on VirusTotal</a>`
+            ? `<a class="vt-btn" href="${escapeHtml(link)}" target="_blank" rel="noopener">View on VirusTotal</a>`
             : `<span class="mono">${pending ? "Pending" : "Unavailable"}</span>`
         }</td>
       `;
@@ -567,15 +630,15 @@ const renderJavaBackendsPanel = (data) => {
     if (tbody) tbody.innerHTML = "";
     return;
   }
-  // deltaInfo() takes nanoseconds and returns the same "⚡ Faster (+X%)" /
-  // "🐌 Slower (−X%)" rendering used by the main bench table. Convert the
+  // deltaInfo() takes nanoseconds and returns the same faster/slower rendering
+  // used by the main benchmark table. Convert the
   // pure_java vs jni ms values to ns so we can reuse it and the JNI panel
   // matches the rest of the page (no more bespoke "1.61× pure-java"
   // multiplier strings and no more rowspan-breaks-card-layout).
   const MS_TO_NS = 1_000_000;
   const TIMER_EPSILON_NS = 200_000;  // matches the main table's threshold
   const fmtTime = (ms, mibs) => {
-    if (typeof ms !== "number" || !Number.isFinite(ms)) return "—";
+    if (typeof ms !== "number" || !Number.isFinite(ms)) return "Not available";
     const mibsTxt = (typeof mibs === "number") ? ` (${mibs.toFixed(0)} MiB/s)` : "";
     return `${ms.toFixed(2)} ms${mibsTxt}`;
   };
@@ -608,7 +671,7 @@ const renderJavaBackendsPanel = (data) => {
       );
       const decDelta = (typeof pure.decrypt_ms === "number" && typeof jni.decrypt_ms === "number")
         ? deltaInfo(pure.decrypt_ms * MS_TO_NS, jni.decrypt_ms * MS_TO_NS, TIMER_EPSILON_NS)
-        : { label: "—", className: "delta-na" };
+        : { label: "Not available", className: "delta-na" };
       // Pick the cell color from whichever direction is bigger in magnitude,
       // so a "mixed" outcome doesn't silently look like an unambiguous win.
       const rowCls = (encDelta.className === "delta-fast" && decDelta.className === "delta-fast")
@@ -656,7 +719,8 @@ const populateBenchHistory = async () => {
   const select = document.getElementById("bench-history");
   if (!select) return;
   try {
-    const base = getResultsBases(latestReleaseTag).primary;
+    const base = await getPinnedResultsBase();
+    if (!base) throw new Error("no pinned results revision");
     const res = await fetch(`${base}/index.json`);
     if (!res.ok) throw new Error("no history index");
     const idx = await res.json();
@@ -676,13 +740,13 @@ const populateBenchHistory = async () => {
 };
 
 const loadJavaBackendsForTag = async (tag) => {
-  const base = getResultsBases(latestReleaseTag).primary;
+  const base = await getPinnedResultsBase();
   const local = getResultsLocalBase();
   const filenames = tag
     ? [`java-backends-${tag}.json`]
     : [`java-backends-latest.json`];
   for (const fn of filenames) {
-    for (const url of [`${base}/${fn}`, `${local}${fn}`]) {
+    for (const url of [base ? `${base}/${fn}` : "", `${local}${fn}`].filter(Boolean)) {
       try {
         const res = await fetch(url);
         if (res.ok) {
@@ -703,19 +767,17 @@ const loadBenchmarks = async (explicitTag = "") => {
     return;
   }
   try {
-    const resultsBases = getResultsBases(latestReleaseTag);
+    const pinnedBase = await getPinnedResultsBase();
     const localBase = getResultsLocalBase();
     const candidates = explicitTag
       ? [
-          `${resultsBases.primary}/benchmarks-${explicitTag}.json`,
-          `${resultsBases.fallback}/benchmarks-${explicitTag}.json`,
+          pinnedBase ? `${pinnedBase}/benchmarks-${explicitTag}.json` : "",
           `${localBase}benchmarks-${explicitTag}.json`
-        ]
+        ].filter(Boolean)
       : [
-          `${resultsBases.primary}/benchmarks-latest.json`,
-          latestReleaseTag ? `${resultsBases.primary}/benchmarks-${latestReleaseTag}.json` : "",
-          `${resultsBases.fallback}/benchmarks-latest.json`,
-          latestReleaseTag ? `${resultsBases.fallback}/benchmarks-${latestReleaseTag}.json` : "",
+          pinnedBase && latestReleaseTag ? `${pinnedBase}/benchmarks-${latestReleaseTag}.json` : "",
+          pinnedBase ? `${pinnedBase}/benchmarks-latest.json` : "",
+          latestReleaseTag ? `${localBase}benchmarks-${latestReleaseTag}.json` : "",
           `${localBase}benchmarks-latest.json`
         ].filter(Boolean);
 
@@ -736,6 +798,10 @@ const loadBenchmarks = async (explicitTag = "") => {
     setLink("#bench-results-text", resultsTxt);
     setLink("#bench-results-json", resultsUrl);
     const data = await response.json();
+    const expectedTag = explicitTag || latestReleaseTag;
+    if (expectedTag && data.release_tag && data.release_tag !== expectedTag) {
+      throw new Error("benchmark report does not match the selected release");
+    }
     const epsilon = Number(data.epsilon_ns) || 1_000_000;
     const generatedAt = data.generated_at
       ? new Date(data.generated_at).toLocaleString()
@@ -767,8 +833,48 @@ const loadBenchmarks = async (explicitTag = "") => {
   }
 };
 
+const initDocToc = () => {
+  const article = document.querySelector(".doc-article");
+  const toc = document.getElementById("doc-toc-list");
+  if (!article || !toc) return;
+
+  const details = toc.closest(".doc-toc");
+  if (window.matchMedia("(max-width: 940px)").matches) {
+    details?.removeAttribute("open");
+  }
+
+  const headings = Array.from(article.querySelectorAll("h2, h3"));
+  if (!headings.length) {
+    details?.setAttribute("hidden", "");
+    return;
+  }
+
+  const usedIds = new Set(Array.from(document.querySelectorAll("[id]"), (el) => el.id));
+  headings.forEach((heading, index) => {
+    if (!heading.id) {
+      const base = heading.textContent
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-|-$/g, "") || `section-${index + 1}`;
+      let id = base;
+      let suffix = 2;
+      while (usedIds.has(id)) id = `${base}-${suffix++}`;
+      heading.id = id;
+      usedIds.add(id);
+    }
+    const link = document.createElement("a");
+    link.href = `#${heading.id}`;
+    link.dataset.level = heading.tagName.slice(1);
+    link.textContent = heading.textContent;
+    toc.appendChild(link);
+  });
+};
+
 document.addEventListener("DOMContentLoaded", () => {
   initBrandMask();
+  initDisabledLinks();
+  initDocToc();
   const run = async () => {
     if (document.getElementById("release-version") || document.getElementById("bench-release")) {
       await loadRelease();

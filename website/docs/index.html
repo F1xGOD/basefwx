@@ -10,27 +10,31 @@
     <style>
       body {
         margin: 0;
-        font-family: "Space Grotesk", "Sora", "IBM Plex Sans", sans-serif;
-        background: #0b0c12;
-        color: #e7e9f3;
+        min-height: 100vh;
+        font-family: "Trebuchet MS", "Segoe UI", sans-serif;
+        background-color: #0a0c0d;
+        background-image:
+          linear-gradient(rgba(255, 255, 255, 0.025) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(255, 255, 255, 0.025) 1px, transparent 1px);
+        background-size: 32px 32px;
+        color: #f1f1ec;
         display: flex;
         align-items: center;
         justify-content: center;
-        height: 100vh;
       }
-      a { color: #b08bff; text-decoration: none; }
+      a { color: #d477df; text-underline-offset: 3px; }
       .card {
-        border: 1px solid #262c40;
-        background: #141826;
+        border: 1px solid #555f63;
+        border-left: 6px solid #974ace;
+        background: #111416;
         padding: 24px;
-        border-radius: 16px;
-        text-align: center;
+        box-shadow: 12px 14px 0 rgba(0, 0, 0, 0.34);
       }
     </style>
   </head>
   <body>
     <div class="card">
-      <p>Redirecting to the BaseFWX portal…</p>
+      <p>Redirecting to the BaseFWX portal.</p>
       <p><a href="../">Open the release portal</a></p>
     </div>
   </body>

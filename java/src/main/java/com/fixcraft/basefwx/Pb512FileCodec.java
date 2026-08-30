@@ -8,26 +8,14 @@ package com.fixcraft.basefwx;
 
 import java.io.BufferedInputStream;
 import java.io.BufferedOutputStream;
-import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
-import java.io.InputStream;
-import java.io.OutputStream;
-import java.nio.ByteBuffer;
-import java.nio.channels.FileChannel;
 import java.nio.charset.StandardCharsets;
 import java.security.GeneralSecurityException;
-import java.time.Instant;
 import java.util.Arrays;
-import java.util.LinkedHashMap;
-import java.util.List;
-import java.util.Map;
-import javax.crypto.Cipher;
-import javax.crypto.Mac;
-import javax.crypto.spec.IvParameterSpec;
-import javax.crypto.spec.SecretKeySpec;
+
 import static com.fixcraft.basefwx.FileCodecIo.*;
 import static com.fixcraft.basefwx.FileCodecKdf.*;
 import static com.fixcraft.basefwx.FileCodecMetadata.*;
@@ -36,11 +24,24 @@ import static com.fixcraft.basefwx.FileCodecObfuscation.*;
 final class Pb512FileCodec {
     private Pb512FileCodec() {}
 
-static File pb512FileEncodeFileStream(File input,
-                                                  File output,
-                                                  String password,
-                                                  boolean useMaster) {
+    static File pb512FileEncodeFileStream(File input,
+                                          File output,
+                                          String password,
+                                          boolean useMaster) {
         byte[] pw = BaseFwx.resolvePasswordBytes(password, useMaster);
+        try {
+            return pb512FileEncodeFileStreamWithPassword(
+                    input, output, pw, useMaster);
+        } finally {
+            Arrays.fill(pw, (byte) 0);
+        }
+    }
+
+    private static File pb512FileEncodeFileStreamWithPassword(
+            File input,
+            File output,
+            byte[] pw,
+            boolean useMaster) {
         PasswordPolicy.requireStrongPassword(pw, "Encryption");
         if (pw.length == 0) {
             throw new IllegalArgumentException("Password required for AES-heavy streaming mode");
@@ -57,21 +58,25 @@ static File pb512FileEncodeFileStream(File input,
             heavyArgonPar = Constants.HEAVY_ARGON2_PARALLELISM;
         }
         boolean obfuscate = payloadObfuscationEnabled();
+        long inputLength = input.length();
         KeyWrap.MasterKeySelection selectedMaster =
                 KeyWrap.selectMasterKey(useMaster);
         boolean useMasterEffective = selectedMaster.usedMaster();
         byte[] masterBlob = new byte[0];
         byte[] ephemeralKey = null;
         PayloadKeySeparation.PayloadKeys payloadKeys = null;
+        File stagedOutput = null;
 
         try {
         if (useMasterEffective) {
             if (selectedMaster.pqPublicKey != null) {
                 try {
-                    PQ.KemResult kem =
-                            PQ.kemEncrypt(selectedMaster.pqPublicKey);
-                    masterBlob = kem.ciphertext;
-                    ephemeralKey = deriveKemKeyAndWipe(kem.shared, Constants.KEM_INFO);
+                    try (PQ.KemResult kem =
+                            PQ.kemEncrypt(selectedMaster.pqPublicKey)) {
+                        masterBlob = kem.ciphertext;
+                        ephemeralKey = deriveKemKeyAndWipe(
+                                kem.shared, Constants.KEM_INFO);
+                    }
                 } catch (Exception exc) {
                     if (exc instanceof RuntimeException) {
                         throw (RuntimeException) exc;
@@ -101,7 +106,7 @@ static File pb512FileEncodeFileStream(File input,
         byte[] streamSalt = StreamObfuscator.generateSalt();
         String ext = BaseFwx.getExtension(input);
         byte[] extBytes = ext.isEmpty() ? new byte[0] : ext.getBytes(StandardCharsets.UTF_8);
-        boolean fastObf = obfuscate && useFastObfuscation(input.length());
+        boolean fastObf = obfuscate && useFastObfuscation(inputLength);
         String obfMode = obfuscate ? (fastObf ? "fast" : "yes") : "no";
         String metadata = buildMetadata(
             "AES-HEAVY",
@@ -126,12 +131,14 @@ static File pb512FileEncodeFileStream(File input,
         byte[] prefixBytes = metadataBytes.length == 0
             ? new byte[0]
             : concat(metadataBytes, Constants.META_DELIM.getBytes(StandardCharsets.UTF_8));
-        byte[] streamHeader = buildStreamHeader(input.length(), streamSalt, extBytes, Constants.STREAM_CHUNK_SIZE);
-        long plaintextLen = (long) prefixBytes.length + streamHeader.length + input.length();
-        long payloadLen = 4L + metadataBytes.length + Constants.AEAD_NONCE_LEN + plaintextLen + Constants.AEAD_TAG_LEN;
-        if (payloadLen > 0xFFFFFFFFL) {
-            throw new IllegalArgumentException("Streaming payload too large");
-        }
+        byte[] streamHeader = buildStreamHeader(
+                inputLength, streamSalt, extBytes,
+                Constants.STREAM_CHUNK_SIZE);
+        long payloadLen = checkedStreamPayloadLength(
+                inputLength,
+                metadataBytes.length,
+                prefixBytes.length,
+                streamHeader.length);
         byte[] userBlob = new byte[0];
         if (pw.length > 0) {
             byte[] salt = Crypto.randomBytes(Constants.USER_KDF_SALT_SIZE);
@@ -165,18 +172,25 @@ static File pb512FileEncodeFileStream(File input,
             obfuscationKey = payloadKeys.obfuscation;
         }
         byte[] nonce = Crypto.randomBytes(Constants.AEAD_NONCE_LEN);
-        StreamObfuscator obfuscator = obfuscate
-                ? (useDerivedKeys
-                    ? StreamObfuscator.forKey(
-                            obfuscationKey, streamSalt, fastObf)
-                    : StreamObfuscator.forPassword(
-                            pw, streamSalt, fastObf))
-                : null;
         File outFile = output != null ? output : new File(input.getParentFile(), input.getName() + ".fwx");
+        try {
+            stagedOutput = BaseFwxUtil.createPrivateSiblingTempFile(
+                    outFile, ".basefwx-pb512-enc-", ".tmp");
+        } catch (IOException exc) {
+            throw new IllegalStateException(
+                    "AES-heavy streaming encode failed", exc);
+        }
 
-        try (FileInputStream fin = new FileInputStream(input);
+        try (StreamObfuscator obfuscator = obfuscate
+                     ? (useDerivedKeys
+                         ? StreamObfuscator.forKey(
+                                 obfuscationKey, streamSalt, fastObf)
+                         : StreamObfuscator.forPassword(
+                                 pw, streamSalt, fastObf))
+                     : null;
+             FileInputStream fin = new FileInputStream(input);
              BufferedInputStream in = new BufferedInputStream(fin, Constants.STREAM_CHUNK_SIZE);
-             FileOutputStream fout = new FileOutputStream(outFile);
+             FileOutputStream fout = new FileOutputStream(stagedOutput);
              BufferedOutputStream out = new BufferedOutputStream(fout, Constants.STREAM_CHUNK_SIZE)) {
             writeU32(out, userBlob.length);
             out.write(userBlob);
@@ -194,47 +208,75 @@ static File pb512FileEncodeFileStream(File input,
                          backend.newGcmEncryptor(
                                  aeadKey, nonce, metadataBytes)) {
                 byte[] outBuf = new byte[Constants.STREAM_CHUNK_SIZE + Constants.AEAD_TAG_LEN];
-                if (prefixBytes.length > 0) {
-                    int outLen = enc.update(prefixBytes, 0, prefixBytes.length, outBuf, 0);
-                    if (outLen > 0) {
-                        out.write(outBuf, 0, outLen);
-                    }
-                }
-                int headerLen = enc.update(streamHeader, 0, streamHeader.length, outBuf, 0);
-                if (headerLen > 0) {
-                    out.write(outBuf, 0, headerLen);
-                }
-
                 byte[] buffer = new byte[Constants.STREAM_CHUNK_SIZE];
-                long remaining = input.length();
-                while (remaining > 0) {
-                    int take = (int) Math.min(buffer.length, remaining);
-                    readExact(in, buffer, take, "Streaming payload truncated");
-                    if (obfuscator != null) {
-                        obfuscator.encodeChunkInPlace(buffer, take);
+                try {
+                    if (prefixBytes.length > 0) {
+                        int outLen = enc.update(
+                                prefixBytes, 0, prefixBytes.length,
+                                outBuf, 0);
+                        if (outLen > 0) {
+                            out.write(outBuf, 0, outLen);
+                        }
                     }
-                    int outLen = enc.update(buffer, 0, take, outBuf, 0);
-                    if (outLen > 0) {
-                        out.write(outBuf, 0, outLen);
+                    int headerLen = enc.update(
+                            streamHeader, 0, streamHeader.length,
+                            outBuf, 0);
+                    if (headerLen > 0) {
+                        out.write(outBuf, 0, headerLen);
                     }
-                    remaining -= take;
+
+                    long remaining = inputLength;
+                    while (remaining > 0) {
+                        int take = (int) Math.min(buffer.length, remaining);
+                        readExact(
+                                in, buffer, take,
+                                "Streaming payload truncated");
+                        if (obfuscator != null) {
+                            obfuscator.encodeChunkInPlace(buffer, take);
+                        }
+                        int outLen = enc.update(
+                                buffer, 0, take, outBuf, 0);
+                        if (outLen > 0) {
+                            out.write(outBuf, 0, outLen);
+                        }
+                        remaining -= take;
+                    }
+                    if (in.read() != -1) {
+                        throw new IllegalStateException(
+                            "Input changed during streaming pb512 encode");
+                    }
+                    int finalLen = enc.doFinal(outBuf, 0);
+                    if (finalLen < Constants.AEAD_TAG_LEN) {
+                        throw new IllegalStateException(
+                                "AES-GCM final block too short");
+                    }
+                    int ctLen = finalLen - Constants.AEAD_TAG_LEN;
+                    if (ctLen > 0) {
+                        out.write(outBuf, 0, ctLen);
+                    }
+                    out.write(outBuf, ctLen, Constants.AEAD_TAG_LEN);
+                } finally {
+                    Arrays.fill(buffer, (byte) 0);
+                    Arrays.fill(outBuf, (byte) 0);
                 }
-                int finalLen = enc.doFinal(outBuf, 0);
-                if (finalLen < Constants.AEAD_TAG_LEN) {
-                    throw new IllegalStateException("AES-GCM final block too short");
-                }
-                int ctLen = finalLen - Constants.AEAD_TAG_LEN;
-                if (ctLen > 0) {
-                    out.write(outBuf, 0, ctLen);
-                }
-                out.write(outBuf, ctLen, Constants.AEAD_TAG_LEN);
             }
             out.flush();
+            fout.getFD().sync();
         } catch (IOException | GeneralSecurityException exc) {
             throw new IllegalStateException("AES-heavy streaming encode failed", exc);
         }
+        try {
+            BaseFwxUtil.commitAuthenticatedFile(stagedOutput, outFile);
+            stagedOutput = null;
+        } catch (IOException exc) {
+            throw new IllegalStateException(
+                    "AES-heavy streaming encode failed", exc);
+        }
         return outFile;
         } finally {
+            if (stagedOutput != null) {
+                BaseFwxUtil.deletePrivateTempFile(stagedOutput);
+            }
             if (payloadKeys != null) {
                 payloadKeys.close();
             }
@@ -242,16 +284,28 @@ static File pb512FileEncodeFileStream(File input,
         }
     }
 
-static File pb512FileDecodeFileStream(File input,
-                                                  File output,
-                                                  String password,
-                                                  boolean useMaster,
-                                                  String metadataPreview) {
+    static File pb512FileDecodeFileStream(File input,
+                                          File output,
+                                          String password,
+                                          boolean useMaster,
+                                          String metadataPreview) {
         byte[] pw = BaseFwx.resolvePasswordBytes(password, useMaster);
-        if (pw.length == 0) {
-            throw new IllegalArgumentException("Password required for AES-heavy streaming mode");
+        try {
+            return pb512FileDecodeFileStreamWithPassword(
+                    input, output, pw, useMaster, metadataPreview);
+        } finally {
+            Arrays.fill(pw, (byte) 0);
         }
+    }
+
+    private static File pb512FileDecodeFileStreamWithPassword(
+            File input,
+            File output,
+            byte[] pw,
+            boolean useMaster,
+            String metadataPreview) {
         File tempPlain = null;
+        File stagedOutput = null;
         byte[] metadataBytes;
         String metadataBlob = "";
         boolean useMasterEffective = useMaster;
@@ -261,6 +315,10 @@ static File pb512FileDecodeFileStream(File input,
         byte[] ephemeralKey = null;
         PayloadKeySeparation.PayloadKeys payloadKeys = null;
         try {
+        if (pw.length == 0) {
+            throw new IllegalArgumentException(
+                    "Password required for AES-heavy streaming mode");
+        }
         try (FileInputStream fin = new FileInputStream(input);
              BufferedInputStream in = new BufferedInputStream(fin, Constants.STREAM_CHUNK_SIZE)) {
             int lenUser = readU32(in, "Ciphertext payload truncated");
@@ -368,29 +426,37 @@ static File pb512FileDecodeFileStream(File input,
                      BufferedOutputStream plainOut = new BufferedOutputStream(fout, Constants.STREAM_CHUNK_SIZE)) {
                     byte[] buffer = new byte[Constants.STREAM_CHUNK_SIZE];
                     byte[] outBuf = new byte[Constants.STREAM_CHUNK_SIZE];
-                    long remaining = cipherBodyLen;
-                    while (remaining > 0) {
-                        int take = (int) Math.min(buffer.length, remaining);
-                        readExact(in, buffer, take, "Ciphertext truncated");
-                        int outLen = dec.update(buffer, 0, take, outBuf, 0);
-                        if (outLen > 0) {
-                            plainOut.write(outBuf, 0, outLen);
+                    try {
+                        long remaining = cipherBodyLen;
+                        while (remaining > 0) {
+                            int take = (int) Math.min(
+                                    buffer.length, remaining);
+                            readExact(
+                                    in, buffer, take,
+                                    "Ciphertext truncated");
+                            int outLen = dec.update(
+                                    buffer, 0, take, outBuf, 0);
+                            if (outLen > 0) {
+                                plainOut.write(outBuf, 0, outLen);
+                            }
+                            remaining -= take;
                         }
-                        remaining -= take;
-                    }
-                    byte[] tag = readExactBytes(in, Constants.AEAD_TAG_LEN, "Ciphertext payload truncated");
-                    int finalLen = dec.doFinal(tag, 0, tag.length, outBuf, 0);
-                    if (finalLen > 0) {
-                        plainOut.write(outBuf, 0, finalLen);
+                        byte[] tag = readExactBytes(
+                                in,
+                                Constants.AEAD_TAG_LEN,
+                                "Ciphertext payload truncated");
+                        int finalLen = dec.doFinal(
+                                tag, 0, tag.length, outBuf, 0);
+                        if (finalLen > 0) {
+                            plainOut.write(outBuf, 0, finalLen);
+                        }
+                    } finally {
+                        Arrays.fill(buffer, (byte) 0);
+                        Arrays.fill(outBuf, (byte) 0);
                     }
                 }
             }
         } catch (IOException | GeneralSecurityException exc) {
-            if (tempPlain != null) {
-                tempPlain.delete();
-            }
-            System.err.println("ERROR: AES-heavy streaming decode failed");
-            exc.printStackTrace(System.err);
             throw new IllegalStateException("AES-heavy streaming decode failed", exc);
         }
 
@@ -412,10 +478,9 @@ static File pb512FileDecodeFileStream(File input,
                 throw new IllegalArgumentException("Malformed streaming payload: magic mismatch");
             }
             int chunkSize = readU32(plainIn, "Malformed streaming payload: missing chunk size");
-            final int MAX_CHUNK = (16 << 20);  // 16 MiB
-            final int MIN_FALLBACK = 4 * 1024 * 1024;  // 4 MiB
-            if (chunkSize <= 0 || chunkSize > MAX_CHUNK) {
-                chunkSize = Math.max(Constants.STREAM_CHUNK_SIZE, MIN_FALLBACK);
+            if (chunkSize <= 0
+                    || chunkSize > Constants.STREAM_CHUNK_SIZE_MAX) {
+                chunkSize = Constants.STREAM_CHUNK_SIZE;
             }
             long originalSize = readU64(plainIn, "Malformed streaming payload: missing original size");
             byte[] salt = readExactBytes(plainIn, Constants.STREAM_SALT_LEN, "Malformed streaming payload: missing salt");
@@ -424,43 +489,56 @@ static File pb512FileDecodeFileStream(File input,
                 ? readExactBytes(plainIn, extLen, "Malformed streaming payload: truncated extension")
                 : new byte[0];
 
-            StreamObfuscator decoder = obfuscateStream
-                ? (useDerivedKeys
-                    ? StreamObfuscator.forKey(
-                            payloadKeys.obfuscation, salt,
-                            fastObfStream)
-                    : StreamObfuscator.forPassword(
-                            pw, salt, fastObfStream))
-                : null;
             File outFile = resolveDecodedOutput(input, output, extBytes);
-            try (FileOutputStream fout = new FileOutputStream(outFile);
+            stagedOutput = BaseFwxUtil.createPrivateSiblingTempFile(
+                    outFile, ".basefwx-pb512-auth-", ".tmp");
+            try (StreamObfuscator decoder = obfuscateStream
+                         ? (useDerivedKeys
+                             ? StreamObfuscator.forKey(
+                                     payloadKeys.obfuscation,
+                                     salt,
+                                     fastObfStream)
+                             : StreamObfuscator.forPassword(
+                                     pw, salt, fastObfStream))
+                         : null;
+                 FileOutputStream fout = new FileOutputStream(stagedOutput);
                  BufferedOutputStream out = new BufferedOutputStream(fout, Constants.STREAM_CHUNK_SIZE)) {
                 byte[] buffer = new byte[chunkSize];
-                long remaining = originalSize;
-                while (remaining > 0) {
-                    int take = (int) Math.min(buffer.length, remaining);
-                    readExact(plainIn, buffer, take, "Streaming payload truncated");
-                    if (decoder != null) {
-                        decoder.decodeChunkInPlace(buffer, take);
+                try {
+                    long remaining = originalSize;
+                    while (remaining > 0) {
+                        int take = (int) Math.min(buffer.length, remaining);
+                        readExact(plainIn, buffer, take, "Streaming payload truncated");
+                        if (decoder != null) {
+                            decoder.decodeChunkInPlace(buffer, take);
+                        }
+                        out.write(buffer, 0, take);
+                        remaining -= take;
                     }
-                    out.write(buffer, 0, take);
-                    remaining -= take;
-                }
-                if (plainIn.read() != -1) {
-                    throw new IllegalArgumentException("Streaming payload contained unexpected trailing data");
+                    if (plainIn.read() != -1) {
+                        throw new IllegalArgumentException(
+                                "Streaming payload contained unexpected "
+                                + "trailing data");
+                    }
+                    out.flush();
+                    fout.getFD().sync();
+                } finally {
+                    Arrays.fill(buffer, (byte) 0);
                 }
             }
+            BaseFwxUtil.commitAuthenticatedFile(stagedOutput, outFile);
+            stagedOutput = null;
             return outFile;
         } catch (IOException exc) {
-            System.err.println("ERROR: AES-heavy streaming decode failed");
-            exc.printStackTrace(System.err);
             throw new IllegalStateException("AES-heavy streaming decode failed", exc);
-        } finally {
-            if (tempPlain != null) {
-                tempPlain.delete();
-            }
         }
         } finally {
+            if (stagedOutput != null) {
+                BaseFwxUtil.deletePrivateTempFile(stagedOutput);
+            }
+            if (tempPlain != null) {
+                BaseFwxUtil.deletePrivateTempFile(tempPlain);
+            }
             if (payloadKeys != null) {
                 payloadKeys.close();
             }
@@ -468,14 +546,14 @@ static File pb512FileDecodeFileStream(File input,
         }
     }
 
-static byte[] pb512FileEncodeBytes(byte[] data,
+    static byte[] pb512FileEncodeBytes(byte[] data,
                                               String extension,
                                               String password,
                                               boolean useMaster) {
         return pb512FileEncodeBytes(data, extension, password, useMaster, false);
     }
 
-static byte[] pb512FileEncodeBytes(byte[] data,
+    static byte[] pb512FileEncodeBytes(byte[] data,
                                               String extension,
                                               String password,
                                               boolean useMaster,
@@ -492,8 +570,14 @@ static byte[] pb512FileEncodeBytes(byte[] data,
                 KeyWrap.selectMasterKey(useMasterRequested);
         boolean useMasterEffective = selectedMaster.usedMaster();
         String resolvedPassword = password == null ? "" : password;
-        PasswordPolicy.requireStrongPassword(
-                BaseFwx.resolvePasswordBytes(resolvedPassword, useMasterEffective), "Encryption");
+        byte[] passwordBytes = BaseFwx.resolvePasswordBytes(
+                resolvedPassword, useMasterEffective);
+        try {
+            PasswordPolicy.requireStrongPassword(
+                    passwordBytes, "Encryption");
+        } finally {
+            Arrays.fill(passwordBytes, (byte) 0);
+        }
         String ext = extension == null ? "" : extension;
         String b64Payload = Base64Codec.encode(data);
         String kdfLabel = resolveUserKdfLabel();
@@ -536,18 +620,32 @@ static byte[] pb512FileEncodeBytes(byte[] data,
             ? body
             : metadata + Constants.META_DELIM + body;
         byte[] plaintextBytes = plaintext.getBytes(StandardCharsets.UTF_8);
-        return LengthPrefixedCodec.encryptAesPayloadBytes(plaintextBytes, resolvedPassword, useMasterEffective, metadata,
-            kdfLabel, heavyIters, obfuscate, fastObf, heavyArgonTime,
-            heavyArgonMem, heavyArgonPar, selectedMaster);
+        try {
+            return LengthPrefixedCodec.encryptAesPayloadBytes(
+                    plaintextBytes,
+                    resolvedPassword,
+                    useMasterEffective,
+                    metadata,
+                    kdfLabel,
+                    heavyIters,
+                    obfuscate,
+                    fastObf,
+                    heavyArgonTime,
+                    heavyArgonMem,
+                    heavyArgonPar,
+                    selectedMaster);
+        } finally {
+            Arrays.fill(plaintextBytes, (byte) 0);
+        }
     }
 
-static BaseFwx.DecodedFile pb512FileDecodeBytes(byte[] blob,
+    static BaseFwx.DecodedFile pb512FileDecodeBytes(byte[] blob,
                                                    String password,
                                                    boolean useMaster) {
         return pb512FileDecodeBytes(blob, password, useMaster, false);
     }
 
-static BaseFwx.DecodedFile pb512FileDecodeBytes(byte[] blob,
+    static BaseFwx.DecodedFile pb512FileDecodeBytes(byte[] blob,
                                                    String password,
                                                    boolean useMaster,
                                                    boolean stripMetadata) {
@@ -571,7 +669,7 @@ static BaseFwx.DecodedFile pb512FileDecodeBytes(byte[] blob,
         return new BaseFwx.DecodedFile(decoded, ext);
     }
 
-static File pb512FileEncodeFile(File input,
+    static File pb512FileEncodeFile(File input,
                                           File output,
                                           String password,
                                           boolean useMaster) {
@@ -588,7 +686,7 @@ static File pb512FileEncodeFile(File input,
         return outFile;
     }
 
-static File pb512FileDecodeFile(File input,
+    static File pb512FileDecodeFile(File input,
                                            File output,
                                            String password,
                                            boolean useMaster) {

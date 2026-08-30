@@ -2,7 +2,7 @@
 # Copyright (C) 2020-2026  FixCraft Inc.
 # Licensed under the GNU Lesser General Public License v3.0 or later.
 
-"""Extracted implementation cluster from legacy.py."""
+"""Stable b512/pb512 file-codec facade and compatibility exports."""
 
 from __future__ import annotations
 

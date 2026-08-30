@@ -10,6 +10,9 @@
 #include "basefwx_build_stamp.hpp"
 #include "cli/colors.hpp"
 #include "basefwx/system_info.hpp"
+#if BASEFWX_HAS_RETIRED_MEDIA
+#include "retired/cli.hpp"
+#endif
 
 #include <array>
 #include <chrono>
@@ -357,6 +360,8 @@ void PrintVersionInfo() {
               << "argon2=" << OnOff(BASEFWX_HAS_ARGON2 != 0)
               << " oqs=" << OnOff(BASEFWX_HAS_OQS != 0)
               << " lzma=" << OnOff(BASEFWX_HAS_LZMA != 0)
+              << " retired_media="
+              << OnOff(BASEFWX_HAS_RETIRED_MEDIA != 0)
               << "\n";
 }
 
@@ -384,28 +389,26 @@ void PrintUsage() {
     std::cout << "  n10-dec <digits>\n";
     std::cout << "  n10file-enc <in-file> <out-file>\n";
     std::cout << "  n10file-dec <in-file> <out-file>\n";
-    std::cout << "  b256-enc <text>\n";
-    std::cout << "  b256-dec <text>\n";
-    std::cout << "  a512-enc <text>\n";
-    std::cout << "  a512-dec <text>\n";
-    std::cout << "  bi512-enc <text>\n";
     std::cout << "  hash512 <text>\n";
-    std::cout << "  uhash513 <text>\n";
     std::cout << "  b512-enc <text> [--password <password>] " << master_flags << " [--kdf <label>] [--pbkdf2-iters <n>] [--no-fallback]\n";
     std::cout << "  b512-dec <text> [--password <password>] " << master_flags << " [--kdf <label>] [--pbkdf2-iters <n>] [--no-fallback]\n";
     std::cout << "  pb512-enc <text> [--password <password>] " << master_flags << " [--kdf <label>] [--pbkdf2-iters <n>] [--no-fallback]\n";
     std::cout << "  pb512-dec <text> [--password <password>] " << master_flags << " [--kdf <label>] [--pbkdf2-iters <n>] [--no-fallback]\n";
     std::cout << "\n";
     std::cout << "File commands:\n";
-    std::cout << "  b512file-enc <file> [--password <password>] " << master_flags << " [--strip-meta] [--no-aead] [--compress] [--keep-input] [--kdf <label>] [--pbkdf2-iters <n>] [--no-fallback]\n";
+    std::cout << "  b512file-enc <file> [--password <password>] " << master_flags << " [--strip-meta] [--compress] [--keep-input] [--kdf <label>] [--pbkdf2-iters <n>] [--no-fallback]\n";
     std::cout << "  b512file-dec <file.fwx> [--password <password>] " << master_flags << " [--strip-meta] [--kdf <label>] [--pbkdf2-iters <n>] [--no-fallback]\n";
-    std::cout << "  b512file-bytes-rt <in> <out> [--password <password>] " << master_flags << " [--strip-meta] [--no-aead] [--kdf <label>] [--pbkdf2-iters <n>] [--no-fallback]\n";
+    std::cout << "  b512file-bytes-rt <in> <out> [--password <password>] " << master_flags << " [--strip-meta] [--kdf <label>] [--pbkdf2-iters <n>] [--no-fallback]\n";
     std::cout << "  pb512file-bytes-rt <in> <out> [--password <password>] " << master_flags << " [--strip-meta] [--kdf <label>] [--pbkdf2-iters <n>] [--no-fallback]\n";
     std::cout << "  pb512file-enc <file> [--password <password>] " << master_flags << " [--strip-meta] [--no-obf] [--compress] [--keep-input] [--kdf <label>] [--pbkdf2-iters <n>] [--no-fallback]\n";
     std::cout << "  pb512file-dec <file.fwx> [--password <password>] " << master_flags << " [--strip-meta] [--kdf <label>] [--pbkdf2-iters <n>] [--no-fallback]\n";
     std::cout << "\n";
     std::cout << "fwxAES commands:\n";
-    std::cout << "  fwxaes-enc <file> [--password <password>] " << master_flags << " [--out <path>] [--heavy] [--normalize] [--threshold <n>] [--cover-phrase <text>] [--compress] [--ignore-media] [--keep-meta] [--keep-input] [--archive|--no-archive] [--kdf <label>] [--pbkdf2-iters <n>] [--argon2-time <n>] [--argon2-mem <n>] [--argon2-par <n>] [--no-fallback] [--legacy-pbkdf2] [--plugin <path>] [--plugin-id <hex>] [--plugin-pos pre|post] [--plugin-config <file>]\n";
+    std::cout << "  fwxaes-enc <file> [--password <password>] " << master_flags << " [--out <path>] [--heavy] [--normalize] [--threshold <n>] [--cover-phrase <text>] [--compress] [--keep-input]";
+#if BASEFWX_HAS_RETIRED_MEDIA
+    basefwx::retired::cli::AppendFwxAesUsageOptions(std::cout);
+#endif
+    std::cout << " [--kdf <label>] [--pbkdf2-iters <n>] [--argon2-time <n>] [--argon2-mem <n>] [--argon2-par <n>] [--no-fallback] [--legacy-pbkdf2] [--plugin <path>] [--plugin-id <hex>] [--plugin-pos pre|post] [--plugin-config <file>]\n";
     std::cout << "  fwxaes-dec <file> [--password <password>] " << master_flags << " [--out <path>] [--heavy]\n";
     std::cout << "  fwxaes-heavy-enc <file> [--password <password>] " << master_flags << " [--out <path>] [--compress] [--keep-input]  (alias of fwxaes-enc --heavy)\n";
     std::cout << "  fwxaes-heavy-dec <file> [--password <password>] " << master_flags << " [--out <path>]                (alias of fwxaes-dec --heavy)\n";
@@ -416,12 +419,10 @@ void PrintUsage() {
     std::cout << "  an7 <file.fwx> [--password <password>] [--out <path>] [--keep-input] [--force-any]\n";
     std::cout << "  dean7 <file> [--password <password>] [--out <path>] [--keep-input]\n";
     std::cout << "\n";
-    std::cout << "Media/carrier commands:\n";
-    std::cout << "  jmge <media> [--password <password>] " << master_flags << " [--out <path>] [--keep-meta] [--keep-input] [--archive|--no-archive]\n";
-    std::cout << "  jmgd <media> [--password <password>] " << master_flags << " [--out <path>]\n";
-    std::cout << "  kFMe <in-file> [--out <path>] [--bw]\n";
-    std::cout << "  kFMd <in-file> [--out <path>] [--bw]\n";
-    std::cout << "\n";
+#if BASEFWX_HAS_RETIRED_MEDIA
+    basefwx::retired::cli::PrintUsageCommands(
+        std::cout, master_flags);
+#endif
     std::cout << "Benchmark commands:\n";
     std::cout << "  bench-text <method> <text-file> [--password <password>] " << master_flags << "\n";
     std::cout << "  bench-hash <method> <text-file>\n";
@@ -430,9 +431,8 @@ void PrintUsage() {
     std::cout << "  bench-an7 <file> <password> " << master_flags << "\n";
     std::cout << "  bench-dean7 <file> <password> " << master_flags << "\n";
     std::cout << "  bench-live <file> <password> " << master_flags << "\n";
-    std::cout << "  bench-b512file <file> <password> " << master_flags << " [--no-aead]\n";
-    std::cout << "  bench-pb512file <file> <password> " << master_flags << " [--no-aead]\n";
-    std::cout << "  bench-jmg <media> <password> " << master_flags << "\n";
+    std::cout << "  bench-b512file <file> <password> " << master_flags << "\n";
+    std::cout << "  bench-pb512file <file> <password> " << master_flags << "\n";
     std::cout << "\n";
     std::cout << "Passworded commands prompt on a TTY when --password is omitted.\n";
 }
@@ -448,12 +448,16 @@ void PrintBashCompletion(const std::string& argv0) {
         << "  local cur cmd\n"
         << "  cur=\"${COMP_WORDS[COMP_CWORD]}\"\n"
         << "  cmd=\"${COMP_WORDS[1]}\"\n"
-        << "  local commands=\"help version completion info identify probe b64-enc b64-dec n10-enc n10-dec n10file-enc n10file-dec "
-           "kFMe kFMd hash512 uhash513 a512-enc a512-dec bi512-enc b256-enc b256-dec "
+        << "  local commands=\"help version completion info identify probe b64-enc b64-dec n10-enc n10-dec n10file-enc n10file-dec ";
+#if BASEFWX_HAS_RETIRED_MEDIA
+    basefwx::retired::cli::AppendCompletionCommandNames(std::cout);
+#endif
+    std::cout
+        << "hash512 "
            "b512-enc b512-dec pb512-enc pb512-dec b512file-enc b512file-dec b512file-bytes-rt pb512file-bytes-rt "
            "pb512file-enc pb512file-dec fwxaes-enc fwxaes-dec fwxaes-heavy-enc fwxaes-heavy-dec fwxaes-stream-enc fwxaes-stream-dec fwxaes-live-enc "
-           "fwxaes-live-dec an7 dean7 jmge jmgd bench-text bench-hash bench-fwxaes bench-fwxaes-par bench-an7 bench-dean7 bench-live bench-b512file "
-           "bench-pb512file bench-jmg\"\n"
+           "fwxaes-live-dec an7 dean7 bench-text bench-hash bench-fwxaes bench-fwxaes-par bench-an7 bench-dean7 bench-live bench-b512file "
+           "bench-pb512file \"\n"
         << "  local master_opts=\"--use-master --no-master --master-pub --use-master-pub --master-autogen --allow-embedded-master\"\n"
         << "  if [[ ${COMP_CWORD} -eq 1 ]]; then\n"
         << "    COMPREPLY=( $(compgen -W \"$commands\" -- \"$cur\") )\n"
@@ -467,25 +471,28 @@ void PrintBashCompletion(const std::string& argv0) {
         << "      COMPREPLY=( $(compgen -W \"-p --password --kdf --pbkdf2-iters --no-fallback $master_opts\" -- \"$cur\") )\n"
         << "      ;;\n"
         << "    b512file-enc|b512file-dec|b512file-bytes-rt|pb512file-bytes-rt|pb512file-enc|pb512file-dec)\n"
-        << "      COMPREPLY=( $(compgen -W \"-p --password --strip-meta --no-aead --no-obf --compress --keep-input --kdf --pbkdf2-iters --no-fallback $master_opts\" -- \"$cur\") )\n"
+        << "      COMPREPLY=( $(compgen -W \"-p --password --strip-meta --no-obf --compress --keep-input --kdf --pbkdf2-iters --no-fallback $master_opts\" -- \"$cur\") )\n"
         << "      ;;\n"
         << "    fwxaes-enc|fwxaes-dec|fwxaes-heavy-enc|fwxaes-heavy-dec|fwxaes-stream-enc|fwxaes-stream-dec|fwxaes-live-enc|fwxaes-live-dec)\n"
-        << "      COMPREPLY=( $(compgen -W \"-p --password --out -o --heavy --light --normalize --threshold --cover-phrase --compress --ignore-media --keep-meta --keep-input --archive --no-archive --kdf --pbkdf2-iters --argon2-time --argon2-mem --argon2-par --no-fallback --legacy-pbkdf2 --no-wrap-kdf $master_opts\" -- \"$cur\") )\n"
+        << "      COMPREPLY=( $(compgen -W \"-p --password --out -o --heavy --light --normalize --threshold --cover-phrase --compress --keep-input ";
+#if BASEFWX_HAS_RETIRED_MEDIA
+    basefwx::retired::cli::AppendFwxAesCompletionOptions(std::cout);
+#endif
+    std::cout
+        << "--kdf --pbkdf2-iters --argon2-time --argon2-mem --argon2-par --no-fallback --legacy-pbkdf2 --no-wrap-kdf $master_opts\" -- \"$cur\") )\n"
         << "      ;;\n"
         << "    an7)\n"
         << "      COMPREPLY=( $(compgen -W \"-p --password --out -o --keep-input --force-any\" -- \"$cur\") )\n"
         << "      ;;\n"
         << "    dean7)\n"
         << "      COMPREPLY=( $(compgen -W \"-p --password --out -o --keep-input\" -- \"$cur\") )\n"
-        << "      ;;\n"
-        << "    jmge|jmgd|bench-jmg)\n"
-        << "      COMPREPLY=( $(compgen -W \"-p --password --out -o --keep-meta --keep-input --archive --no-archive $master_opts\" -- \"$cur\") )\n"
-        << "      ;;\n"
-        << "    kFMe|kFMd)\n"
-        << "      COMPREPLY=( $(compgen -W \"--out -o --bw\" -- \"$cur\") )\n"
-        << "      ;;\n"
+        << "      ;;\n";
+#if BASEFWX_HAS_RETIRED_MEDIA
+    basefwx::retired::cli::AppendCompletionCases(std::cout);
+#endif
+    std::cout
         << "    bench-text|bench-fwxaes|bench-fwxaes-par|bench-an7|bench-dean7|bench-live|bench-b512file|bench-pb512file)\n"
-        << "      COMPREPLY=( $(compgen -W \"-p --password --no-aead $master_opts\" -- \"$cur\") )\n"
+        << "      COMPREPLY=( $(compgen -W \"-p --password $master_opts\" -- \"$cur\") )\n"
         << "      ;;\n"
         << "    *)\n"
         << "      COMPREPLY=()\n"

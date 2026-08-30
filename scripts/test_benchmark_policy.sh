@@ -10,11 +10,11 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$ROOT/scripts/lib/benchmark_policy.sh"
 
 expect_default_methods() {
-    [[ "$BASEFWX_BENCH_RETIRED_ENABLED" == "0" ]]
-    [[ "${BASEFWX_BENCH_TEXT_METHODS[*]}" == "b512 pb512 b64 a512 n10" ]]
+    [[ "${BASEFWX_BENCH_TEXT_METHODS[*]}" == "b512 pb512 b64 n10" ]]
 }
 
 unset BASEFWX_BENCH_RETIRED
+unset BASEFWX_ENABLE_RETIRED_MEDIA
 basefwx_benchmark_configure_methods
 expect_default_methods
 
@@ -26,9 +26,13 @@ done
 
 for value in 1 true yes on TRUE; do
     BASEFWX_BENCH_RETIRED="$value"
+    unset BASEFWX_ENABLE_RETIRED_MEDIA
     basefwx_benchmark_configure_methods
-    [[ "$BASEFWX_BENCH_RETIRED_ENABLED" == "1" ]]
-    [[ "${BASEFWX_BENCH_TEXT_METHODS[*]}" == "b256 b512 pb512 b64 a512 n10" ]]
+    expect_default_methods
+
+    BASEFWX_ENABLE_RETIRED_MEDIA=1
+    basefwx_benchmark_configure_methods
+    expect_default_methods
 done
 
-printf 'PASS: retired benchmarks are opt-in\n'
+printf 'PASS: retired compatibility stays excluded from benchmarks\n'

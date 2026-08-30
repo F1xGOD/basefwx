@@ -7,7 +7,6 @@
 package com.fixcraft.basefwx.cli;
 
 import com.fixcraft.basefwx.Constants;
-import com.fixcraft.basefwx.MediaCipher;
 import com.fixcraft.basefwx.PQ;
 import com.fixcraft.basefwx.VersionInfo;
 
@@ -29,21 +28,6 @@ final class CliOptions {
             this.noLog = noLog;
             this.args = args;
         }
-    }
-
-    static final class KfmArgs {
-        File input;
-        File output;
-        boolean bwMode = false;
-    }
-
-    static final class JmgArgs {
-        File input;
-        File output;
-        String password = "";
-        boolean keepMeta = false;
-        boolean keepInput = false;
-        boolean archiveOriginal = true;
     }
 
     static final class An7Args {
@@ -87,33 +71,20 @@ final class CliOptions {
         // Argon2BytesGenerator (always available as a runtime dep), so the
         // feature flag flips on. OQS / LZMA remain OFF in Java; configure
         // them out-of-band on the C++ side if you need full coverage.
-        System.out.println("features: argon2=ON pq=" + PQ.currentKemAlgorithm() + " lzma=OFF");
+        System.out.println(
+                "features: argon2=ON pq=" + PQ.currentKemAlgorithm()
+                + " lzma=OFF retired_media="
+                + (profileEnabled() ? "ON" : "OFF"));
     }
 
     static String[] hwPlanForCommand(String command) {
-        String encode = "CPU";
-        String decode = "CPU";
-        String pixels = "CPU";
-        String reason = "command uses CPU crypto path";
-        if ("jmge".equals(command) || "jmgd".equals(command) || "bench-jmg".equals(command)) {
-            String hw = MediaCipher.selectedHwaccelForCli().toLowerCase(Locale.US);
-            if ("nvenc".equals(hw)) {
-                encode = "NVENC";
-                decode = "NVENC";
-                reason = "BASEFWX_HWACCEL selected NVIDIA media acceleration";
-            } else if ("qsv".equals(hw)) {
-                encode = "QSV";
-                decode = "QSV";
-                reason = "BASEFWX_HWACCEL selected Intel QSV media acceleration";
-            } else if ("vaapi".equals(hw)) {
-                encode = "VAAPI";
-                decode = "VAAPI";
-                reason = "BASEFWX_HWACCEL selected VAAPI media acceleration";
-            } else {
-                reason = "media acceleration unavailable, CPU fallback in effect";
-            }
+        String[] profilePlan = profileHwPlanForCommand(command);
+        if (profilePlan != null) {
+            return profilePlan;
         }
-        return new String[] {encode, decode, pixels, reason};
+        return new String[]{
+            "CPU", "CPU", "CPU", "command uses CPU crypto path"
+        };
     }
 
     static boolean truthy(String raw) {
@@ -123,6 +94,16 @@ final class CliOptions {
         String value = raw.trim().toLowerCase(Locale.US);
         return "1".equals(value) || "true".equals(value) || "yes".equals(value) || "on".equals(value);
     }
+
+    // BASEFWX_PROFILE_METHODS_BEGIN
+    private static boolean profileEnabled() {
+        return false;
+    }
+
+    private static String[] profileHwPlanForCommand(String command) {
+        return null;
+    }
+    // BASEFWX_PROFILE_METHODS_END
 
     static String aesAccelState() {
         String arch = System.getProperty("os.arch", "").toLowerCase(Locale.US);
@@ -144,113 +125,6 @@ final class CliOptions {
             return "OFF";
         }
         return "ON(" + workers + "w)";
-    }
-
-    static KfmArgs parseKfmArgs(String[] args, int startIndex) {
-        KfmArgs parsed = new KfmArgs();
-        java.util.List<String> positional = new java.util.ArrayList<>();
-        for (int i = startIndex; i < args.length; i++) {
-            String arg = args[i];
-            if ("--no-master".equalsIgnoreCase(arg) || "--use-master".equalsIgnoreCase(arg)) {
-                continue;
-            }
-            if ("--bw".equalsIgnoreCase(arg)) {
-                parsed.bwMode = true;
-                continue;
-            }
-            if ("-o".equalsIgnoreCase(arg) || "--out".equalsIgnoreCase(arg)) {
-                if (i + 1 >= args.length) {
-                    throw new IllegalArgumentException("Missing output value");
-                }
-                parsed.output = new File(args[++i]);
-                continue;
-            }
-            positional.add(arg);
-        }
-        if (positional.isEmpty()) {
-            throw new IllegalArgumentException("Missing input path");
-        }
-        parsed.input = new File(positional.get(0));
-        if (parsed.output == null && positional.size() >= 2) {
-            parsed.output = new File(positional.get(1));
-        }
-        if (positional.size() > 2) {
-            throw new IllegalArgumentException("Too many kFM arguments");
-        }
-        return parsed;
-    }
-
-    static JmgArgs parseJmgArgs(String[] args, int startIndex) {
-        JmgArgs parsed = new JmgArgs();
-        java.util.List<String> positional = new java.util.ArrayList<>();
-        for (int i = startIndex; i < args.length; i++) {
-            String arg = args[i];
-            if ("--keep-meta".equalsIgnoreCase(arg)) {
-                parsed.keepMeta = true;
-                continue;
-            }
-            if ("--keep-input".equalsIgnoreCase(arg)) {
-                parsed.keepInput = true;
-                continue;
-            }
-            if ("--no-archive".equalsIgnoreCase(arg)) {
-                parsed.archiveOriginal = false;
-                continue;
-            }
-            if ("--no-master".equalsIgnoreCase(arg) || "--use-master".equalsIgnoreCase(arg)) {
-                continue;
-            }
-            if ("-p".equalsIgnoreCase(arg) || "--password".equalsIgnoreCase(arg)) {
-                if (i + 1 >= args.length) {
-                    throw new IllegalArgumentException("Missing password value");
-                }
-                parsed.password = args[++i];
-                continue;
-            }
-            if ("-o".equalsIgnoreCase(arg) || "--out".equalsIgnoreCase(arg)) {
-                if (i + 1 >= args.length) {
-                    throw new IllegalArgumentException("Missing output value");
-                }
-                parsed.output = new File(args[++i]);
-                continue;
-            }
-            positional.add(arg);
-        }
-        if (positional.isEmpty()) {
-            throw new IllegalArgumentException("Missing input path");
-        }
-        parsed.input = new File(positional.get(0));
-        if (parsed.output == null) {
-            if (positional.size() >= 3) {
-                parsed.output = new File(positional.get(1));
-                if (parsed.password == null || parsed.password.isEmpty()) {
-                    parsed.password = positional.get(2);
-                }
-                if (positional.size() > 3) {
-                    throw new IllegalArgumentException("Too many arguments for jMG command");
-                }
-            } else if (positional.size() == 2) {
-                if (parsed.password == null || parsed.password.isEmpty()) {
-                    parsed.password = positional.get(1);
-                } else {
-                    parsed.output = new File(positional.get(1));
-                }
-            }
-        } else if (positional.size() >= 2) {
-            if (parsed.password == null || parsed.password.isEmpty()) {
-                parsed.password = positional.get(1);
-            }
-            if (positional.size() > 2) {
-                throw new IllegalArgumentException("Too many arguments for jMG command");
-            }
-        }
-        if (parsed.output == null) {
-            parsed.output = parsed.input;
-        }
-        if (parsed.password == null) {
-            parsed.password = "";
-        }
-        return parsed;
     }
 
     static An7Args parseAn7Args(String[] args, int startIndex, boolean allowForceAny) {

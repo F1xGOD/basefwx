@@ -8,11 +8,7 @@ package com.fixcraft.basefwx;
 
 import java.util.Base64;
 
-/**
- * Base64 encoding/decoding using Java's standard library implementation.
- * This delegates to java.util.Base64 which uses optimized native code
- * similar to how Python's base64 module uses C implementations.
- */
+/** Base64 encoding/decoding through the JDK implementation. */
 public final class Base64Codec {
     private Base64Codec() {}
 
@@ -20,10 +16,7 @@ public final class Base64Codec {
     private static final Base64.Decoder DECODER = Base64.getDecoder();
     private static final Base64.Decoder MIME_DECODER = Base64.getMimeDecoder();
 
-    /**
-     * Encode bytes to Base64 string.
-     * Uses Java's standard library implementation which is optimized with native code.
-     */
+    /** Encode bytes using the canonical standard alphabet. */
     public static String encode(byte[] data) {
         if (data == null || data.length == 0) {
             return "";
@@ -31,11 +24,7 @@ public final class Base64Codec {
         return ENCODER.encodeToString(data);
     }
 
-    /**
-     * Decode Base64 string to bytes.
-     * Uses Java's standard library implementation which is optimized with native code.
-     * Handles whitespace in input gracefully.
-     */
+    /** Decode standard or historical URL-safe input, including whitespace. */
     public static byte[] decode(String input) {
         if (input == null || input.isEmpty()) {
             return new byte[0];

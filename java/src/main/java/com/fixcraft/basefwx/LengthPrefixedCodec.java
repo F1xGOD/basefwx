@@ -74,6 +74,38 @@ final class LengthPrefixedCodec {
             FileCodecKdf.requirePeerPbkdf2WithinLimits(kdfIterations);
         }
         byte[] pw = BaseFwx.resolvePasswordBytes(password, useMaster);
+        try {
+            return encryptAesPayloadBytesWithPassword(
+                    payloadBytes,
+                    pw,
+                    useMaster,
+                    metadataBlob,
+                    resolvedKdfLabel,
+                    kdfIterations,
+                    obfuscate,
+                    fastObf,
+                    argonTime,
+                    argonMem,
+                    argonPar,
+                    selectedMaster);
+        } finally {
+            Arrays.fill(pw, (byte) 0);
+        }
+    }
+
+    private static byte[] encryptAesPayloadBytesWithPassword(
+            byte[] payloadBytes,
+            byte[] pw,
+            boolean useMaster,
+            String metadataBlob,
+            String resolvedKdfLabel,
+            int kdfIterations,
+            boolean obfuscate,
+            boolean fastObf,
+            Integer argonTime,
+            Integer argonMem,
+            Integer argonPar,
+            KeyWrap.MasterKeySelection selectedMaster) {
         PasswordPolicy.requireStrongPassword(pw, "Encryption");
         boolean useMasterEffective =
                 useMaster && selectedMaster != null && selectedMaster.usedMaster();
@@ -100,10 +132,12 @@ final class LengthPrefixedCodec {
             if (useMasterEffective) {
                 if (selectedMaster.pqPublicKey != null) {
                     try {
-                        PQ.KemResult kem = PQ.kemEncrypt(selectedMaster.pqPublicKey);
-                        masterBlob = kem.ciphertext;
-                        ephemeralKey =
-                                FileCodecKdf.deriveKemKeyAndWipe(kem.shared, Constants.KEM_INFO);
+                        try (PQ.KemResult kem =
+                                PQ.kemEncrypt(selectedMaster.pqPublicKey)) {
+                            masterBlob = kem.ciphertext;
+                            ephemeralKey = FileCodecKdf.deriveKemKeyAndWipe(
+                                    kem.shared, Constants.KEM_INFO);
+                        }
                     } catch (Exception exc) {
                         if (exc instanceof RuntimeException) {
                             throw (RuntimeException) exc;
@@ -182,11 +216,25 @@ final class LengthPrefixedCodec {
 
     static String decryptAesPayload(byte[] blob, String password, boolean useMaster) {
         byte[] plain = decryptAesPayloadBytes(blob, password, useMaster);
-        return new String(plain, StandardCharsets.UTF_8);
+        try {
+            return new String(plain, StandardCharsets.UTF_8);
+        } finally {
+            Arrays.fill(plain, (byte) 0);
+        }
     }
 
     static byte[] decryptAesPayloadBytes(byte[] blob, String password, boolean useMaster) {
         byte[] pw = BaseFwx.resolvePasswordBytes(password, useMaster);
+        try {
+            return decryptAesPayloadBytesWithPassword(
+                    blob, pw, useMaster);
+        } finally {
+            Arrays.fill(pw, (byte) 0);
+        }
+    }
+
+    private static byte[] decryptAesPayloadBytesWithPassword(
+            byte[] blob, byte[] pw, boolean useMaster) {
         List<byte[]> parts = Format.unpackLengthPrefixed(blob, 3);
         byte[] userBlob = parts.get(0);
         byte[] masterBlob = parts.get(1);

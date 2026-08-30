@@ -1,0 +1,42 @@
+    /*
+     * BaseFWX - Cryptography Engine
+     * Copyright (C) 2020-2026  FixCraft Inc.
+     * Licensed under the GNU Lesser General Public License v3.0 or later.
+     */
+
+    @Deprecated
+    public static String b256Encode(String input) {
+        RetiredCodecs.warnB256RetiredOnce();
+        return RetiredCodecs.b256Encode(input);
+    }
+
+    @Deprecated
+    public static String b256Decode(String input) {
+        RetiredCodecs.warnB256RetiredOnce();
+        return RetiredCodecs.b256Decode(input);
+    }
+
+    @Deprecated
+    public static String uhash513(String input) {
+        return uhash513Bytes(input.getBytes(StandardCharsets.UTF_8));
+    }
+
+    @Deprecated
+    public static String uhash513Bytes(byte[] inputBytes) {
+        return RetiredCodecs.uhash513Bytes(inputBytes);
+    }
+
+    @Deprecated
+    public static String bi512Encode(String input) {
+        return RetiredCodecs.bi512Encode(input);
+    }
+
+    @Deprecated
+    public static String a512Encode(String input) {
+        return RetiredCodecs.a512Encode(input);
+    }
+
+    @Deprecated
+    public static String a512Decode(String input) {
+        return RetiredCodecs.a512Decode(input);
+    }

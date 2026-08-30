@@ -1,0 +1,23 @@
+    /*
+     * BaseFWX - Cryptography Engine
+     * Copyright (C) 2020-2026  FixCraft Inc.
+     * Licensed under the GNU Lesser General Public License v3.0 or later.
+     */
+
+    public static String base32HexEncode(byte[] data) {
+        return RetiredCodecs.base32HexEncode(data);
+    }
+
+    public static byte[] base32HexDecode(String input) {
+        return RetiredCodecs.base32HexDecode(input);
+    }
+
+    @Deprecated
+    public static String b256Encode(String input) {
+        return RetiredCodecs.b256Encode(input);
+    }
+
+    @Deprecated
+    public static String b256Decode(String input) {
+        return RetiredCodecs.b256Decode(input);
+    }

@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: LGPL-3.0-or-later AND GPL-3.0-or-later
 
 from pathlib import Path
+import os
 from setuptools import setup, find_packages
 
 
@@ -41,10 +42,31 @@ def read_version() -> str:
     )
 
 
+def retired_media_enabled() -> bool:
+    return os.getenv("BASEFWX_ENABLE_RETIRED_MEDIA", "").strip().lower() in {
+        "1", "true", "yes", "on"
+    }
+
+
+package_excludes = () if retired_media_enabled() else (
+    "basefwx.retired",
+    "basefwx.retired.*",
+)
+build_base = (
+    "build/retired-media" if retired_media_enabled()
+    else "build/core"
+)
+
+
 setup(
     name="basefwx",
     version=read_version(),
-    packages=find_packages(),
+    packages=find_packages(exclude=package_excludes),
+    include_package_data=False,
+    # Keep generated package trees separate. Otherwise setuptools can retain
+    # compatibility-only modules in build/lib and publish them in a later
+    # default wheel even though find_packages() excludes those modules.
+    options={"build": {"build_base": build_base}},
     # Keep these in sync with pyproject.toml [project].dependencies /
     # [project].optional-dependencies. setuptools emits a warning when
     # pyproject.toml overwrites these — that's expected because we ship
@@ -54,7 +76,6 @@ setup(
     install_requires=[
         "cryptography>=41.0.0",
         "numpy>=1.24.0",
-        "pillow>=10.0.0",
         "pqcrypto>=0.3.4",
         # Argon2id is the default user-KDF for password-based encryption
         # paths (see SECURITY.md and Constants.USER_KDF_DEFAULT in
@@ -66,6 +87,7 @@ setup(
     ],
     extras_require={
         "argon2": [],  # kept for compat; argon2-cffi is now a hard dep
+        "retired-media": ["pillow>=10.0.0"],
     },
     python_requires=">=3.10",
     classifiers=[

@@ -18,11 +18,11 @@
             <span class="brand-cutout" aria-hidden="true"></span>
           </div>
           <div>
-            <div class="brand-name">FixCraft</div>
-            <div class="brand-sub">BaseFWX secure toolkit</div>
+            <div class="brand-name">BaseFWX</div>
+            <div class="brand-sub">A FixCraft cryptographic engine</div>
           </div>
         </div>
-        <nav>
+        <nav aria-label="Primary navigation">
           <a href="../#downloads">Downloads</a>
           <a href="./">Hashes</a>
           <a href="../#integrity">Integrity</a>
@@ -33,14 +33,15 @@
         </nav>
       </header>
 
+      <main>
       <section class="hero">
         <div>
-          <div class="chip">Release manifest</div>
-          <h1>SHA256 + MD5 Hashes</h1>
+          <div class="hero-status"><span aria-hidden="true"></span>Release manifest</div>
+          <h1>Release checksums</h1>
           <p>
             Use this page to verify every published artifact. Values are fetched from the latest GitHub release hash files.
             Machine-readable release metadata is published as
-            <a data-asset-link="release-manifest.json" href="#">release-manifest.json</a>.
+            <a class="disabled" data-asset-link="release-manifest.json" aria-disabled="true" tabindex="-1">release-manifest.json</a>.
           </p>
           <div class="link-row">
             <a class="btn secondary" href="../#downloads">Back to downloads</a>
@@ -50,17 +51,20 @@
         <div class="hero-panel">
           <div>
             <div class="meta">Latest release</div>
-            <div class="panel-title" id="release-version">Loading...</div>
+            <div class="panel-title" id="release-version">Release metadata requires JavaScript</div>
             <div class="meta-row">
-              <span id="release-date">Fetching date</span>
-              <span id="release-assets">0 assets</span>
+              <span id="release-date">Use GitHub Releases for current files</span>
+              <span id="release-assets"></span>
             </div>
           </div>
         </div>
+        <noscript>
+          <div class="notice">Live hashes and manifests require JavaScript. Use GitHub Releases when live metadata is unavailable.</div>
+        </noscript>
       </section>
 
       <section id="linux">
-        <div class="section-title">Linux</div>
+        <h2 class="section-title">Linux</h2>
         <div class="table-scroll">
           <table class="bench-table hash-manifest-table">
             <thead>
@@ -74,20 +78,20 @@
             <tbody>
               <tr>
                 <td class="mono">basefwx-linux-amd64</td>
-                <td class="mono hash-digest" data-hash-file="basefwx-linux-amd64.sha256">Loading...</td>
-                <td class="mono hash-digest" data-hash-file="basefwx-linux-amd64.md5">Loading...</td>
+                <td class="mono hash-digest" data-hash-file="basefwx-linux-amd64.sha256">No release metadata loaded</td>
+                <td class="mono hash-digest" data-hash-file="basefwx-linux-amd64.md5">No release metadata loaded</td>
                 <td class="mono">
-                  <a data-asset-link="basefwx-linux-amd64.sha256" href="#">sha256</a> ·
-                  <a data-asset-link="basefwx-linux-amd64.md5" href="#">md5</a>
+                  <a class="disabled" data-asset-link="basefwx-linux-amd64.sha256" aria-disabled="true" tabindex="-1">sha256</a> ·
+                  <a class="disabled" data-asset-link="basefwx-linux-amd64.md5" aria-disabled="true" tabindex="-1">md5</a>
                 </td>
               </tr>
               <tr>
                 <td class="mono">basefwx-linux-arm64</td>
-                <td class="mono hash-digest" data-hash-file="basefwx-linux-arm64.sha256">Loading...</td>
-                <td class="mono hash-digest" data-hash-file="basefwx-linux-arm64.md5">Loading...</td>
+                <td class="mono hash-digest" data-hash-file="basefwx-linux-arm64.sha256">No release metadata loaded</td>
+                <td class="mono hash-digest" data-hash-file="basefwx-linux-arm64.md5">No release metadata loaded</td>
                 <td class="mono">
-                  <a data-asset-link="basefwx-linux-arm64.sha256" href="#">sha256</a> ·
-                  <a data-asset-link="basefwx-linux-arm64.md5" href="#">md5</a>
+                  <a class="disabled" data-asset-link="basefwx-linux-arm64.sha256" aria-disabled="true" tabindex="-1">sha256</a> ·
+                  <a class="disabled" data-asset-link="basefwx-linux-arm64.md5" aria-disabled="true" tabindex="-1">md5</a>
                 </td>
               </tr>
             </tbody>
@@ -96,7 +100,7 @@
       </section>
 
       <section id="windows">
-        <div class="section-title">Windows</div>
+        <h2 class="section-title">Windows</h2>
         <div class="table-scroll">
           <table class="bench-table hash-manifest-table">
             <thead>
@@ -110,20 +114,20 @@
             <tbody>
               <tr>
                 <td class="mono">basefwx-windows-amd64.zip</td>
-                <td class="mono hash-digest" data-hash-file="basefwx-windows-amd64.zip.sha256">Loading...</td>
-                <td class="mono hash-digest" data-hash-file="basefwx-windows-amd64.zip.md5">Loading...</td>
+                <td class="mono hash-digest" data-hash-file="basefwx-windows-amd64.zip.sha256">No release metadata loaded</td>
+                <td class="mono hash-digest" data-hash-file="basefwx-windows-amd64.zip.md5">No release metadata loaded</td>
                 <td class="mono">
-                  <a data-asset-link="basefwx-windows-amd64.zip.sha256" href="#">sha256</a> ·
-                  <a data-asset-link="basefwx-windows-amd64.zip.md5" href="#">md5</a>
+                  <a class="disabled" data-asset-link="basefwx-windows-amd64.zip.sha256" aria-disabled="true" tabindex="-1">sha256</a> ·
+                  <a class="disabled" data-asset-link="basefwx-windows-amd64.zip.md5" aria-disabled="true" tabindex="-1">md5</a>
                 </td>
               </tr>
               <tr>
                 <td class="mono">basefwx-windows-x86.zip</td>
-                <td class="mono hash-digest" data-hash-file="basefwx-windows-x86.zip.sha256">Loading...</td>
-                <td class="mono hash-digest" data-hash-file="basefwx-windows-x86.zip.md5">Loading...</td>
+                <td class="mono hash-digest" data-hash-file="basefwx-windows-x86.zip.sha256">No release metadata loaded</td>
+                <td class="mono hash-digest" data-hash-file="basefwx-windows-x86.zip.md5">No release metadata loaded</td>
                 <td class="mono">
-                  <a data-asset-link="basefwx-windows-x86.zip.sha256" href="#">sha256</a> ·
-                  <a data-asset-link="basefwx-windows-x86.zip.md5" href="#">md5</a>
+                  <a class="disabled" data-asset-link="basefwx-windows-x86.zip.sha256" aria-disabled="true" tabindex="-1">sha256</a> ·
+                  <a class="disabled" data-asset-link="basefwx-windows-x86.zip.md5" aria-disabled="true" tabindex="-1">md5</a>
                 </td>
               </tr>
             </tbody>
@@ -132,7 +136,7 @@
       </section>
 
       <section id="mac">
-        <div class="section-title">macOS</div>
+        <h2 class="section-title">macOS</h2>
         <div class="table-scroll">
           <table class="bench-table hash-manifest-table">
             <thead>
@@ -146,20 +150,20 @@
             <tbody>
               <tr>
                 <td class="mono">basefwx-mac-amd64</td>
-                <td class="mono hash-digest" data-hash-file="basefwx-mac-amd64.sha256">Loading...</td>
-                <td class="mono hash-digest" data-hash-file="basefwx-mac-amd64.md5">Loading...</td>
+                <td class="mono hash-digest" data-hash-file="basefwx-mac-amd64.sha256">No release metadata loaded</td>
+                <td class="mono hash-digest" data-hash-file="basefwx-mac-amd64.md5">No release metadata loaded</td>
                 <td class="mono">
-                  <a data-asset-link="basefwx-mac-amd64.sha256" href="#">sha256</a> ·
-                  <a data-asset-link="basefwx-mac-amd64.md5" href="#">md5</a>
+                  <a class="disabled" data-asset-link="basefwx-mac-amd64.sha256" aria-disabled="true" tabindex="-1">sha256</a> ·
+                  <a class="disabled" data-asset-link="basefwx-mac-amd64.md5" aria-disabled="true" tabindex="-1">md5</a>
                 </td>
               </tr>
               <tr>
                 <td class="mono">basefwx-mac-arm64</td>
-                <td class="mono hash-digest" data-hash-file="basefwx-mac-arm64.sha256">Loading...</td>
-                <td class="mono hash-digest" data-hash-file="basefwx-mac-arm64.md5">Loading...</td>
+                <td class="mono hash-digest" data-hash-file="basefwx-mac-arm64.sha256">No release metadata loaded</td>
+                <td class="mono hash-digest" data-hash-file="basefwx-mac-arm64.md5">No release metadata loaded</td>
                 <td class="mono">
-                  <a data-asset-link="basefwx-mac-arm64.sha256" href="#">sha256</a> ·
-                  <a data-asset-link="basefwx-mac-arm64.md5" href="#">md5</a>
+                  <a class="disabled" data-asset-link="basefwx-mac-arm64.sha256" aria-disabled="true" tabindex="-1">sha256</a> ·
+                  <a class="disabled" data-asset-link="basefwx-mac-arm64.md5" aria-disabled="true" tabindex="-1">md5</a>
                 </td>
               </tr>
             </tbody>
@@ -168,7 +172,7 @@
       </section>
 
       <section id="java">
-        <div class="section-title">Java</div>
+        <h2 class="section-title">Java</h2>
         <div class="table-scroll">
           <table class="bench-table hash-manifest-table">
             <thead>
@@ -182,17 +186,18 @@
             <tbody>
               <tr>
                 <td class="mono">basefwx-java.jar</td>
-                <td class="mono hash-digest" data-hash-file="basefwx-java.jar.sha256">Loading...</td>
-                <td class="mono hash-digest" data-hash-file="basefwx-java.jar.md5">Loading...</td>
+                <td class="mono hash-digest" data-hash-file="basefwx-java.jar.sha256">No release metadata loaded</td>
+                <td class="mono hash-digest" data-hash-file="basefwx-java.jar.md5">No release metadata loaded</td>
                 <td class="mono">
-                  <a data-asset-link="basefwx-java.jar.sha256" href="#">sha256</a> ·
-                  <a data-asset-link="basefwx-java.jar.md5" href="#">md5</a>
+                  <a class="disabled" data-asset-link="basefwx-java.jar.sha256" aria-disabled="true" tabindex="-1">sha256</a> ·
+                  <a class="disabled" data-asset-link="basefwx-java.jar.md5" aria-disabled="true" tabindex="-1">md5</a>
                 </td>
               </tr>
             </tbody>
           </table>
         </div>
       </section>
+      </main>
 
       <footer>
         FixCraft BaseFWX Documentation and Release Portal

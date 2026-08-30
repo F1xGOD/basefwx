@@ -71,13 +71,13 @@ std::string B512EncodeFileSimple(const std::filesystem::path& input,
     std::string ext_token = basefwx::pb512::B512Encode(ext, resolved, use_master_effective, kdf_opts);
     std::string data_token = basefwx::pb512::B512Encode(b64_payload, resolved, use_master_effective, kdf_opts);
 
-    bool use_aead = EnableAead(options);
+    (void)EnableAead(options);
     std::string metadata_blob = basefwx::metadata::Build(
         "FWX512R",
         options.strip_metadata,
         use_master_effective,
         master_kem,
-        use_aead ? "AESGCM" : "NONE",
+        "AESGCM",
         kdf_label,
         {},
         std::nullopt,
@@ -94,34 +94,30 @@ std::string B512EncodeFileSimple(const std::filesystem::path& input,
         : metadata_blob + std::string(constants::kMetaDelim) + body;
     Bytes payload_bytes = ToBytes(payload);
 
-    Bytes output_bytes;
-    if (use_aead) {
-        auto mask = basefwx::keywrap::PrepareMaskKey(
-            resolved,
-            use_master_effective,
-            constants::kB512FileMaskInfo,
-            !use_master_effective,
-            constants::kMaskAadB512File,
-            kdf_opts,
-            &selected_master
-        );
-        basefwx::crypto::SecureBytes aead_key{
-            basefwx::crypto::HkdfSha256(
-                mask.mask_key, constants::kB512AeadInfo, 32)};
-        Bytes ct = basefwx::crypto::AeadEncrypt(
-            aead_key.bytes(), payload_bytes,
-            Bytes(constants::kB512AeadInfo.begin(),
-                  constants::kB512AeadInfo.end()));
-        std::vector<basefwx::format::Bytes> parts = {mask.user_blob, mask.master_blob, ct};
-        output_bytes = basefwx::format::PackLengthPrefixed(parts);
-    } else {
-        output_bytes = payload_bytes;
-    }
+    auto mask = basefwx::keywrap::PrepareMaskKey(
+        resolved,
+        use_master_effective,
+        constants::kB512FileMaskInfo,
+        !use_master_effective,
+        constants::kMaskAadB512File,
+        kdf_opts,
+        &selected_master
+    );
+    basefwx::crypto::SecureBytes aead_key{
+        basefwx::crypto::HkdfSha256(
+            mask.mask_key, constants::kB512AeadInfo, 32)};
+    Bytes ct = basefwx::crypto::AeadEncrypt(
+        aead_key.bytes(), payload_bytes,
+        Bytes(constants::kB512AeadInfo.begin(),
+              constants::kB512AeadInfo.end()));
+    const std::vector<basefwx::format::Bytes> parts = {
+        mask.user_blob, mask.master_blob, ct};
+    Bytes output_bytes = basefwx::format::PackLengthPrefixed(parts);
 
     std::filesystem::path out_path = input;
     out_path.replace_extension(".fwx");
     WriteFileBytes(out_path, output_bytes);
-    if (!options.keep_input) {
+    if (!options.keep_input && input != out_path) {
         std::filesystem::remove(input);
     }
     return out_path.string();
@@ -137,14 +133,16 @@ std::string B512EncodeFileStream(const std::filesystem::path& input,
             "Streaming b512 encode requires metadata for format dispatch");
     }
     std::string resolved = basefwx::ResolvePassword(password);
+    basefwx::crypto::SecretGuard password_guard;
+    password_guard.Add(resolved);
     if (resolved.empty()) {
         throw std::runtime_error("Password required for streaming b512 encode");
     }
-    if (!EnableAead(options)) {
-        throw std::runtime_error("Streaming b512 encode requires AEAD mode");
-    }
+    (void)EnableAead(options);
     std::uint64_t input_size = FileSize(input);
-    std::size_t chunk_size = options.stream_chunk_size;
+    const std::uint32_t encoded_chunk_size =
+        RequireStreamChunkSize(options.stream_chunk_size);
+    const std::size_t chunk_size = encoded_chunk_size;
 
     std::optional<Bytes> pq_pub;
     std::optional<Bytes> ec_pub;
@@ -199,16 +197,22 @@ std::string B512EncodeFileStream(const std::filesystem::path& input,
 
     Bytes stream_header;
     stream_header.insert(stream_header.end(), constants::kStreamMagic.begin(), constants::kStreamMagic.end());
-    Bytes chunk_bytes = Uint32Be(static_cast<std::uint32_t>(chunk_size));
+    Bytes chunk_bytes = Uint32Be(encoded_chunk_size);
     stream_header.insert(stream_header.end(), chunk_bytes.begin(), chunk_bytes.end());
     Bytes size_bytes = Uint64Be(input_size);
     stream_header.insert(stream_header.end(), size_bytes.begin(), size_bytes.end());
     stream_header.insert(stream_header.end(), stream_salt.begin(), stream_salt.end());
+    if (ext_bytes.size() > std::numeric_limits<std::uint16_t>::max()) {
+        throw std::length_error("Streaming file extension is too long");
+    }
     Bytes ext_len = Uint16Be(static_cast<std::uint16_t>(ext_bytes.size()));
     stream_header.insert(stream_header.end(), ext_len.begin(), ext_len.end());
     stream_header.insert(stream_header.end(), ext_bytes.begin(), ext_bytes.end());
-
-    std::uint64_t plaintext_len = static_cast<std::uint64_t>(prefix_bytes.size() + stream_header.size() + input_size);
+    const std::uint32_t payload_len = CheckedStreamPayloadLength(
+        input_size,
+        metadata_bytes.size(),
+        prefix_bytes.size(),
+        stream_header.size());
 
     auto mask = basefwx::keywrap::PrepareMaskKey(
         resolved,
@@ -224,18 +228,19 @@ std::string B512EncodeFileStream(const std::filesystem::path& input,
             mask.mask_key, constants::kB512AeadInfo, 32)};
     Bytes nonce = basefwx::crypto::RandomBytes(constants::kAeadNonceLen);
 
-    std::uint64_t payload_len = 4 + metadata_bytes.size() + nonce.size() + plaintext_len + constants::kAeadTagLen;
-
     std::filesystem::path out_path = input;
     out_path.replace_extension(".fwx");
-    std::ofstream output(out_path, std::ios::binary);
+    auto staged_output =
+        basefwx::temp::SecureTempPath::CreateSibling(
+            out_path, "b512-enc");
+    std::ofstream output(staged_output.path(), std::ios::binary);
     if (!output) {
         throw std::runtime_error("Failed to open output file: " + out_path.string());
     }
 
     Bytes len_user = Uint32Be(static_cast<std::uint32_t>(mask.user_blob.size()));
     Bytes len_master = Uint32Be(static_cast<std::uint32_t>(mask.master_blob.size()));
-    Bytes len_payload = Uint32Be(static_cast<std::uint32_t>(payload_len));
+    Bytes len_payload = Uint32Be(payload_len);
     output.write(reinterpret_cast<const char*>(len_user.data()), len_user.size());
     output.write(reinterpret_cast<const char*>(mask.user_blob.data()), static_cast<std::streamsize>(mask.user_blob.size()));
     output.write(reinterpret_cast<const char*>(len_master.data()), len_master.size());
@@ -269,19 +274,29 @@ std::string B512EncodeFileStream(const std::filesystem::path& input,
     if (!input_stream) {
         throw std::runtime_error("Failed to open input file: " + input.string());
     }
-    Bytes buffer(chunk_size);
-    while (input_stream) {
-        buffer.resize(chunk_size);
-        input_stream.read(reinterpret_cast<char*>(buffer.data()), static_cast<std::streamsize>(buffer.size()));
-        std::streamsize got = input_stream.gcount();
-        if (got <= 0) {
-            break;
+    basefwx::crypto::SecureBytes buffer{Bytes(chunk_size)};
+    std::uint64_t remaining_input = input_size;
+    while (remaining_input > 0) {
+        const std::size_t take = static_cast<std::size_t>(
+            std::min<std::uint64_t>(remaining_input, chunk_size));
+        buffer.bytes().resize(take);
+        input_stream.read(
+            reinterpret_cast<char*>(buffer.data()),
+            static_cast<std::streamsize>(take));
+        if (input_stream.gcount() != static_cast<std::streamsize>(take)) {
+            throw std::runtime_error(
+                "Input changed during streaming b512 encode");
         }
-        buffer.resize(static_cast<std::size_t>(got));
-        obfuscator.EncodeChunkInPlace(buffer);
-        Bytes ct = encryptor.Update(buffer);
+        obfuscator.EncodeChunkInPlace(buffer.bytes());
+        Bytes ct = encryptor.Update(buffer.bytes());
         output.write(reinterpret_cast<const char*>(ct.data()), static_cast<std::streamsize>(ct.size()));
+        remaining_input -= take;
     }
+    if (input_stream.peek() != std::char_traits<char>::eof()) {
+        throw std::runtime_error(
+            "Input changed during streaming b512 encode");
+    }
+    input_stream.close();
 
     Bytes final_chunk = encryptor.Final();
     if (!final_chunk.empty()) {
@@ -294,7 +309,9 @@ std::string B512EncodeFileStream(const std::filesystem::path& input,
     if (!output) {
         throw std::runtime_error("Failed to write output file: " + out_path.string());
     }
-    if (!options.keep_input) {
+    output.close();
+    staged_output.CommitReplace(out_path);
+    if (!options.keep_input && input != out_path) {
         std::filesystem::remove(input);
     }
     return out_path.string();
@@ -304,10 +321,11 @@ std::string B512DecodeFileStream(const std::filesystem::path& input,
                                  const std::string& password,
                                  const FileOptions& options,
                                  const basefwx::pb512::KdfOptions& kdf) {
-    if (!EnableAead(options)) {
-        throw std::runtime_error("Streaming b512 decode requires AEAD mode");
-    }
+    const std::size_t io_chunk_size =
+        RequireStreamChunkSize(options.stream_chunk_size);
     std::string resolved = basefwx::ResolvePassword(password);
+    basefwx::crypto::SecretGuard password_guard;
+    password_guard.Add(resolved);
     std::ifstream handle(input, std::ios::binary);
     if (!handle) {
         throw std::runtime_error("Failed to open file: " + input.string());
@@ -440,7 +458,7 @@ std::string B512DecodeFileStream(const std::filesystem::path& input,
     }
 
     std::uint64_t remaining = cipher_body_len;
-    Bytes buffer(options.stream_chunk_size);
+    Bytes buffer(io_chunk_size);
     while (remaining > 0) {
         ThrowIfInterrupted();
         std::size_t take = static_cast<std::size_t>(std::min<std::uint64_t>(remaining, buffer.size()));
@@ -449,9 +467,12 @@ std::string B512DecodeFileStream(const std::filesystem::path& input,
         if (handle.gcount() != static_cast<std::streamsize>(take)) {
             throw std::runtime_error("Ciphertext truncated");
         }
-        Bytes plain = decryptor.Update(buffer);
+        basefwx::crypto::SecureBytes plain{
+            decryptor.Update(buffer)};
         if (!plain.empty()) {
-            plain_out.write(reinterpret_cast<const char*>(plain.data()), static_cast<std::streamsize>(plain.size()));
+            plain_out.write(
+                reinterpret_cast<const char*>(plain.data()),
+                static_cast<std::streamsize>(plain.size()));
         }
         remaining -= take;
     }
@@ -500,8 +521,9 @@ std::string B512DecodeFileStream(const std::filesystem::path& input,
                                | (static_cast<std::uint32_t>(chunk_buf[1]) << 16)
                                | (static_cast<std::uint32_t>(chunk_buf[2]) << 8)
                                | static_cast<std::uint32_t>(chunk_buf[3]);
-    if (chunk_size == 0 || chunk_size > (16u << 20)) {
-        chunk_size = static_cast<std::uint32_t>(options.stream_chunk_size);
+    if (chunk_size == 0
+        || chunk_size > constants::kStreamChunkSizeMax) {
+        chunk_size = static_cast<std::uint32_t>(io_chunk_size);
     }
     std::array<std::uint8_t, 8> size_buf{};
     plain_in.read(reinterpret_cast<char*>(size_buf.data()), size_buf.size());
@@ -549,32 +571,45 @@ std::string B512DecodeFileStream(const std::filesystem::path& input,
         target.replace_extension(ext);
     }
     auto pack_mode = ResolvePackMode(meta, ext);
-    std::ofstream out(target, std::ios::binary);
+    auto authenticated_output =
+        basefwx::temp::SecureTempPath::CreateSibling(
+            target, "b512-auth");
+    std::ofstream out(authenticated_output.path(), std::ios::binary);
     if (!out) {
-        throw std::runtime_error("Failed to open output file");
+        throw std::runtime_error("Failed to open authenticated output file");
     }
-    Bytes chunk_buf_bytes(chunk_size);
+    basefwx::crypto::SecureBytes chunk_buf_bytes{
+        Bytes(chunk_size)};
     std::uint64_t processed = 0;
     while (processed < original_size) {
         ThrowIfInterrupted();
         std::size_t take = static_cast<std::size_t>(
             std::min<std::uint64_t>(chunk_size, original_size - processed));
-        chunk_buf_bytes.resize(take);
-        plain_in.read(reinterpret_cast<char*>(chunk_buf_bytes.data()), static_cast<std::streamsize>(take));
+        chunk_buf_bytes.bytes().resize(take);
+        plain_in.read(
+            reinterpret_cast<char*>(chunk_buf_bytes.data()),
+            static_cast<std::streamsize>(take));
         if (plain_in.gcount() != static_cast<std::streamsize>(take)) {
             throw std::runtime_error("Streaming payload truncated");
         }
-        decoder.DecodeChunkInPlace(chunk_buf_bytes);
+        decoder.DecodeChunkInPlace(chunk_buf_bytes.bytes());
         out.write(reinterpret_cast<const char*>(chunk_buf_bytes.data()),
                   static_cast<std::streamsize>(chunk_buf_bytes.size()));
         processed += static_cast<std::uint64_t>(chunk_buf_bytes.size());
+    }
+    if (plain_in.peek() != std::char_traits<char>::eof()) {
+        throw std::runtime_error(
+            "Streaming payload contained unexpected trailing data");
     }
     out.flush();
     if (!out) {
         throw std::runtime_error("Failed to write output file");
     }
+    out.close();
     plain_in.close();
-    if (!options.keep_input) {
+    handle.close();
+    authenticated_output.CommitReplace(target);
+    if (!options.keep_input && input != target) {
         std::filesystem::remove(input);
     }
     if (pack_mode != basefwx::archive::PackMode::None) {
@@ -613,6 +648,13 @@ std::string B512DecodeFileSimple(const std::filesystem::path& input,
             Bytes(constants::kB512AeadInfo.begin(), constants::kB512AeadInfo.end()));
         content = ToString(payload);
     } else {
+        if (!basefwx::env::IsEnabled(
+                "BASEFWX_ALLOW_LEGACY_B512FILE_RAW", false)) {
+            throw std::runtime_error(
+                "Unauthenticated raw b512file is disabled; set "
+                "BASEFWX_ALLOW_LEGACY_B512FILE_RAW=1 only to recover "
+                "trusted legacy data");
+        }
         content = ToString(raw);
     }
 
@@ -639,7 +681,7 @@ std::string B512DecodeFileSimple(const std::filesystem::path& input,
         target.replace_extension(ext);
     }
     WriteFileBytes(target, decoded);
-    if (!options.keep_input) {
+    if (!options.keep_input && input != target) {
         std::filesystem::remove(input);
     }
     if (pack_mode != basefwx::archive::PackMode::None) {
@@ -664,10 +706,9 @@ std::string B512EncodeFile(const std::string& path,
         std::uint64_t size = FileSize(source);
         std::uint64_t b64_len = ((size + 2u) / 3u) * 4u;
         bool force_stream = b64_len > basefwx::constants::kHkdfMaxLen;
-        if (EnableAead(options) && (size >= options.stream_threshold || force_stream)) {
+        (void)EnableAead(options);
+        if (size >= options.stream_threshold || force_stream) {
             output = B512EncodeFileStream(source, password, options, kdf, pack_flag);
-        } else if (force_stream) {
-            throw std::runtime_error("b512file payload too large for non-AEAD mode; enable AEAD or use streaming");
         } else {
             output = B512EncodeFileSimple(source, password, options, kdf, pack_flag);
         }
@@ -681,7 +722,7 @@ std::string B512EncodeFile(const std::string& path,
                 throw std::runtime_error("Failed to move output file: " + ec.message());
             }
             output = final_out.string();
-            if (!options.keep_input) {
+            if (!options.keep_input && input != final_out) {
                 if (std::filesystem::is_directory(input)) {
                     std::filesystem::remove_all(input, ec);
                 } else {
@@ -758,13 +799,13 @@ std::vector<std::uint8_t> B512EncodeBytes(const std::vector<std::uint8_t>& data,
     std::string ext_token = basefwx::pb512::B512Encode(ext, resolved, use_master_effective, kdf_opts);
     std::string data_token = basefwx::pb512::B512Encode(b64_payload, resolved, use_master_effective, kdf_opts);
 
-    bool use_aead = EnableAead(options);
+    (void)EnableAead(options);
     std::string metadata_blob = basefwx::metadata::Build(
         "FWX512R",
         options.strip_metadata,
         use_master_effective,
         master_kem,
-        use_aead ? "AESGCM" : "NONE",
+        "AESGCM",
         kdf_label,
         {},
         std::nullopt,
@@ -781,9 +822,6 @@ std::vector<std::uint8_t> B512EncodeBytes(const std::vector<std::uint8_t>& data,
         : metadata_blob + std::string(constants::kMetaDelim) + body;
     Bytes payload_bytes = ToBytes(payload);
 
-    if (!use_aead) {
-        return payload_bytes;
-    }
     auto mask = basefwx::keywrap::PrepareMaskKey(
         resolved,
         use_master_effective,
@@ -832,6 +870,13 @@ DecodedBytes B512DecodeBytes(const std::vector<std::uint8_t>& blob,
             Bytes(constants::kB512AeadInfo.begin(), constants::kB512AeadInfo.end()));
         content = ToString(payload);
     } else {
+        if (!basefwx::env::IsEnabled(
+                "BASEFWX_ALLOW_LEGACY_B512FILE_RAW", false)) {
+            throw std::runtime_error(
+                "Unauthenticated raw b512file is disabled; set "
+                "BASEFWX_ALLOW_LEGACY_B512FILE_RAW=1 only to recover "
+                "trusted legacy data");
+        }
         content = ToString(blob);
     }
 

@@ -14,11 +14,17 @@ python -m basefwx cryptin <method> <paths...> [flags]
 
 Methods (aliases in parentheses):
 
-- `fwxaes` (file mode with optional media auto-detect)
+- `fwxaes` (file mode)
 - `b512` (`512`, `fwx512`)
 - `aes-light` (`aes`, `256`, `light`)
 - `aes-heavy` (`pb512`, `aes512`, `heavy`)
   `aes512` is a legacy alias; the cipher remains AES-256-GCM.
+
+Current `b512`/`pb512` text writers emit authenticated payload v3 as canonical
+standard base64. Use `BASEFWX_ALLOW_LEGACY_TEXT_V2=1` only to recover trusted
+v2 text. `b512file` writers always use the outer AES-256-GCM container; raw
+historical input requires `BASEFWX_ALLOW_LEGACY_B512FILE_RAW=1` for trusted
+recovery. The former C++ `--no-aead` writer option is no longer available.
 
 Common flags:
 
@@ -38,10 +44,11 @@ fwxAES-only flags:
 - `--normalize` wrap output in a zero-width cover text (small files only)
 - `--normalize-threshold <bytes>` max plaintext bytes for normalize
 - `--cover-phrase <text>` cover phrase for normalize
-- `--ignore-media` disable media auto-detection (use normal fwxAES)
-- `--keep-meta` keep media metadata (encrypted) when using jMG
-- `--no-archive` jMG mode: skip embedded full-payload archive (Python default)
-- `--archive` jMG mode: embed full-payload archive for exact restore
+
+`--ignore-media`, `--keep-meta`, `--archive`, and `--no-archive` belong to the
+retired media path. A default build has no media auto-detection, so
+`--ignore-media` does nothing and the other three fail with an error naming the
+compatibility switch. See [Retired media commands](#retired-media-commands).
 
 Examples:
 
@@ -50,9 +57,7 @@ python -m basefwx cryptin aes-light secret.bin -p "correct-horse-battery" --stri
 python -m basefwx cryptin aes-light secret.bin.fwx -p "correct-horse-battery"
 
 python -m basefwx cryptin fwxaes photo.jpg -p "correct-horse-battery"
-python -m basefwx cryptin fwxaes track.m4a -p "correct-horse-battery" --keep-meta
-python -m basefwx cryptin fwxaes track.m4a -p "correct-horse-battery"            # default no-archive
-python -m basefwx cryptin fwxaes track.m4a -p "correct-horse-battery" --archive  # exact-restore trailer
+python -m basefwx cryptin fwxaes track.m4a -p "correct-horse-battery"
 ```
 
 `--strip` is not available when b512 or AES-heavy file encryption selects the
@@ -66,15 +71,6 @@ python -m basefwx n10-enc "hello"
 python -m basefwx n10-dec "<digits>"
 python -m basefwx n10file-enc in.bin out.n10
 python -m basefwx n10file-dec out.n10 restored.bin
-```
-
-kFM carrier commands:
-
-```
-python -m basefwx kFMe input.png -o input.wav
-python -m basefwx kFMe input.mp3 -o input.png --bw
-python -m basefwx kFMd input.wav -o restored.png
-python -m basefwx kFMd input.png -o restored.mp3
 ```
 
 Master key usage (master-only payloads):
@@ -102,31 +98,23 @@ Notes:
   1024 for wrapping and authenticated `ENC-KEM` metadata; recovery selects
   by private-key/ciphertext size. Default generation remains `ml-kem-768`.
   Upstream ships with
-  **no** baked master public key — provision via `BASEFWX_MASTER_PQ_PUB`
+  no baked master public key. Provision one through `BASEFWX_MASTER_PQ_PUB`
   or a build-time `-DBASEFWX_MASTER_PQ_PUB_B64=…` /
   `-Dbasefwx.master.pq.public.b64=…` opt-in.
 - Explicit-salt HKDF and X25519 helpers are public multi-lang APIs
   (C++ `HkdfSha256`/`x25519`, Java `Crypto.hkdfSha256`/`X25519`,
   Python `basefwx.hkdf_sha256(salt=…)` / `basefwx.x25519`). They are not wired
   into fwxAES file formats.
-- C++ `info` / `identify` / `probe` recognize length-prefixed containers, `FWX1` headers, and kFM PNG/WAV carriers, including legacy `kFAe` output.
+- C++ `info` / `identify` / `probe` recognize length-prefixed containers and
+  `FWX1` headers. A compatibility build also recognizes kFM PNG/WAV carriers,
+  including legacy `kFAe` output.
 - When a file is not recognized as BaseFWX, the C++ CLI reports a heuristic guess (`unknown`, random-like, or a simple format hint) instead of only saying "corrupted container".
-- `kFMe` auto-detects source type (audio -> PNG, non-audio -> WAV).
-- `kFMe` only writes `.png` or `.wav` carrier files; explicit mismatched output extensions are rejected.
-- `kFMd` strictly decodes BaseFWX carriers only.
-- C++ kFM carriers are block-coded into PNG/WAV media at near full carrier capacity instead of copying raw container bytes directly into pixels or samples; legacy raw carriers still decode.
-- `kFAe`/`kFAd` are deprecated compatibility aliases.
-- New encrypt operations reject passwords shorter than 10 characters unless `BASEFWX_ALLOW_WEAK_PASSWORD=1` is set.
+- New encrypt operations reject passwords shorter than 10 UTF-8 bytes unless `BASEFWX_ALLOW_WEAK_PASSWORD=1` is set.
 - Default user KDF targets are hardened to `PBKDF2=600000` / `Argon2id=4 x 64 MiB`, and heavy-mode payloads advertise `PBKDF2=2000000` / `Argon2id=6 x 256 MiB`.
 - Support policy is single-version: only the latest release is maintained; all older releases are immediately unsupported.
 - Python `n10` is optimized for large payloads, but C++/Java remain faster in heavy benchmark runs.
-- Optional kFM/kFA acceleration:
-  - `BASEFWX_KFM_ACCEL=auto|cuda|cpu` (default `auto`)
-  - `BASEFWX_KFM_ACCEL_MIN_BYTES=<bytes>` (default `1048576`, auto mode threshold)
 - CLI progress includes live system telemetry (CPU/GPU/RAM/I/O/TEMP when available).
   Set `BASEFWX_PROGRESS_TELEMETRY=0` to disable.
-- Python jMG HW accel policy: NVIDIA (`nvenc`) -> Intel (`qsv`) -> VAAPI -> CPU.
-- Set `BASEFWX_HWACCEL_STRICT=1` to fail instead of CPU fallback when the requested accelerator cannot be used.
 
 ## Python API
 
@@ -195,32 +183,18 @@ blob = pb512file_encode_bytes(data, ".bin", "password", use_master=False)
 plain, ext = pb512file_decode_bytes(blob, "password", use_master=False)
 ```
 
-n10 and kFM helpers:
+n10 helpers:
 
 ```
 from basefwx import n10encode, n10decode, n10encode_bytes, n10decode_bytes
-from basefwx import kFMe, kFMd
 
 digits = n10encode("hello")
 text = n10decode(digits)
 blob_digits = n10encode_bytes(b"\x00\x01\x02")
 blob = n10decode_bytes(blob_digits)
-
-carrier = kFMe("input.mp3", output="input.png", bw_mode=True)
-restored = kFMd("input.png", output="restored.mp3")
-```
-
-Media helpers:
-
-```
-from basefwx import jMGe, jMGd
-jMGe("input.m4a", "password", output="out-small.m4a")  # default no-archive
-jMGe("cover.png", "password", output="out.png", archive_original=True)
-jMGd("out-small.m4a", "password", output="plain.m4a")  # may not be byte-identical
 ```
 
 Use an empty password to rely on the master key only (requires the private key to be available).
-jMG video is temporarily disabled by default across Python/C++/Java unless `BASEFWX_ENABLE_JMG_VIDEO=1`.
 
 ## C++ CLI
 
@@ -247,8 +221,6 @@ cpp/build/basefwx n10-enc <text>
 cpp/build/basefwx n10-dec <digits>
 cpp/build/basefwx n10file-enc <in-file> <out-file>
 cpp/build/basefwx n10file-dec <in-file> <out-file>
-cpp/build/basefwx kFMe <in-file> [--out <path>] [--bw]
-cpp/build/basefwx kFMd <carrier-file> [--out <path>] [--bw]
 
 cpp/build/basefwx b512-enc <text> -p <password>
 cpp/build/basefwx b512-dec <text> -p <password>
@@ -259,27 +231,14 @@ cpp/build/basefwx b512file-enc <file> -p <password>
 cpp/build/basefwx b512file-dec <file.fwx> -p <password>
 cpp/build/basefwx pb512file-enc <file> -p <password>
 cpp/build/basefwx pb512file-dec <file.fwx> -p <password>
-
-cpp/build/basefwx jmge <media> [-p <password>] [--master-pub <path>] [--out <path>] [--archive]
-cpp/build/basefwx jmgd <media> [-p <password>] [--out <path>]
-```
-
-Master-only media encryption (C++):
-
-```
-cpp/build/basefwx jmge input.mp4 --master-pub /secure/mlkem768.pub --out out.mp4
 ```
 
 Notes:
 
-- C++ `jmge` now defaults to a key-only `JMG1` trailer (smaller output, concealment-first, decode may not be byte-identical).
-- Use `jmge --archive` when you explicitly want the encrypted original payload appended for exact restore.
 - `--no-log` suppresses telemetry/progress/warnings and keeps primary outputs/errors only.
 - `--verbose` adds detailed hardware routing reason lines.
 - `fwxaes-live-*` implements the packetized `LIVE` v1 stream format used by Python/Java.
 - `fwxaes-live-*` supports `-` for stdin/stdout, so you can pipe media streams (for example with `ffmpeg`).
-- Optional NVIDIA acceleration for jMG: set `BASEFWX_HWACCEL=nvenc` (auto fallback to CPU if unavailable).
-- jMG video is disabled by default unless `BASEFWX_ENABLE_JMG_VIDEO=1`.
 
 Example live audio pipe (C++):
 
@@ -331,16 +290,13 @@ auto blob2 = basefwx::filecodec::Pb512EncodeBytes(data, ".bin", "password", file
 auto decoded2 = basefwx::filecodec::Pb512DecodeBytes(blob2, "password", file_opts);
 ```
 
-n10 and kFM helpers:
+n10 helpers:
 
 ```
 #include "basefwx/basefwx.hpp"
 
 std::string digits = basefwx::N10Encode("hello");
 std::string text = basefwx::N10Decode(digits);
-
-std::string carrier = basefwx::Kfme("input.mp3", "input.png", true);
-std::string restored = basefwx::Kfmd("input.png", "restored.mp3");
 ```
 
 ## Java CLI
@@ -356,10 +312,6 @@ java -jar build/libs/basefwx-java.jar n10-enc <text>
 java -jar build/libs/basefwx-java.jar n10-dec <digits>
 java -jar build/libs/basefwx-java.jar n10file-enc <in> <out>
 java -jar build/libs/basefwx-java.jar n10file-dec <in> <out>
-java -jar build/libs/basefwx-java.jar kFMe <in> [--out <out>] [--bw]
-java -jar build/libs/basefwx-java.jar kFMd <carrier> [--out <out>] [--bw]
-java -jar build/libs/basefwx-java.jar kFAe <in> [--out <out>] [--bw]   # deprecated alias
-java -jar build/libs/basefwx-java.jar kFAd <carrier> [--out <out>]     # deprecated alias
 
 java -jar build/libs/basefwx-java.jar b512-enc <text> <password>
 java -jar build/libs/basefwx-java.jar b512-dec <text> <password>
@@ -370,22 +322,14 @@ java -jar build/libs/basefwx-java.jar b512file-enc <in> <out> <password>
 java -jar build/libs/basefwx-java.jar b512file-dec <in> <out> <password>
 java -jar build/libs/basefwx-java.jar pb512file-enc <in> <out> <password>
 java -jar build/libs/basefwx-java.jar pb512file-dec <in> <out> <password>
-
-java -jar build/libs/basefwx-java.jar jmge <in> <out> <password> [--no-archive]
-java -jar build/libs/basefwx-java.jar jmgd <in> <out> <password>
 ```
 
 Notes:
 
-- jMG media requires `ffmpeg` and `ffprobe` to be available on PATH.
-- `jmge` supports `--keep-meta`, `--keep-input`, and `--no-archive`.
-- `--no-archive` writes a key-only `JMG1` trailer (smaller output, but restore may not be byte-identical).
 - Java CLI global flags: `--verbose|-v`, `--no-log`.
 - `--no-log` suppresses telemetry/warnings while preserving primary outputs/errors.
-- jMG video is disabled by default unless `BASEFWX_ENABLE_JMG_VIDEO=1`.
-- `kFMd` strictly decodes BaseFWX carriers and refuses plain files.
 - The Java module includes Argon2id (BouncyCastle, optional libargon2 JNI) and ML-KEM-768/1024 master wrap (BouncyCastle PQC). LZMA is not available. See `COMPATIBILITY.md`.
-- C++ CLI plugin flags: `--plugin <path>`, `--plugin-id <hex>`, `--plugin-pos pre|post`, `--plugin-config <file>` (Profile A PRE/POST). Keyed/`POS_RAW` host wiring is incomplete — see `examples/plugins/THREAT_MODEL.md`.
+- C++ CLI plugin flags: `--plugin <path>`, `--plugin-id <hex>`, `--plugin-pos pre|post`, `--plugin-config <file>` (Profile A PRE/POST). Keyed/`POS_RAW` host wiring is incomplete. See `examples/plugins/THREAT_MODEL.md`.
 
 ## Java API
 
@@ -400,10 +344,6 @@ try (InputStream in = new FileInputStream("input.bin");
 byte[] blob = BaseFwx.b512FileEncodeBytes(data, ".bin", "password", false);
 BaseFwx.DecodedFile decoded = BaseFwx.b512FileDecodeBytes(blob, "password", false);
 
-BaseFwx.jmgEncryptFile(new File("input.mp4"), new File("out.mp4"), "password", true, false, true);
-BaseFwx.jmgDecryptFile(new File("out.mp4"), new File("plain.mp4"), "password", true);
-BaseFwx.jmgEncryptFile(new File("input.mp4"), new File("out-small.mp4"), "password", true, false, true, false);
-
 try (InputStream in = new FileInputStream("input.bin");
      OutputStream out = new FileOutputStream("output.live")) {
     BaseFwx.fwxAesLiveEncryptStream(in, out, "password", false);
@@ -415,7 +355,125 @@ try (InputStream in = new FileInputStream("output.live");
 
 String digits = BaseFwx.n10Encode("hello");
 String text = BaseFwx.n10Decode(digits);
-
-File carrier = BaseFwx.kFMe(new File("input.mp3"), new File("input.png"), true);
-File restored = BaseFwx.kFMd(new File("input.png"), new File("restored.mp3"));
 ```
+
+## Retired media commands
+
+The kFM and kFA carriers and the jMG media cipher were retired in 3.8.0. A
+default CLI, JAR, or wheel does not contain them, and none of the commands
+below appear in its help output.
+
+They ship only in a compatibility artifact, and their job there is to read
+media files you already have. The formats, flags, and bytes are unchanged; the
+profile gets security, correctness, and existing-data compatibility fixes only.
+Encrypt new media with `fwxaes`, which treats it as bytes and gives it the same
+AEAD guarantees as any other file.
+
+Selecting the compatibility profile happens at build time, so the switch cannot
+restore these commands in an artifact that shipped without them. Use a
+compatibility artifact of the same BaseFWX version that wrote the file.
+
+| Runtime | How to select |
+| :-- | :-- |
+| C++ | Configure with `-DBASEFWX_ENABLE_RETIRED_MEDIA=ON`. |
+| Java | `BASEFWX_ENABLE_RETIRED_MEDIA=1`, or Gradle `-PbasefwxEnableRetiredMedia=true` (the property wins). |
+| Python | Build from source with `BASEFWX_ENABLE_RETIRED_MEDIA=1` and the `retired-media` extra, then set the same variable before importing BaseFWX. |
+
+The same compatibility profile contains b256, A512, Bi512, and Uhash513. The
+historical environment-variable name remains unchanged so existing build
+automation does not break. None of these retired commands or their benchmarks
+ship in a default artifact.
+
+🫡 b256 has been retired since BaseFWX 3.7.0. It was the first BaseFWX
+encoding method, born in V1 back when this was a proof of concept and not yet a
+project. Existing data still decodes through the compatibility profile, but
+for new work, it's time to go. ❤️
+
+### Python
+
+```
+BASEFWX_ENABLE_RETIRED_MEDIA=1 python -m pip install './python[retired-media]'
+
+BASEFWX_ENABLE_RETIRED_MEDIA=1 python -m basefwx kFMe input.png -o input.wav
+BASEFWX_ENABLE_RETIRED_MEDIA=1 python -m basefwx kFMe input.mp3 -o input.png --bw
+BASEFWX_ENABLE_RETIRED_MEDIA=1 python -m basefwx kFMd input.wav -o restored.png
+```
+
+```
+from basefwx import kFMe, kFMd, jMGe, jMGd
+
+carrier = kFMe("input.mp3", output="input.png", bw_mode=True)
+restored = kFMd("input.png", output="restored.mp3")
+
+jMGe("input.m4a", "password", output="out-small.m4a")  # default no-archive
+jMGe("cover.png", "password", output="out.png", archive_original=True)
+jMGd("out-small.m4a", "password", output="plain.m4a")  # may not be byte-identical
+```
+
+The `fwxaes` media flags belong here too: `--keep-meta` preserves and encrypts
+media metadata, `--archive` embeds the full payload for exact restore, and
+`--no-archive` (the Python default) skips it. On a default build these raise an
+error naming the switch rather than silently writing a different format.
+
+### C++
+
+```
+cpp/build/basefwx kFMe <in-file> [--out <path>] [--bw]
+cpp/build/basefwx kFMd <carrier-file> [--out <path>] [--bw]
+cpp/build/basefwx jmge <media> [-p <password>] [--master-pub <path>] [--out <path>] [--archive]
+cpp/build/basefwx jmgd <media> [-p <password>] [--out <path>]
+```
+
+Master-only media encryption:
+
+```
+cpp/build/basefwx jmge input.mp4 --master-pub /secure/mlkem768.pub --out out.mp4
+```
+
+```
+std::string carrier = basefwx::Kfme("input.mp3", "input.png", true);
+std::string restored = basefwx::Kfmd("input.png", "restored.mp3");
+```
+
+### Java
+
+```
+java -jar build/libs/basefwx-java.jar kFMe <in> [--out <out>] [--bw]
+java -jar build/libs/basefwx-java.jar kFMd <carrier> [--out <out>] [--bw]
+java -jar build/libs/basefwx-java.jar kFAe <in> [--out <out>] [--bw]   # deprecated alias
+java -jar build/libs/basefwx-java.jar kFAd <carrier> [--out <out>]     # deprecated alias
+java -jar build/libs/basefwx-java.jar jmge <in> <out> <password> [--no-archive]
+java -jar build/libs/basefwx-java.jar jmgd <in> <out> <password>
+```
+
+```
+BaseFwxImage.jmgEncryptFile(new File("input.mp4"), new File("out.mp4"), "password", true, false, true);
+BaseFwxImage.jmgDecryptFile(new File("out.mp4"), new File("plain.mp4"), "password", true);
+
+File carrier = BaseFwxImage.kFMe(new File("input.mp3"), new File("input.png"), true);
+File restored = BaseFwxImage.kFMd(new File("input.png"), new File("restored.mp3"));
+```
+
+### Behaviour notes
+
+- `kFMe` picks the carrier from the source type: audio becomes PNG, everything
+  else becomes WAV. It writes only `.png` or `.wav`, and rejects a mismatched
+  output extension.
+- `kFMd` decodes BaseFWX carriers strictly and refuses plain media files.
+- C++ kFM carriers are block-coded into PNG/WAV at near full carrier capacity
+  rather than copying container bytes straight into pixels or samples. Legacy
+  raw carriers still decode.
+- C++ `jmge` defaults to a key-only `JMG1` trailer: smaller output,
+  concealment-first, and decode may not be byte-identical. `--archive` appends
+  the encrypted original for exact restore.
+- Java `jmge` accepts `--keep-meta`, `--keep-input`, and `--no-archive`.
+- jMG media needs `ffmpeg` and `ffprobe` on `PATH`.
+- jMG video stays disabled unless `BASEFWX_ENABLE_JMG_VIDEO=1`, on top of the
+  compatibility profile.
+- kFM/kFA acceleration: `BASEFWX_KFM_ACCEL=auto|cuda|cpu` (default `auto`) and
+  `BASEFWX_KFM_ACCEL_MIN_BYTES=<bytes>` (default `1048576`).
+- Python jMG hardware acceleration order is NVIDIA (`nvenc`), Intel (`qsv`),
+  VAAPI, then CPU. `BASEFWX_HWACCEL_STRICT=1` fails instead of falling back to
+  CPU; C++ selects `nvenc` with `BASEFWX_HWACCEL=nvenc`.
+- Retired methods have no benchmark commands or rows. Compatibility
+  qualification checks exact bytes and existing-data decoding instead.

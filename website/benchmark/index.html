@@ -18,11 +18,11 @@
             <span class="brand-cutout" aria-hidden="true"></span>
           </div>
           <div>
-            <div class="brand-name">FixCraft</div>
-            <div class="brand-sub">BaseFWX secure toolkit</div>
+            <div class="brand-name">BaseFWX</div>
+            <div class="brand-sub">A FixCraft cryptographic engine</div>
           </div>
         </div>
-        <nav>
+        <nav aria-label="Primary navigation">
           <a href="../#downloads">Downloads</a>
           <a href="../hashes/">Hashes</a>
           <a href="../#integrity">Integrity</a>
@@ -33,31 +33,32 @@
         </nav>
       </header>
 
+      <main>
       <section class="hero" id="top">
         <div>
-          <div class="chip">Benchmark telemetry</div>
-          <h1>Benchmark Dashboard</h1>
+          <div class="hero-status"><span aria-hidden="true"></span>Measured runtime evidence</div>
+          <h1>Benchmark results</h1>
           <p>
             These results capture steady-state performance across Python, PyPy, C++, and Java.
-            Warmup iterations and median sampling are baked into every run to keep the numbers honest.
+            Each run records its warmup and median-sampling method.
           </p>
           <div class="link-row">
-            <a id="bench-results-text" href="https://raw.githubusercontent.com/F1xGOD/basefwx/refs/heads/DEV/website/results/benchmarks-latest.txt" target="_blank" rel="noopener">Download results.txt</a>
-            <a id="bench-results-json" href="https://raw.githubusercontent.com/F1xGOD/basefwx/refs/heads/DEV/website/results/benchmarks-latest.json" target="_blank" rel="noopener">Raw JSON</a>
+            <a id="bench-results-text" href="https://github.com/F1xGOD/basefwx/releases" target="_blank" rel="noopener">Benchmark report</a>
+            <a id="bench-results-json" href="https://github.com/F1xGOD/basefwx/releases" target="_blank" rel="noopener">Benchmark JSON</a>
           </div>
-          <div class="link-row" style="margin-top:12px;">
+          <div class="link-row link-row-spaced">
             <label for="bench-history" class="meta">History:</label>
-            <select id="bench-history" class="bench-history-select" aria-label="Browse historical benchmark snapshots">
-              <option value="">Loading snapshots…</option>
+            <select id="bench-history" class="bench-history-select" aria-label="Browse historical benchmark snapshots" disabled>
+              <option value="">JavaScript required</option>
             </select>
           </div>
         </div>
         <div class="hero-panel">
           <div>
             <div class="meta">Latest benchmark</div>
-            <div class="panel-title" id="bench-release">Loading...</div>
+            <div class="panel-title" id="bench-release">No benchmark loaded</div>
             <div class="meta-row">
-              <span id="bench-date">Fetching timestamp</span>
+              <span id="bench-date">Use the text or JSON links for static access</span>
               <span id="bench-meta">iters: -- · warmup: -- · workers: --</span>
             </div>
           </div>
@@ -66,11 +67,14 @@
           </div>
         </div>
       </section>
+      <noscript>
+        <div class="notice">Interactive benchmark tables require JavaScript. The text and JSON reports above remain available.</div>
+      </noscript>
 
       <section>
-        <div class="section-title">Overall</div>
+        <h2 class="section-title">Overall</h2>
         <p class="section-lead">Aggregated totals across the full benchmark suite.</p>
-        <div id="bench-status" class="status-pill ok">Loading benchmark data...</div>
+        <div id="bench-status" class="status-pill warn">Benchmark data requires JavaScript.</div>
         <div class="table-scroll">
           <table class="bench-table" id="bench-overall-table">
             <thead>
@@ -82,7 +86,7 @@
             </thead>
             <tbody>
               <tr>
-                <td colspan="3" class="mono">Waiting for results...</td>
+                <td colspan="3" class="mono">No results loaded.</td>
               </tr>
             </tbody>
           </table>
@@ -90,16 +94,16 @@
       </section>
 
       <section>
-        <div class="section-title">Detailed Results</div>
+        <h2 class="section-title">Detailed results</h2>
         <p class="section-lead">Expand each benchmark to see per-runtime breakdowns.</p>
-        <div id="bench-details"></div>
+        <div id="bench-details"><div class="card">No detailed benchmark data loaded.</div></div>
       </section>
 
       <section id="java-backends">
-        <div class="section-title">Java backends: pure Java vs JNI</div>
+        <h2 class="section-title">Java backends: pure Java vs JNI</h2>
         <p class="section-lead">Side-by-side fwxAES throughput for the two Java backends. Shown only when the snapshot has a <code>java-backends-&lt;tag&gt;.json</code> sidecar.</p>
         <div id="java-backends-status" class="status-pill warn">No Java-backend data in this snapshot.</div>
-        <div class="table-scroll" style="margin-top:12px;">
+        <div class="table-scroll table-scroll-spaced">
           <table class="bench-table" id="java-backends-table" hidden>
             <thead>
               <tr>
@@ -114,6 +118,7 @@
           </table>
         </div>
       </section>
+      </main>
 
       <footer>
         FixCraft BaseFWX Documentation and Release Portal

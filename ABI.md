@@ -12,12 +12,19 @@ The C++ helpers in `plugin.hpp` and `plugin_static.hpp` wrap that C contract.
 
 ## C++ library ABI
 
-`libbasefwx.so.3` exposes the public C++ headers under
+`libbasefwx.so.4` exposes the public C++ headers under
 `cpp/include/basefwx/`. It is not a compiler-neutral ABI: consumers must use a
 compatible C++ standard library and toolchain. CMake package compatibility is
 limited to the same BaseFWX minor line, and Debian uses a package-level
 `shlibs` floor so binaries using the 3.8 protocol primitives cannot resolve
-against an older `libbasefwx.so.3`.
+against an older `libbasefwx.so.4`.
+
+BaseFWX 3.8 deliberately moved the default library from SONAME 3 to SONAME 4.
+The core profile no longer exports the retired b256/A512/Uhash513/Bi512 and
+media compatibility APIs that were present in released SONAME-3 libraries.
+The plugin vtable remains independently versioned by
+`BASEFWX_PLUGIN_API_VERSION`; the C++ library SONAME transition does not change
+that source-level plugin contract.
 
 The command-line implementation is not part of this interface. CLI headers
 live under `cpp/src/cli/`, are not installed, and GPL CLI objects are linked
@@ -28,5 +35,5 @@ Breaking a released C++ ABI requires a deliberate SONAME/package transition.
 Additive APIs within the current 3.8 line must preserve existing exported
 signatures. Because C++ symbol files are compiler- and standard-library-
 sensitive, Debian tracks the minimum runtime as a whole package through
-`debian/libbasefwx3.shlibs`; the stable plugin C ABI remains the preferred
+`debian/libbasefwx4.shlibs`; the stable plugin C ABI remains the preferred
 interface for independently built binary extensions.

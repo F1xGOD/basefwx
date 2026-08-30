@@ -1,0 +1,7 @@
+    private static boolean profileEnabled() {
+        return true;
+    }
+
+    private static String[] profileHwPlanForCommand(String command) {
+        return RetiredCommands.hwPlanForCommand(command);
+    }

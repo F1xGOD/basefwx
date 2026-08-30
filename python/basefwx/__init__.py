@@ -7,6 +7,7 @@
 from typing import Optional
 
 from . import x25519
+from .features import RETIRED_MEDIA_ENABLED
 from .api_files import (
     LiveDecryptor,
     LiveEncryptor,
@@ -33,17 +34,11 @@ from .api_files import (
     pb512file_decode_bytes,
     pb512file_encode_bytes,
 )
-from .api_media import jMGd, jMGe, kFAd, kFAe, kFMd, kFMe
 from .api_strings import (
-    a512decode,
-    a512encode,
-    b256decode,
-    b256encode,
     b512decode,
     b512encode,
     b64decode,
     b64encode,
-    bi512encode,
     hash512,
     n10decode,
     n10decode_bytes,
@@ -51,7 +46,6 @@ from .api_strings import (
     n10encode_bytes,
     pb512decode,
     pb512encode,
-    uhash513,
 )
 from .crypto._pq import (
     current_kem_algorithm,
@@ -81,6 +75,8 @@ from .plugin import (
 )
 from .version import __version__
 
+HAS_RETIRED_MEDIA = RETIRED_MEDIA_ENABLED
+
 
 def hkdf_sha256(
     key_material: bytes,
@@ -102,11 +98,7 @@ def hkdf_sha256(
 
 __all__ = [
     "__version__",
-    "a512decode",
-    "a512encode",
     "an7_file",
-    "b256decode",
-    "b256encode",
     "b512decode",
     "b512decodefile",
     "b512encode",
@@ -117,7 +109,6 @@ __all__ = [
     "b64decode",
     "b64encode",
     "basefwx",
-    "bi512encode",
     "cli",
     "dean7_file",
     "fwxAES",
@@ -133,16 +124,11 @@ __all__ = [
     "fwxAES_live_encrypt_stream",
     "generate_kem_keypair",
     "hash512",
+    "HAS_RETIRED_MEDIA",
     "hkdf_sha256",
     "current_kem_algorithm",
     "is_supported_kem_algorithm",
     "kem_algorithm_for_public_key",
-    "jMGd",
-    "jMGe",
-    "kFAd",
-    "kFAe",
-    "kFMd",
-    "kFMe",
     "LiveDecryptor",
     "LiveEncryptor",
     "main",
@@ -156,7 +142,6 @@ __all__ = [
     "pb512encode",
     "pb512file_decode_bytes",
     "pb512file_encode_bytes",
-    "uhash513",
     "x25519",
     # plugin SPI (3.7.0)
     "BasefwxPlugin",
@@ -177,3 +162,9 @@ __all__ = [
     "register_native_plugin",
     "register_plugin",
 ]
+
+if RETIRED_MEDIA_ENABLED:
+    from .retired import install_public_api as _install_retired_public_api
+
+    _install_retired_public_api(globals(), __all__)
+    del _install_retired_public_api

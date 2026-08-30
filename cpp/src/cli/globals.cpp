@@ -63,10 +63,7 @@ bool IsLightCommand(const std::string& command) {
         "info", "identify", "probe",
         "b64-enc", "b64-dec",
         "n10-enc", "n10-dec",
-        "b256-enc", "b256-dec",
-        "a512-enc", "a512-dec",
-        "bi512-enc",
-        "hash512", "uhash513"
+        "hash512"
     };
     return kLightCommands.count(command) > 0;
 }

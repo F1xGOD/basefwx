@@ -286,6 +286,42 @@ Bytes Uint16Be(std::uint16_t value) {
     };
 }
 
+std::uint32_t RequireStreamChunkSize(std::size_t value) {
+    if (value == 0 || value > constants::kStreamChunkSizeMax) {
+        throw std::invalid_argument(
+            "Streaming chunk size must be between 1 byte and 16 MiB");
+    }
+    return static_cast<std::uint32_t>(value);
+}
+
+std::uint32_t CheckedStreamPayloadLength(
+    std::uint64_t input_size,
+    std::size_t metadata_size,
+    std::size_t prefix_size,
+    std::size_t header_size) {
+    constexpr std::uint64_t kMaximum =
+        std::numeric_limits<std::uint32_t>::max();
+    if (input_size > kMaximum) {
+        throw std::length_error(
+            "Streaming payload exceeds 32-bit format limit");
+    }
+    std::uint64_t total = input_size;
+    const auto add = [&total](std::uint64_t value) {
+        if (value > kMaximum - total) {
+            throw std::length_error(
+                "Streaming payload exceeds 32-bit format limit");
+        }
+        total += value;
+    };
+    add(prefix_size);
+    add(header_size);
+    add(4u);
+    add(metadata_size);
+    add(constants::kAeadNonceLen);
+    add(constants::kAeadTagLen);
+    return static_cast<std::uint32_t>(total);
+}
+
 void ThrowIfInterrupted() {
     if (basefwx::runtime::StopRequested()) {
         throw std::runtime_error("Interrupted");
@@ -652,7 +688,11 @@ std::string DecryptAesPayload(const Bytes& blob,
 }
 
 bool EnableAead(const FileOptions& options) {
-    return options.enable_aead && basefwx::env::IsEnabled("BASEFWX_B512_AEAD", true);
+    if (!options.enable_aead) {
+        throw std::invalid_argument(
+            "Unauthenticated b512file writing is retired; AES-GCM is required");
+    }
+    return true;
 }
 
 bool EnableObfuscation(const FileOptions& options) {

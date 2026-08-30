@@ -48,6 +48,11 @@ public final class Crypto {
 
     private static final SecureRandom RNG = new SecureRandom();
     private static final byte[] HKDF_ZERO_SALT = new byte[32];
+    private static final byte[] HMAC_RESET_KEY = new byte[32];
+    private static final byte[] AES_RESET_KEY = new byte[Constants.FWXAES_KEY_LEN];
+    private static final byte[] GCM_RESET_IV = new byte[Constants.AEAD_NONCE_LEN];
+    private static final int AES_CTR_IV_LEN = 16;
+    private static final byte[] CTR_RESET_IV = new byte[AES_CTR_IV_LEN];
     // ThreadLocals must be initialized before detectPbkdf2Compat() to avoid init-order bug
     private static final ThreadLocal<Cipher> AES_GCM_ENC = ThreadLocal.withInitial(Crypto::initAesGcmCipher);
     private static final ThreadLocal<Cipher> AES_GCM_DEC = ThreadLocal.withInitial(Crypto::initAesGcmCipher);
@@ -57,14 +62,12 @@ public final class Crypto {
     // (~220 times on a 220 MiB bench file); JCA provider lookup is
     // ~0.5-1 ms each, so the cached instance saves ~150 ms per run.
     private static final ThreadLocal<Cipher> AES_CTR = ThreadLocal.withInitial(Crypto::initAesCtrCipher);
-    private static final ThreadLocal<Mac> HMAC_SHA256 = ThreadLocal.withInitial(Crypto::initHmacInstance);
     private static final ThreadLocal<SecretKeyFactory> PBKDF2_FACTORY = ThreadLocal.withInitial(Crypto::initPbkdf2Factory);
     // DirectByteBuffer pools for fast AES-GCM (16x faster than byte[] arrays for large data)
     private static final int DIRECT_BUF_SIZE = 8 * 1024 * 1024; // 8 MiB chunks
     private static final int DIRECT_BUF_THRESHOLD = 256 * 1024; // Use DirectByteBuffer only for >= 256KB
     private static final ThreadLocal<ByteBuffer> DIRECT_IN = ThreadLocal.withInitial(() -> ByteBuffer.allocateDirect(DIRECT_BUF_SIZE));
     private static final ThreadLocal<ByteBuffer> DIRECT_OUT = ThreadLocal.withInitial(() -> ByteBuffer.allocateDirect(DIRECT_BUF_SIZE + Constants.AEAD_TAG_LEN));
-    // PBKDF2 compat detection must come after HMAC_SHA256 is initialized
     private static final boolean PBKDF2_NATIVE_ENABLED = resolvePbkdf2Native();
     private static final boolean PBKDF2_JCE_COMPAT = PBKDF2_NATIVE_ENABLED && detectPbkdf2Compat();
     
@@ -76,6 +79,9 @@ public final class Crypto {
     private Crypto() {}
 
     public static byte[] randomBytes(int length) {
+        if (length < 0) {
+            throw new IllegalArgumentException("length must not be negative");
+        }
         byte[] out = new byte[length];
         if (length > 0) {
             RNG.nextBytes(out);
@@ -96,12 +102,21 @@ public final class Crypto {
      * 3-arg overload and OpenSSL's HashLen-zero default (C++ reference).
      */
     public static byte[] hkdfSha256(byte[] keyMaterial, byte[] salt, byte[] info, int length) {
+        requireHkdfInputs(keyMaterial, length);
         byte[] extractSalt = (salt == null || salt.length == 0) ? HKDF_ZERO_SALT : salt;
         byte[] prk = hmacSha256(extractSalt, keyMaterial);
-        return hkdfExpandRfc(prk, info == null ? new byte[0] : info, length);
+        try {
+            return hkdfExpandRfc(
+                    prk, info == null ? new byte[0] : info, length);
+        } finally {
+            Arrays.fill(prk, (byte) 0);
+        }
     }
 
     static byte[] hkdfPrkSha256(byte[] keyMaterial) {
+        if (keyMaterial == null) {
+            throw new IllegalArgumentException("HKDF key material must not be null");
+        }
         return hmacSha256(HKDF_ZERO_SALT, keyMaterial);
     }
 
@@ -114,8 +129,44 @@ public final class Crypto {
         if (length <= Constants.HKDF_MAX_LEN) {
             return hkdfSha256(keyMaterial, info, length);
         }
+        return compatPrfStreamSha256(keyMaterial, info, length);
+    }
+
+    /**
+     * Released large-payload compatibility PRF; this is not RFC 5869 HKDF.
+     * After a zero-salt HMAC-SHA256 extract, it emits blocks as
+     * {@code HMAC(PRK, previous || info || uint32_be(counter))}. Existing
+     * masked BaseFWX payloads larger than 8160 bytes depend on these bytes.
+     */
+    public static byte[] compatPrfStreamSha256(
+            byte[] keyMaterial, byte[] info, int length) {
+        if (keyMaterial == null) {
+            throw new IllegalArgumentException(
+                    "compatibility PRF key material must not be null");
+        }
+        if (length < 0) {
+            throw new IllegalArgumentException("length must not be negative");
+        }
         byte[] prk = hmacSha256(HKDF_ZERO_SALT, keyMaterial);
-        return prfStreamHmacSha256(prk, info == null ? new byte[0] : info, length);
+        try {
+            return prfStreamHmacSha256(
+                    prk, info == null ? new byte[0] : info, length);
+        } finally {
+            Arrays.fill(prk, (byte) 0);
+        }
+    }
+
+    private static void requireHkdfInputs(byte[] keyMaterial, int length) {
+        if (keyMaterial == null) {
+            throw new IllegalArgumentException("HKDF key material must not be null");
+        }
+        if (length < 0) {
+            throw new IllegalArgumentException("HKDF length must not be negative");
+        }
+        if (length > Constants.HKDF_MAX_LEN) {
+            throw new IllegalArgumentException(
+                    "HKDF length exceeds RFC 5869 limit");
+        }
     }
 
     private static byte[] hkdfExpandRfc(byte[] prk, byte[] info, int length) {
@@ -129,25 +180,30 @@ public final class Crypto {
         int tLen = 0;
         int offset = 0;
         Mac mac = initHmac(prk);
-        for (int i = 1; i <= n; i++) {
-            if (tLen > 0) {
-                mac.update(t, 0, tLen);
+        try {
+            for (int i = 1; i <= n; i++) {
+                if (tLen > 0) {
+                    mac.update(t, 0, tLen);
+                }
+                if (info.length > 0) {
+                    mac.update(info);
+                }
+                mac.update((byte) i);
+                try {
+                    mac.doFinal(t, 0);
+                    tLen = t.length;
+                } catch (GeneralSecurityException exc) {
+                    throw new IllegalStateException("HKDF expand failed", exc);
+                }
+                int toCopy = Math.min(tLen, length - offset);
+                System.arraycopy(t, 0, out, offset, toCopy);
+                offset += toCopy;
             }
-            if (info.length > 0) {
-                mac.update(info);
-            }
-            mac.update((byte) i);
-            try {
-                mac.doFinal(t, 0);
-                tLen = t.length;
-            } catch (GeneralSecurityException exc) {
-                throw new IllegalStateException("HKDF expand failed", exc);
-            }
-            int toCopy = Math.min(tLen, length - offset);
-            System.arraycopy(t, 0, out, offset, toCopy);
-            offset += toCopy;
+            return out;
+        } finally {
+            Arrays.fill(t, (byte) 0);
+            resetHmac(mac);
         }
-        return out;
     }
 
     private static byte[] prfStreamHmacSha256(byte[] prk, byte[] info, int length) {
@@ -165,25 +221,35 @@ public final class Crypto {
         int counter = 1;
         Mac mac = initHmac(prk);
         byte[] counterBytes = new byte[4];
-        while (offset < length) {
-            if (t.length > 0) {
-                mac.update(t);
+        try {
+            while (offset < length) {
+                if (t.length > 0) {
+                    mac.update(t);
+                }
+                if (info.length > 0) {
+                    mac.update(info);
+                }
+                counterBytes[0] = (byte) (counter >>> 24);
+                counterBytes[1] = (byte) (counter >>> 16);
+                counterBytes[2] = (byte) (counter >>> 8);
+                counterBytes[3] = (byte) counter;
+                mac.update(counterBytes);
+                byte[] next = mac.doFinal();
+                Arrays.fill(t, (byte) 0);
+                t = next;
+                int toCopy = Math.min(hashLen, length - offset);
+                System.arraycopy(t, 0, out, offset, toCopy);
+                offset += toCopy;
+                if (offset < length) {
+                    counter++;
+                }
             }
-            if (info.length > 0) {
-                mac.update(info);
-            }
-            counterBytes[0] = (byte) (counter >>> 24);
-            counterBytes[1] = (byte) (counter >>> 16);
-            counterBytes[2] = (byte) (counter >>> 8);
-            counterBytes[3] = (byte) counter;
-            mac.update(counterBytes);
-            t = mac.doFinal();
-            int toCopy = Math.min(hashLen, length - offset);
-            System.arraycopy(t, 0, out, offset, toCopy);
-            offset += toCopy;
-            counter++;
+            return out;
+        } finally {
+            Arrays.fill(t, (byte) 0);
+            Arrays.fill(counterBytes, (byte) 0);
+            resetHmac(mac);
         }
-        return out;
     }
 
     /**
@@ -203,7 +269,12 @@ public final class Crypto {
         if (len == 0) {
             return;
         }
-        if (inOff < 0 || outOff < 0 || inOff + len > in.length || outOff + len > out.length) {
+        if (in == null || out == null) {
+            throw new IllegalArgumentException("Input and output must not be null");
+        }
+        if (inOff < 0 || outOff < 0
+                || inOff > in.length || len > in.length - inOff
+                || outOff > out.length || len > out.length - outOff) {
             throw new IllegalArgumentException("Invalid buffer bounds");
         }
         long blocks = (len + 31L) / 32L;
@@ -218,13 +289,13 @@ public final class Crypto {
             throw new IllegalArgumentException("counter overflow");
         }
         byte[] infoBytes = info == null ? new byte[0] : info;
+        Mac mac = initHmac(prk);
+        byte[] t = new byte[32];
+        byte[] counterBytes = new byte[4];
         try {
-            Mac mac = initHmac(prk);
-            byte[] t = new byte[32];
             int tLen = 0;
             int offset = 0;
             int counter = counterStart;
-            byte[] counterBytes = new byte[4];
             while (offset < len) {
                 if (tLen > 0) {
                     mac.update(t, 0, tLen);
@@ -244,22 +315,32 @@ public final class Crypto {
                     out[outOff + offset + i] = (byte) (in[inOff + offset + i] ^ t[i]);
                 }
                 offset += take;
-                counter += 1;
+                if (offset < len) {
+                    counter += 1;
+                }
             }
         } catch (GeneralSecurityException exc) {
             throw new IllegalStateException("HKDF stream XOR failed", exc);
+        } finally {
+            Arrays.fill(t, (byte) 0);
+            Arrays.fill(counterBytes, (byte) 0);
+            resetHmac(mac);
         }
     }
 
     public static byte[] hmacSha256(byte[] key, byte[] data) {
         Mac mac = initHmac(key);
-        mac.update(data);
-        return mac.doFinal();
+        try {
+            mac.update(data);
+            return mac.doFinal();
+        } finally {
+            resetHmac(mac);
+        }
     }
 
     static Mac initHmac(byte[] key) {
         try {
-            Mac mac = HMAC_SHA256.get();
+            Mac mac = initHmacInstance();
             mac.init(new SecretKeySpec(key, "HmacSHA256"));
             return mac;
         } catch (GeneralSecurityException exc) {
@@ -267,12 +348,31 @@ public final class Crypto {
         }
     }
 
+    static void resetHmac(Mac mac) {
+        try {
+            mac.init(new SecretKeySpec(HMAC_RESET_KEY, "HmacSHA256"));
+            mac.reset();
+        } catch (GeneralSecurityException exc) {
+            // The instance is local to one operation, so a provider that
+            // cannot replace the key schedule is simply allowed to die.
+        }
+    }
+
     public static byte[] pbkdf2HmacSha256(byte[] password, byte[] salt, int iterations, int length) {
+        if (password == null) {
+            throw new IllegalArgumentException("password must not be null");
+        }
+        if (salt == null || salt.length == 0) {
+            throw new IllegalArgumentException("salt must not be empty");
+        }
         if (iterations <= 0) {
             throw new IllegalArgumentException("iterations must be > 0");
         }
         if (length <= 0) {
             throw new IllegalArgumentException("length must be > 0");
+        }
+        if (length > Integer.MAX_VALUE / 8) {
+            throw new IllegalArgumentException("PBKDF2 output length is too large");
         }
         if (PBKDF2_JCE_COMPAT) {
             byte[] fast = pbkdf2HmacSha256Native(password, salt, iterations, length);
@@ -362,18 +462,20 @@ public final class Crypto {
         if (chars == null) {
             return null;
         }
+        PBEKeySpec spec = null;
         try {
-            PBEKeySpec spec = new PBEKeySpec(chars, salt, iterations, length * 8);
+            spec = new PBEKeySpec(chars, salt, iterations, length * 8);
             SecretKeyFactory factory = PBKDF2_FACTORY.get();
             if (factory == null) {
                 return null;
             }
-            byte[] out = factory.generateSecret(spec).getEncoded();
-            spec.clearPassword();
-            return out;
+            return factory.generateSecret(spec).getEncoded();
         } catch (GeneralSecurityException exc) {
             return null;
         } finally {
+            if (spec != null) {
+                spec.clearPassword();
+            }
             Arrays.fill(chars, '\0');
         }
     }
@@ -383,12 +485,23 @@ public final class Crypto {
         byte[] salt = "salt".getBytes(StandardCharsets.UTF_8);
         int iterations = 2;
         int length = 32;
+        byte[] slow = null;
+        byte[] fast = null;
         try {
-            byte[] slow = pbkdf2HmacSha256Slow(pw, salt, iterations, length);
-            byte[] fast = pbkdf2HmacSha256Native(pw, salt, iterations, length);
+            slow = pbkdf2HmacSha256Slow(pw, salt, iterations, length);
+            fast = pbkdf2HmacSha256Native(pw, salt, iterations, length);
             return fast != null && Arrays.equals(fast, slow);
         } catch (RuntimeException exc) {
             return false;
+        } finally {
+            Arrays.fill(pw, (byte) 0);
+            Arrays.fill(salt, (byte) 0);
+            if (slow != null) {
+                Arrays.fill(slow, (byte) 0);
+            }
+            if (fast != null) {
+                Arrays.fill(fast, (byte) 0);
+            }
         }
     }
 
@@ -398,9 +511,13 @@ public final class Crypto {
         byte[] output = new byte[length];
         for (int block = 1; block <= blocks; block++) {
             byte[] t = pbkdf2Block(password, salt, iterations, block);
-            int offset = (block - 1) * hashLen;
-            int toCopy = Math.min(hashLen, length - offset);
-            System.arraycopy(t, 0, output, offset, toCopy);
+            try {
+                int offset = (block - 1) * hashLen;
+                int toCopy = Math.min(hashLen, length - offset);
+                System.arraycopy(t, 0, output, offset, toCopy);
+            } finally {
+                Arrays.fill(t, (byte) 0);
+            }
         }
         return output;
     }
@@ -430,10 +547,17 @@ public final class Crypto {
             return t;
         } catch (GeneralSecurityException exc) {
             throw new IllegalStateException("PBKDF2 failed", exc);
+        } finally {
+            Arrays.fill(u, (byte) 0);
+            Arrays.fill(blockSalt, (byte) 0);
+            resetHmac(mac);
         }
     }
 
     public static byte[] aesGcmEncrypt(byte[] key, byte[] plaintext, byte[] aad) {
+        if (plaintext == null) {
+            throw new IllegalArgumentException("plaintext must not be null");
+        }
         byte[] iv = randomBytes(Constants.AEAD_NONCE_LEN);
         byte[] cipher = aesGcmEncryptWithIv(key, iv, plaintext, aad);
         byte[] out = new byte[iv.length + cipher.length];
@@ -443,6 +567,10 @@ public final class Crypto {
     }
 
     public static byte[] aesGcmEncryptWithIv(byte[] key, byte[] iv, byte[] plaintext, byte[] aad) {
+        requireAesGcmInputs(key, iv);
+        if (plaintext == null) {
+            throw new IllegalArgumentException("plaintext must not be null");
+        }
         int outLen = plaintext.length + Constants.AEAD_TAG_LEN;
         byte[] out = new byte[outLen];
         int written = aesGcmEncryptWithIvInto(key, iv, plaintext, 0, plaintext.length, out, 0, aad);
@@ -481,8 +609,10 @@ public final class Crypto {
             // surfacing as a bad-output-length error elsewhere would mask the
             // real cause.
         }
+        Cipher cipher = AES_GCM_ENC.get();
+        ByteBuffer inBuf = null;
+        ByteBuffer outBuf = null;
         try {
-            Cipher cipher = AES_GCM_ENC.get();
             GCMParameterSpec spec = new GCMParameterSpec(Constants.AEAD_TAG_LEN * 8, iv);
             // lgtm[java/static-initialization-vector] - IV is provided by caller; the
             // top-level helper `aesGcmEncrypt()` generates a fresh random nonce each
@@ -500,8 +630,8 @@ public final class Crypto {
             
             // Use DirectByteBuffer for ~16x faster AES-GCM on HotSpot for large data
             // Process in chunks for large data
-            ByteBuffer inBuf = DIRECT_IN.get();
-            ByteBuffer outBuf = DIRECT_OUT.get();
+            inBuf = DIRECT_IN.get();
+            outBuf = DIRECT_OUT.get();
             int totalWritten = 0;
             int remaining = plainLen;
             int srcOff = plainOff;
@@ -536,10 +666,17 @@ public final class Crypto {
             return totalWritten;
         } catch (GeneralSecurityException exc) {
             throw new IllegalStateException("AES-GCM encrypt failed", exc);
+        } finally {
+            wipeDirectBuffer(inBuf);
+            wipeDirectBuffer(outBuf);
+            resetAesGcmCipher(cipher, AES_GCM_ENC);
         }
     }
 
     public static byte[] aesGcmDecrypt(byte[] key, byte[] payload, byte[] aad) {
+        if (payload == null) {
+            throw new IllegalArgumentException("AEAD payload must not be null");
+        }
         if (payload.length < Constants.AEAD_NONCE_LEN + Constants.AEAD_TAG_LEN) {
             throw new IllegalArgumentException("AEAD payload too short");
         }
@@ -551,6 +688,10 @@ public final class Crypto {
     }
 
     public static byte[] aesGcmDecryptWithIv(byte[] key, byte[] iv, byte[] ciphertext, byte[] aad) {
+        requireAesGcmInputs(key, iv);
+        if (ciphertext == null) {
+            throw new IllegalArgumentException("ciphertext must not be null");
+        }
         int outLen = ciphertext.length - Constants.AEAD_TAG_LEN;
         if (outLen < 0) {
             throw new IllegalArgumentException("AEAD payload too short");
@@ -595,8 +736,10 @@ public final class Crypto {
                     "Bad password or corrupted payload");
         }
         byte[] staged = new byte[ctLen - Constants.AEAD_TAG_LEN];
+        Cipher cipher = AES_GCM_DEC.get();
+        ByteBuffer inBuf = null;
+        ByteBuffer outBuf = null;
         try {
-            Cipher cipher = AES_GCM_DEC.get();
             GCMParameterSpec spec = new GCMParameterSpec(Constants.AEAD_TAG_LEN * 8, iv);
             // lgtm[java/static-initialization-vector] - IV is passed in by the initial
             // encryption routine; uniqueness is the caller's responsibility.  Decryption
@@ -617,8 +760,8 @@ public final class Crypto {
             // DirectByteBuffer optimization applies only when ciphertext fits in pooled buffer
             if (ctLen <= DIRECT_BUF_SIZE) {
                 // Fits in pooled DirectByteBuffer - ~16x faster
-                ByteBuffer inBuf = DIRECT_IN.get();
-                ByteBuffer outBuf = DIRECT_OUT.get();
+                inBuf = DIRECT_IN.get();
+                outBuf = DIRECT_OUT.get();
                 inBuf.clear().limit(ctLen);
                 inBuf.put(ciphertext, ctOff, ctLen);
                 inBuf.flip();
@@ -641,6 +784,9 @@ public final class Crypto {
             throw new IllegalArgumentException("Bad password or corrupted payload", exc);
         } finally {
             Arrays.fill(staged, (byte) 0);
+            wipeDirectBuffer(inBuf);
+            wipeDirectBuffer(outBuf);
+            resetAesGcmCipher(cipher, AES_GCM_DEC);
         }
     }
 
@@ -648,8 +794,8 @@ public final class Crypto {
         if (key == null) {
             throw new IllegalArgumentException("AES-GCM key must not be null");
         }
-        if (key.length != 16 && key.length != 24 && key.length != 32) {
-            throw new IllegalArgumentException("AES-GCM key must be 16, 24, or 32 bytes");
+        if (key.length != Constants.FWXAES_KEY_LEN) {
+            throw new IllegalArgumentException("AES-GCM key must be 32 bytes");
         }
         if (iv == null || iv.length == 0) {
             throw new IllegalArgumentException("AES-GCM IV is required");
@@ -683,6 +829,59 @@ public final class Crypto {
         }
     }
 
+    static void wipeDirectBuffer(ByteBuffer buffer) {
+        if (buffer == null) {
+            return;
+        }
+        buffer.clear();
+        while (buffer.remaining() >= Long.BYTES) {
+            buffer.putLong(0L);
+        }
+        while (buffer.hasRemaining()) {
+            buffer.put((byte) 0);
+        }
+        buffer.clear();
+    }
+
+    private static void resetAesGcmCipher(
+            Cipher cipher, ThreadLocal<Cipher> pool) {
+        byte[] resetIv = new byte[Constants.AEAD_NONCE_LEN];
+        RNG.nextBytes(resetIv);
+        try {
+            cipher.init(
+                    Cipher.ENCRYPT_MODE,
+                    new SecretKeySpec(AES_RESET_KEY, "AES"),
+                    new GCMParameterSpec(
+                            Constants.AEAD_TAG_LEN * 8, resetIv));
+        } catch (GeneralSecurityException exc) {
+            pool.remove();
+        } finally {
+            Arrays.fill(resetIv, (byte) 0);
+        }
+    }
+
+    static void resetAesCtrCipher(Cipher cipher) {
+        try {
+            cipher.init(
+                    Cipher.ENCRYPT_MODE,
+                    new SecretKeySpec(AES_RESET_KEY, "AES"),
+                    new IvParameterSpec(CTR_RESET_IV));
+        } catch (GeneralSecurityException exc) {
+            AES_CTR.remove();
+        }
+    }
+
+    private static void requireAesCtrInputs(
+            byte[] key, byte[] iv, byte[] data, int offset, int length) {
+        if (key == null || key.length != Constants.FWXAES_KEY_LEN) {
+            throw new IllegalArgumentException("AES-CTR key must be 32 bytes");
+        }
+        if (iv == null || iv.length != AES_CTR_IV_LEN) {
+            throw new IllegalArgumentException("AES-CTR IV must be 16 bytes");
+        }
+        requireSlice(data, offset, length, "AES-CTR input");
+    }
+
     /**
      * AES-256-CTR one-shot transform reusing a thread-local Cipher to skip
      * the per-call provider lookup. Encrypt and decrypt are the same op
@@ -690,12 +889,19 @@ public final class Crypto {
      * Throws IllegalStateException on JCE failure.
      */
     public static byte[] aesCtrTransform(byte[] key, byte[] iv, byte[] data) {
+        if (data == null) {
+            throw new IllegalArgumentException(
+                    "AES-CTR input buffer must not be null");
+        }
+        requireAesCtrInputs(key, iv, data, 0, data.length);
+        Cipher cipher = AES_CTR.get();
         try {
-            Cipher cipher = AES_CTR.get();
             cipher.init(Cipher.ENCRYPT_MODE, new SecretKeySpec(key, "AES"), new IvParameterSpec(iv));
             return cipher.doFinal(data);
         } catch (GeneralSecurityException exc) {
             throw new IllegalStateException("AES-CTR transform failed", exc);
+        } finally {
+            resetAesCtrCipher(cipher);
         }
     }
 
@@ -707,11 +913,12 @@ public final class Crypto {
      * Cipher.
      */
     public static void aesCtrTransformInPlace(byte[] key, byte[] iv, byte[] buf, int off, int len) {
+        requireAesCtrInputs(key, iv, buf, off, len);
         if (len == 0) {
             return;
         }
+        Cipher cipher = AES_CTR.get();
         try {
-            Cipher cipher = AES_CTR.get();
             cipher.init(Cipher.ENCRYPT_MODE, new SecretKeySpec(key, "AES"), new IvParameterSpec(iv));
             int n = cipher.update(buf, off, len, buf, off);
             int m = cipher.doFinal(buf, off + n);
@@ -720,6 +927,8 @@ public final class Crypto {
             }
         } catch (GeneralSecurityException exc) {
             throw new IllegalStateException("AES-CTR transform failed", exc);
+        } finally {
+            resetAesCtrCipher(cipher);
         }
     }
 

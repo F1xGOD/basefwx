@@ -6,33 +6,18 @@
 
 package com.fixcraft.basefwx;
 
-import java.io.BufferedInputStream;
-import java.io.BufferedOutputStream;
-import java.io.ByteArrayOutputStream;
 import java.io.File;
-import java.io.FileInputStream;
-import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.charset.StandardCharsets;
-import java.security.GeneralSecurityException;
-import java.time.Instant;
-import java.util.Arrays;
-import java.util.LinkedHashMap;
-import java.util.List;
-import java.util.Map;
-import javax.crypto.Cipher;
-import javax.crypto.Mac;
-import javax.crypto.spec.IvParameterSpec;
-import javax.crypto.spec.SecretKeySpec;
 
 final class FileCodecIo {
     private FileCodecIo() {}
 
-static File resolveDecodedOutput(File input, File output, byte[] extBytes) {
+    static File resolveDecodedOutput(File input, File output, byte[] extBytes) {
         if (output != null) {
             return output;
         }
@@ -50,7 +35,7 @@ static File resolveDecodedOutput(File input, File output, byte[] extBytes) {
         return new File(input.getParentFile(), name);
     }
 
-static void readExact(InputStream input, byte[] buffer, int length, String error) throws IOException {
+    static void readExact(InputStream input, byte[] buffer, int length, String error) throws IOException {
         int offset = 0;
         while (offset < length) {
             int read = input.read(buffer, offset, length - offset);
@@ -72,7 +57,7 @@ static void readExact(InputStream input, byte[] buffer, int length, String error
         }
     }
 
-static void readExactChannel(FileChannel channel, ByteBuffer buffer, int length, String error) throws IOException {
+    static void readExactChannel(FileChannel channel, ByteBuffer buffer, int length, String error) throws IOException {
         buffer.clear();
         buffer.limit(length);
         while (buffer.hasRemaining()) {
@@ -84,13 +69,13 @@ static void readExactChannel(FileChannel channel, ByteBuffer buffer, int length,
         buffer.flip();
     }
 
-static void writeFully(FileChannel channel, ByteBuffer buffer) throws IOException {
+    static void writeFully(FileChannel channel, ByteBuffer buffer) throws IOException {
         while (buffer.hasRemaining()) {
             channel.write(buffer);
         }
     }
 
-static byte[] readExactBytes(InputStream input, int length, String error) throws IOException {
+    static byte[] readExactBytes(InputStream input, int length, String error) throws IOException {
         if (length < 0) {
             throw new IllegalArgumentException(error + " (negative length)");
         }
@@ -102,7 +87,7 @@ static byte[] readExactBytes(InputStream input, int length, String error) throws
         return buf;
     }
 
-static void requireBoundedFileLength(File input,
+    static void requireBoundedFileLength(File input,
                                      long consumed,
                                      int length,
                                      int maximum,
@@ -123,7 +108,7 @@ static void requireBoundedFileLength(File input,
         }
     }
 
-static void requireHeaderLengthTotal(long total) {
+    static void requireHeaderLengthTotal(long total) {
         final long threeLengthPrefixes = 3L * 4L;
         if (total < 0
                 || total > Constants.LENGTH_PREFIXED_MAX
@@ -133,7 +118,34 @@ static void requireHeaderLengthTotal(long total) {
         }
     }
 
-static void skipFully(InputStream input, int length, String error) throws IOException {
+    static long checkedStreamPayloadLength(long inputLength,
+                                       int metadataLength,
+                                       int prefixLength,
+                                       int headerLength) {
+        if (inputLength < 0L) {
+            throw new IllegalArgumentException(
+                    "Streaming input length must not be negative");
+        }
+        long total;
+        try {
+            total = Math.addExact(inputLength, prefixLength);
+            total = Math.addExact(total, headerLength);
+            total = Math.addExact(total, 4L);
+            total = Math.addExact(total, metadataLength);
+            total = Math.addExact(total, Constants.AEAD_NONCE_LEN);
+            total = Math.addExact(total, Constants.AEAD_TAG_LEN);
+        } catch (ArithmeticException exc) {
+            throw new IllegalArgumentException(
+                    "Streaming payload length overflow", exc);
+        }
+        if (total > 0xFFFFFFFFL) {
+            throw new IllegalArgumentException(
+                    "Streaming payload exceeds 32-bit format limit");
+        }
+        return total;
+    }
+
+    static void skipFully(InputStream input, int length, String error) throws IOException {
         if (length <= 0) {
             return;
         }
@@ -157,7 +169,7 @@ static void skipFully(InputStream input, int length, String error) throws IOExce
         }
     }
 
-static long resolvePayloadLengthFromFileSize(File input,
+    static long resolvePayloadLengthFromFileSize(File input,
                                                          int lenUser,
                                                          int lenMaster,
                                                          int encodedPayloadLen) {
@@ -180,17 +192,17 @@ static long resolvePayloadLengthFromFileSize(File input,
         return payloadLen;
     }
 
-static int readU32(InputStream input, String error) throws IOException {
+    static int readU32(InputStream input, String error) throws IOException {
         byte[] buf = readExactBytes(input, 4, error);
         return BaseFwxUtil.readU32(buf, 0);
     }
 
-static int readU16(InputStream input, String error) throws IOException {
+    static int readU16(InputStream input, String error) throws IOException {
         byte[] buf = readExactBytes(input, 2, error);
         return ((buf[0] & 0xFF) << 8) | (buf[1] & 0xFF);
     }
 
-static long readU64(InputStream input, String error) throws IOException {
+    static long readU64(InputStream input, String error) throws IOException {
         byte[] buf = readExactBytes(input, 8, error);
         long out = 0L;
         for (int i = 0; i < buf.length; i++) {
@@ -199,26 +211,26 @@ static long readU64(InputStream input, String error) throws IOException {
         return out;
     }
 
-static void writeU32(OutputStream output, int value) throws IOException {
+    static void writeU32(OutputStream output, int value) throws IOException {
         output.write((value >> 24) & 0xFF);
         output.write((value >> 16) & 0xFF);
         output.write((value >> 8) & 0xFF);
         output.write(value & 0xFF);
     }
 
-static void writeU16(OutputStream output, int value) throws IOException {
+    static void writeU16(OutputStream output, int value) throws IOException {
         output.write((value >> 8) & 0xFF);
         output.write(value & 0xFF);
     }
 
-static void writeU64(OutputStream output, long value) throws IOException {
+    static void writeU64(OutputStream output, long value) throws IOException {
         long v = value;
         for (int i = 7; i >= 0; i--) {
             output.write((int) ((v >> (i * 8)) & 0xFF));
         }
     }
 
-static byte[] concat(byte[]... parts) {
+    static byte[] concat(byte[]... parts) {
         int total = 0;
         for (byte[] part : parts) {
             total += part.length;

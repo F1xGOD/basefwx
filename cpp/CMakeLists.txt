@@ -17,6 +17,7 @@ if(NOT _basefwx_numeric_match)
 endif()
 set(BASEFWX_NUMERIC_VERSION
     "${CMAKE_MATCH_1}.${CMAKE_MATCH_2}.${CMAKE_MATCH_3}")
+set(BASEFWX_LIBRARY_SOVERSION 4)
 
 project(basefwx_cpp VERSION ${BASEFWX_NUMERIC_VERSION} LANGUAGES CXX)
 
@@ -30,10 +31,15 @@ option(BASEFWX_BUILD_TESTS
        ${_basefwx_build_tests_default})
 option(BASEFWX_BUILD_CLI "Build BaseFWX CLI" ON)
 option(BASEFWX_BUILD_JNI "Build the basefwxcrypto JNI shared library for the Java bindings" OFF)
+option(BASEFWX_ENABLE_RETIRED_MEDIA
+       "Build retired jMG and kFM/kFA media compatibility codecs"
+       OFF)
 option(BASEFWX_BUILD_PROTOCOL_KAT_GEN
        "Build the internal multi-runtime protocol-vector generator" OFF)
 option(BASEFWX_REQUIRE_ARGON2 "Require libargon2 for Argon2id support" ON)
-option(BASEFWX_REQUIRE_OQS "Require liboqs for ML-KEM-768 support" OFF)
+option(BASEFWX_REQUIRE_OQS
+       "Require liboqs with ML-KEM-768 and ML-KEM-1024 support"
+       OFF)
 option(BASEFWX_OQS_STATIC "Prefer static liboqs when available" OFF)
 option(BASEFWX_REQUIRE_LZMA "Require liblzma for xz support" OFF)
 option(BASEFWX_NATIVE_OPT "Enable -march/-mtune native optimizations" OFF)
@@ -599,8 +605,52 @@ if((CMAKE_CROSSCOMPILING OR BASEFWX_FORCE_CROSS) AND OQS_FOUND)
     endif()
 endif()
 
+# Finding a liboqs installation is not enough: distributors may compile out
+# individual algorithms. BaseFWX exposes both parameter sets, and YUME uses
+# ML-KEM-1024, so advertise OQS support only when the selected headers enable
+# both. A compile-only probe also works for cross builds without executing a
+# target binary.
+if(OQS_FOUND)
+    include(CheckCXXSourceCompiles)
+    set(_basefwx_saved_required_includes "${CMAKE_REQUIRED_INCLUDES}")
+    set(_basefwx_saved_try_compile_target_type
+        "${CMAKE_TRY_COMPILE_TARGET_TYPE}")
+    set(CMAKE_REQUIRED_INCLUDES ${OQS_INCLUDE_DIRS})
+    set(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)
+    unset(BASEFWX_OQS_HAS_REQUIRED_KEMS CACHE)
+    check_cxx_source_compiles([[
+        #include <oqs/oqsconfig.h>
+        #if !defined(OQS_ENABLE_KEM_ml_kem_768)
+        #error "liboqs does not enable ML-KEM-768"
+        #endif
+        #if !defined(OQS_ENABLE_KEM_ml_kem_1024)
+        #error "liboqs does not enable ML-KEM-1024"
+        #endif
+        int main() { return 0; }
+    ]] BASEFWX_OQS_HAS_REQUIRED_KEMS)
+    set(CMAKE_REQUIRED_INCLUDES "${_basefwx_saved_required_includes}")
+    if(_basefwx_saved_try_compile_target_type STREQUAL "")
+        unset(CMAKE_TRY_COMPILE_TARGET_TYPE)
+    else()
+        set(CMAKE_TRY_COMPILE_TARGET_TYPE
+            "${_basefwx_saved_try_compile_target_type}")
+    endif()
+    if(NOT BASEFWX_OQS_HAS_REQUIRED_KEMS)
+        set(OQS_FOUND FALSE)
+        set(BASEFWX_HAS_OQS 0)
+        if(BASEFWX_REQUIRE_OQS)
+            message(FATAL_ERROR
+                "liboqs was found but does not enable both required KEMs: ML-KEM-768 and ML-KEM-1024")
+        else()
+            message(WARNING
+                "liboqs does not enable both ML-KEM-768 and ML-KEM-1024; disabling BaseFWX OQS support")
+        endif()
+    endif()
+endif()
+
 if(BASEFWX_REQUIRE_OQS AND NOT OQS_FOUND)
-    message(FATAL_ERROR "liboqs not found (install liboqs-dev or set BASEFWX_REQUIRE_OQS=OFF)")
+    message(FATAL_ERROR
+        "compatible liboqs not found (ML-KEM-768 and ML-KEM-1024 are required; install liboqs-dev or set BASEFWX_REQUIRE_OQS=OFF)")
 endif()
 
 if(BASEFWX_REQUIRE_LZMA AND NOT LZMA_FOUND)
@@ -636,24 +686,34 @@ add_library(basefwxcpp
     src/formats/archive.cpp
     src/formats/base64.cpp
     src/formats/basefwx.cpp
-    src/formats/basefwx_kfm.cpp
-    src/formats/basefwx_kfm_carriers.cpp
     src/formats/codec.cpp
     src/formats/format.cpp
     src/formats/metadata.cpp
     src/formats/obfuscation.cpp
-    src/media/imagecipher.cpp
-    src/media/imagecipher_common.cpp
-    src/media/imagecipher_image.cpp
-    src/media/imagecipher_media.cpp
-    src/media/imagecipher_media_support.cpp
-    src/media/imagecipher_media_transform.cpp
-    src/media/imagecipher_trailer.cpp
     src/platform/env.cpp
     src/platform/secure_temp.cpp
     src/platform/system_info.cpp
     src/plugin/plugin_loader.cpp
 )
+
+if(BASEFWX_ENABLE_RETIRED_MEDIA)
+    target_sources(basefwxcpp PRIVATE
+        src/retired/codecs.cpp
+        src/retired/media/kfm.cpp
+        src/retired/media/kfm_carriers.cpp
+        src/retired/media/basefwx_media_api.cpp
+        src/retired/media/imagecipher.cpp
+        src/retired/media/imagecipher_common.cpp
+        src/retired/media/imagecipher_image.cpp
+        src/retired/media/imagecipher_media.cpp
+        src/retired/media/imagecipher_media_support.cpp
+        src/retired/media/imagecipher_media_transform.cpp
+        src/retired/media/imagecipher_trailer.cpp
+    )
+endif()
+
+target_compile_definitions(basefwxcpp
+    PUBLIC BASEFWX_HAS_RETIRED_MEDIA=$<BOOL:${BASEFWX_ENABLE_RETIRED_MEDIA}>)
 
 option(BASEFWX_INSTALL "Generate install rules for basefwxcpp (system packaging)" OFF)
 
@@ -770,6 +830,11 @@ if(BASEFWX_BUILD_CLI)
         src/cli/options.cpp
         src/cli/colors.cpp
     )
+    if(BASEFWX_ENABLE_RETIRED_MEDIA)
+        target_sources(basefwx_cpp PRIVATE
+            src/retired/cli.cpp
+        )
+    endif()
     add_dependencies(basefwx_cpp basefwx_cli_build_stamp)
     set_target_properties(basefwx_cpp PROPERTIES OUTPUT_NAME "basefwx")
     target_link_libraries(basefwx_cpp PRIVATE basefwxcpp)
@@ -793,9 +858,23 @@ if(BASEFWX_BUILD_TESTS AND BUILD_TESTING)
     target_include_directories(peer_kdf_policy_test PRIVATE
         "${CMAKE_CURRENT_BINARY_DIR}/generated"
         "${CMAKE_CURRENT_SOURCE_DIR}/include"
+        "${CMAKE_CURRENT_SOURCE_DIR}/src"
         "${CMAKE_CURRENT_SOURCE_DIR}/src/file"
     )
     add_test(NAME peer_kdf_policy_test COMMAND peer_kdf_policy_test)
+
+    if(BASEFWX_ENABLE_RETIRED_MEDIA)
+        add_executable(retired_media_policy_test
+            tools/retired/media_policy_test.cpp)
+        target_link_libraries(retired_media_policy_test PRIVATE basefwxcpp)
+        target_include_directories(retired_media_policy_test PRIVATE
+            "${CMAKE_CURRENT_BINARY_DIR}/generated"
+            "${CMAKE_CURRENT_SOURCE_DIR}/include"
+            "${CMAKE_CURRENT_SOURCE_DIR}/src"
+        )
+        add_test(NAME retired_media_policy_test
+                 COMMAND retired_media_policy_test)
+    endif()
 
     add_executable(bench_memory_policy_test
         tools/bench_memory_policy_test.cpp
@@ -825,11 +904,23 @@ if(BASEFWX_BUILD_TESTS AND BUILD_TESTING)
     )
     add_test(NAME crypto_api_safety_test COMMAND crypto_api_safety_test)
 
+    add_executable(text_payload_security_test
+        tools/text_payload_security_test.cpp
+    )
+    target_link_libraries(text_payload_security_test PRIVATE basefwxcpp)
+    target_include_directories(text_payload_security_test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/include"
+    )
+    add_test(NAME text_payload_security_test COMMAND text_payload_security_test)
+
     if(BUILD_SHARED_LIBS AND UNIX AND CMAKE_NM)
         add_test(NAME basefwx_core_abi_exports
             COMMAND "${CMAKE_COMMAND}"
                 "-DBASEFWX_LIBRARY=$<TARGET_FILE:basefwxcpp>"
+                "-DBASEFWX_SONAME_FILE_NAME=$<TARGET_SONAME_FILE_NAME:basefwxcpp>"
+                "-DBASEFWX_EXPECT_SOVERSION=${BASEFWX_LIBRARY_SOVERSION}"
                 "-DBASEFWX_NM=${CMAKE_NM}"
+                "-DBASEFWX_EXPECT_RETIRED_MEDIA=$<BOOL:${BASEFWX_ENABLE_RETIRED_MEDIA}>"
                 -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/check_core_abi_exports.cmake"
         )
     endif()
@@ -841,6 +932,7 @@ if(BASEFWX_BUILD_TESTS AND BUILD_TESTING)
                 "-DBASEFWX_BUILD_CONFIG=$<CONFIG>"
                 "-DBASEFWX_TEST_PREFIX=${CMAKE_BINARY_DIR}/test-install/basefwx-$<CONFIG>"
                 "-DBASEFWX_CONSUMER_TEST=${CMAKE_CURRENT_SOURCE_DIR}/../debian/tests/libbasefwx-dev"
+                "-DBASEFWX_EXPECT_RETIRED_MEDIA=$<BOOL:${BASEFWX_ENABLE_RETIRED_MEDIA}>"
                 -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/check_installed_consumer.cmake"
         )
     endif()
@@ -941,7 +1033,7 @@ if(BUILD_SHARED_LIBS)
     set_target_properties(basefwxcpp PROPERTIES
         OUTPUT_NAME basefwx
         VERSION ${BASEFWX_NUMERIC_VERSION}
-        SOVERSION 3
+        SOVERSION ${BASEFWX_LIBRARY_SOVERSION}
     )
 endif()
 
@@ -1001,6 +1093,11 @@ if(BASEFWX_INSTALL)
 
     # pkg-config file for non-CMake consumers.
     set(_basefwx_pc "${CMAKE_CURRENT_BINARY_DIR}/basefwx.pc")
+    if(BASEFWX_ENABLE_RETIRED_MEDIA)
+        set(_basefwx_retired_media_value 1)
+    else()
+        set(_basefwx_retired_media_value 0)
+    endif()
     set(_basefwx_pc_install_dir "/${CMAKE_INSTALL_LIBDIR}/pkgconfig")
     file(RELATIVE_PATH BASEFWX_PC_PREFIX_FROM_PKGCONFIG
         "${_basefwx_pc_install_dir}" "/")
@@ -1015,7 +1112,7 @@ if(BASEFWX_INSTALL)
 "Version: ${BASEFWX_PROJECT_VERSION}\n"
 "Requires: openssl zlib\n"
 "Libs: -L\${libdir} -lbasefwx\n"
-"Cflags: -I\${includedir} -DBASEFWX_HAS_ARGON2=${BASEFWX_HAS_ARGON2} -DBASEFWX_HAS_OQS=${BASEFWX_HAS_OQS} -DBASEFWX_HAS_LZMA=${BASEFWX_HAS_LZMA}\n"
+"Cflags: -I\${includedir} -DBASEFWX_HAS_ARGON2=${BASEFWX_HAS_ARGON2} -DBASEFWX_HAS_OQS=${BASEFWX_HAS_OQS} -DBASEFWX_HAS_LZMA=${BASEFWX_HAS_LZMA} -DBASEFWX_HAS_RETIRED_MEDIA=${_basefwx_retired_media_value}\n"
 )
     install(FILES "${_basefwx_pc}"
         DESTINATION ${CMAKE_INSTALL_LIBDIR}/pkgconfig

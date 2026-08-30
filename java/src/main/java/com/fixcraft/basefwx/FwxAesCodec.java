@@ -30,7 +30,6 @@ import com.fixcraft.basefwx.plugin.BasefwxPluginRegistry;
 final class FwxAesCodec {
     private FwxAesCodec() {}
 
-    static final int STREAM_CHUNK = 1 << 20;
     // Wrap-mode header carries two length-prefixed blobs. Mirror C++
 
     static final class PluginBinding {
@@ -177,7 +176,11 @@ final class FwxAesCodec {
             throw new IllegalArgumentException("fwxAES_encrypt_raw expects bytes");
         }
         byte[] pw = BaseFwx.resolvePasswordBytes(password, useMaster);
-        return fwxAesEncryptRawBytes(plaintext, pw, useMaster);
+        try {
+            return fwxAesEncryptRawBytes(plaintext, pw, useMaster);
+        } finally {
+            Arrays.fill(pw, (byte) 0);
+        }
     }
 
     static byte[] fwxAesEncryptRawBytes(byte[] plaintext, byte[] passwordBytes, boolean useMaster) {
@@ -334,7 +337,11 @@ final class FwxAesCodec {
             throw new IllegalArgumentException("fwxAES_decrypt_raw expects bytes");
         }
         byte[] pw = BaseFwx.resolvePasswordBytes(password, useMaster);
-        return fwxAesDecryptRawBytes(blob, pw, useMaster);
+        try {
+            return fwxAesDecryptRawBytes(blob, pw, useMaster);
+        } finally {
+            Arrays.fill(pw, (byte) 0);
+        }
     }
 
     static byte[] fwxAesDecryptRawBytes(byte[] blob, byte[] passwordBytes, boolean useMaster) {
@@ -507,6 +514,7 @@ final class FwxAesCodec {
                                                     String password,
                                                     boolean useMaster) throws IOException {
         byte[] pw = BaseFwx.resolvePasswordBytes(password, useMaster);
+        try {
         PasswordPolicy.requireStrongPassword(pw, "fwxAES stream encryption");
         boolean hasPassword = pw.length > 0;
         boolean useWrap = false;
@@ -576,24 +584,30 @@ final class FwxAesCodec {
 
             CryptoBackend backend = CryptoBackends.get();
             try (CryptoBackend.AeadEncryptor enc = backend.newGcmEncryptor(key, iv, Constants.FWXAES_AAD)) {
-                byte[] buf = new byte[STREAM_CHUNK];
-                byte[] outBuf = new byte[STREAM_CHUNK + Constants.AEAD_TAG_LEN];
-                long ctLen = 0;
-                int read;
-                while ((read = input.read(buf)) != -1) {
-                    int outLen = enc.update(buf, 0, read, outBuf, 0);
-                    if (outLen > 0) {
-                        output.write(outBuf, 0, outLen);
-                        ctLen += outLen;
+                byte[] buf = new byte[Constants.STREAM_CHUNK_SIZE];
+                byte[] outBuf = new byte[
+                        Constants.STREAM_CHUNK_SIZE + Constants.AEAD_TAG_LEN];
+                try {
+                    long ctLen = 0;
+                    int read;
+                    while ((read = input.read(buf)) != -1) {
+                        int outLen = enc.update(buf, 0, read, outBuf, 0);
+                        if (outLen > 0) {
+                            output.write(outBuf, 0, outLen);
+                            ctLen += outLen;
+                        }
                     }
+                    int finalLen = enc.doFinal(outBuf, 0);
+                    if (finalLen > 0) {
+                        output.write(outBuf, 0, finalLen);
+                        ctLen += finalLen;
+                    }
+                    output.flush();
+                    return ctLen;
+                } finally {
+                    Arrays.fill(buf, (byte) 0);
+                    Arrays.fill(outBuf, (byte) 0);
                 }
-                int finalLen = enc.doFinal(outBuf, 0);
-                if (finalLen > 0) {
-                    output.write(outBuf, 0, finalLen);
-                    ctLen += finalLen;
-                }
-                output.flush();
-                return ctLen;
             }
         } catch (GeneralSecurityException exc) {
             throw new IllegalStateException("fwxAES encrypt failed", exc);
@@ -605,6 +619,9 @@ final class FwxAesCodec {
                 Arrays.fill(maskKey, (byte) 0);
             }
         }
+        } finally {
+            Arrays.fill(pw, (byte) 0);
+        }
     }
 
     static long fwxAesEncryptChannel(FileChannel input,
@@ -612,6 +629,7 @@ final class FwxAesCodec {
                                              String password,
                                              boolean useMaster) throws IOException {
         byte[] pw = BaseFwx.resolvePasswordBytes(password, useMaster);
+        try {
         PasswordPolicy.requireStrongPassword(pw, "fwxAES file encryption");
         boolean hasPassword = pw.length > 0;
         boolean useWrap = false;
@@ -691,32 +709,40 @@ final class FwxAesCodec {
             cipher.init(Cipher.ENCRYPT_MODE, new SecretKeySpec(key, "AES"), spec);
             cipher.updateAAD(Constants.FWXAES_AAD);
 
-            ByteBuffer inBuf = ByteBuffer.allocateDirect(STREAM_CHUNK);
-            ByteBuffer outBuf = ByteBuffer.allocateDirect(STREAM_CHUNK + Constants.AEAD_TAG_LEN);
-            long ctLen = 0;
-            while (true) {
-                int read = input.read(inBuf);
-                if (read < 0) {
-                    break;
+            ByteBuffer inBuf = ByteBuffer.allocateDirect(
+                    Constants.STREAM_CHUNK_SIZE);
+            ByteBuffer outBuf = ByteBuffer.allocateDirect(
+                    Constants.STREAM_CHUNK_SIZE + Constants.AEAD_TAG_LEN);
+            try {
+                long ctLen = 0;
+                while (true) {
+                    int read = input.read(inBuf);
+                    if (read < 0) {
+                        break;
+                    }
+                    inBuf.flip();
+                    outBuf.clear();
+                    int outLen = cipher.update(inBuf, outBuf);
+                    if (outLen > 0) {
+                        outBuf.flip();
+                        FileCodecs.writeFully(output, outBuf);
+                        ctLen += outLen;
+                    }
+                    inBuf.clear();
                 }
-                inBuf.flip();
                 outBuf.clear();
-                int outLen = cipher.update(inBuf, outBuf);
-                if (outLen > 0) {
+                int finalLen = cipher.doFinal(
+                        ByteBuffer.allocate(0), outBuf);
+                if (finalLen > 0) {
                     outBuf.flip();
                     FileCodecs.writeFully(output, outBuf);
-                    ctLen += outLen;
+                    ctLen += finalLen;
                 }
-                inBuf.clear();
+                return ctLen;
+            } finally {
+                Crypto.wipeDirectBuffer(inBuf);
+                Crypto.wipeDirectBuffer(outBuf);
             }
-            outBuf.clear();
-            int finalLen = cipher.doFinal(ByteBuffer.allocate(0), outBuf);
-            if (finalLen > 0) {
-                outBuf.flip();
-                FileCodecs.writeFully(output, outBuf);
-                ctLen += finalLen;
-            }
-            return ctLen;
         } catch (GeneralSecurityException exc) {
             throw new IllegalStateException("fwxAES encrypt failed", exc);
         } finally {
@@ -726,6 +752,9 @@ final class FwxAesCodec {
             if (maskKey.length > 0) {
                 Arrays.fill(maskKey, (byte) 0);
             }
+        }
+        } finally {
+            Arrays.fill(pw, (byte) 0);
         }
     }
 
@@ -753,10 +782,11 @@ final class FwxAesCodec {
         if (ctLen < Constants.AEAD_TAG_LEN) {
             throw new IllegalArgumentException("fwxAES ciphertext too short");
         }
-        byte[] key;
+        byte[] key = null;
         byte[] iv;
         byte[] maskKey = null;
         byte[] pw = BaseFwx.resolvePasswordBytes(password, useMaster);
+        try {
         if (kdf == Constants.FWXAES_KDF_WRAP) {
             int headerLen = iters;
             enforceWrapKeyHeaderLimit(headerLen);
@@ -792,15 +822,17 @@ final class FwxAesCodec {
             key = Crypto.pbkdf2HmacSha256(pw, salt, iters, Constants.FWXAES_KEY_LEN);
         }
 
-        try {
-            decryptAuthenticatedFwxAesStream(
+        decryptAuthenticatedFwxAesStream(
                 key,
                 iv,
                 Channels.newInputStream(input),
                 ctLen,
                 Channels.newOutputStream(output));
         } finally {
-            Arrays.fill(key, (byte) 0);
+            if (key != null) {
+                Arrays.fill(key, (byte) 0);
+            }
+            Arrays.fill(pw, (byte) 0);
         }
     }
 
@@ -831,12 +863,16 @@ final class FwxAesCodec {
         channel.position(pos);
     }
     static void copyStream(InputStream input, OutputStream output) throws IOException {
-        byte[] buf = new byte[STREAM_CHUNK];
-        int read;
-        while ((read = input.read(buf)) != -1) {
-            output.write(buf, 0, read);
+        byte[] buf = new byte[Constants.STREAM_CHUNK_SIZE];
+        try {
+            int read;
+            while ((read = input.read(buf)) != -1) {
+                output.write(buf, 0, read);
+            }
+            output.flush();
+        } finally {
+            Arrays.fill(buf, (byte) 0);
         }
-        output.flush();
     }
 
     private static void enforceWrapKeyHeaderLimit(int headerLen) {
@@ -880,9 +916,9 @@ final class FwxAesCodec {
         }
         File spool =
             BaseFwx.createPrivateTempFile("basefwx-fwxaes-dec-", ".plain");
-        byte[] cipherBuffer = new byte[STREAM_CHUNK];
+        byte[] cipherBuffer = new byte[Constants.STREAM_CHUNK_SIZE];
         byte[] plainBuffer =
-            new byte[STREAM_CHUNK + Constants.AEAD_TAG_LEN];
+            new byte[Constants.STREAM_CHUNK_SIZE + Constants.AEAD_TAG_LEN];
         byte[] tag = new byte[Constants.AEAD_TAG_LEN];
         long plaintextLen = 0;
         try {
@@ -965,10 +1001,11 @@ final class FwxAesCodec {
         if (ctLen < Constants.AEAD_TAG_LEN) {
             throw new IllegalArgumentException("fwxAES ciphertext too short");
         }
-        byte[] key;
+        byte[] key = null;
         byte[] iv;
         byte[] maskKey = null;
         byte[] pw = BaseFwx.resolvePasswordBytes(password, useMaster);
+        try {
         if (kdf == Constants.FWXAES_KDF_WRAP) {
             int headerLen = iters;
             enforceWrapKeyHeaderLimit(headerLen);
@@ -1004,11 +1041,13 @@ final class FwxAesCodec {
             key = Crypto.pbkdf2HmacSha256(pw, salt, iters, Constants.FWXAES_KEY_LEN);
         }
 
-        try {
-            return decryptAuthenticatedFwxAesStream(
+        return decryptAuthenticatedFwxAesStream(
                 key, iv, input, ctLen, output);
         } finally {
-            Arrays.fill(key, (byte) 0);
+            if (key != null) {
+                Arrays.fill(key, (byte) 0);
+            }
+            Arrays.fill(pw, (byte) 0);
         }
     }
 

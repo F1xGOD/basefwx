@@ -22,18 +22,19 @@ Package: basefwx
 Section: utils
 Architecture: any
 Depends:
- libbasefwx3 (= ${binary:Version}),
+ libbasefwx4 (= ${binary:Version}),
  ${shlibs:Depends},
  ${misc:Depends}
 Description: BaseFWX command-line cryptographic codec tool
- BaseFWX is a cryptographic codec toolkit for files, byte streams, and
- selected media carrier formats.
+ BaseFWX is a cryptographic codec toolkit for files and byte streams.
+ The retired kFM/kFA carrier and jMG media formats are not built into this
+ package; they require a separate compatibility build.
  .
  This package contains the BaseFWX command-line tool. The shared runtime
- library is kept in libbasefwx3 so applications can link against the same
+ library is kept in libbasefwx4 so applications can link against the same
  packaged implementation instead of bundling a private copy.
 
-Package: libbasefwx3
+Package: libbasefwx4
 Section: libs
 Architecture: any
 Multi-Arch: same
@@ -55,7 +56,7 @@ Section: libdevel
 Architecture: any
 Multi-Arch: same
 Depends:
- libbasefwx3 (= ${binary:Version}),
+ libbasefwx4 (= ${binary:Version}),
  libssl-dev,
  zlib1g-dev,
  ${misc:Depends}

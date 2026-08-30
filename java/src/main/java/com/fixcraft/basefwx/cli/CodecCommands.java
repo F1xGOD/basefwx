@@ -77,18 +77,6 @@ final class CodecCommands {
                     throw new RuntimeException("n10 file decode failed", exc);
                 }
                 return 0;
-            case "b256-enc":
-                if (argc < 2) {
-                    return 1;
-                }
-                System.out.println(BaseFwx.b256Encode(args[1]));
-                return 0;
-            case "b256-dec":
-                if (argc < 2) {
-                    return 1;
-                }
-                System.out.println(BaseFwx.b256Decode(args[1]));
-                return 0;
             case "b64-enc":
                 if (argc < 2) {
                     return 1;
@@ -107,31 +95,6 @@ final class CodecCommands {
                 }
                 System.out.println(BaseFwx.hash512(args[1]));
                 return 0;
-            case "uhash513":
-                if (argc < 2) {
-                    return 1;
-                }
-                System.out.println(BaseFwx.uhash513(args[1]));
-                return 0;
-            case "a512-enc":
-                if (argc < 2) {
-                    return 1;
-                }
-                System.out.println(BaseFwx.a512Encode(args[1]));
-                return 0;
-            case "a512-dec":
-                if (argc < 2) {
-                    return 1;
-                }
-                System.out.println(BaseFwx.a512Decode(args[1]));
-                return 0;
-            case "bi512-enc":
-                if (argc < 2) {
-                    return 1;
-                }
-                System.out.println(BaseFwx.bi512Encode(args[1]));
-                return 0;
-            // b1024-enc retired in 3.7.0; was `bi512-enc $(a512-enc text)`.
             default:
                 return -1;
         }
@@ -141,10 +104,6 @@ final class CodecCommands {
         switch (method) {
             case "b64":
                 return BaseFwx.b64Encode(text);
-            case "b256":
-                return BaseFwx.b256Encode(text);
-            case "a512":
-                return BaseFwx.a512Encode(text);
             case "n10":
                 return BaseFwx.n10Encode(text);
             case "b512":
@@ -160,10 +119,6 @@ final class CodecCommands {
         switch (method) {
             case "b64":
                 return BaseFwx.b64Decode(text);
-            case "b256":
-                return BaseFwx.b256Decode(text);
-            case "a512":
-                return BaseFwx.a512Decode(text);
             case "n10":
                 return BaseFwx.n10Decode(text);
             case "b512":
@@ -179,11 +134,6 @@ final class CodecCommands {
         switch (method) {
             case "hash512":
                 return BaseFwx.hash512(text);
-            case "uhash513":
-                return BaseFwx.uhash513(text);
-            case "bi512":
-                return BaseFwx.bi512Encode(text);
-            // b1024 retired in 3.7.0; chain bi512(a512(text)) in caller code.
             default:
                 throw new IllegalArgumentException("Unsupported hash method " + method);
         }

@@ -9,6 +9,18 @@ else
 fi
 cd "$workdir"
 
+# Debian builds the core profile. The internal CMake install-consumer test
+# overrides this for an explicit compatibility build.
+expected_retired="${BASEFWX_EXPECT_RETIRED_MEDIA:-0}"
+case "$expected_retired" in
+    0|1) ;;
+    *)
+        echo "BASEFWX_EXPECT_RETIRED_MEDIA must be 0 or 1" >&2
+        exit 2
+        ;;
+esac
+export BASEFWX_EXPECT_RETIRED_MEDIA="$expected_retired"
+
 prefix="${BASEFWX_TEST_PREFIX:-/usr}"
 multiarch="$(dpkg-architecture -qDEB_HOST_MULTIARCH)"
 if [ "$prefix" != "/usr" ]; then
@@ -23,10 +35,19 @@ cat > check.cpp <<'EOF'
 #include <basefwx/pq.hpp>
 #include <basefwx/x25519.hpp>
 
+#include <cstdlib>
 #include <iostream>
 #include <string>
 
 int main() {
+    const char* expected_retired =
+        std::getenv("BASEFWX_EXPECT_RETIRED_MEDIA");
+    if (expected_retired == nullptr
+        || (BASEFWX_HAS_RETIRED_MEDIA != 0)
+            != (std::string(expected_retired) == "1")) {
+        return 5;
+    }
+
     const std::string value = "basefwx";
     const auto encoded = basefwx::B64Encode(value);
     const auto decoded = basefwx::B64Decode(encoded);

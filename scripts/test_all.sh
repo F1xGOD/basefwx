@@ -28,6 +28,14 @@ source "$ROOT/scripts/lib/java_bench_flags.sh"
 # shellcheck source=lib/benchmark_policy.sh
 source "$ROOT/scripts/lib/benchmark_policy.sh"
 
+RETIRED_MEDIA_ENABLED=0
+if basefwx_benchmark_value_is_true \
+    "${BASEFWX_ENABLE_RETIRED_MEDIA:-0}"; then
+    RETIRED_MEDIA_ENABLED=1
+    export BASEFWX_ENABLE_RETIRED_MEDIA=1
+else
+    export BASEFWX_ENABLE_RETIRED_MEDIA=0
+fi
 USE_VENV="${USE_VENV:-1}"
 VENV_DIR="${VENV_DIR:-$ROOT/.venv}"
 VENV_PY="$VENV_DIR/bin/python"
@@ -37,7 +45,11 @@ RUN_PY_TESTS="${RUN_PY_TESTS:-1}"
 CPP_BIN="$ROOT/cpp/build/basefwx"
 RUN_CPP_TESTS="${RUN_CPP_TESTS:-1}"
 JAVA_DIR="$ROOT/java"
-JAVA_BUILD_DIR="$JAVA_DIR/build"
+JAVA_PROFILE="core"
+if (( RETIRED_MEDIA_ENABLED == 1 )); then
+    JAVA_PROFILE="retired-media"
+fi
+JAVA_BUILD_DIR="$JAVA_DIR/build/test-all/$JAVA_PROFILE"
 JAVA_JAR="$JAVA_BUILD_DIR/libs/basefwx-java.jar"
 JAVA_BIN="${JAVA_BIN:-}"
 JAVAC_BIN="${JAVAC_BIN:-}"
@@ -279,9 +291,11 @@ fi
 
 export PYTHONPATH="$PY_ROOT${PYTHONPATH:+:$PYTHONPATH}"
 export BASEFWX_USER_KDF="pbkdf2"
-export BASEFWX_B512_AEAD="1"
 export BASEFWX_OBFUSCATE="1"
-export BASEFWX_OBFUSCATE_CODECS="1"
+# Qualify the supported writer defaults. Focused compatibility tests exercise
+# legacy input recovery and token-map decoding without changing suite-wide
+# output policy.
+unset BASEFWX_B512_AEAD BASEFWX_OBFUSCATE_CODECS
 DEFAULT_BENCH_WORKERS=""
 if command -v nproc >/dev/null 2>&1; then
     DEFAULT_BENCH_WORKERS="$(nproc)"
@@ -363,9 +377,9 @@ if (( FFMPEG_AVAILABLE == 1 )) && command -v nvidia-smi >/dev/null 2>&1; then
 fi
 export FFMPEG_AVAILABLE NVIDIA_HWACCEL_AVAILABLE COOLDOWN_SECONDS
 
-TEXT_NOPASS_METHODS=("b64" "b256" "a512" "n10")
+TEXT_NOPASS_METHODS=("b64" "n10")
 TEXT_PASS_METHODS=("b512" "pb512")
-HASH_METHODS=("hash512" "uhash513" "bi512")  # b1024 retired in 3.6.5
+HASH_METHODS=("hash512")
 
 declare -A TIMES
 FAILURES=()
@@ -781,6 +795,9 @@ lang_cooldown() {
 ensure_venv() {
     local pip_cmd
     local py_install_target="${PY_ROOT}[argon2]"
+    if (( RETIRED_MEDIA_ENABLED == 1 )); then
+        py_install_target="${PY_ROOT}[argon2,retired-media]"
+    fi
     if [[ "$USE_VENV" != "1" ]]; then
         if [[ -z "$PYTHON_BIN" ]]; then
             PYTHON_BIN="$(command -v python3 || command -v python || true)"
@@ -848,7 +865,6 @@ calc_total_steps() {
     local b512_count="${#B512FILE_CASES[@]}"
     local pb512_count="${#PB512FILE_CASES[@]}"
     local pb512_ksep_count="${#PB512_KSEP_CASES[@]}"
-    local jmg_count="${#JMG_CASES[@]}"
     local nopass_count="${#TEXT_NOPASS_METHODS[@]}"
     local pass_count="${#TEXT_PASS_METHODS[@]}"
     local hash_count="${#HASH_METHODS[@]}"
@@ -867,18 +883,12 @@ calc_total_steps() {
         STEP_TOTAL=$((STEP_TOTAL + py_base + py_wrong))
         STEP_TOTAL=$((STEP_TOTAL + file_unit * b512_count + file_unit * pb512_count))
         STEP_TOTAL=$((STEP_TOTAL + 5))
-        if (( jmg_count > 0 )); then
-            STEP_TOTAL=$((STEP_TOTAL + jmg_count))
-        fi
     fi
     if [[ "$RUN_PYPY_TESTS" == "1" && "$PYPY_AVAILABLE" == "1" ]]; then
         local pypy_base=$((1 + nopass_count + pass_count + hash_count))
         STEP_TOTAL=$((STEP_TOTAL + pypy_base))
         STEP_TOTAL=$((STEP_TOTAL + b512_count + pb512_count))
         STEP_TOTAL=$((STEP_TOTAL + 4))
-        if (( jmg_count > 0 )); then
-            STEP_TOTAL=$((STEP_TOTAL + jmg_count))
-        fi
     fi
     if [[ "$RUN_CPP_TESTS" == "1" && "$CPP_AVAILABLE" == "1" ]]; then
         local cpp_base=$((1 + nopass_count + pass_count + hash_count))
@@ -889,9 +899,6 @@ calc_total_steps() {
         STEP_TOTAL=$((STEP_TOTAL + cpp_base + cpp_wrong))
         STEP_TOTAL=$((STEP_TOTAL + file_unit * b512_count + file_unit * pb512_count))
         STEP_TOTAL=$((STEP_TOTAL + 5))
-        if (( jmg_count > 0 )); then
-            STEP_TOTAL=$((STEP_TOTAL + jmg_count))
-        fi
     fi
     if [[ "$RUN_JAVA_TESTS" == "1" && "$JAVA_AVAILABLE" == "1" ]]; then
         local java_base=$((1 + nopass_count + pass_count + hash_count))
@@ -902,32 +909,26 @@ calc_total_steps() {
         STEP_TOTAL=$((STEP_TOTAL + java_base + java_wrong))
         STEP_TOTAL=$((STEP_TOTAL + file_unit * b512_count + file_unit * pb512_count))
         STEP_TOTAL=$((STEP_TOTAL + 5))
-        if (( jmg_count > 0 )); then
-            STEP_TOTAL=$((STEP_TOTAL + jmg_count))
-        fi
     fi
     if [[ "$SKIP_CROSS" != "1" ]]; then
         if [[ "$RUN_PY_TESTS" == "1" && "$RUN_CPP_TESTS" == "1" && "$CPP_AVAILABLE" == "1" ]]; then
             STEP_TOTAL=$((STEP_TOTAL + 2 * reversible_count + 2))
             STEP_TOTAL=$((STEP_TOTAL + 2 * b512_count + 2 * pb512_count))
             STEP_TOTAL=$((STEP_TOTAL + 4 * pb512_ksep_count))
-            if (( jmg_count > 0 )); then
-                STEP_TOTAL=$((STEP_TOTAL + 2 * jmg_count))
-            fi
             STEP_TOTAL=$((STEP_TOTAL + 4))
         fi
         if [[ "$RUN_PY_TESTS" == "1" && "$RUN_JAVA_TESTS" == "1" && "$JAVA_AVAILABLE" == "1" ]]; then
             STEP_TOTAL=$((STEP_TOTAL + 2 * reversible_count + 2))
             STEP_TOTAL=$((STEP_TOTAL + 4 * pb512_ksep_count))
-            if (( jmg_count > 0 )); then
-                STEP_TOTAL=$((STEP_TOTAL + 2 * jmg_count))
-            fi
             STEP_TOTAL=$((STEP_TOTAL + 4))
         fi
         if [[ "$RUN_CPP_TESTS" == "1" && "$CPP_AVAILABLE" == "1" && "$RUN_JAVA_TESTS" == "1" && "$JAVA_AVAILABLE" == "1" ]]; then
             STEP_TOTAL=$((STEP_TOTAL + 4 * pb512_ksep_count))
             STEP_TOTAL=$((STEP_TOTAL + 4))
         fi
+    fi
+    if (( RETIRED_MEDIA_ENABLED == 1 )); then
+        STEP_TOTAL=$((STEP_TOTAL + $(retired_media_step_count)))
     fi
 }
 
@@ -1011,6 +1012,7 @@ ensure_cpp() {
     time_cmd_no_fail "cpp_configure" cmake -S "$ROOT/cpp" -B "$build_dir" \
         -DCMAKE_BUILD_TYPE=Release \
         -DBASEFWX_BUILD_TESTS=ON \
+        -DBASEFWX_ENABLE_RETIRED_MEDIA="$([[ "$RETIRED_MEDIA_ENABLED" == "1" ]] && printf ON || printf OFF)" \
         -DBASEFWX_REQUIRE_ARGON2="$CPP_REQUIRE_ARGON2" \
         -DBASEFWX_REQUIRE_OQS="$CPP_REQUIRE_OQS" \
         -DBASEFWX_REQUIRE_LZMA="$CPP_REQUIRE_LZMA" \
@@ -1052,6 +1054,23 @@ ensure_java() {
     while IFS= read -r -d '' file; do
         sources+=("$file")
     done < <(find "$JAVA_DIR/src/main/java" -type f -name "*.java" -print0)
+    if (( RETIRED_MEDIA_ENABLED == 1 )); then
+        while IFS= read -r -d '' file; do
+            sources+=("$file")
+        done < <(find "$JAVA_DIR/src/retired/java" -type f -name "*.java" -print0)
+        local retired_profile_fragment
+        for retired_profile_fragment in \
+            Constants.fields BaseFwx.methods Codec.methods \
+            BaseFwxCli.methods CliOptions.methods; do
+            retired_profile_fragment="$JAVA_DIR/src/retired/profile/$retired_profile_fragment"
+            if [[ ! -f "$retired_profile_fragment" ]]; then
+                JAVA_AVAILABLE=0
+                FAILURES+=("java_build (retired profile fragment missing: $retired_profile_fragment)")
+                return 1
+            fi
+            sources+=("$retired_profile_fragment")
+        done
+    fi
     if (( ${#sources[@]} == 0 )); then
         JAVA_AVAILABLE=0
         FAILURES+=("java_build (no sources)")
@@ -1068,6 +1087,22 @@ ensure_java() {
             fi
         done
     fi
+    if [[ "$JAVA_DIR/build.gradle" -nt "$JAVA_JAR" ]]; then
+        needs_build=1
+    fi
+    if (( needs_build == 0 )); then
+        local expected_profile profile_line
+        expected_profile="retired_media=OFF"
+        if (( RETIRED_MEDIA_ENABLED == 1 )); then
+            expected_profile="retired_media=ON"
+        fi
+        profile_line="$("$JAVA_BIN" -jar "$JAVA_JAR" version 2>>"$LOG" \
+            | grep '^features:' | head -n 1 || true)"
+        if [[ "$profile_line" != *"$expected_profile"* ]]; then
+            log "Java artifact profile mismatch: expected $expected_profile"
+            needs_build=1
+        fi
+    fi
     if [[ -n "${CI:-}" ]]; then
         needs_build=1
     fi
@@ -1081,19 +1116,39 @@ ensure_java() {
             else
                 gradle_args=(build --no-daemon)
             fi
+            if (( RETIRED_MEDIA_ENABLED == 1 )); then
+                gradle_args+=(-PbasefwxEnableRetiredMedia=true)
+            fi
             if ! time_cmd_no_fail "java_build" gradle -p "$JAVA_DIR" "${gradle_args[@]}"; then
                 JAVA_AVAILABLE=0
                 FAILURES+=("java_build (gradle build failed)")
                 return 1
             fi
-            if [[ ! -f "$JAVA_JAR" ]]; then
-                local built_jar
-                built_jar="$(find "$JAVA_DIR/build/libs" -maxdepth 1 -name "*.jar" | head -n1)"
-                if [[ -n "$built_jar" && -f "$built_jar" ]]; then
-                    JAVA_JAR="$built_jar"
-                fi
+            local built_jar
+            built_jar="$(find "$JAVA_DIR/build/libs" -maxdepth 1 -name "*.jar" | head -n1)"
+            if [[ -z "$built_jar" || ! -f "$built_jar" ]]; then
+                JAVA_AVAILABLE=0
+                FAILURES+=("java_build (Gradle jar missing)")
+                return 1
+            fi
+            # CI runs `gradle clean`, which removes the profile cache because
+            # it deliberately lives below java/build. Recreate the destination
+            # only after Gradle completes so the qualified JAR can be retained
+            # for the cross-runtime phase.
+            mkdir -p "$(dirname "$JAVA_JAR")"
+            if ! cp -f "$built_jar" "$JAVA_JAR"; then
+                JAVA_AVAILABLE=0
+                FAILURES+=("java_build (profile jar copy failed)")
+                return 1
             fi
         else
+            if (( RETIRED_MEDIA_ENABLED == 1 )); then
+                JAVA_AVAILABLE=0
+                FAILURES+=(
+                    "java_build (retired-media compatibility requires Gradle for the generated Constants API overlay)"
+                )
+                return 1
+            fi
             # Fallback: Compile with javac and manually resolve dependencies
             # First, try to find BouncyCastle JARs in gradle cache or system
             local cp_arg=""
@@ -1272,7 +1327,7 @@ cpp_text_roundtrip() {
     local enc_file="${out_path}.enc"
     local text
     text="$(cat "$text_path")"
-    if [[ "$method" == "b256" || "$method" == "b64" || "$method" == "a512" || "$method" == "n10" ]]; then
+    if [[ "$method" == "b64" || "$method" == "n10" ]]; then
         log "STEP: $CPP_BIN ${method}-enc"
         "$CPP_BIN" "${method}-enc" "$text" >"$enc_file" || return $?
         local enc
@@ -1298,7 +1353,7 @@ cpp_text_encode() {
     local pw="$4"
     local text
     text="$(cat "$text_path")"
-    if [[ "$method" == "b256" || "$method" == "b64" || "$method" == "a512" || "$method" == "n10" ]]; then
+    if [[ "$method" == "b64" || "$method" == "n10" ]]; then
         log "STEP: $CPP_BIN ${method}-enc"
         "$CPP_BIN" "${method}-enc" "$text" >"$enc_file" || return $?
         strip_newline "$enc_file"
@@ -1316,7 +1371,7 @@ cpp_text_decode() {
     local pw="$4"
     local enc
     enc="$(cat "$enc_file")"
-    if [[ "$method" == "b256" || "$method" == "b64" || "$method" == "a512" || "$method" == "n10" ]]; then
+    if [[ "$method" == "b64" || "$method" == "n10" ]]; then
         log "STEP: $CPP_BIN ${method}-dec"
         "$CPP_BIN" "${method}-dec" "$enc" >"$out_path" || return $?
         strip_newline "$out_path"
@@ -1355,10 +1410,6 @@ cpp_text_hash() {
     local text
     text="$(cat "$text_path")"
     local cmd="$method"
-    if [[ "$method" == "bi512" ]]; then
-        cmd="bi512-enc"
-    fi
-    # b1024 retired in 3.6.5
     log "STEP: $CPP_BIN $cmd"
     "$CPP_BIN" "$cmd" "$text" >"$out_path" || return $?
     strip_newline "$out_path"
@@ -1432,7 +1483,7 @@ java_text_roundtrip() {
     local enc_file="${out_path}.enc"
     local text
     text="$(cat "$text_path")"
-    if [[ "$method" == "b256" || "$method" == "b64" || "$method" == "a512" || "$method" == "n10" ]]; then
+    if [[ "$method" == "b64" || "$method" == "n10" ]]; then
         log "STEP: $JAVA_BIN -jar $JAVA_JAR ${method}-enc"
         "$JAVA_BIN" -jar "$JAVA_JAR" "${method}-enc" "$text" >"$enc_file" || return $?
         local enc
@@ -1458,7 +1509,7 @@ java_text_encode() {
     local pw="$4"
     local text
     text="$(cat "$text_path")"
-    if [[ "$method" == "b256" || "$method" == "b64" || "$method" == "a512" || "$method" == "n10" ]]; then
+    if [[ "$method" == "b64" || "$method" == "n10" ]]; then
         log "STEP: $JAVA_BIN -jar $JAVA_JAR ${method}-enc"
         "$JAVA_BIN" -jar "$JAVA_JAR" "${method}-enc" "$text" >"$enc_file" || return $?
         strip_newline "$enc_file"
@@ -1476,7 +1527,7 @@ java_text_decode() {
     local pw="$4"
     local enc
     enc="$(cat "$enc_file")"
-    if [[ "$method" == "b256" || "$method" == "b64" || "$method" == "a512" || "$method" == "n10" ]]; then
+    if [[ "$method" == "b64" || "$method" == "n10" ]]; then
         log "STEP: $JAVA_BIN -jar $JAVA_JAR ${method}-dec"
         "$JAVA_BIN" -jar "$JAVA_JAR" "${method}-dec" "$enc" >"$out_path" || return $?
         strip_newline "$out_path"
@@ -1494,7 +1545,7 @@ java_text_wrong() {
     local enc_file="$4"
     local text
     text="$(cat "$text_path")"
-    if [[ "$method" == "b256" || "$method" == "b64" || "$method" == "a512" || "$method" == "n10" ]]; then
+    if [[ "$method" == "b64" || "$method" == "n10" ]]; then
         return 0
     fi
     log "STEP: $JAVA_BIN -jar $JAVA_JAR ${method}-enc"
@@ -1518,10 +1569,6 @@ java_text_hash() {
     local text
     text="$(cat "$text_path")"
     local cmd="$method"
-    if [[ "$method" == "bi512" ]]; then
-        cmd="bi512-enc"
-    fi
-    # b1024 retired in 3.6.5
     log "STEP: $JAVA_BIN -jar $JAVA_JAR $cmd"
     "$JAVA_BIN" -jar "$JAVA_JAR" "$cmd" "$text" >"$out_path" || return $?
     strip_newline "$out_path"
@@ -1759,539 +1806,10 @@ java_pb512file_wrong() {
     return 0
 }
 
-py_jmg_roundtrip() {
-    local input="$1"
-    local enc="$2"
-    local dec="$3"
-    log "STEP: python jmg-enc $input"
-    "$PYTHON_BIN" "$PY_HELPER" jmg-roundtrip "$input" "$enc" "$dec" "$PW"
-}
-
-py_jmg_roundtrip_no_archive() {
-    local input="$1"
-    local enc="$2"
-    local dec="$3"
-    log "STEP: python jmg-enc(no-archive) $input"
-    "$PYTHON_BIN" "$PY_HELPER" jmg-roundtrip-no-archive "$input" "$enc" "$dec" "$PW"
-}
-
-py_jmg_roundtrip_gpu_logged() {
-    local input="$1"
-    local enc="$2"
-    local dec="$3"
-    local hwlog="$TMP_DIR/jmg_py_gpu_hw_$(basename "$enc").log"
-    rm -f "$hwlog"
-    log "STEP: python jmg-enc (gpu+hwlog) $input"
-    env BASEFWX_HWACCEL=nvenc BASEFWX_HWACCEL_STRICT=1 \
-        "$PYTHON_BIN" "$PY_HELPER" jmg-roundtrip "$input" "$enc" "$dec" "$PW" >>"$LOG" 2>"$hwlog" || {
-        cat "$hwlog" >>"$LOG"
-        return 1
-    }
-    cat "$hwlog" >>"$LOG"
-    if ! grep -q "\\[basefwx.hw\\].*op=jMGe" "$hwlog"; then
-        log "Missing hardware routing log for jMGe in GPU path"
-        return 1
-    fi
-    if ! grep -q "\\[basefwx.hw\\].*op=jMGd" "$hwlog"; then
-        log "Missing hardware routing log for jMGd in GPU path"
-        return 1
-    fi
-    return 0
-}
-
-pypy_jmg_roundtrip() {
-    local input="$1"
-    local enc="$2"
-    local dec="$3"
-    log "STEP: pypy jmg-enc $input"
-    "$PYPY_BIN" "$PY_HELPER" jmg-roundtrip "$input" "$enc" "$dec" "$PW"
-}
-
-py_jmg_enc() {
-    local input="$1"
-    local enc="$2"
-    log "STEP: python jmg-enc $input"
-    "$PYTHON_BIN" "$PY_HELPER" jmg-enc "$input" "$enc" "$PW"
-}
-
-pypy_jmg_enc() {
-    local input="$1"
-    local enc="$2"
-    log "STEP: pypy jmg-enc $input"
-    "$PYPY_BIN" "$PY_HELPER" jmg-enc "$input" "$enc" "$PW"
-}
-
-py_jmg_dec() {
-    local input="$1"
-    local dec="$2"
-    log "STEP: python jmg-dec $input"
-    "$PYTHON_BIN" "$PY_HELPER" jmg-dec "$input" "$dec" "$PW"
-}
-
-pypy_jmg_dec() {
-    local input="$1"
-    local dec="$2"
-    log "STEP: pypy jmg-dec $input"
-    "$PYPY_BIN" "$PY_HELPER" jmg-dec "$input" "$dec" "$PW"
-}
-
-cpp_jmg_roundtrip() {
-    local input="$1"
-    local enc="$2"
-    local dec="$3"
-    log "STEP: $CPP_BIN jmge $input --archive"
-    "$CPP_BIN" jmge "$input" -p "$PW" --archive --out "$enc" || return $?
-    log "STEP: $CPP_BIN jmgd $enc"
-    "$CPP_BIN" jmgd "$enc" -p "$PW" --out "$dec"
-}
-
-cpp_jmg_roundtrip_no_archive() {
-    local input="$1"
-    local enc="$2"
-    local dec="$3"
-    log "STEP: $CPP_BIN jmge $input"
-    "$CPP_BIN" jmge "$input" -p "$PW" --out "$enc" || return $?
-    log "STEP: $CPP_BIN jmgd $enc"
-    "$CPP_BIN" jmgd "$enc" -p "$PW" --out "$dec"
-}
-
-cpp_jmg_enc() {
-    local input="$1"
-    local enc="$2"
-    log "STEP: $CPP_BIN jmge $input --archive"
-    "$CPP_BIN" jmge "$input" -p "$PW" --archive --out "$enc"
-}
-
-cpp_jmg_dec() {
-    local input="$1"
-    local dec="$2"
-    log "STEP: $CPP_BIN jmgd $input"
-    "$CPP_BIN" jmgd "$input" -p "$PW" --out "$dec"
-}
-
-java_jmg_roundtrip() {
-    local input="$1"
-    local enc="$2"
-    local dec="$3"
-    log "STEP: $JAVA_BIN -jar $JAVA_JAR jmge $input"
-    "$JAVA_BIN" -jar "$JAVA_JAR" jmge "$input" "$enc" "$PW" || return $?
-    log "STEP: $JAVA_BIN -jar $JAVA_JAR jmgd $enc"
-    "$JAVA_BIN" -jar "$JAVA_JAR" jmgd "$enc" "$dec" "$PW"
-}
-
-java_jmg_roundtrip_no_archive() {
-    local input="$1"
-    local enc="$2"
-    local dec="$3"
-    log "STEP: $JAVA_BIN -jar $JAVA_JAR jmge $input --no-archive"
-    "$JAVA_BIN" -jar "$JAVA_JAR" jmge "$input" "$enc" "$PW" --no-archive || return $?
-    log "STEP: $JAVA_BIN -jar $JAVA_JAR jmgd $enc"
-    "$JAVA_BIN" -jar "$JAVA_JAR" jmgd "$enc" "$dec" "$PW"
-}
-
-java_jmg_enc() {
-    local input="$1"
-    local enc="$2"
-    log "STEP: $JAVA_BIN -jar $JAVA_JAR jmge $input"
-    "$JAVA_BIN" -jar "$JAVA_JAR" jmge "$input" "$enc" "$PW"
-}
-
-java_jmg_dec() {
-    local input="$1"
-    local dec="$2"
-    log "STEP: $JAVA_BIN -jar $JAVA_JAR jmgd $input"
-    "$JAVA_BIN" -jar "$JAVA_JAR" jmgd "$input" "$dec" "$PW"
-}
-
-py_kfme() {
-    local input="$1"
-    local out="$2"
-    log "STEP: python -m basefwx kFMe $input"
-    "$PYTHON_BIN" -m basefwx kFMe "$input" --out "$out"
-}
-
-py_kfmd() {
-    local input="$1"
-    local out="$2"
-    log "STEP: python -m basefwx kFMd $input"
-    "$PYTHON_BIN" -m basefwx kFMd "$input" --out "$out"
-}
-
-py_kfae() {
-    local input="$1"
-    local out="$2"
-    log "STEP: python -m basefwx kFAe $input (legacy PNG mode)"
-    "$PYTHON_BIN" -m basefwx kFAe "$input" --out "$out"
-}
-
-py_kfad() {
-    local input="$1"
-    local out="$2"
-    log "STEP: python -m basefwx kFAd $input (legacy decode alias)"
-    "$PYTHON_BIN" -m basefwx kFAd "$input" --out "$out"
-}
-
-pypy_kfme() {
-    local input="$1"
-    local out="$2"
-    log "STEP: pypy -m basefwx kFMe $input"
-    "$PYPY_BIN" -m basefwx kFMe "$input" --out "$out"
-}
-
-pypy_kfmd() {
-    local input="$1"
-    local out="$2"
-    log "STEP: pypy -m basefwx kFMd $input"
-    "$PYPY_BIN" -m basefwx kFMd "$input" --out "$out"
-}
-
-pypy_kfae() {
-    local input="$1"
-    local out="$2"
-    log "STEP: pypy -m basefwx kFAe $input (legacy PNG mode)"
-    "$PYPY_BIN" -m basefwx kFAe "$input" --out "$out"
-}
-
-pypy_kfad() {
-    local input="$1"
-    local out="$2"
-    log "STEP: pypy -m basefwx kFAd $input (legacy decode alias)"
-    "$PYPY_BIN" -m basefwx kFAd "$input" --out "$out"
-}
-
-cpp_kfme() {
-    local input="$1"
-    local out="$2"
-    log "STEP: $CPP_BIN kFMe $input"
-    "$CPP_BIN" kFMe "$input" --out "$out"
-}
-
-cpp_kfmd() {
-    local input="$1"
-    local out="$2"
-    log "STEP: $CPP_BIN kFMd $input"
-    "$CPP_BIN" kFMd "$input" --out "$out"
-}
-
-cpp_kfae() {
-    local input="$1"
-    local out="$2"
-    log "STEP: $CPP_BIN kFAe $input (legacy PNG mode)"
-    "$CPP_BIN" kFAe "$input" --out "$out"
-}
-
-cpp_kfad() {
-    local input="$1"
-    local out="$2"
-    log "STEP: $CPP_BIN kFAd $input (legacy decode alias)"
-    "$CPP_BIN" kFAd "$input" --out "$out"
-}
-
-java_kfme() {
-    local input="$1"
-    local out="$2"
-    log "STEP: $JAVA_BIN -jar $JAVA_JAR kFMe $input"
-    "$JAVA_BIN" -jar "$JAVA_JAR" kFMe "$input" --out "$out"
-}
-
-java_kfmd() {
-    local input="$1"
-    local out="$2"
-    log "STEP: $JAVA_BIN -jar $JAVA_JAR kFMd $input"
-    "$JAVA_BIN" -jar "$JAVA_JAR" kFMd "$input" --out "$out"
-}
-
-java_kfae() {
-    local input="$1"
-    local out="$2"
-    log "STEP: $JAVA_BIN -jar $JAVA_JAR kFAe $input (legacy PNG mode)"
-    "$JAVA_BIN" -jar "$JAVA_JAR" kFAe "$input" --out "$out"
-}
-
-java_kfad() {
-    local input="$1"
-    local out="$2"
-    log "STEP: $JAVA_BIN -jar $JAVA_JAR kFAd $input (legacy decode alias)"
-    "$JAVA_BIN" -jar "$JAVA_JAR" kFAd "$input" --out "$out"
-}
-
-kfme_py_enc_cpp_dec() {
-    local input="$1"
-    local enc="$2"
-    local dec="$3"
-    py_kfme "$input" "$enc" || return $?
-    cpp_kfmd "$enc" "$dec"
-}
-
-kfme_cpp_enc_py_dec() {
-    local input="$1"
-    local enc="$2"
-    local dec="$3"
-    cpp_kfme "$input" "$enc" || return $?
-    py_kfmd "$enc" "$dec"
-}
-
-kfae_py_enc_cpp_dec() {
-    local input="$1"
-    local enc="$2"
-    local dec="$3"
-    py_kfae "$input" "$enc" || return $?
-    cpp_kfad "$enc" "$dec"
-}
-
-kfae_cpp_enc_py_dec() {
-    local input="$1"
-    local enc="$2"
-    local dec="$3"
-    cpp_kfae "$input" "$enc" || return $?
-    py_kfad "$enc" "$dec"
-}
-
-kfme_py_enc_java_dec() {
-    local input="$1"
-    local enc="$2"
-    local dec="$3"
-    py_kfme "$input" "$enc" || return $?
-    java_kfmd "$enc" "$dec"
-}
-
-kfme_java_enc_py_dec() {
-    local input="$1"
-    local enc="$2"
-    local dec="$3"
-    java_kfme "$input" "$enc" || return $?
-    py_kfmd "$enc" "$dec"
-}
-
-kfae_py_enc_java_dec() {
-    local input="$1"
-    local enc="$2"
-    local dec="$3"
-    py_kfae "$input" "$enc" || return $?
-    java_kfad "$enc" "$dec"
-}
-
-kfae_java_enc_py_dec() {
-    local input="$1"
-    local enc="$2"
-    local dec="$3"
-    java_kfae "$input" "$enc" || return $?
-    py_kfad "$enc" "$dec"
-}
-
-kfme_cpp_enc_java_dec() {
-    local input="$1"
-    local enc="$2"
-    local dec="$3"
-    cpp_kfme "$input" "$enc" || return $?
-    java_kfmd "$enc" "$dec"
-}
-
-kfme_java_enc_cpp_dec() {
-    local input="$1"
-    local enc="$2"
-    local dec="$3"
-    java_kfme "$input" "$enc" || return $?
-    cpp_kfmd "$enc" "$dec"
-}
-
-kfae_cpp_enc_java_dec() {
-    local input="$1"
-    local enc="$2"
-    local dec="$3"
-    cpp_kfae "$input" "$enc" || return $?
-    java_kfad "$enc" "$dec"
-}
-
-kfae_java_enc_cpp_dec() {
-    local input="$1"
-    local enc="$2"
-    local dec="$3"
-    java_kfae "$input" "$enc" || return $?
-    cpp_kfad "$enc" "$dec"
-}
-
-kfme_py_roundtrip() {
-    local input="$1"
-    local enc="$2"
-    local dec="$3"
-    py_kfme "$input" "$enc" || return $?
-    py_kfmd "$enc" "$dec"
-}
-
-kfme_pypy_roundtrip() {
-    local input="$1"
-    local enc="$2"
-    local dec="$3"
-    pypy_kfme "$input" "$enc" || return $?
-    pypy_kfmd "$enc" "$dec"
-}
-
-kfme_cpp_roundtrip() {
-    local input="$1"
-    local enc="$2"
-    local dec="$3"
-    cpp_kfme "$input" "$enc" || return $?
-    cpp_kfmd "$enc" "$dec"
-}
-
-kfme_java_roundtrip() {
-    local input="$1"
-    local enc="$2"
-    local dec="$3"
-    java_kfme "$input" "$enc" || return $?
-    java_kfmd "$enc" "$dec"
-}
-
-kfae_py_roundtrip() {
-    local input="$1"
-    local enc="$2"
-    local dec="$3"
-    py_kfae "$input" "$enc" || return $?
-    py_kfad "$enc" "$dec"
-}
-
-kfae_pypy_roundtrip() {
-    local input="$1"
-    local enc="$2"
-    local dec="$3"
-    pypy_kfae "$input" "$enc" || return $?
-    pypy_kfad "$enc" "$dec"
-}
-
-kfae_cpp_roundtrip() {
-    local input="$1"
-    local enc="$2"
-    local dec="$3"
-    cpp_kfae "$input" "$enc" || return $?
-    cpp_kfad "$enc" "$dec"
-}
-
-kfae_java_roundtrip() {
-    local input="$1"
-    local enc="$2"
-    local dec="$3"
-    java_kfae "$input" "$enc" || return $?
-    java_kfad "$enc" "$dec"
-}
-
-bench_median_ns() {
-    if [[ "$#" -eq 0 ]]; then
-        printf "0\n"
-        return 0
-    fi
-    printf "%s\n" "$@" | sort -n | awk '
-        {
-            values[NR] = $1
-        }
-        END {
-            if (NR == 0) {
-                print 0
-            } else if (NR % 2 == 1) {
-                print values[(NR + 1) / 2]
-            } else {
-                printf "%.0f\n", (values[NR / 2] + values[(NR / 2) + 1]) / 2
-            }
-        }
-    '
-}
-
-bench_kf_roundtrip_once() {
-    local mode="$1"
-    local lang="$2"
-    local input="$3"
-    local run_dir="$4"
-    local enc_fn=""
-    local dec_fn=""
-    local carrier=""
-    local decoded=""
-
-    case "$mode" in
-        kfme)
-            carrier="$run_dir/carrier.wav"
-            decoded="$run_dir/decoded_${input##*/}"
-            case "$lang" in
-                py) enc_fn="py_kfme"; dec_fn="py_kfmd" ;;
-                pypy) enc_fn="pypy_kfme"; dec_fn="pypy_kfmd" ;;
-                cpp) enc_fn="cpp_kfme"; dec_fn="cpp_kfmd" ;;
-                java) enc_fn="java_kfme"; dec_fn="java_kfmd" ;;
-                *)
-                    log "Unknown kFM benchmark language: $lang"
-                    return 1
-                    ;;
-            esac
-            ;;
-        kfae)
-            carrier="$run_dir/carrier.png"
-            decoded="$run_dir/decoded_${input##*/}"
-            case "$lang" in
-                py) enc_fn="py_kfae"; dec_fn="py_kfad" ;;
-                pypy) enc_fn="pypy_kfae"; dec_fn="pypy_kfad" ;;
-                cpp) enc_fn="cpp_kfae"; dec_fn="cpp_kfad" ;;
-                java) enc_fn="java_kfae"; dec_fn="java_kfad" ;;
-                *)
-                    log "Unknown kFA benchmark language: $lang"
-                    return 1
-                    ;;
-            esac
-            ;;
-        *)
-            log "Unknown kF benchmark mode: $mode"
-            return 1
-            ;;
-    esac
-
-    cp -f "$input" "$run_dir/input_${input##*/}" || return 1
-    local input_copy="$run_dir/input_${input##*/}"
-    "$enc_fn" "$input_copy" "$carrier" || return 1
-    "$dec_fn" "$carrier" "$decoded" || return 1
-    cmp -s "$input_copy" "$decoded" || return 1
-    return 0
-}
-
-bench_kf_roundtrip() {
-    local mode="$1"
-    local lang="$2"
-    local input="$3"
-    local warmup="${BASEFWX_BENCH_WARMUP:-0}"
-    local iters="${BASEFWX_BENCH_ITERS:-1}"
-    if [[ ! "$warmup" =~ ^[0-9]+$ ]]; then
-        warmup=0
-    fi
-    if [[ ! "$iters" =~ ^[0-9]+$ || "$iters" -lt 1 ]]; then
-        iters=1
-    fi
-    if [[ ! -f "$input" ]]; then
-        log "kF benchmark input missing: $input"
-        return 1
-    fi
-
-    local run_root="$TMP_DIR/bench_${mode}_${lang}"
-    rm -rf "$run_root"
-    mkdir -p "$run_root"
-    local total_runs=$((warmup + iters))
-    local run_idx
-    local start_ns end_ns
-    local samples=()
-
-    for ((run_idx = 0; run_idx < total_runs; run_idx++)); do
-        local run_dir="$run_root/run_${run_idx}"
-        rm -rf "$run_dir"
-        mkdir -p "$run_dir"
-        start_ns=$(date +%s%N)
-        bench_kf_roundtrip_once "$mode" "$lang" "$input" "$run_dir" || return 1
-        end_ns=$(date +%s%N)
-        if (( run_idx >= warmup )); then
-            samples+=("$((end_ns - start_ns))")
-        fi
-        rm -rf "$run_dir"
-    done
-
-    local median
-    median="$(bench_median_ns "${samples[@]}")"
-    printf "BENCH_NS=%s\n" "$median"
-}
-
+if (( RETIRED_MEDIA_ENABLED == 1 )); then
+    # shellcheck source=retired/media_test_helpers.sh
+    source "$ROOT/scripts/retired/media_test_helpers.sh"
+fi
 fwxaes_py_enc_cpp_dec() {
     local input="$1"
     local enc="$2"
@@ -2643,38 +2161,6 @@ pb512file_java_enc_cpp_dec() {
         --kdf pbkdf2 --pbkdf2-iters "$PBKDF2_ITERS"
 }
 
-jmg_py_enc_cpp_dec() {
-    local input="$1"
-    local enc="$2"
-    local dec="$3"
-    py_jmg_enc "$input" "$enc" || return $?
-    cpp_jmg_dec "$enc" "$dec"
-}
-
-jmg_cpp_enc_py_dec() {
-    local input="$1"
-    local enc="$2"
-    local dec="$3"
-    cpp_jmg_enc "$input" "$enc" || return $?
-    py_jmg_dec "$enc" "$dec"
-}
-
-jmg_py_enc_java_dec() {
-    local input="$1"
-    local enc="$2"
-    local dec="$3"
-    py_jmg_enc "$input" "$enc" || return $?
-    java_jmg_dec "$enc" "$dec"
-}
-
-jmg_java_enc_py_dec() {
-    local input="$1"
-    local enc="$2"
-    local dec="$3"
-    java_jmg_enc "$input" "$enc" || return $?
-    py_jmg_dec "$enc" "$dec"
-}
-
 rm -rf "$TMP_DIR"
 phase "PHASE1: generate temporary files"
 mkdir -p "$ORIG_DIR" "$WORK_DIR" "$OUT_DIR"
@@ -2701,16 +2187,25 @@ fi
 
 phase "PHASE1.1: fast security policy gates"
 if [[ "$RUN_PY_TESTS" == "1" ]]; then
+    python_policy_tests=(
+        python.tests.test_peer_kdf_policy
+        python.tests.test_master_key_policy
+        python.tests.test_password_policy
+        python.tests.test_kdf_default_policy
+        python.tests.test_fwxaes_auth_publication
+        python.tests.test_payload_key_separation
+        python.tests.test_protocol_kats
+        python.tests.test_retired_media_boundary
+    )
+    if (( RETIRED_MEDIA_ENABLED == 1 )); then
+        python_policy_tests+=(
+            python.tests.retired.test_media_auth_publication
+            python.tests.retired.test_media_process_lifecycle
+        )
+    fi
     if ! PYTHONPATH="$ROOT/python${PYTHONPATH:+:$PYTHONPATH}" \
          "$PYTHON_BIN" -m unittest \
-         python.tests.test_peer_kdf_policy \
-         python.tests.test_master_key_policy \
-         python.tests.test_password_policy \
-         python.tests.test_kdf_default_policy \
-         python.tests.test_fwxaes_auth_publication \
-         python.tests.test_media_auth_publication \
-         python.tests.test_payload_key_separation \
-         python.tests.test_protocol_kats >>"$LOG" 2>&1; then
+         "${python_policy_tests[@]}" >>"$LOG" 2>&1; then
         FAILURES+=("python_security_policy_tests")
     fi
 fi
@@ -2731,6 +2226,7 @@ fi
 log "Python: $("$PYTHON_BIN" --version 2>&1)"
 log "C++ binary: $CPP_BIN"
 log "TEST_MODE: $TEST_MODE"
+log "BASEFWX_ENABLE_RETIRED_MEDIA: $BASEFWX_ENABLE_RETIRED_MEDIA"
 log "SHOW_RUNTIME_USAGE: $SHOW_RUNTIME_USAGE"
 if [[ -z "$JAVA_BIN" ]]; then
     JAVA_BIN="$(command -v java || true)"
@@ -2794,10 +2290,6 @@ bench_mode = mode == "bench"
 
 text = ("The quick brown fox jumps over the lazy dog. " * 40).encode("ascii")
 (root / "tiny.txt").write_bytes(text[:1024])
-kfm_payload_bytes = 256 * 1024
-if mode == "heavy":
-    kfm_payload_bytes = 2 * 1024 * 1024
-(root / "kfm_payload.bin").write_bytes(os.urandom(kfm_payload_bytes))
 bench_text_bytes = int(os.getenv("BENCH_TEXT_BYTES", "0"))
 if bench_text_bytes > 0:
     phrase = (
@@ -2817,14 +2309,6 @@ def write_png(path: Path, size: int) -> None:
         path.write_bytes(os.urandom(size * size * 3))
 
 if not bench_mode:
-    if mode in ("fast", "quickest"):
-        jmg_size = 96
-    elif mode == "heavy":
-        jmg_size = 320
-    else:
-        jmg_size = 192
-    write_png(root / "jmg_sample.png", jmg_size)
-
     if mode not in ("fast", "quickest"):
         (root / "small.bin").write_bytes(os.urandom(64 * 1024))
         (root / "medium.bin").write_bytes(os.urandom(512 * 1024))
@@ -2842,8 +2326,8 @@ if not bench_mode:
             duration = "1.0"
             fps = "24"
             v_size = "128x72"
-        mp4_path = root / "jmg_sample.mp4"
-        m4a_path = root / "jmg_sample.m4a"
+        mp4_path = root / "media_sample.mp4"
+        m4a_path = root / "media_sample.m4a"
         try:
             subprocess.run(
                 [
@@ -2947,6 +2431,12 @@ if (( gen_rc != 0 )); then
     cat "$LOG"
     exit 1
 fi
+if (( RETIRED_MEDIA_ENABLED == 1 )); then
+    if ! create_retired_media_fixtures; then
+        printf "Retired-media fixture generation failed; see diagnose.log.\n" >&2
+        exit 1
+    fi
+fi
 
 cat >"$PY_HELPER" <<'PY'
 import sys
@@ -2972,10 +2462,6 @@ def write_text(path: str, text: str) -> None:
 def text_encode(method: str, text: str, pw: str) -> str:
     if method == "b64":
         return basefwx.b64encode(text)
-    if method == "b256":
-        return basefwx.b256encode(text)
-    if method == "a512":
-        return basefwx.a512encode(text)
     if method == "n10":
         return basefwx.n10encode(text)
     if method == "b512":
@@ -2987,10 +2473,6 @@ def text_encode(method: str, text: str, pw: str) -> str:
 def text_decode(method: str, enc: str, pw: str) -> str:
     if method == "b64":
         return basefwx.b64decode(enc)
-    if method == "b256":
-        return basefwx.b256decode(enc)
-    if method == "a512":
-        return basefwx.a512decode(enc)
     if method == "n10":
         return basefwx.n10decode(enc)
     if method == "b512":
@@ -3002,11 +2484,6 @@ def text_decode(method: str, enc: str, pw: str) -> str:
 def text_hash(method: str, text: str) -> str:
     if method == "hash512":
         return basefwx.hash512(text)
-    if method == "uhash513":
-        return basefwx.uhash513(text)
-    if method == "bi512":
-        return basefwx.bi512encode(text)
-    # b1024 retired in 3.6.5
     raise ValueError(f"Unsupported hash method {method}")
 
 def _fwxaes_call(path: str, pw: str, output: str) -> None:
@@ -3143,27 +2620,6 @@ def cmd_text_hash(args: list[str]) -> int:
     write_text(out_path, digest)
     return 0
 
-def cmd_jmg_roundtrip(args: list[str]) -> int:
-    inp, enc, dec, pw = args
-    basefwx.MediaCipher.encrypt_media(inp, pw, output=enc, archive_original=True)
-    basefwx.MediaCipher.decrypt_media(enc, pw, output=dec)
-    return 0
-
-def cmd_jmg_roundtrip_no_archive(args: list[str]) -> int:
-    inp, enc, dec, pw = args
-    basefwx.MediaCipher.encrypt_media(inp, pw, output=enc, archive_original=False)
-    basefwx.MediaCipher.decrypt_media(enc, pw, output=dec)
-    return 0
-
-def cmd_jmg_enc(args: list[str]) -> int:
-    inp, enc, pw = args
-    basefwx.MediaCipher.encrypt_media(inp, pw, output=enc, archive_original=True)
-    return 0
-
-def cmd_jmg_dec(args: list[str]) -> int:
-    inp, dec, pw = args
-    basefwx.MediaCipher.decrypt_media(inp, pw, output=dec)
-    return 0
 
 def cmd_b512file_bytes_roundtrip(args: list[str]) -> int:
     inp, out_path, pw = args
@@ -3285,10 +2741,6 @@ _BENCH_FILE_PW = None
 _BENCH_FILE_TEMP = None
 _BENCH_FILE_INPUT = None
 
-_BENCH_JMG_SRC = None
-_BENCH_JMG_PW = None
-_BENCH_JMG_SUFFIX = None
-_BENCH_JMG_TEMP = None
 
 _BENCH_AN7_MODE = None
 _BENCH_AN7_PW = None
@@ -3347,37 +2799,6 @@ def _bench_file_worker(_: int) -> int:
     except FileNotFoundError:
         pass
     return size
-
-def _bench_jmg_init(media_path: str, pw: str) -> None:
-    global _BENCH_JMG_SRC, _BENCH_JMG_PW, _BENCH_JMG_SUFFIX, _BENCH_JMG_TEMP
-    _BENCH_JMG_SRC = Path(media_path)
-    _BENCH_JMG_PW = pw
-    _BENCH_JMG_SUFFIX = _BENCH_JMG_SRC.suffix
-    _BENCH_JMG_TEMP = tempfile.TemporaryDirectory(prefix="basefwx-bench-jmg-")
-
-def _bench_jmg_worker(worker_id: int) -> int:
-    tmp = Path(_BENCH_JMG_TEMP.name)
-    uid = f"{worker_id}_{os.getpid()}"
-    enc_path = tmp / f"bench_enc_{uid}{_BENCH_JMG_SUFFIX}"
-    dec_path = tmp / f"bench_dec_{uid}{_BENCH_JMG_SUFFIX}"
-    try:
-        basefwx.MediaCipher.encrypt_media(
-            str(_BENCH_JMG_SRC),
-            _BENCH_JMG_PW,
-            output=str(enc_path),
-            keep_input=True,
-        )
-        basefwx.MediaCipher.decrypt_media(str(enc_path), _BENCH_JMG_PW, output=str(dec_path))
-        return dec_path.stat().st_size
-    finally:
-        try:
-            enc_path.unlink()
-        except FileNotFoundError:
-            pass
-        try:
-            dec_path.unlink()
-        except FileNotFoundError:
-            pass
 
 def _bench_an7_init(mode: str, input_path: str, pw: str) -> None:
     global _BENCH_AN7_MODE, _BENCH_AN7_PW, _BENCH_AN7_TEMP, _BENCH_AN7_SEED_FWX, _BENCH_AN7_SEED_AN7
@@ -3705,44 +3126,6 @@ def cmd_bench_pb512file(args: list[str]) -> int:
             _bench(warmup, iters, run)
     return 0
 
-def cmd_bench_jmg(args: list[str]) -> int:
-    if len(args) < 2:
-        return 2
-    media_path, pw = args[:2]
-    warmup = _warmup_env()
-    iters = _iters_env()
-    workers = _workers_env()
-    
-    src = Path(media_path)
-    if not src.exists():
-        print(f"Media file not found: {media_path}", file=sys.stderr)
-        return 1
-    
-    if workers > 1:
-        _bench_parallel(
-            warmup,
-            iters,
-            workers,
-            _bench_jmg_worker,
-            initializer=_bench_jmg_init,
-            initargs=(media_path, pw),
-        )
-    else:
-        with tempfile.TemporaryDirectory(prefix="basefwx-bench-jmg-") as tmpdir:
-            tmp = Path(tmpdir)
-            enc_path = tmp / f"bench_enc{src.suffix}"
-            dec_path = tmp / f"bench_dec{src.suffix}"
-            def run() -> int:
-                basefwx.MediaCipher.encrypt_media(
-                    str(src),
-                    pw,
-                    output=str(enc_path),
-                    keep_input=True,
-                )
-                basefwx.MediaCipher.decrypt_media(str(enc_path), pw, output=str(dec_path))
-                return dec_path.stat().st_size
-            _bench(warmup, iters, run)
-    return 0
 
 def cmd_bench_live(args: list[str]) -> int:
     if len(args) < 2:
@@ -3840,14 +3223,6 @@ def main() -> int:
         return cmd_text_wrong(args)
     if cmd == "text-hash":
         return cmd_text_hash(args)
-    if cmd == "jmg-roundtrip":
-        return cmd_jmg_roundtrip(args)
-    if cmd == "jmg-roundtrip-no-archive":
-        return cmd_jmg_roundtrip_no_archive(args)
-    if cmd == "jmg-enc":
-        return cmd_jmg_enc(args)
-    if cmd == "jmg-dec":
-        return cmd_jmg_dec(args)
     if cmd == "b512file-bytes-roundtrip":
         return cmd_b512file_bytes_roundtrip(args)
     if cmd == "pb512file-bytes-roundtrip":
@@ -3868,8 +3243,6 @@ def main() -> int:
         return cmd_bench_b512file(args)
     if cmd == "bench-pb512file":
         return cmd_bench_pb512file(args)
-    if cmd == "bench-jmg":
-        return cmd_bench_jmg(args)
     if cmd == "bench-live":
         return cmd_bench_live(args)
     if cmd == "bench-live-ffmpeg":
@@ -3988,9 +3361,9 @@ if [[ "$RUN_PY_TESTS" == "1" ]]; then
     add_verify "$ORIG_DIR/$FWXAES_FILE" "$fwxaes_py_live_dec"
 
     if (( FFMPEG_AVAILABLE == 1 )); then
-        fwxaes_py_live_ffmpeg_src="$ORIG_DIR/jmg_sample.mp4"
+        fwxaes_py_live_ffmpeg_src="$ORIG_DIR/media_sample.mp4"
         if [[ ! -f "$fwxaes_py_live_ffmpeg_src" ]]; then
-            fwxaes_py_live_ffmpeg_src="$ORIG_DIR/jmg_sample.m4a"
+            fwxaes_py_live_ffmpeg_src="$ORIG_DIR/media_sample.m4a"
         fi
         if [[ -f "$fwxaes_py_live_ffmpeg_src" ]]; then
             fwxaes_py_live_ffmpeg_dir="$WORK_DIR/fwxaes_py_live_ffmpeg_stream"
@@ -4036,9 +3409,9 @@ if [[ "$RUN_CPP_TESTS" == "1" ]]; then
     fi
 
     if (( CPP_AVAILABLE == 1 )) && (( FFMPEG_AVAILABLE == 1 )); then
-        fwxaes_cpp_live_audio_source="$ORIG_DIR/jmg_sample.m4a"
+        fwxaes_cpp_live_audio_source="$ORIG_DIR/media_sample.m4a"
         if [[ ! -f "$fwxaes_cpp_live_audio_source" ]]; then
-            fwxaes_cpp_live_audio_source="$ORIG_DIR/jmg_sample.mp4"
+            fwxaes_cpp_live_audio_source="$ORIG_DIR/media_sample.mp4"
         fi
         if [[ -f "$fwxaes_cpp_live_audio_source" ]]; then
             fwxaes_cpp_live_audio_ref="$WORK_DIR/fwxaes_cpp_live_audio_stream/reference.wav"
@@ -4429,190 +3802,8 @@ for file_name in "${PB512FILE_CASES[@]}"; do
     fi
 done
 
-if (( ${#JMG_CASES[@]} > 0 )) && { [[ "$RUN_PY_TESTS" == "1" ]] || [[ "$RUN_PYPY_TESTS" == "1" && "$PYPY_AVAILABLE" == "1" ]] || [[ "$RUN_CPP_TESTS" == "1" && "$CPP_AVAILABLE" == "1" ]] || [[ "$RUN_JAVA_TESTS" == "1" && "$JAVA_AVAILABLE" == "1" ]]; }; then
-    phase "PHASE2.1: jMG media tests (${PHASE2_LABEL:-native})"
-    for file_name in "${JMG_CASES[@]}"; do
-        tag="$(case_tag "$file_name")"
-        if [[ "$RUN_PY_TESTS" == "1" ]]; then
-            jmg_py_input="$(copy_input "jmg_py_${tag}" "$file_name")"
-            jmg_py_enc="$WORK_DIR/jmg_py_${tag}/enc_${file_name}"
-            jmg_py_dec="$WORK_DIR/jmg_py_${tag}/dec_${file_name}"
-            time_cmd "jmg_py_${tag}" py_jmg_roundtrip "$jmg_py_input" "$jmg_py_enc" "$jmg_py_dec"
-            add_verify "$ORIG_DIR/$file_name" "$jmg_py_dec"
-
-            jmg_py_noa_input="$(copy_input "jmg_py_noarchive_${tag}" "$file_name")"
-            jmg_py_noa_enc="$WORK_DIR/jmg_py_noarchive_${tag}/enc_${file_name}"
-            jmg_py_noa_dec="$WORK_DIR/jmg_py_noarchive_${tag}/dec_${file_name}"
-            time_cmd "jmg_py_noarchive_${tag}" py_jmg_roundtrip_no_archive "$jmg_py_noa_input" "$jmg_py_noa_enc" "$jmg_py_noa_dec"
-            if [[ ! -s "$jmg_py_noa_dec" ]]; then
-                FAILURES+=("jmg_py_noarchive_${tag} (decode empty)")
-            fi
-
-            if (( NVIDIA_HWACCEL_AVAILABLE == 1 )) && [[ "$file_name" == *.mp4 || "$file_name" == *.mkv || "$file_name" == *.mov ]]; then
-                jmg_py_gpu_input="$(copy_input "jmg_py_gpu_${tag}" "$file_name")"
-                jmg_py_gpu_enc="$WORK_DIR/jmg_py_gpu_${tag}/enc_${file_name}"
-                jmg_py_gpu_dec="$WORK_DIR/jmg_py_gpu_${tag}/dec_${file_name}"
-                time_cmd "jmg_py_gpu_${tag}" py_jmg_roundtrip_gpu_logged \
-                    "$jmg_py_gpu_input" "$jmg_py_gpu_enc" "$jmg_py_gpu_dec"
-                add_verify "$ORIG_DIR/$file_name" "$jmg_py_gpu_dec"
-            fi
-        fi
-        if [[ "$RUN_PYPY_TESTS" == "1" && "$PYPY_AVAILABLE" == "1" ]]; then
-            jmg_pypy_input="$(copy_input "jmg_pypy_${tag}" "$file_name")"
-            jmg_pypy_enc="$WORK_DIR/jmg_pypy_${tag}/enc_${file_name}"
-            jmg_pypy_dec="$WORK_DIR/jmg_pypy_${tag}/dec_${file_name}"
-            time_cmd "jmg_pypy_${tag}" pypy_jmg_roundtrip "$jmg_pypy_input" "$jmg_pypy_enc" "$jmg_pypy_dec"
-            add_verify "$ORIG_DIR/$file_name" "$jmg_pypy_dec"
-        fi
-
-        if [[ "$RUN_CPP_TESTS" == "1" ]]; then
-            jmg_cpp_input="$(copy_input "jmg_cpp_${tag}" "$file_name")"
-            jmg_cpp_enc="$WORK_DIR/jmg_cpp_${tag}/enc_${file_name}"
-            jmg_cpp_dec="$WORK_DIR/jmg_cpp_${tag}/dec_${file_name}"
-            if (( CPP_AVAILABLE == 1 )); then
-                cooldown "jmg_py_to_cpp_${tag}"
-                time_cmd "jmg_cpp_${tag}" cpp_jmg_roundtrip "$jmg_cpp_input" "$jmg_cpp_enc" "$jmg_cpp_dec"
-                add_verify "$ORIG_DIR/$file_name" "$jmg_cpp_dec"
-
-                jmg_cpp_noa_input="$(copy_input "jmg_cpp_noarchive_${tag}" "$file_name")"
-                jmg_cpp_noa_enc="$WORK_DIR/jmg_cpp_noarchive_${tag}/enc_${file_name}"
-                jmg_cpp_noa_dec="$WORK_DIR/jmg_cpp_noarchive_${tag}/dec_${file_name}"
-                time_cmd "jmg_cpp_noarchive_${tag}" cpp_jmg_roundtrip_no_archive \
-                    "$jmg_cpp_noa_input" "$jmg_cpp_noa_enc" "$jmg_cpp_noa_dec"
-                if [[ ! -s "$jmg_cpp_noa_dec" ]]; then
-                    FAILURES+=("jmg_cpp_noarchive_${tag} (decode empty)")
-                fi
-
-                if (( NVIDIA_HWACCEL_AVAILABLE == 1 )) && [[ "$file_name" == *.mp4 || "$file_name" == *.mkv || "$file_name" == *.mov ]]; then
-                    jmg_cpp_gpu_input="$(copy_input "jmg_cpp_gpu_${tag}" "$file_name")"
-                    jmg_cpp_gpu_enc="$WORK_DIR/jmg_cpp_gpu_${tag}/enc_${file_name}"
-                    jmg_cpp_gpu_dec="$WORK_DIR/jmg_cpp_gpu_${tag}/dec_${file_name}"
-                    time_cmd "jmg_cpp_gpu_${tag}" env BASEFWX_HWACCEL=nvenc cpp_jmg_roundtrip \
-                        "$jmg_cpp_gpu_input" "$jmg_cpp_gpu_enc" "$jmg_cpp_gpu_dec"
-                    add_verify "$ORIG_DIR/$file_name" "$jmg_cpp_gpu_dec"
-                fi
-            else
-                FAILURES+=("jmg_cpp_${tag} (cpp unavailable)")
-            fi
-        fi
-        if [[ "$RUN_JAVA_TESTS" == "1" ]]; then
-            jmg_java_input="$(copy_input "jmg_java_${tag}" "$file_name")"
-            jmg_java_enc="$WORK_DIR/jmg_java_${tag}/enc_${file_name}"
-            jmg_java_dec="$WORK_DIR/jmg_java_${tag}/dec_${file_name}"
-            if (( JAVA_AVAILABLE == 1 )); then
-                cooldown "jmg_cpp_to_java_${tag}"
-                time_cmd "jmg_java_${tag}" java_jmg_roundtrip "$jmg_java_input" "$jmg_java_enc" "$jmg_java_dec"
-                add_verify "$ORIG_DIR/$file_name" "$jmg_java_dec"
-
-                jmg_java_noa_input="$(copy_input "jmg_java_noarchive_${tag}" "$file_name")"
-                jmg_java_noa_enc="$WORK_DIR/jmg_java_noarchive_${tag}/enc_${file_name}"
-                jmg_java_noa_dec="$WORK_DIR/jmg_java_noarchive_${tag}/dec_${file_name}"
-                time_cmd "jmg_java_noarchive_${tag}" java_jmg_roundtrip_no_archive \
-                    "$jmg_java_noa_input" "$jmg_java_noa_enc" "$jmg_java_noa_dec"
-                if [[ ! -s "$jmg_java_noa_dec" ]]; then
-                    FAILURES+=("jmg_java_noarchive_${tag} (decode empty)")
-                fi
-            else
-                FAILURES+=("jmg_java_${tag} (java unavailable)")
-            fi
-        fi
-    done
-else
-    if [[ "$RUN_PYPY_TESTS" == "1" && "$RUN_PY_TESTS" != "1" && "$RUN_CPP_TESTS" != "1" ]]; then
-        phase "PHASE2.1: jMG media tests (${PHASE2_LABEL:-native}, skipped - PyPy phase)"
-    else
-        phase "PHASE2.1: jMG media tests (${PHASE2_LABEL:-native}, skipped)"
-    fi
-fi
-
-if [[ "$RUN_PY_TESTS" == "1" ]] || [[ "$RUN_PYPY_TESTS" == "1" && "$PYPY_AVAILABLE" == "1" ]] || [[ "$RUN_CPP_TESTS" == "1" && "$CPP_AVAILABLE" == "1" ]] || [[ "$RUN_JAVA_TESTS" == "1" && "$JAVA_AVAILABLE" == "1" ]]; then
-    phase "PHASE2.15: kFM/kFA carrier tests (${PHASE2_LABEL:-native})"
-
-    if [[ "$RUN_PY_TESTS" == "1" ]]; then
-        kfme_py_input="$(copy_input "kfme_py_correct" "$KFM_FILE")"
-        kfme_py_enc="$WORK_DIR/kfme_py_correct/carrier.wav"
-        kfme_py_dec="$WORK_DIR/kfme_py_correct/decoded_${KFM_FILE}"
-        time_cmd "kfme_py_correct" kfme_py_roundtrip "$kfme_py_input" "$kfme_py_enc" "$kfme_py_dec"
-        add_verify "$ORIG_DIR/$KFM_FILE" "$kfme_py_dec"
-        add_verify "$ORIG_DIR/$KFM_FILE" "$kfme_py_input"
-
-        kfae_py_input="$(copy_input "kfae_py_correct" "$KFM_FILE")"
-        kfae_py_enc="$WORK_DIR/kfae_py_correct/carrier.png"
-        kfae_py_dec="$WORK_DIR/kfae_py_correct/decoded_${KFM_FILE}"
-        time_cmd "kfae_py_correct" kfae_py_roundtrip "$kfae_py_input" "$kfae_py_enc" "$kfae_py_dec"
-        add_verify "$ORIG_DIR/$KFM_FILE" "$kfae_py_dec"
-        add_verify "$ORIG_DIR/$KFM_FILE" "$kfae_py_input"
-    fi
-
-    if [[ "$RUN_PYPY_TESTS" == "1" && "$PYPY_AVAILABLE" == "1" ]]; then
-        kfme_pypy_input="$(copy_input "kfme_pypy_correct" "$KFM_FILE")"
-        kfme_pypy_enc="$WORK_DIR/kfme_pypy_correct/carrier.wav"
-        kfme_pypy_dec="$WORK_DIR/kfme_pypy_correct/decoded_${KFM_FILE}"
-        time_cmd "kfme_pypy_correct" kfme_pypy_roundtrip "$kfme_pypy_input" "$kfme_pypy_enc" "$kfme_pypy_dec"
-        add_verify "$ORIG_DIR/$KFM_FILE" "$kfme_pypy_dec"
-        add_verify "$ORIG_DIR/$KFM_FILE" "$kfme_pypy_input"
-
-        kfae_pypy_input="$(copy_input "kfae_pypy_correct" "$KFM_FILE")"
-        kfae_pypy_enc="$WORK_DIR/kfae_pypy_correct/carrier.png"
-        kfae_pypy_dec="$WORK_DIR/kfae_pypy_correct/decoded_${KFM_FILE}"
-        time_cmd "kfae_pypy_correct" kfae_pypy_roundtrip "$kfae_pypy_input" "$kfae_pypy_enc" "$kfae_pypy_dec"
-        add_verify "$ORIG_DIR/$KFM_FILE" "$kfae_pypy_dec"
-        add_verify "$ORIG_DIR/$KFM_FILE" "$kfae_pypy_input"
-    fi
-
-    if [[ "$RUN_CPP_TESTS" == "1" ]]; then
-        kfme_cpp_input="$(copy_input "kfme_cpp_correct" "$KFM_FILE")"
-        kfme_cpp_enc="$WORK_DIR/kfme_cpp_correct/carrier.wav"
-        kfme_cpp_dec="$WORK_DIR/kfme_cpp_correct/decoded_${KFM_FILE}"
-        if (( CPP_AVAILABLE == 1 )); then
-            cooldown "kfme_py_to_cpp_correct"
-            time_cmd "kfme_cpp_correct" kfme_cpp_roundtrip "$kfme_cpp_input" "$kfme_cpp_enc" "$kfme_cpp_dec"
-            add_verify "$ORIG_DIR/$KFM_FILE" "$kfme_cpp_dec"
-            add_verify "$ORIG_DIR/$KFM_FILE" "$kfme_cpp_input"
-        else
-            FAILURES+=("kfme_cpp_correct (cpp unavailable)")
-        fi
-
-        kfae_cpp_input="$(copy_input "kfae_cpp_correct" "$KFM_FILE")"
-        kfae_cpp_enc="$WORK_DIR/kfae_cpp_correct/carrier.png"
-        kfae_cpp_dec="$WORK_DIR/kfae_cpp_correct/decoded_${KFM_FILE}"
-        if (( CPP_AVAILABLE == 1 )); then
-            cooldown "kfae_py_to_cpp_correct"
-            time_cmd "kfae_cpp_correct" kfae_cpp_roundtrip "$kfae_cpp_input" "$kfae_cpp_enc" "$kfae_cpp_dec"
-            add_verify "$ORIG_DIR/$KFM_FILE" "$kfae_cpp_dec"
-            add_verify "$ORIG_DIR/$KFM_FILE" "$kfae_cpp_input"
-        else
-            FAILURES+=("kfae_cpp_correct (cpp unavailable)")
-        fi
-    fi
-
-    if [[ "$RUN_JAVA_TESTS" == "1" ]]; then
-        kfme_java_input="$(copy_input "kfme_java_correct" "$KFM_FILE")"
-        kfme_java_enc="$WORK_DIR/kfme_java_correct/carrier.wav"
-        kfme_java_dec="$WORK_DIR/kfme_java_correct/decoded_${KFM_FILE}"
-        if (( JAVA_AVAILABLE == 1 )); then
-            cooldown "kfme_cpp_to_java_correct"
-            time_cmd "kfme_java_correct" kfme_java_roundtrip "$kfme_java_input" "$kfme_java_enc" "$kfme_java_dec"
-            add_verify "$ORIG_DIR/$KFM_FILE" "$kfme_java_dec"
-            add_verify "$ORIG_DIR/$KFM_FILE" "$kfme_java_input"
-        else
-            FAILURES+=("kfme_java_correct (java unavailable)")
-        fi
-
-        kfae_java_input="$(copy_input "kfae_java_correct" "$KFM_FILE")"
-        kfae_java_enc="$WORK_DIR/kfae_java_correct/carrier.png"
-        kfae_java_dec="$WORK_DIR/kfae_java_correct/decoded_${KFM_FILE}"
-        if (( JAVA_AVAILABLE == 1 )); then
-            cooldown "kfae_cpp_to_java_correct"
-            time_cmd "kfae_java_correct" kfae_java_roundtrip "$kfae_java_input" "$kfae_java_enc" "$kfae_java_dec"
-            add_verify "$ORIG_DIR/$KFM_FILE" "$kfae_java_dec"
-            add_verify "$ORIG_DIR/$KFM_FILE" "$kfae_java_input"
-        else
-            FAILURES+=("kfae_java_correct (java unavailable)")
-        fi
-    fi
-else
-    phase "PHASE2.15: kFM/kFA carrier tests (${PHASE2_LABEL:-native}, skipped)"
+if (( RETIRED_MEDIA_ENABLED == 1 )); then
+    run_retired_native_tests_block
 fi
 }
 
@@ -4654,7 +3845,6 @@ else
 fi
 
 FWXAES_FILE="tiny.txt"
-KFM_FILE="kfm_payload.bin"
 PB512_KSEP_CASES=("tiny.txt" "pb512_ksep_stream_3m.bin")
 if [[ "$TEST_MODE" == "fast" || "$TEST_MODE" == "quickest" ]]; then
     B512FILE_CASES=("sample_payload.bin" "sample_payload_copy.bin")
@@ -4674,80 +3864,9 @@ else
         PB512FILE_CASES+=("huge_1p2g.bin")
     fi
 fi
-JMG_CASES=()
-JMG_VIDEO_CASES_ENABLED="${BASEFWX_ENABLE_JMG_VIDEO:-0}"
-for file_name in "jmg_sample.png" "jmg_sample.m4a"; do
-    if [[ -f "$ORIG_DIR/$file_name" ]]; then
-        JMG_CASES+=("$file_name")
-    fi
-done
-if [[ "$JMG_VIDEO_CASES_ENABLED" == "1" || "$JMG_VIDEO_CASES_ENABLED" == "true" || "$JMG_VIDEO_CASES_ENABLED" == "yes" || "$JMG_VIDEO_CASES_ENABLED" == "on" ]]; then
-    if [[ -f "$ORIG_DIR/jmg_sample.mp4" ]]; then
-        JMG_CASES+=("jmg_sample.mp4")
-    fi
-fi
-
-# CLI flag smoke checks and jMG video gate checks for C++/Java.
-if [[ "$TEST_MODE" != "quickest" ]]; then
-    if [[ "$CPP_AVAILABLE" == "1" && -x "$CPP_BIN" && -f "$ORIG_DIR/jmg_sample.m4a" ]]; then
-        cpp_smoke_dir="$WORK_DIR/cpp_flag_smoke"
-        mkdir -p "$cpp_smoke_dir"
-        cpp_no_log_err="$cpp_smoke_dir/no_log.err"
-        cpp_no_log_out="$cpp_smoke_dir/no_log.m4a"
-        if ! "$CPP_BIN" --no-log jmge "$ORIG_DIR/jmg_sample.m4a" -p "$PW" --keep-input --out "$cpp_no_log_out" 2>"$cpp_no_log_err"; then
-            FAILURES+=("cpp_no_log_smoke (command failed)")
-        elif grep -Eq "basefwx\\.hw|Overall|File    |WARN:" "$cpp_no_log_err"; then
-            FAILURES+=("cpp_no_log_smoke (unexpected logs)")
-        fi
-        cpp_verbose_err="$cpp_smoke_dir/verbose.err"
-        cpp_verbose_out="$cpp_smoke_dir/verbose.m4a"
-        if ! "$CPP_BIN" --verbose jmge "$ORIG_DIR/jmg_sample.m4a" -p "$PW" --keep-input --out "$cpp_verbose_out" 2>"$cpp_verbose_err"; then
-            FAILURES+=("cpp_verbose_smoke (command failed)")
-        elif ! grep -q "reason:" "$cpp_verbose_err"; then
-            FAILURES+=("cpp_verbose_smoke (missing reason line)")
-        fi
-    fi
-    if [[ "$JAVA_AVAILABLE" == "1" && -f "$JAVA_JAR" && -f "$ORIG_DIR/jmg_sample.m4a" ]]; then
-        java_smoke_dir="$WORK_DIR/java_flag_smoke"
-        mkdir -p "$java_smoke_dir"
-        java_no_log_err="$java_smoke_dir/no_log.err"
-        java_no_log_out="$java_smoke_dir/no_log.m4a"
-        if ! "$JAVA_BIN" -jar "$JAVA_JAR" --no-log jmge "$ORIG_DIR/jmg_sample.m4a" "$java_no_log_out" "$PW" --keep-input 2>"$java_no_log_err"; then
-            FAILURES+=("java_no_log_smoke (command failed)")
-        elif grep -Eq "basefwx\\.hw|WARN:" "$java_no_log_err"; then
-            FAILURES+=("java_no_log_smoke (unexpected logs)")
-        fi
-        java_verbose_err="$java_smoke_dir/verbose.err"
-        java_verbose_out="$java_smoke_dir/verbose.m4a"
-        if ! "$JAVA_BIN" -jar "$JAVA_JAR" --verbose jmge "$ORIG_DIR/jmg_sample.m4a" "$java_verbose_out" "$PW" --keep-input 2>"$java_verbose_err"; then
-            FAILURES+=("java_verbose_smoke (command failed)")
-        elif ! grep -q "reason:" "$java_verbose_err"; then
-            FAILURES+=("java_verbose_smoke (missing reason line)")
-        fi
-    fi
-fi
-
-if [[ "$JMG_VIDEO_CASES_ENABLED" != "1" && "$JMG_VIDEO_CASES_ENABLED" != "true" && "$JMG_VIDEO_CASES_ENABLED" != "yes" && "$JMG_VIDEO_CASES_ENABLED" != "on" && -f "$ORIG_DIR/jmg_sample.mp4" ]]; then
-    if [[ "$CPP_AVAILABLE" == "1" && -x "$CPP_BIN" ]]; then
-        cpp_gate_dir="$WORK_DIR/cpp_jmg_video_gate"
-        mkdir -p "$cpp_gate_dir"
-        cpp_gate_err="$cpp_gate_dir/jmge_video.err"
-        if "$CPP_BIN" jmge "$ORIG_DIR/jmg_sample.mp4" -p "$PW" --out "$cpp_gate_dir/out.mp4" >"$cpp_gate_dir/stdout.log" 2>"$cpp_gate_err"; then
-            FAILURES+=("cpp_jmg_video_gate (expected failure)")
-        elif ! grep -q "jMG video mode is temporarily disabled" "$cpp_gate_err"; then
-            FAILURES+=("cpp_jmg_video_gate (missing disable message)")
-        fi
-    fi
-    if [[ "$JAVA_AVAILABLE" == "1" && -f "$JAVA_JAR" ]]; then
-        java_gate_dir="$WORK_DIR/java_jmg_video_gate"
-        mkdir -p "$java_gate_dir"
-        java_gate_err="$java_gate_dir/jmge_video.err"
-        if "$JAVA_BIN" -jar "$JAVA_JAR" jmge "$ORIG_DIR/jmg_sample.mp4" "$java_gate_dir/out.mp4" "$PW" >"$java_gate_dir/stdout.log" 2>"$java_gate_err"; then
-            FAILURES+=("java_jmg_video_gate (expected failure)")
-        elif ! grep -q "jMG video mode is temporarily disabled" "$java_gate_err"; then
-            FAILURES+=("java_jmg_video_gate (missing disable message)")
-        fi
-    fi
+if (( RETIRED_MEDIA_ENABLED == 1 )); then
+    configure_retired_media_cases
+    run_retired_cli_policy_smokes
 fi
 
 STEP_INDEX=0
@@ -4859,34 +3978,9 @@ if [[ "$SKIP_CROSS" != "1" ]]; then
             "$fwxaes_live_cpyp_input" "$fwxaes_live_cpyp_enc" "$fwxaes_live_cpyp_dec"
         add_verify "$ORIG_DIR/$FWXAES_FILE" "$fwxaes_live_cpyp_dec"
 
-        # kFM/kFA cross-compat (Python <-> C++)
-        kfme_pycc_input="$(copy_input "kfme_pycc" "$KFM_FILE")"
-        kfme_pycc_enc="$WORK_DIR/kfme_pycc/carrier.wav"
-        kfme_pycc_dec="$WORK_DIR/kfme_pycc/decoded_${KFM_FILE}"
-        time_cmd "kfme_py_enc_cpp_dec" kfme_py_enc_cpp_dec "$kfme_pycc_input" "$kfme_pycc_enc" "$kfme_pycc_dec"
-        add_verify "$ORIG_DIR/$KFM_FILE" "$kfme_pycc_dec"
-        add_verify "$ORIG_DIR/$KFM_FILE" "$kfme_pycc_input"
-
-        kfme_cpyp_input="$(copy_input "kfme_cpyp" "$KFM_FILE")"
-        kfme_cpyp_enc="$WORK_DIR/kfme_cpyp/carrier.wav"
-        kfme_cpyp_dec="$WORK_DIR/kfme_cpyp/decoded_${KFM_FILE}"
-        time_cmd "kfme_cpp_enc_py_dec" kfme_cpp_enc_py_dec "$kfme_cpyp_input" "$kfme_cpyp_enc" "$kfme_cpyp_dec"
-        add_verify "$ORIG_DIR/$KFM_FILE" "$kfme_cpyp_dec"
-        add_verify "$ORIG_DIR/$KFM_FILE" "$kfme_cpyp_input"
-
-        kfae_pycc_input="$(copy_input "kfae_pycc" "$KFM_FILE")"
-        kfae_pycc_enc="$WORK_DIR/kfae_pycc/carrier.png"
-        kfae_pycc_dec="$WORK_DIR/kfae_pycc/decoded_${KFM_FILE}"
-        time_cmd "kfae_py_enc_cpp_dec" kfae_py_enc_cpp_dec "$kfae_pycc_input" "$kfae_pycc_enc" "$kfae_pycc_dec"
-        add_verify "$ORIG_DIR/$KFM_FILE" "$kfae_pycc_dec"
-        add_verify "$ORIG_DIR/$KFM_FILE" "$kfae_pycc_input"
-
-        kfae_cpyp_input="$(copy_input "kfae_cpyp" "$KFM_FILE")"
-        kfae_cpyp_enc="$WORK_DIR/kfae_cpyp/carrier.png"
-        kfae_cpyp_dec="$WORK_DIR/kfae_cpyp/decoded_${KFM_FILE}"
-        time_cmd "kfae_cpp_enc_py_dec" kfae_cpp_enc_py_dec "$kfae_cpyp_input" "$kfae_cpyp_enc" "$kfae_cpyp_dec"
-        add_verify "$ORIG_DIR/$KFM_FILE" "$kfae_cpyp_dec"
-        add_verify "$ORIG_DIR/$KFM_FILE" "$kfae_cpyp_input"
+        if (( RETIRED_MEDIA_ENABLED == 1 )); then
+            run_retired_python_cpp_cross_tests
+        fi
 
         for method in "${TEXT_NOPASS_METHODS[@]}" "${TEXT_PASS_METHODS[@]}"; do
             py_enc="$OUT_DIR/${method}_py_enc.txt"
@@ -4949,22 +4043,6 @@ if [[ "$SKIP_CROSS" != "1" ]]; then
             done
         done
 
-        if (( ${#JMG_CASES[@]} > 0 )); then
-            for file_name in "${JMG_CASES[@]}"; do
-                tag="$(case_tag "$file_name")"
-                jmg_pycc_input="$(copy_input "jmg_pycc_${tag}" "$file_name")"
-                jmg_pycc_enc="$WORK_DIR/jmg_pycc_${tag}/enc_${file_name}"
-                jmg_pycc_dec="$WORK_DIR/jmg_pycc_${tag}/dec_${file_name}"
-                time_cmd "jmg_py_enc_cpp_dec_${tag}" jmg_py_enc_cpp_dec "$jmg_pycc_input" "$jmg_pycc_enc" "$jmg_pycc_dec"
-                add_verify "$ORIG_DIR/$file_name" "$jmg_pycc_dec"
-
-                jmg_cpyp_input="$(copy_input "jmg_cpyp_${tag}" "$file_name")"
-                jmg_cpyp_enc="$WORK_DIR/jmg_cpyp_${tag}/enc_${file_name}"
-                jmg_cpyp_dec="$WORK_DIR/jmg_cpyp_${tag}/dec_${file_name}"
-                time_cmd "jmg_cpp_enc_py_dec_${tag}" jmg_cpp_enc_py_dec "$jmg_cpyp_input" "$jmg_cpyp_enc" "$jmg_cpyp_dec"
-                add_verify "$ORIG_DIR/$file_name" "$jmg_cpyp_dec"
-            done
-        fi
     fi
 
     if [[ "$RUN_PY_TESTS" == "1" && "$RUN_JAVA_TESTS" == "1" && "$JAVA_AVAILABLE" == "1" ]]; then
@@ -5016,34 +4094,9 @@ if [[ "$SKIP_CROSS" != "1" ]]; then
             done
         done
 
-        # kFM/kFA cross-compat (Python <-> Java)
-        kfme_pyj_input="$(copy_input "kfme_pyj" "$KFM_FILE")"
-        kfme_pyj_enc="$WORK_DIR/kfme_pyj/carrier.wav"
-        kfme_pyj_dec="$WORK_DIR/kfme_pyj/decoded_${KFM_FILE}"
-        time_cmd "kfme_py_enc_java_dec" kfme_py_enc_java_dec "$kfme_pyj_input" "$kfme_pyj_enc" "$kfme_pyj_dec"
-        add_verify "$ORIG_DIR/$KFM_FILE" "$kfme_pyj_dec"
-        add_verify "$ORIG_DIR/$KFM_FILE" "$kfme_pyj_input"
-
-        kfme_jp_input="$(copy_input "kfme_jp" "$KFM_FILE")"
-        kfme_jp_enc="$WORK_DIR/kfme_jp/carrier.wav"
-        kfme_jp_dec="$WORK_DIR/kfme_jp/decoded_${KFM_FILE}"
-        time_cmd "kfme_java_enc_py_dec" kfme_java_enc_py_dec "$kfme_jp_input" "$kfme_jp_enc" "$kfme_jp_dec"
-        add_verify "$ORIG_DIR/$KFM_FILE" "$kfme_jp_dec"
-        add_verify "$ORIG_DIR/$KFM_FILE" "$kfme_jp_input"
-
-        kfae_pyj_input="$(copy_input "kfae_pyj" "$KFM_FILE")"
-        kfae_pyj_enc="$WORK_DIR/kfae_pyj/carrier.png"
-        kfae_pyj_dec="$WORK_DIR/kfae_pyj/decoded_${KFM_FILE}"
-        time_cmd "kfae_py_enc_java_dec" kfae_py_enc_java_dec "$kfae_pyj_input" "$kfae_pyj_enc" "$kfae_pyj_dec"
-        add_verify "$ORIG_DIR/$KFM_FILE" "$kfae_pyj_dec"
-        add_verify "$ORIG_DIR/$KFM_FILE" "$kfae_pyj_input"
-
-        kfae_jp_input="$(copy_input "kfae_jp" "$KFM_FILE")"
-        kfae_jp_enc="$WORK_DIR/kfae_jp/carrier.png"
-        kfae_jp_dec="$WORK_DIR/kfae_jp/decoded_${KFM_FILE}"
-        time_cmd "kfae_java_enc_py_dec" kfae_java_enc_py_dec "$kfae_jp_input" "$kfae_jp_enc" "$kfae_jp_dec"
-        add_verify "$ORIG_DIR/$KFM_FILE" "$kfae_jp_dec"
-        add_verify "$ORIG_DIR/$KFM_FILE" "$kfae_jp_input"
+        if (( RETIRED_MEDIA_ENABLED == 1 )); then
+            run_retired_python_java_cross_tests
+        fi
 
         for method in "${TEXT_NOPASS_METHODS[@]}" "${TEXT_PASS_METHODS[@]}"; do
             py_enc="$OUT_DIR/${method}_py_enc_java.txt"
@@ -5057,22 +4110,6 @@ if [[ "$SKIP_CROSS" != "1" ]]; then
             add_verify "$TEXT_ORIG" "$jp_out"
         done
 
-        if (( ${#JMG_CASES[@]} > 0 )); then
-            for file_name in "${JMG_CASES[@]}"; do
-                tag="$(case_tag "$file_name")"
-                jmg_pyj_input="$(copy_input "jmg_pyj_${tag}" "$file_name")"
-                jmg_pyj_enc="$WORK_DIR/jmg_pyj_${tag}/enc_${file_name}"
-                jmg_pyj_dec="$WORK_DIR/jmg_pyj_${tag}/dec_${file_name}"
-                time_cmd "jmg_py_enc_java_dec_${tag}" jmg_py_enc_java_dec "$jmg_pyj_input" "$jmg_pyj_enc" "$jmg_pyj_dec"
-                add_verify "$ORIG_DIR/$file_name" "$jmg_pyj_dec"
-
-                jmg_jp_input="$(copy_input "jmg_jp_${tag}" "$file_name")"
-                jmg_jp_enc="$WORK_DIR/jmg_jp_${tag}/enc_${file_name}"
-                jmg_jp_dec="$WORK_DIR/jmg_jp_${tag}/dec_${file_name}"
-                time_cmd "jmg_java_enc_py_dec_${tag}" jmg_java_enc_py_dec "$jmg_jp_input" "$jmg_jp_enc" "$jmg_jp_dec"
-                add_verify "$ORIG_DIR/$file_name" "$jmg_jp_dec"
-            done
-        fi
     fi
 
     if [[ "$RUN_CPP_TESTS" == "1" && "$CPP_AVAILABLE" == "1" && "$RUN_JAVA_TESTS" == "1" && "$JAVA_AVAILABLE" == "1" ]]; then
@@ -5111,34 +4148,9 @@ if [[ "$SKIP_CROSS" != "1" ]]; then
             done
         done
 
-        # kFM/kFA cross-compat (C++ <-> Java)
-        kfme_cppj_input="$(copy_input "kfme_cppj" "$KFM_FILE")"
-        kfme_cppj_enc="$WORK_DIR/kfme_cppj/carrier.wav"
-        kfme_cppj_dec="$WORK_DIR/kfme_cppj/decoded_${KFM_FILE}"
-        time_cmd "kfme_cpp_enc_java_dec" kfme_cpp_enc_java_dec "$kfme_cppj_input" "$kfme_cppj_enc" "$kfme_cppj_dec"
-        add_verify "$ORIG_DIR/$KFM_FILE" "$kfme_cppj_dec"
-        add_verify "$ORIG_DIR/$KFM_FILE" "$kfme_cppj_input"
-
-        kfme_jcpp_input="$(copy_input "kfme_jcpp" "$KFM_FILE")"
-        kfme_jcpp_enc="$WORK_DIR/kfme_jcpp/carrier.wav"
-        kfme_jcpp_dec="$WORK_DIR/kfme_jcpp/decoded_${KFM_FILE}"
-        time_cmd "kfme_java_enc_cpp_dec" kfme_java_enc_cpp_dec "$kfme_jcpp_input" "$kfme_jcpp_enc" "$kfme_jcpp_dec"
-        add_verify "$ORIG_DIR/$KFM_FILE" "$kfme_jcpp_dec"
-        add_verify "$ORIG_DIR/$KFM_FILE" "$kfme_jcpp_input"
-
-        kfae_cppj_input="$(copy_input "kfae_cppj" "$KFM_FILE")"
-        kfae_cppj_enc="$WORK_DIR/kfae_cppj/carrier.png"
-        kfae_cppj_dec="$WORK_DIR/kfae_cppj/decoded_${KFM_FILE}"
-        time_cmd "kfae_cpp_enc_java_dec" kfae_cpp_enc_java_dec "$kfae_cppj_input" "$kfae_cppj_enc" "$kfae_cppj_dec"
-        add_verify "$ORIG_DIR/$KFM_FILE" "$kfae_cppj_dec"
-        add_verify "$ORIG_DIR/$KFM_FILE" "$kfae_cppj_input"
-
-        kfae_jcpp_input="$(copy_input "kfae_jcpp" "$KFM_FILE")"
-        kfae_jcpp_enc="$WORK_DIR/kfae_jcpp/carrier.png"
-        kfae_jcpp_dec="$WORK_DIR/kfae_jcpp/decoded_${KFM_FILE}"
-        time_cmd "kfae_java_enc_cpp_dec" kfae_java_enc_cpp_dec "$kfae_jcpp_input" "$kfae_jcpp_enc" "$kfae_jcpp_dec"
-        add_verify "$ORIG_DIR/$KFM_FILE" "$kfae_jcpp_dec"
-        add_verify "$ORIG_DIR/$KFM_FILE" "$kfae_jcpp_input"
+        if (( RETIRED_MEDIA_ENABLED == 1 )); then
+            run_retired_cpp_java_cross_tests
+        fi
     fi
 fi
 
@@ -5186,11 +4198,6 @@ fi
 bench_text_for_method() {
     local method="$1"
     local limit="$BENCH_TEXT_BYTES"
-    case "$method" in
-        a512|bi512)
-            limit="$BENCH_TEXT_SLOW_BYTES"
-            ;;
-    esac
     if [[ -z "$limit" || ! "$limit" =~ ^[0-9]+$ || "$limit" -le 0 ]]; then
         printf "%s\n" "$BENCH_TEXT"
         return 0
@@ -5211,46 +4218,20 @@ bench_text_for_method() {
 }
 
 bench_iters_for_method() {
-    local method="$1"
-    case "$method" in
-        a512|bi512)
-            printf "%s\n" "$BENCH_ITERS_SLOW"
-            ;;
-        *)
-            printf "%s\n" "$BENCH_ITERS_LIGHT"
-            ;;
-    esac
+    printf "%s\n" "$BENCH_ITERS_LIGHT"
 }
 
 bench_workers_for_method() {
-    local method="$1"
     local lang="${2:-}"
-    case "$method" in
-        a512|bi512)
-            case "$lang" in
-                py)
-                    printf "%s\n" "$BENCH_WORKERS_PY_SLOW"
-                    ;;
-                pypy)
-                    printf "%s\n" "$BENCH_WORKERS_PYPY_SLOW"
-                    ;;
-                *)
-                    printf "%s\n" "$BENCH_WORKERS_SLOW"
-                    ;;
-            esac
+    case "$lang" in
+        py)
+            printf "%s\n" "$BENCH_WORKERS_PY"
+            ;;
+        pypy)
+            printf "%s\n" "$BENCH_WORKERS_PYPY"
             ;;
         *)
-            case "$lang" in
-                py)
-                    printf "%s\n" "$BENCH_WORKERS_PY"
-                    ;;
-                pypy)
-                    printf "%s\n" "$BENCH_WORKERS_PYPY"
-                    ;;
-                *)
-                    printf "%s\n" "$BASEFWX_BENCH_WORKERS"
-                    ;;
-            esac
+            printf "%s\n" "$BASEFWX_BENCH_WORKERS"
             ;;
     esac
 }
@@ -5265,16 +4246,11 @@ else
     BENCH_BYTES_FILE="$ORIG_DIR/$FWXAES_FILE"
 fi
 
-BENCH_KFM_FILE="$ORIG_DIR/$KFM_FILE"
-if [[ ! -f "$BENCH_KFM_FILE" ]]; then
-    BENCH_KFM_FILE="$BENCH_BYTES_FILE"
-fi
-
 BENCH_LIVE_AUDIO_FILE=""
 if (( FFMPEG_AVAILABLE == 1 )); then
-    bench_live_audio_src="$ORIG_DIR/jmg_sample.m4a"
+    bench_live_audio_src="$ORIG_DIR/media_sample.m4a"
     if [[ ! -f "$bench_live_audio_src" ]]; then
-        bench_live_audio_src="$ORIG_DIR/jmg_sample.mp4"
+        bench_live_audio_src="$ORIG_DIR/media_sample.mp4"
     fi
     if [[ -f "$bench_live_audio_src" ]]; then
         BENCH_LIVE_AUDIO_FILE="$TMP_DIR/bench_live_audio.wav"
@@ -5492,9 +4468,8 @@ case "$BENCH_FWXAES_MODE" in
 esac
 
 basefwx_benchmark_configure_methods
-BENCH_RETIRED="$BASEFWX_BENCH_RETIRED_ENABLED"
 BENCH_TEXT_METHODS=("${BASEFWX_BENCH_TEXT_METHODS[@]}")
-BENCH_HASH_METHODS=("hash512" "uhash513" "bi512")  # b1024 retired in 3.6.5
+BENCH_HASH_METHODS=("hash512")
 
 BENCH_LANGS=()
 if [[ "$RUN_PY_TESTS" == "1" ]]; then
@@ -5511,7 +4486,6 @@ if [[ "$RUN_JAVA_TESTS" == "1" && "$JAVA_AVAILABLE" == "1" ]]; then
 fi
 
 log "BENCH_FWXAES_MODE: $BENCH_FWXAES_MODE"
-log "BENCH_RETIRED: $BENCH_RETIRED"
 log "BENCH_PARALLEL: $BENCH_PARALLEL"
 log "BENCH_ALL_CORES: $BENCH_ALL_CORES"
 log "BENCH_WORKERS: $BASEFWX_BENCH_WORKERS"
@@ -5536,7 +4510,6 @@ log "BENCH_ITERS_FILE: $BENCH_ITERS_FILE"
 log "BENCH_TEXT_BYTES: $BENCH_TEXT_BYTES"
 log "BENCH_TEXT_SLOW_BYTES: $BENCH_TEXT_SLOW_BYTES"
 log "BENCH_TEXT_MAX_BYTES: $BENCH_TEXT_MAX_BYTES"
-log "BENCH_KFM_FILE: $BENCH_KFM_FILE"
 log "BENCH_LIVE_AUDIO_FILE: ${BENCH_LIVE_AUDIO_FILE:-<none>}"
 log "NVIDIA_HWACCEL_AVAILABLE: $NVIDIA_HWACCEL_AVAILABLE"
 
@@ -5605,18 +4578,6 @@ for idx in "${!BENCH_LANGS[@]}"; do
                 BASEFWX_BENCH_WORKERS="$BENCH_FILE_WORKERS" \
                 BASEFWX_BENCH_AN7_WORKERS=1 \
                 "$PYTHON_BIN" "$PY_HELPER" bench-dean7 "$BENCH_BYTES_FILE" "$PW"
-            if (( BENCH_RETIRED == 1 )); then
-                for jmg_file in "${JMG_CASES[@]}"; do
-                    time_cmd_bench "jmg_py_${jmg_file%.*}" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_FILE" \
-                        BASEFWX_BENCH_ITERS="$BENCH_ITERS_FILE" \
-                        BASEFWX_BENCH_WORKERS="$BENCH_FILE_WORKERS" \
-                        "$PYTHON_BIN" "$PY_HELPER" bench-jmg "$ORIG_DIR/$jmg_file" "$PW"
-                done
-                BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_FILE" BASEFWX_BENCH_ITERS="$BENCH_ITERS_FILE" \
-                    time_cmd_bench "kfme_py_total" bench_kf_roundtrip "kfme" "py" "$BENCH_KFM_FILE"
-                BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_FILE" BASEFWX_BENCH_ITERS="$BENCH_ITERS_FILE" \
-                    time_cmd_bench "kfae_py_total" bench_kf_roundtrip "kfae" "py" "$BENCH_KFM_FILE"
-            fi
             ;;
         pypy)
             if [[ "$BENCH_FWXAES_MODE" == "par" ]]; then
@@ -5672,18 +4633,6 @@ for idx in "${!BENCH_LANGS[@]}"; do
                 BASEFWX_BENCH_WORKERS="$BENCH_FILE_WORKERS" \
                 BASEFWX_BENCH_AN7_WORKERS=1 \
                 "$PYPY_BIN" "$PY_HELPER" bench-dean7 "$BENCH_BYTES_FILE" "$PW"
-            if (( BENCH_RETIRED == 1 )); then
-                for jmg_file in "${JMG_CASES[@]}"; do
-                    time_cmd_bench "jmg_pypy_${jmg_file%.*}" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_FILE" \
-                        BASEFWX_BENCH_ITERS="$BENCH_ITERS_FILE" \
-                        BASEFWX_BENCH_WORKERS="$BENCH_FILE_WORKERS" \
-                        "$PYPY_BIN" "$PY_HELPER" bench-jmg "$ORIG_DIR/$jmg_file" "$PW"
-                done
-                BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_FILE" BASEFWX_BENCH_ITERS="$BENCH_ITERS_FILE" \
-                    time_cmd_bench "kfme_pypy_total" bench_kf_roundtrip "kfme" "pypy" "$BENCH_KFM_FILE"
-                BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_FILE" BASEFWX_BENCH_ITERS="$BENCH_ITERS_FILE" \
-                    time_cmd_bench "kfae_pypy_total" bench_kf_roundtrip "kfae" "pypy" "$BENCH_KFM_FILE"
-            fi
             ;;
         cpp)
             if [[ "$BENCH_FWXAES_MODE" == "par" ]]; then
@@ -5758,27 +4707,6 @@ for idx in "${!BENCH_LANGS[@]}"; do
                 BASEFWX_BENCH_ITERS="$BENCH_ITERS_FILE" \
                 BASEFWX_BENCH_WORKERS=1 \
                 "$CPP_BIN" bench-dean7 "$BENCH_BYTES_FILE" "$PW" --no-master
-            if (( BENCH_RETIRED == 1 )); then
-                for jmg_file in "${JMG_CASES[@]}"; do
-                    time_cmd_bench "jmg_cpp_${jmg_file%.*}" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_FILE" \
-                        BASEFWX_BENCH_ITERS="$BENCH_ITERS_FILE" \
-                        BASEFWX_BENCH_WORKERS="$BENCH_FILE_WORKERS" \
-                        "$CPP_BIN" bench-jmg "$ORIG_DIR/$jmg_file" "$PW" --no-master
-                done
-                if (( NVIDIA_HWACCEL_AVAILABLE == 1 )) \
-                    && [[ "$JMG_VIDEO_CASES_ENABLED" == "1" || "$JMG_VIDEO_CASES_ENABLED" == "true" || "$JMG_VIDEO_CASES_ENABLED" == "yes" || "$JMG_VIDEO_CASES_ENABLED" == "on" ]] \
-                    && [[ -f "$ORIG_DIR/jmg_sample.mp4" ]]; then
-                    time_cmd_bench "jmg_cpp_gpu_jmg_sample_mp4" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_FILE" \
-                        BASEFWX_BENCH_ITERS="$BENCH_ITERS_FILE" \
-                        BASEFWX_BENCH_WORKERS="$BENCH_FILE_WORKERS" \
-                        BASEFWX_HWACCEL=nvenc \
-                        "$CPP_BIN" bench-jmg "$ORIG_DIR/jmg_sample.mp4" "$PW" --no-master
-                fi
-                BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_FILE" BASEFWX_BENCH_ITERS="$BENCH_ITERS_FILE" \
-                    time_cmd_bench "kfme_cpp_total" bench_kf_roundtrip "kfme" "cpp" "$BENCH_KFM_FILE"
-                BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_FILE" BASEFWX_BENCH_ITERS="$BENCH_ITERS_FILE" \
-                    time_cmd_bench "kfae_cpp_total" bench_kf_roundtrip "kfae" "cpp" "$BENCH_KFM_FILE"
-            fi
             ;;
         java)
             if [[ "$BENCH_FWXAES_MODE" == "par" ]]; then
@@ -5841,18 +4769,6 @@ for idx in "${!BENCH_LANGS[@]}"; do
                 BASEFWX_BENCH_ITERS="$BENCH_ITERS_FILE" \
                 BASEFWX_BENCH_WORKERS=1 \
                 "$JAVA_BIN" "${JAVA_BENCH_FLAGS_ARR[@]}" -jar "$JAVA_JAR" bench-dean7 "$BENCH_BYTES_FILE" "$PW" --no-master
-            if (( BENCH_RETIRED == 1 )); then
-                for jmg_file in "${JMG_CASES[@]}"; do
-                    time_cmd_bench "jmg_java_${jmg_file%.*}" env BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_FILE_JAVA" \
-                        BASEFWX_BENCH_ITERS="$BENCH_ITERS_FILE" \
-                        BASEFWX_BENCH_WORKERS="$BENCH_FILE_WORKERS" \
-                        "$JAVA_BIN" "${JAVA_BENCH_FLAGS_ARR[@]}" -jar "$JAVA_JAR" bench-jmg "$ORIG_DIR/$jmg_file" "$PW" --no-master
-                done
-                BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_FILE_JAVA" BASEFWX_BENCH_ITERS="$BENCH_ITERS_FILE" \
-                    time_cmd_bench "kfme_java_total" bench_kf_roundtrip "kfme" "java" "$BENCH_KFM_FILE"
-                BASEFWX_BENCH_WARMUP="$BENCH_WARMUP_FILE_JAVA" BASEFWX_BENCH_ITERS="$BENCH_ITERS_FILE" \
-                    time_cmd_bench "kfae_java_total" bench_kf_roundtrip "kfae" "java" "$BENCH_KFM_FILE"
-            fi
             ;;
     esac
     if (( idx < ${#BENCH_LANGS[@]} - 1 )); then
@@ -6068,23 +4984,13 @@ BENCH_METHODS=(
     "b512|b512_py_correct|b512_pypy_correct|b512_cpp_correct|b512_java_correct"
     "pb512|pb512_py_correct|pb512_pypy_correct|pb512_cpp_correct|pb512_java_correct"
     "b64|b64_py_correct|b64_pypy_correct|b64_cpp_correct|b64_java_correct"
-    "a512|a512_py_correct|a512_pypy_correct|a512_cpp_correct|a512_java_correct"
     "n10|n10_py_correct|n10_pypy_correct|n10_cpp_correct|n10_java_correct"
     "hash512|hash512_py_correct|hash512_pypy_correct|hash512_cpp_correct|hash512_java_correct"
-    "uhash513|uhash513_py_correct|uhash513_pypy_correct|uhash513_cpp_correct|uhash513_java_correct"
-    "bi512|bi512_py_correct|bi512_pypy_correct|bi512_cpp_correct|bi512_java_correct"
     "b512file|b512file_py_total|b512file_pypy_total|b512file_cpp_total|b512file_java_total"
     "pb512file|pb512file_py_total|pb512file_pypy_total|pb512file_cpp_total|pb512file_java_total"
     "an7|an7_py_total|an7_pypy_total|an7_cpp_total|an7_java_total"
     "dean7|dean7_py_total|dean7_pypy_total|dean7_cpp_total|dean7_java_total"
 )
-if (( BENCH_RETIRED == 1 )); then
-    BENCH_METHODS+=(
-        "b256|b256_py_correct|b256_pypy_correct|b256_cpp_correct|b256_java_correct"
-        "kFMe|kfme_py_total|kfme_pypy_total|kfme_cpp_total|kfme_java_total"
-        "kFAe|kfae_py_total|kfae_pypy_total|kfae_cpp_total|kfae_java_total"
-    )
-fi
 
 overall_summary() {
     local py_sum py_count py_base_sum
@@ -6159,7 +5065,6 @@ write_bench_results() {
     local bench_python="${PYTHON_BIN:-python3}"
     BENCH_EPSILON_NS="$DELTA_EPSILON_NS" \
     BENCH_BYTES_FILE="$BENCH_BYTES_FILE" \
-    BENCH_KFM_FILE="$BENCH_KFM_FILE" \
     BENCH_TEXT_FILE="$BENCH_TEXT" \
     BENCH_FWXAES_MODE="$BENCH_FWXAES_MODE" \
     BENCH_ITERS_LIGHT="$BENCH_ITERS_LIGHT" \
@@ -6263,7 +5168,6 @@ data = {
     "epsilon_ns": epsilon_ns,
     "bench_files": {
         "bytes": os.getenv("BENCH_BYTES_FILE", ""),
-        "kfm": os.getenv("BENCH_KFM_FILE", ""),
         "text": os.getenv("BENCH_TEXT_FILE", ""),
         "text_bytes": to_int(os.getenv("BENCH_TEXT_BYTES", "0")) or 0,
         "text_slow_bytes": to_int(os.getenv("BENCH_TEXT_SLOW_BYTES", "0")) or 0,
@@ -6324,12 +5228,8 @@ compare_speed_block "fwxAES-live" "fwxaes_live_py_total" "fwxaes_live_pypy_total
 compare_speed_block "b512" "b512_py_correct" "b512_pypy_correct" "b512_cpp_correct" "b512_java_correct"
 compare_speed_block "pb512" "pb512_py_correct" "pb512_pypy_correct" "pb512_cpp_correct" "pb512_java_correct"
 compare_speed_block "b64" "b64_py_correct" "b64_pypy_correct" "b64_cpp_correct" "b64_java_correct"
-compare_speed_block "a512" "a512_py_correct" "a512_pypy_correct" "a512_cpp_correct" "a512_java_correct"
 compare_speed_block "n10" "n10_py_correct" "n10_pypy_correct" "n10_cpp_correct" "n10_java_correct"
 compare_speed_block "hash512" "hash512_py_correct" "hash512_pypy_correct" "hash512_cpp_correct" "hash512_java_correct"
-compare_speed_block "uhash513" "uhash513_py_correct" "uhash513_pypy_correct" "uhash513_cpp_correct" "uhash513_java_correct"
-compare_speed_block "bi512" "bi512_py_correct" "bi512_pypy_correct" "bi512_cpp_correct" "bi512_java_correct"
-# b1024 retired in 3.6.5 — was Bi512Encode(A512Encode(...)). compare_speed_block dropped.
 if [[ "$RUN_PY_TESTS" == "1" && -z "${TIMES[b512file_py_total]-}" ]]; then
     TIMES["b512file_py_total"]=${B512FILE_PY_TOTAL:-0}
     TIMES["pb512file_py_total"]=${PB512FILE_PY_TOTAL:-0}
@@ -6348,11 +5248,6 @@ if [[ "$RUN_JAVA_TESTS" == "1" && -z "${TIMES[b512file_java_total]-}" ]]; then
 fi
 compare_speed_block "b512file" "b512file_py_total" "b512file_pypy_total" "b512file_cpp_total" "b512file_java_total"
 compare_speed_block "pb512file" "pb512file_py_total" "pb512file_pypy_total" "pb512file_cpp_total" "pb512file_java_total"
-if (( BENCH_RETIRED == 1 )); then
-    compare_speed_block "b256" "b256_py_correct" "b256_pypy_correct" "b256_cpp_correct" "b256_java_correct"
-    compare_speed_block "kFMe" "kfme_py_total" "kfme_pypy_total" "kfme_cpp_total" "kfme_java_total"
-    compare_speed_block "kFAe" "kfae_py_total" "kfae_pypy_total" "kfae_cpp_total" "kfae_java_total"
-fi
 
 # --- plugin ABI smoke ----------------------------------------------------
 # Verifies the blackbox plugin ABI end-to-end (build + dlopen + ServiceLoader
@@ -6360,8 +5255,8 @@ fi
 # with-and-without a plugin attached — that would double the suite runtime
 # for little extra coverage. The plugin contract is independent of which
 # AEAD pipeline it wraps; once it round-trips here, it round-trips in
-# any encryption pipeline that loads it. Hash-only methods (hash512,
-# uhash513, bi512) intentionally have no plugin integration path.
+# any encryption pipeline that loads it. Hash-only methods intentionally
+# have no plugin integration path.
 SMOKE_LABEL="plugin ABI smoke"
 if [[ -x "$ROOT/scripts/plugin-smoke.sh" ]]; then
     announce_step "$SMOKE_LABEL"

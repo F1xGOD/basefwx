@@ -50,6 +50,25 @@ public class ProtocolKatTest {
     }
 
     @Test
+    @SuppressWarnings("deprecation")
+    public void compatibilityPrfPinsFourByteCounterBoundary() {
+        byte[] key = "compatibility-key".getBytes(StandardCharsets.US_ASCII);
+        byte[] info = "basefwx.compat.prf.test".getBytes(
+                StandardCharsets.US_ASCII);
+        byte[] stream = Crypto.compatPrfStreamSha256(key, info, 256 * 32);
+        assertEquals(
+                "52441fd524e5898966141ddac1212f0e282458a5fadea27f871d4cf6d9621cb5",
+                hex(Arrays.copyOfRange(stream, 0, 32)));
+        assertEquals(
+                "b9cfd313174c50ff195d80c3cdabd82bbb7b15c63391a19d08ad9ac10d7fe279",
+                hex(Arrays.copyOfRange(stream, 254 * 32, 255 * 32)));
+        assertEquals(
+                "1243c9a23c437ceaab6dfb5af5c5a01a5b34c474e9fd0ce9d9563f269255f383",
+                hex(Arrays.copyOfRange(stream, 255 * 32, 256 * 32)));
+        assertArrayEquals(stream, Crypto.hkdfSha256Stream(key, info, 256 * 32));
+    }
+
+    @Test
     public void x25519MatchesCppAndRejectsAllZero() throws Exception {
         Map<String, String> v = section("x25519");
         byte[] shared = X25519.deriveSharedSecret(
@@ -87,11 +106,19 @@ public class ProtocolKatTest {
     public void generateKeyPairRoundTrip() throws Exception {
         for (PQ.KemAlgorithm alg : PQ.KemAlgorithm.values()) {
             PQ.KemKeyPair kp = PQ.generateKeyPair(alg);
-            PQ.KemResult enc = PQ.kemEncrypt(kp.publicKey);
-            byte[] shared = PQ.kemDecrypt(kp.privateKey, enc.ciphertext);
-            assertArrayEquals(enc.shared, shared);
-            kp.wipePrivate();
-            Arrays.fill(enc.shared, (byte) 0);
+            byte[] sharedRef;
+            try (PQ.KemResult enc = PQ.kemEncrypt(kp.publicKey)) {
+                sharedRef = enc.shared;
+                byte[] shared = PQ.kemDecrypt(kp.privateKey, enc.ciphertext);
+                try {
+                    assertArrayEquals(enc.shared, shared);
+                } finally {
+                    Arrays.fill(shared, (byte) 0);
+                }
+            } finally {
+                kp.wipePrivate();
+            }
+            assertArrayEquals(new byte[sharedRef.length], sharedRef);
         }
     }
 
@@ -99,16 +126,16 @@ public class ProtocolKatTest {
     public void rejectsMismatchedKemSizesBeforeDecapsulation() throws Exception {
         PQ.KemKeyPair kp768 = PQ.generateKeyPair(PQ.KemAlgorithm.ML_KEM_768);
         PQ.KemKeyPair kp1024 = PQ.generateKeyPair(PQ.KemAlgorithm.ML_KEM_1024);
-        PQ.KemResult enc1024 = PQ.kemEncrypt(kp1024.publicKey);
-        try {
-            PQ.kemDecrypt(kp768.privateKey, enc1024.ciphertext);
-            fail("expected mismatched ML-KEM sizes to be rejected");
-        } catch (IllegalArgumentException expected) {
-            assertTrue(expected.getMessage().contains("mismatched"));
+        try (PQ.KemResult enc1024 = PQ.kemEncrypt(kp1024.publicKey)) {
+            try {
+                PQ.kemDecrypt(kp768.privateKey, enc1024.ciphertext);
+                fail("expected mismatched ML-KEM sizes to be rejected");
+            } catch (IllegalArgumentException expected) {
+                assertTrue(expected.getMessage().contains("mismatched"));
+            }
         } finally {
             kp768.wipePrivate();
             kp1024.wipePrivate();
-            Arrays.fill(enc1024.shared, (byte) 0);
         }
     }
 

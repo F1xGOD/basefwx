@@ -116,13 +116,24 @@ public final class PQ {
         }
     }
 
-    public static class KemResult {
+    public static class KemResult implements AutoCloseable {
         public final byte[] ciphertext;
         public final byte[] shared;
 
         public KemResult(byte[] ciphertext, byte[] shared) {
             this.ciphertext = ciphertext;
             this.shared = shared;
+        }
+
+        public final void wipeShared() {
+            if (shared != null) {
+                Arrays.fill(shared, (byte) 0);
+            }
+        }
+
+        @Override
+        public final void close() {
+            wipeShared();
         }
     }
 

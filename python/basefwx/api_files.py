@@ -274,6 +274,11 @@ def b512file_encode_bytes(
     use_master: bool = False,
     enable_aead: bool | None = None,
 ):
+    """Encode an authenticated b512file byte container.
+
+    ``enable_aead`` remains for source compatibility, but passing ``False``
+    is rejected because unauthenticated b512file writing is retired.
+    """
     return basefwx.b512file_encode_bytes(
         data,
         ext,

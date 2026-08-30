@@ -7,7 +7,7 @@
 
 ## What contributions are welcome
 
-- Bug fixes against the current development line (3.8.0-dev1 + `[Unreleased]`).
+- Bug fixes against the current development line under `[Unreleased]`.
 - Cross-runtime parity fixes (C++ ↔ Java ↔ Python drift).
 - New plugins for `examples/plugins/` (the templates are MIT OR
   Apache-2.0; see [LICENSING.md](./LICENSING.md)).
@@ -15,7 +15,7 @@
 - Test-suite improvements in `scripts/test_all.sh` or its
   per-runtime equivalents.
 
-## What's *not* welcome (without prior discussion)
+## What needs prior discussion
 
 - New cryptographic primitives. Open an issue first.
 - Wire-format changes. Open an issue, and read
@@ -53,7 +53,7 @@
 - Markdown: prose; one sentence per line in long files for clean
   diffs.
 
-## The Contributor License Agreement (CLA)
+## Contributor license agreement (CLA)
 
 By signing the CLA, you grant FixCraft Inc. the right to redistribute
 your contribution under both:
@@ -68,7 +68,7 @@ You keep your copyright. You give FixCraft Inc. the right to
 relicense your contribution as part of the repository split-license
 model.
 
-If you don't want to sign the CLA, that's fine — but your patch will
+If you don't want to sign the CLA, that's fine, but your patch will
 need to be small enough to be considered de minimis (i.e., not
 copyrightable; typically <10 lines of code, or pure formatting / typo
 fixes). For anything larger, the CLA is required.
@@ -97,7 +97,7 @@ If you're contributing on behalf of an employer, your employer must
 also acknowledge (typically a one-line approval from a manager
 copied into the PR). For corporate contributors with a lot of
 ongoing involvement, a separate signed Corporate CLA is available
-on request — email `admin@fixcraft.jp`.
+on request. Email `admin@fixcraft.jp`.
 
 ## Security issues
 

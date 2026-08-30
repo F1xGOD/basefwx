@@ -124,7 +124,7 @@ std::string Pb512EncodeFileSimple(const std::filesystem::path& input,
     std::filesystem::path out_path = input;
     out_path.replace_extension(".fwx");
     WriteFileBytes(out_path, blob);
-    if (!options.keep_input) {
+    if (!options.keep_input && input != out_path) {
         std::filesystem::remove(input);
     }
     return out_path.string();
@@ -140,13 +140,17 @@ std::string Pb512EncodeFileStream(const std::filesystem::path& input,
             "Streaming pb512 encode requires metadata for format dispatch");
     }
     std::string resolved = basefwx::ResolvePassword(password);
+    basefwx::crypto::SecretGuard password_guard;
+    password_guard.Add(resolved);
     const std::uint32_t heavy_pbkdf2_iterations =
         basefwx::constants::HeavyPbkdf2Iterations();
     if (resolved.empty()) {
         throw std::runtime_error("Password required for AES-heavy streaming mode");
     }
     std::uint64_t input_size = FileSize(input);
-    std::size_t chunk_size = options.stream_chunk_size;
+    const std::uint32_t encoded_chunk_size =
+        RequireStreamChunkSize(options.stream_chunk_size);
+    const std::size_t chunk_size = encoded_chunk_size;
 
     std::optional<Bytes> pq_pub;
     std::optional<Bytes> ec_pub;
@@ -210,22 +214,27 @@ std::string Pb512EncodeFileStream(const std::filesystem::path& input,
 
     Bytes stream_header;
     stream_header.insert(stream_header.end(), constants::kStreamMagic.begin(), constants::kStreamMagic.end());
-    Bytes chunk_bytes = Uint32Be(static_cast<std::uint32_t>(chunk_size));
+    Bytes chunk_bytes = Uint32Be(encoded_chunk_size);
     stream_header.insert(stream_header.end(), chunk_bytes.begin(), chunk_bytes.end());
     Bytes size_bytes = Uint64Be(input_size);
     stream_header.insert(stream_header.end(), size_bytes.begin(), size_bytes.end());
     stream_header.insert(stream_header.end(), stream_salt.begin(), stream_salt.end());
+    if (ext_bytes.size() > std::numeric_limits<std::uint16_t>::max()) {
+        throw std::length_error("Streaming file extension is too long");
+    }
     Bytes ext_len = Uint16Be(static_cast<std::uint16_t>(ext_bytes.size()));
     stream_header.insert(stream_header.end(), ext_len.begin(), ext_len.end());
     stream_header.insert(stream_header.end(), ext_bytes.begin(), ext_bytes.end());
-
-    std::uint64_t plaintext_len = static_cast<std::uint64_t>(prefix_bytes.size() + stream_header.size() + input_size);
+    const std::uint32_t payload_len = CheckedStreamPayloadLength(
+        input_size,
+        metadata_bytes.size(),
+        prefix_bytes.size(),
+        stream_header.size());
 
     Bytes master_payload;
     Bytes ephemeral_key;
     PayloadKeys payload_keys;
     basefwx::crypto::SecretGuard secrets;
-    secrets.Add(resolved);
     secrets.Add(ephemeral_key);
     secrets.Add(payload_keys.aead);
     secrets.Add(payload_keys.obf);
@@ -284,18 +293,19 @@ std::string Pb512EncodeFileStream(const std::filesystem::path& input,
     }
 
     Bytes nonce = basefwx::crypto::RandomBytes(constants::kAeadNonceLen);
-    std::uint64_t payload_len = 4 + metadata_bytes.size() + nonce.size() + plaintext_len + constants::kAeadTagLen;
-
     std::filesystem::path out_path = input;
     out_path.replace_extension(".fwx");
-    std::ofstream output(out_path, std::ios::binary);
+    auto staged_output =
+        basefwx::temp::SecureTempPath::CreateSibling(
+            out_path, "pb512-enc");
+    std::ofstream output(staged_output.path(), std::ios::binary);
     if (!output) {
         throw std::runtime_error("Failed to open output file: " + out_path.string());
     }
 
     Bytes len_user = Uint32Be(static_cast<std::uint32_t>(user_blob.size()));
     Bytes len_master = Uint32Be(static_cast<std::uint32_t>(master_payload.size()));
-    Bytes len_payload = Uint32Be(static_cast<std::uint32_t>(payload_len));
+    Bytes len_payload = Uint32Be(payload_len);
     output.write(reinterpret_cast<const char*>(len_user.data()), len_user.size());
     output.write(reinterpret_cast<const char*>(user_blob.data()), static_cast<std::streamsize>(user_blob.size()));
     output.write(reinterpret_cast<const char*>(len_master.data()), len_master.size());
@@ -336,21 +346,31 @@ std::string Pb512EncodeFileStream(const std::filesystem::path& input,
     if (!input_stream) {
         throw std::runtime_error("Failed to open input file: " + input.string());
     }
-    Bytes buffer(chunk_size);
-    while (input_stream) {
-        buffer.resize(chunk_size);
-        input_stream.read(reinterpret_cast<char*>(buffer.data()), static_cast<std::streamsize>(buffer.size()));
-        std::streamsize got = input_stream.gcount();
-        if (got <= 0) {
-            break;
+    basefwx::crypto::SecureBytes buffer{Bytes(chunk_size)};
+    std::uint64_t remaining_input = input_size;
+    while (remaining_input > 0) {
+        const std::size_t take = static_cast<std::size_t>(
+            std::min<std::uint64_t>(remaining_input, chunk_size));
+        buffer.bytes().resize(take);
+        input_stream.read(
+            reinterpret_cast<char*>(buffer.data()),
+            static_cast<std::streamsize>(take));
+        if (input_stream.gcount() != static_cast<std::streamsize>(take)) {
+            throw std::runtime_error(
+                "Input changed during streaming pb512 encode");
         }
-        buffer.resize(static_cast<std::size_t>(got));
         if (obfuscator.has_value()) {
-            obfuscator->EncodeChunkInPlace(buffer);
+            obfuscator->EncodeChunkInPlace(buffer.bytes());
         }
-        Bytes ct = encryptor.Update(buffer);
+        Bytes ct = encryptor.Update(buffer.bytes());
         output.write(reinterpret_cast<const char*>(ct.data()), static_cast<std::streamsize>(ct.size()));
+        remaining_input -= take;
     }
+    if (input_stream.peek() != std::char_traits<char>::eof()) {
+        throw std::runtime_error(
+            "Input changed during streaming pb512 encode");
+    }
+    input_stream.close();
 
     Bytes final_chunk = encryptor.Final();
     if (!final_chunk.empty()) {
@@ -363,7 +383,9 @@ std::string Pb512EncodeFileStream(const std::filesystem::path& input,
     if (!output) {
         throw std::runtime_error("Failed to write output file: " + out_path.string());
     }
-    if (!options.keep_input) {
+    output.close();
+    staged_output.CommitReplace(out_path);
+    if (!options.keep_input && input != out_path) {
         std::filesystem::remove(input);
     }
     return out_path.string();
@@ -373,7 +395,11 @@ std::string Pb512DecodeFileStream(const std::filesystem::path& input,
                                   const std::string& password,
                                   const FileOptions& options,
                                   const basefwx::pb512::KdfOptions& kdf) {
+    const std::size_t io_chunk_size =
+        RequireStreamChunkSize(options.stream_chunk_size);
     std::string resolved = basefwx::ResolvePassword(password);
+    basefwx::crypto::SecretGuard password_guard;
+    password_guard.Add(resolved);
     std::ifstream handle(input, std::ios::binary);
     if (!handle) {
         throw std::runtime_error("Failed to open file: " + input.string());
@@ -494,7 +520,6 @@ std::string Pb512DecodeFileStream(const std::filesystem::path& input,
     Bytes ephemeral_key;
     PayloadKeys payload_keys;
     basefwx::crypto::SecretGuard secrets;
-    secrets.Add(resolved);
     secrets.Add(ephemeral_key);
     secrets.Add(payload_keys.aead);
     secrets.Add(payload_keys.obf);
@@ -522,7 +547,7 @@ std::string Pb512DecodeFileStream(const std::filesystem::path& input,
     }
 
     std::uint64_t remaining = cipher_body_len;
-    Bytes buffer(options.stream_chunk_size);
+    Bytes buffer(io_chunk_size);
     while (remaining > 0) {
         ThrowIfInterrupted();
         std::size_t take = static_cast<std::size_t>(std::min<std::uint64_t>(remaining, buffer.size()));
@@ -531,9 +556,12 @@ std::string Pb512DecodeFileStream(const std::filesystem::path& input,
         if (handle.gcount() != static_cast<std::streamsize>(take)) {
             throw std::runtime_error("Ciphertext truncated");
         }
-        Bytes plain = decryptor.Update(buffer);
+        basefwx::crypto::SecureBytes plain{
+            decryptor.Update(buffer)};
         if (!plain.empty()) {
-            plain_out.write(reinterpret_cast<const char*>(plain.data()), static_cast<std::streamsize>(plain.size()));
+            plain_out.write(
+                reinterpret_cast<const char*>(plain.data()),
+                static_cast<std::streamsize>(plain.size()));
         }
         remaining -= take;
     }
@@ -578,8 +606,9 @@ std::string Pb512DecodeFileStream(const std::filesystem::path& input,
                                | (static_cast<std::uint32_t>(chunk_buf[1]) << 16)
                                | (static_cast<std::uint32_t>(chunk_buf[2]) << 8)
                                | static_cast<std::uint32_t>(chunk_buf[3]);
-    if (chunk_size == 0 || chunk_size > (16u << 20)) {
-        chunk_size = static_cast<std::uint32_t>(options.stream_chunk_size);
+    if (chunk_size == 0
+        || chunk_size > constants::kStreamChunkSizeMax) {
+        chunk_size = static_cast<std::uint32_t>(io_chunk_size);
     }
     std::array<std::uint8_t, 8> size_buf{};
     plain_in.read(reinterpret_cast<char*>(size_buf.data()), size_buf.size());
@@ -638,36 +667,49 @@ std::string Pb512DecodeFileStream(const std::filesystem::path& input,
         target.replace_extension(ext);
     }
     auto pack_mode = ResolvePackMode(meta, ext);
-    std::ofstream out(target, std::ios::binary);
+    auto authenticated_output =
+        basefwx::temp::SecureTempPath::CreateSibling(
+            target, "pb512-auth");
+    std::ofstream out(authenticated_output.path(), std::ios::binary);
     if (!out) {
-        throw std::runtime_error("Failed to open output file");
+        throw std::runtime_error("Failed to open authenticated output file");
     }
-    Bytes chunk_buf_bytes(chunk_size);
+    basefwx::crypto::SecureBytes chunk_buf_bytes{
+        Bytes(chunk_size)};
     std::uint64_t processed = 0;
     while (processed < original_size) {
         ThrowIfInterrupted();
         std::size_t take = static_cast<std::size_t>(
             std::min<std::uint64_t>(chunk_size, original_size - processed));
-        chunk_buf_bytes.resize(take);
-        plain_in.read(reinterpret_cast<char*>(chunk_buf_bytes.data()), static_cast<std::streamsize>(take));
+        chunk_buf_bytes.bytes().resize(take);
+        plain_in.read(
+            reinterpret_cast<char*>(chunk_buf_bytes.data()),
+            static_cast<std::streamsize>(take));
         if (plain_in.gcount() != static_cast<std::streamsize>(take)) {
             throw std::runtime_error("Streaming payload truncated");
         }
         if (decoder_v1.has_value()) {
-            decoder_v1->DecodeChunkInPlace(chunk_buf_bytes);
+            decoder_v1->DecodeChunkInPlace(chunk_buf_bytes.bytes());
         } else if (decoder_legacy.has_value()) {
-            decoder_legacy->DecodeChunkInPlace(chunk_buf_bytes);
+            decoder_legacy->DecodeChunkInPlace(chunk_buf_bytes.bytes());
         }
         out.write(reinterpret_cast<const char*>(chunk_buf_bytes.data()),
                   static_cast<std::streamsize>(chunk_buf_bytes.size()));
         processed += static_cast<std::uint64_t>(chunk_buf_bytes.size());
     }
+    if (plain_in.peek() != std::char_traits<char>::eof()) {
+        throw std::runtime_error(
+            "Streaming payload contained unexpected trailing data");
+    }
     out.flush();
     if (!out) {
         throw std::runtime_error("Failed to write output file");
     }
+    out.close();
     plain_in.close();
-    if (!options.keep_input) {
+    handle.close();
+    authenticated_output.CommitReplace(target);
+    if (!options.keep_input && input != target) {
         std::filesystem::remove(input);
     }
     if (pack_mode != basefwx::archive::PackMode::None) {
@@ -819,7 +861,7 @@ std::string Pb512EncodeFile(const std::string& path,
                 throw std::runtime_error("Failed to move output file: " + ec.message());
             }
             output = final_out.string();
-            if (!options.keep_input) {
+            if (!options.keep_input && input != final_out) {
                 if (std::filesystem::is_directory(input)) {
                     std::filesystem::remove_all(input, ec);
                 } else {
@@ -884,7 +926,7 @@ std::string Pb512DecodeFile(const std::string& path,
         target.replace_extension(ext);
     }
     WriteFileBytes(target, decoded);
-    if (!options.keep_input) {
+    if (!options.keep_input && input != target) {
         std::filesystem::remove(input);
     }
     if (pack_mode != basefwx::archive::PackMode::None) {

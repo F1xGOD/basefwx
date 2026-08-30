@@ -79,6 +79,12 @@ final class BaseFwxUtil {
         }
     }
 
+    static void deletePrivateTempFile(File temp) {
+        if (temp != null && !temp.delete() && temp.exists()) {
+            temp.deleteOnExit();
+        }
+    }
+
     static void writeU32(byte[] target, int offset, int value) {
         target[offset] = (byte) ((value >> 24) & 0xFF);
         target[offset + 1] = (byte) ((value >> 16) & 0xFF);

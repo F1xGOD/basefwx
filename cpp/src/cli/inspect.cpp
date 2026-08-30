@@ -97,36 +97,6 @@ std::string FormatEntropy(double bits_per_byte) {
     return out.str();
 }
 
-std::string DescribeKfmMode(std::uint8_t mode) {
-    if (mode == 1u) {
-        return "image->audio";
-    }
-    if (mode == 2u) {
-        return "audio->image";
-    }
-    return "unknown";
-}
-
-std::string DescribeKfmFlags(std::uint8_t flags) {
-    if (flags == 0u) {
-        return "none";
-    }
-    std::string out;
-    if ((flags & 0x01u) != 0u) {
-        out = "bw";
-    }
-    std::uint8_t remaining = static_cast<std::uint8_t>(flags & ~0x01u);
-    if (remaining != 0u) {
-        if (!out.empty()) {
-            out += ", ";
-        }
-        std::ostringstream hex;
-        hex << "0x" << std::hex << std::setw(2) << std::setfill('0')
-            << static_cast<unsigned int>(remaining);
-        out += hex.str();
-    }
-    return out;
-}
 std::vector<std::uint8_t> ReadSampleBytes(const std::filesystem::path& path, std::size_t max_bytes) {
     std::ifstream input(path, std::ios::binary);
     if (!input) {
@@ -248,7 +218,7 @@ std::optional<UnknownFileAnalysis> AnalyzeUnknownFile(const std::filesystem::pat
 
     if (!analysis.format_hint.empty()) {
         analysis.note = "File looks like " + analysis.format_hint
-            + ", but no BaseFWX length-prefixed header, FWX1 header, or kFM carrier marker was found.";
+            + ", but no BaseFWX length-prefixed or FWX1 header was found.";
     } else if (analysis.looks_random) {
         analysis.note =
             "Sample is high-entropy/random-like. It may be AN7 output, other encrypted data, or compressed data.";
@@ -607,20 +577,6 @@ bool PrintIdentifyFwxAes(const std::string& file_path, const FwxAesHeaderInfo& h
     return true;
 }
 
-bool PrintIdentifyKfmCarrier(const std::string& file_path, const basefwx::KfmCarrierInspectResult& info) {
-    std::cout << basefwx::cli::BoldBlue("basefwx identify") << "\n";
-    PrintIdentifyField("file", file_path);
-    PrintIdentifyField("format", "basefwx kFM carrier");
-    PrintIdentifyField("integrity", basefwx::cli::BoldGreen("OK"));
-    PrintIdentifyField("carrier_kind", info.carrier_kind);
-    PrintIdentifyField("mode", DescribeKfmMode(info.mode) + " (" + std::to_string(static_cast<unsigned int>(info.mode)) + ")");
-    PrintIdentifyField("flags", DescribeKfmFlags(info.flags));
-    PrintIdentifyField("payload_ext", info.payload_ext.empty() ? ".bin" : info.payload_ext);
-    PrintIdentifyField("payload_size", FormatSize(static_cast<std::uint64_t>(info.payload_len)));
-    PrintIdentifyField("file_size", FormatSize(info.file_size));
-    return true;
-}
-
 bool PrintIdentifyUnknown(const std::string& file_path, const UnknownFileAnalysis& analysis) {
     std::cout << basefwx::cli::BoldBlue("basefwx identify") << "\n";
     PrintIdentifyField("file", file_path);
@@ -669,17 +625,6 @@ void PrintFwxAesInfo(const FwxAesHeaderInfo& header) {
         std::cout << "ciphertext_len: " << header.ct_len32 << " bytes\n";
     }
     std::cout << "file_size: " << header.file_size << " bytes\n";
-}
-
-void PrintKfmCarrierInfo(const basefwx::KfmCarrierInspectResult& info) {
-    std::cout << "format: kFM carrier\n";
-    std::cout << "carrier_kind: " << info.carrier_kind << "\n";
-    std::cout << "mode: " << DescribeKfmMode(info.mode)
-              << " (" << static_cast<unsigned int>(info.mode) << ")\n";
-    std::cout << "flags: " << DescribeKfmFlags(info.flags) << "\n";
-    std::cout << "payload_ext: " << (info.payload_ext.empty() ? ".bin" : info.payload_ext) << "\n";
-    std::cout << "payload_len: " << info.payload_len << " bytes\n";
-    std::cout << "file_size: " << info.file_size << " bytes\n";
 }
 
 void PrintInspectInfo(const basefwx::InspectResult& info) {

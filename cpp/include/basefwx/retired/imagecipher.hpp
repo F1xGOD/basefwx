@@ -1,0 +1,38 @@
+/*
+ * BaseFWX - Cryptography Engine
+ * Copyright (C) 2020-2026  FixCraft Inc.
+ * Licensed under the GNU Lesser General Public License v3.0 or later.
+ */
+
+#pragma once
+
+#include <string>
+
+namespace basefwx::imagecipher {
+
+std::string EncryptImageInv(const std::string& path,
+                            const std::string& password,
+                            const std::string& output = {},
+                            bool include_trailer = true,
+                            bool archive_original = false,
+                            bool use_master = false);
+
+std::string DecryptImageInv(const std::string& path,
+                            const std::string& password,
+                            const std::string& output = {},
+                            bool use_master = false);
+
+std::string EncryptMedia(const std::string& path,
+                         const std::string& password,
+                         const std::string& output = {},
+                         bool keep_meta = false,
+                         bool keep_input = false,
+                         bool archive_original = false,
+                         bool use_master = false);
+
+std::string DecryptMedia(const std::string& path,
+                         const std::string& password,
+                         const std::string& output = {},
+                         bool use_master = false);
+
+}  // namespace basefwx::imagecipher

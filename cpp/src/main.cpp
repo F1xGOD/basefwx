@@ -40,7 +40,6 @@
 #include <string_view>
 #include <thread>
 #include <tuple>
-#include <unordered_set>
 #include <vector>
 
 #ifdef _WIN32
@@ -70,6 +69,9 @@
 #include "cli/password.hpp"
 #include "cli/telemetry.hpp"
 #include "basefwx/plugin_loader.hpp"
+#if BASEFWX_HAS_RETIRED_MEDIA
+#include "retired/cli.hpp"
+#endif
 
 namespace {
 
@@ -217,24 +219,6 @@ basefwx::fwxaes::Options BuildFwxAesOptions(const basefwx::cli::FwxAesArgs& opts
     return out;
 }
 
-bool LooksLikeMediaPath(const std::filesystem::path& path) {
-    static const std::unordered_set<std::string> kImageExts = {
-        ".png", ".jpg", ".jpeg", ".bmp", ".tga", ".gif", ".webp", ".tif", ".tiff",
-        ".heic", ".heif", ".avif", ".ico"
-    };
-    static const std::unordered_set<std::string> kVideoExts = {
-        ".mp4", ".mkv", ".mov", ".avi", ".webm", ".m4v", ".flv", ".wmv",
-        ".mpg", ".mpeg", ".3gp", ".3g2", ".ts", ".m2ts"
-    };
-    static const std::unordered_set<std::string> kAudioExts = {
-        ".mp3", ".wav", ".flac", ".aac", ".m4a", ".ogg", ".opus", ".wma", ".aiff", ".alac"
-    };
-    std::string ext = basefwx::cli::ToLower(path.extension().string());
-    if (ext.empty()) {
-        return false;
-    }
-    return kImageExts.count(ext) || kVideoExts.count(ext) || kAudioExts.count(ext);
-}
 void EnableBinaryStdio(bool use_stdin, bool use_stdout) {
 #ifdef _WIN32
     if (use_stdin) {
@@ -333,7 +317,12 @@ int main(int argc, char** argv) {
         return 0;
     }
     std::optional<basefwx::cli::CommandTelemetry> telemetry;
-    if (!basefwx::cli::IsLightCommand(command) && command != "jmge" && command != "jmgd") {
+    bool skip_core_telemetry = false;
+#if BASEFWX_HAS_RETIRED_MEDIA
+    skip_core_telemetry =
+        basefwx::retired::cli::SkipsCoreTelemetry(command);
+#endif
+    if (!basefwx::cli::IsLightCommand(command) && !skip_core_telemetry) {
         telemetry.emplace(basefwx::cli::BuildHwPlan(command));
     }
 
@@ -341,6 +330,13 @@ int main(int argc, char** argv) {
     basefwx::cli::PrintSystemInfo();
 
     try {
+#if BASEFWX_HAS_RETIRED_MEDIA
+        if (const auto retired_status =
+                basefwx::retired::cli::TryHandleCliCommand(
+                    command, argc, argv)) {
+            return *retired_status;
+        }
+#endif
         if (command == "info") {
             if (argc < 3) {
                 basefwx::cli::PrintUsage();
@@ -357,11 +353,12 @@ int main(int argc, char** argv) {
                 basefwx::cli::PrintFwxAesInfo(*fwx);
                 return 0;
             }
-            auto kfm = basefwx::InspectKfmCarrierFile(input_path.string());
-            if (kfm.has_value()) {
-                basefwx::cli::PrintKfmCarrierInfo(*kfm);
+#if BASEFWX_HAS_RETIRED_MEDIA
+            if (basefwx::retired::cli::TryPrintKfmInfo(
+                    input_path.string())) {
                 return 0;
             }
+#endif
             std::string fallback_reason;
             auto full = basefwx::cli::TryReadFullInspectSafe(input_path, &fallback_reason);
             if (full.has_value()) {
@@ -405,11 +402,12 @@ int main(int argc, char** argv) {
                 basefwx::cli::PrintIdentifyFwxAes(input_path.string(), *fwx);
                 return 0;
             }
-            auto kfm = basefwx::InspectKfmCarrierFile(input_path.string());
-            if (kfm.has_value()) {
-                basefwx::cli::PrintIdentifyKfmCarrier(input_path.string(), *kfm);
+#if BASEFWX_HAS_RETIRED_MEDIA
+            if (basefwx::retired::cli::TryPrintKfmIdentify(
+                    input_path.string())) {
                 return 0;
             }
+#endif
             std::string fallback_reason;
             auto full = basefwx::cli::TryReadFullInspectSafe(input_path, &fallback_reason);
             if (full.has_value()) {
@@ -496,31 +494,6 @@ int main(int argc, char** argv) {
                     basefwx::cli::g_bench_sink.fetch_xor(dec.size(), std::memory_order_relaxed);
                     return dec.size();
                 };
-            } else if (method == "b256") {
-                op = [&]() {
-                    // b256 is retired since 3.7.0; the CLI still dispatches it
-                    // so existing scripts / blobs keep working. Suppress the
-                    // deprecation warning here only — user-written code that
-                    // calls basefwx::B256Encode will still see it.
-#if defined(__GNUC__) || defined(__clang__)
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
-#endif
-                    std::string enc = basefwx::B256Encode(text);
-                    std::string dec = basefwx::B256Decode(enc);
-#if defined(__GNUC__) || defined(__clang__)
-#pragma GCC diagnostic pop
-#endif
-                    basefwx::cli::g_bench_sink.fetch_xor(dec.size(), std::memory_order_relaxed);
-                    return dec.size();
-                };
-            } else if (method == "a512") {
-                op = [&]() {
-                    std::string enc = basefwx::A512Encode(text);
-                    std::string dec = basefwx::A512Decode(enc);
-                    basefwx::cli::g_bench_sink.fetch_xor(dec.size(), std::memory_order_relaxed);
-                    return dec.size();
-                };
             } else if (method == "n10") {
                 op = [&]() {
                     std::string enc = basefwx::N10Encode(text);
@@ -577,33 +550,7 @@ int main(int argc, char** argv) {
                     basefwx::cli::g_bench_sink.fetch_xor(digest.size(), std::memory_order_relaxed);
                     return digest.size();
                 };
-            } else if (method == "uhash513") {
-                op = [&]() {
-                    // uhash513 deprecated in 3.7.0; suppress the
-                    // compile-time warning at the CLI bench dispatch
-                    // only — user code calling basefwx::Uhash513 still
-                    // sees it.
-#if defined(__GNUC__) || defined(__clang__)
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
-#endif
-                    std::string digest = basefwx::Uhash513(text);
-#if defined(__GNUC__) || defined(__clang__)
-#pragma GCC diagnostic pop
-#endif
-                    basefwx::cli::g_bench_sink.fetch_xor(digest.size(), std::memory_order_relaxed);
-                    return digest.size();
-                };
-            } else if (method == "bi512") {
-                op = [&]() {
-                    std::string digest = basefwx::Bi512Encode(text);
-                    basefwx::cli::g_bench_sink.fetch_xor(digest.size(), std::memory_order_relaxed);
-                    return digest.size();
-                };
             } else {
-                // b1024 was a Bi512(A512(...)) alias — retired in 3.7.0.
-                // Chain the primitives in your own code if you need that
-                // composition.
                 throw std::runtime_error("Unsupported hash benchmark method: " + method);
             }
             auto run = [&]() {
@@ -905,19 +852,15 @@ int main(int argc, char** argv) {
             std::string input = argv[2];
             std::string password = argv[3];
             bool use_master = false;
-            bool disable_aead = false;
             for (int idx = 4; idx < argc; ++idx) {
                 std::string flag(argv[idx]);
                 if (basefwx::cli::HandleMasterFlag(flag, argc, argv, &idx, &use_master)) {
-                } else if (flag == "--no-aead") {
-                    disable_aead = true;
                 } else {
                     throw std::runtime_error("Unknown flag: " + flag);
                 }
             }
             basefwx::filecodec::FileOptions file_opts;
             file_opts.use_master = use_master;
-            file_opts.enable_aead = !disable_aead;
             file_opts.keep_input = true;
             try {
                 std::filesystem::path src_path(input);
@@ -961,86 +904,6 @@ int main(int argc, char** argv) {
                         std::filesystem::remove(enc_path, cleanup_ec);
                     }
                     if (!dec_path.empty() && dec_path != bench_input) {
-                        std::filesystem::remove(dec_path, cleanup_ec);
-                    }
-                    if (!size_ec) {
-                        basefwx::cli::g_bench_sink.fetch_xor(static_cast<std::size_t>(dec_size), std::memory_order_relaxed);
-                        return static_cast<std::size_t>(dec_size);
-                    }
-                    return 0;
-                };
-                auto run = [&]() {
-                    if (workers > 1) {
-                        basefwx::cli::RunParallel(workers, run_once);
-                        return;
-                    }
-                    run_once(0);
-                };
-
-                long long ns = basefwx::cli::BenchMedian(warmup, iters, run);
-                std::cout << "BENCH_NS=" << ns << "\n";
-                for (const auto& dir : temp_dirs) {
-                    std::error_code ec;
-                    std::filesystem::remove_all(dir, ec);
-                }
-                return 0;
-            } catch (const std::exception& exc) {
-                throw;
-            }
-        }
-        if (command == "bench-jmg") {
-            if (argc < 4) {
-                basefwx::cli::PrintUsage();
-                return 2;
-            }
-            std::string media_path = argv[2];
-            std::string password = argv[3];
-            bool use_master = false;
-            for (int idx = 4; idx < argc; ++idx) {
-                std::string flag(argv[idx]);
-                if (basefwx::cli::HandleMasterFlag(flag, argc, argv, &idx, &use_master)) {
-                } else {
-                    throw std::runtime_error("Unknown flag: " + flag);
-                }
-            }
-            try {
-                std::filesystem::path src_path(media_path);
-                if (!std::filesystem::exists(src_path)) {
-                    throw std::runtime_error("Media file not found: " + media_path);
-                }
-                std::size_t workers = static_cast<std::size_t>(basefwx::cli::BenchWorkers());
-                if (workers == 0) {
-                    workers = 1;
-                }
-                basefwx::cli::ConfirmSingleThreadCli(workers);
-                std::vector<std::filesystem::path> temp_dirs;
-                auto stamp = std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
-                for (std::size_t i = 0; i < workers; ++i) {
-                    std::filesystem::path temp_dir = std::filesystem::temp_directory_path()
-                        / ("basefwx-bench-jmg-" + stamp + "-" + std::to_string(i));
-                    std::filesystem::create_directories(temp_dir);
-                    temp_dirs.push_back(temp_dir);
-                }
-
-                int warmup = basefwx::cli::BenchWarmup();
-                int iters = basefwx::cli::BenchIters();
-                auto run_once = [&](std::size_t idx) -> std::size_t {
-                    const auto& temp_dir = temp_dirs[idx];
-                    std::string enc_name = "bench_enc_" + std::to_string(idx) + src_path.extension().string();
-                    std::string dec_name = "bench_dec_" + std::to_string(idx) + src_path.extension().string();
-                    std::filesystem::path enc_path = temp_dir / enc_name;
-                    std::filesystem::path dec_path = temp_dir / dec_name;
-                    
-                    basefwx::Jmge(src_path.string(), password, enc_path.string(), false, true, true, use_master);
-                    basefwx::Jmgd(enc_path.string(), password, dec_path.string(), use_master);
-                    
-                    std::error_code size_ec;
-                    auto dec_size = std::filesystem::file_size(dec_path, size_ec);
-                    std::error_code cleanup_ec;
-                    if (!enc_path.empty()) {
-                        std::filesystem::remove(enc_path, cleanup_ec);
-                    }
-                    if (!dec_path.empty()) {
                         std::filesystem::remove(dec_path, cleanup_ec);
                     }
                     if (!size_ec) {
@@ -1119,41 +982,6 @@ int main(int argc, char** argv) {
             WriteBinaryFile(argv[3], basefwx::N10Decode(digits));
             return 0;
         }
-        if (command == "kFMe" || command == "kFMd" || command == "kFAe" || command == "kFAd") {
-            if (argc < 3) {
-                basefwx::cli::PrintUsage();
-                return 2;
-            }
-            std::string input = argv[2];
-            std::string output;
-            bool bw_mode = false;
-            for (int idx = 3; idx < argc; ++idx) {
-                std::string flag(argv[idx]);
-                if (flag == "--out" || flag == "-o") {
-                    if (idx + 1 >= argc) {
-                        throw std::runtime_error("Missing value for --out");
-                    }
-                    output = argv[++idx];
-                } else if (flag == "--bw") {
-                    bw_mode = true;
-                } else {
-                    throw std::runtime_error("Unknown flag: " + flag);
-                }
-            }
-
-            std::string out_path;
-            if (command == "kFMe") {
-                out_path = basefwx::Kfme(input, output, bw_mode);
-            } else if (command == "kFMd") {
-                out_path = basefwx::Kfmd(input, output, bw_mode);
-            } else if (command == "kFAe") {
-                out_path = basefwx::Kfae(input, output, bw_mode);
-            } else {
-                out_path = basefwx::Kfad(input, output);
-            }
-            std::cout << out_path << "\n";
-            return 0;
-        }
         if (command == "hash512") {
             if (argc < 3) {
                 basefwx::cli::PrintUsage();
@@ -1162,78 +990,6 @@ int main(int argc, char** argv) {
             std::cout << basefwx::Hash512(argv[2]) << "\n";
             return 0;
         }
-        // uhash513 deprecated in 3.7.0 — CLI keeps dispatching for
-        // backwards compat. Suppress the [[deprecated]] warning at
-        // this internal site only; user code still sees it.
-#if defined(__GNUC__) || defined(__clang__)
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
-#endif
-        if (command == "uhash513") {
-            if (argc < 3) {
-                basefwx::cli::PrintUsage();
-                return 2;
-            }
-            std::cout << basefwx::Uhash513(argv[2]) << "\n";
-            return 0;
-        }
-#if defined(__GNUC__) || defined(__clang__)
-#pragma GCC diagnostic pop
-#endif
-        if (command == "a512-enc") {
-            if (argc < 3) {
-                basefwx::cli::PrintUsage();
-                return 2;
-            }
-            std::cout << basefwx::A512Encode(argv[2]) << "\n";
-            return 0;
-        }
-        if (command == "a512-dec") {
-            if (argc < 3) {
-                basefwx::cli::PrintUsage();
-                return 2;
-            }
-            std::cout << basefwx::A512Decode(argv[2]) << "\n";
-            return 0;
-        }
-        if (command == "bi512-enc") {
-            if (argc < 3) {
-                basefwx::cli::PrintUsage();
-                return 2;
-            }
-            std::cout << basefwx::Bi512Encode(argv[2]) << "\n";
-            return 0;
-        }
-        // b1024-enc retired in 3.7.0; was an alias for `bi512-enc $(a512-enc text)`.
-        // b256 is retired since 3.7.0 — see basefwx.hpp / CHANGELOG.
-        // The CLI keeps dispatching it so existing scripts keep working;
-        // the runtime warning emits from inside the function. Suppress
-        // the [[deprecated]] compile-time warning only at these two CLI
-        // dispatch sites — user code calling basefwx::B256Encode still
-        // sees it.
-#if defined(__GNUC__) || defined(__clang__)
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
-#endif
-        if (command == "b256-enc") {
-            if (argc < 3) {
-                basefwx::cli::PrintUsage();
-                return 2;
-            }
-            std::cout << basefwx::B256Encode(argv[2]) << "\n";
-            return 0;
-        }
-        if (command == "b256-dec") {
-            if (argc < 3) {
-                basefwx::cli::PrintUsage();
-                return 2;
-            }
-            std::cout << basefwx::B256Decode(argv[2]) << "\n";
-            return 0;
-        }
-#if defined(__GNUC__) || defined(__clang__)
-#pragma GCC diagnostic pop
-#endif
         if (command == "b512-enc" || command == "b512-dec" || command == "pb512-enc" || command == "pb512-dec") {
             basefwx::cli::ParsedOptions opts = basefwx::cli::ParseCodecArgs(argc, argv, 2);
             basefwx::cli::ResolveCliPassword(
@@ -1280,13 +1036,6 @@ int main(int argc, char** argv) {
                     } else if (flag == "--strip-meta") {
                         opts.strip_metadata = true;
                         idx += 1;
-                    } else if (flag == "--no-aead") {
-                        if (command == "b512file-bytes-rt") {
-                            opts.enable_aead = false;
-                            idx += 1;
-                        } else {
-                            throw std::runtime_error("Unsupported flag for pb512file-bytes-rt: " + flag);
-                        }
                     } else if (flag == "--kdf") {
                         if (idx + 1 >= argc) {
                             throw std::runtime_error("Missing kdf label");
@@ -1309,7 +1058,6 @@ int main(int argc, char** argv) {
                 basefwx::filecodec::FileOptions file_opts;
                 file_opts.strip_metadata = opts.strip_metadata;
                 file_opts.use_master = opts.use_master;
-                file_opts.enable_aead = opts.enable_aead;
                 std::filesystem::path input_path(input);
                 auto data = basefwx::ReadFile(input_path.string());
                 std::string ext = input_path.extension().string();
@@ -1345,7 +1093,6 @@ int main(int argc, char** argv) {
             basefwx::filecodec::FileOptions file_opts;
             file_opts.strip_metadata = opts.strip_metadata;
             file_opts.use_master = opts.use_master;
-            file_opts.enable_aead = opts.enable_aead;
             file_opts.enable_obfuscation = opts.enable_obf;
             file_opts.compress = opts.compress;
             file_opts.keep_input = opts.keep_input;
@@ -1389,8 +1136,12 @@ int main(int argc, char** argv) {
                         std::filesystem::path out_path(opts.input);
                         out_path.replace_extension(".fwx");
                         opts.output = out_path.string();
-                    } else if (!opts.ignore_media && LooksLikeMediaPath(std::filesystem::path(opts.input))) {
-                        opts.output = opts.input;
+#if BASEFWX_HAS_RETIRED_MEDIA
+                    } else if (const auto retired_output =
+                                   basefwx::retired::cli::
+                                       TryDefaultFwxAesOutput(opts)) {
+                        opts.output = *retired_output;
+#endif
                     } else {
                         opts.output = opts.input + ".fwx";
                     }
@@ -1506,9 +1257,9 @@ int main(int argc, char** argv) {
                 if (opts.threshold != 8 * 1024 || opts.cover_phrase != "low taper fade") {
                     throw std::runtime_error("fwxAES heavy mode does not support normalize options");
                 }
-                if (opts.ignore_media || opts.keep_meta || opts.archive_original) {
-                    throw std::runtime_error("fwxAES heavy mode does not support media-only options");
-                }
+#if BASEFWX_HAS_RETIRED_MEDIA
+                basefwx::retired::cli::ValidateHeavyFwxAesOptions(opts);
+#endif
                 basefwx::filecodec::FileOptions file_opts;
                 file_opts.use_master = opts.use_master;
                 file_opts.compress = opts.compress;
@@ -1541,27 +1292,17 @@ int main(int argc, char** argv) {
                     basefwx::ResolvePassword(opts.password),
                     opts.heavy ? "fwxAES-heavy" : "fwxAES"
                 );
-                if (!opts.ignore_media && LooksLikeMediaPath(std::filesystem::path(opts.input))) {
-                    try {
-                        std::string media_output = basefwx::Jmge(
-                            opts.input,
-                            opts.password,
-                            opts.output,
-                            opts.keep_meta,
-                            opts.keep_input,
-                            opts.archive_original,
-                            opts.use_master
-                        );
-                        if (telemetry) {
-                            telemetry->MarkProgressComplete();
-                            telemetry.reset();
-                        }
-                        std::cout << media_output << "\n";
-                        return 0;
-                    } catch (const std::exception&) {
-                        // Fall back to standard fwxAES if media processing fails.
+#if BASEFWX_HAS_RETIRED_MEDIA
+                if (const auto media_output =
+                        basefwx::retired::cli::TryEncryptMedia(opts)) {
+                    if (telemetry) {
+                        telemetry->MarkProgressComplete();
+                        telemetry.reset();
                     }
+                    std::cout << *media_output << "\n";
+                    return 0;
                 }
+#endif
                 basefwx::fwxaes::NormalizeOptions norm;
                 norm.enabled = opts.normalize;
                 norm.threshold = opts.threshold;
@@ -1575,24 +1316,6 @@ int main(int argc, char** argv) {
                 basefwx::fwxaes::DecryptFile(opts.input, opts.output, opts.password, fwxaes_opts);
             }
             complete_progress();
-            return 0;
-        }
-        if (command == "jmge" || command == "jmgd") {
-            basefwx::cli::ImageArgs opts = basefwx::cli::ParseImageArgs(argc, argv, 2);
-            basefwx::cli::ResolveCliPassword(opts.password, opts.password_provided, !opts.use_master, command == "jmge");
-            if (command == "jmge") {
-                std::cout << basefwx::Jmge(
-                    opts.input,
-                    opts.password,
-                    opts.output,
-                    opts.keep_meta,
-                    opts.keep_input,
-                    opts.archive_original,
-                    opts.use_master
-                ) << "\n";
-            } else {
-                std::cout << basefwx::Jmgd(opts.input, opts.password, opts.output, opts.use_master) << "\n";
-            }
             return 0;
         }
         basefwx::cli::PrintUsage();

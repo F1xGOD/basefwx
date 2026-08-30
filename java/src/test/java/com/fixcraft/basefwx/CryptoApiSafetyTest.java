@@ -6,6 +6,7 @@
 
 package com.fixcraft.basefwx;
 
+import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import org.junit.Test;
 
@@ -14,6 +15,19 @@ import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
 public class CryptoApiSafetyTest {
+    private static byte[] fromHex(String hex) {
+        byte[] out = new byte[hex.length() / 2];
+        for (int i = 0; i < out.length; i++) {
+            int high = Character.digit(hex.charAt(i * 2), 16);
+            int low = Character.digit(hex.charAt(i * 2 + 1), 16);
+            if (high < 0 || low < 0) {
+                throw new IllegalArgumentException("invalid hex fixture");
+            }
+            out[i] = (byte) ((high << 4) | low);
+        }
+        return out;
+    }
+
     private static void expectIllegalArgument(Runnable action) {
         try {
             action.run();
@@ -36,6 +50,10 @@ public class CryptoApiSafetyTest {
 
         expectIllegalArgument(() -> Crypto.aesGcmEncryptWithIvInto(
                 new byte[31], iv, input, 0, 1, output, 0, null));
+        expectIllegalArgument(() -> Crypto.aesGcmEncryptWithIvInto(
+                new byte[16], iv, input, 0, 1, output, 0, null));
+        expectIllegalArgument(() -> Crypto.aesGcmEncryptWithIvInto(
+                new byte[24], iv, input, 0, 1, output, 0, null));
         expectIllegalArgument(() -> Crypto.aesGcmEncryptWithIvInto(
                 key, iv, input, -1, 1, output, 0, null));
         expectIllegalArgument(() -> Crypto.aesGcmEncryptWithIvInto(
@@ -69,5 +87,46 @@ public class CryptoApiSafetyTest {
             // Expected.
         }
         assertArrayEquals(before, output);
+    }
+
+    @Test
+    public void validatesHkdfBoundariesBeforeAllocation() {
+        byte[] keyMaterial = new byte[] {1};
+        byte[] info = new byte[] {2};
+        assertTrue(Crypto.hkdfSha256(
+                keyMaterial, info, Constants.HKDF_MAX_LEN).length
+                == Constants.HKDF_MAX_LEN);
+        expectIllegalArgument(() -> Crypto.hkdfSha256(
+                keyMaterial, info, -1));
+        expectIllegalArgument(() -> Crypto.hkdfSha256(
+                keyMaterial, info, Constants.HKDF_MAX_LEN + 1));
+        expectIllegalArgument(() -> Crypto.hkdfSha256(
+                null, info, 32));
+        expectIllegalArgument(() -> Crypto.compatPrfStreamSha256(
+                keyMaterial, info, -1));
+    }
+
+    @Test
+    public void pbkdf2UsesUtf8BytesAcrossRuntimeImplementations() {
+        byte[] password = "pässwörd-密碼".getBytes(StandardCharsets.UTF_8);
+        byte[] salt = "basefwx-unicode-salt".getBytes(StandardCharsets.US_ASCII);
+        byte[] expected = fromHex(
+                "f36111f8498228a4c642fb6fa1deef6a"
+                + "2fa6d2441c727b68dac19d28f5455cb8");
+        assertArrayEquals(
+                expected,
+                Crypto.pbkdf2HmacSha256(password, salt, 2, 32));
+    }
+
+    @Test
+    public void pbkdf2RejectsInvalidInputsBeforeAllocation() {
+        byte[] password = "password".getBytes(StandardCharsets.US_ASCII);
+        byte[] salt = "salt".getBytes(StandardCharsets.US_ASCII);
+        expectIllegalArgument(() -> Crypto.pbkdf2HmacSha256(
+                null, salt, 2, 32));
+        expectIllegalArgument(() -> Crypto.pbkdf2HmacSha256(
+                password, new byte[0], 2, 32));
+        expectIllegalArgument(() -> Crypto.pbkdf2HmacSha256(
+                password, salt, 2, Integer.MAX_VALUE / 8 + 1));
     }
 }

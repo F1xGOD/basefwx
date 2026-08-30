@@ -74,6 +74,7 @@ def license_for(path: Path) -> str | None:
 
     if (
         rel.startswith("cpp/src/cli/")
+        or rel in {"cpp/src/retired/cli.cpp", "cpp/src/retired/cli.hpp"}
         or rel.startswith("cpp/cmake/")
         or rel.startswith("cpp/tools/")
     ):
@@ -87,9 +88,10 @@ def license_for(path: Path) -> str | None:
         "java/src/main/java/com/fixcraft/basefwx/cli/CodecCommands.java",
         "java/src/main/java/com/fixcraft/basefwx/cli/CliOptions.java",
         "java/src/main/java/com/fixcraft/basefwx/cli/FileCommands.java",
-        "java/src/main/java/com/fixcraft/basefwx/cli/MediaCommands.java",
         "java/src/main/java/com/fixcraft/basefwx/FwxAESBenchmark.java",
     }:
+        return BASEFWX_GPL_NEW
+    if rel == "java/src/retired/java/com/fixcraft/basefwx/cli/RetiredCommands.java":
         return BASEFWX_GPL_NEW
     if rel in {
         "cpp/CMakeLists.txt",
@@ -113,6 +115,8 @@ def license_for(path: Path) -> str | None:
         return BASEFWX_LGPL_NEW
     if rel.startswith("java/src/main/java/com/fixcraft/basefwx/"):
         return BASEFWX_LGPL_NEW
+    if rel == "python/basefwx/retired/cli.py":
+        return BASEFWX_GPL_NEW
     if rel.startswith("python/basefwx/"):
         return BASEFWX_LGPL_NEW
 

@@ -1,0 +1,30 @@
+    /*
+     * BaseFWX - Cryptography Engine
+     * Copyright (C) 2020-2026  FixCraft Inc.
+     * Licensed under the GNU Lesser General Public License v3.0 or later.
+     */
+
+    public static final byte[] MASK_AAD_JMG =
+            com.fixcraft.basefwx.media.RetiredMediaConstants.MASK_AAD_JMG;
+    public static final byte[] IMAGECIPHER_STREAM_INFO =
+            com.fixcraft.basefwx.media.RetiredMediaConstants.IMAGECIPHER_STREAM_INFO;
+    public static final byte[] IMAGECIPHER_ARCHIVE_INFO =
+            com.fixcraft.basefwx.media.RetiredMediaConstants.IMAGECIPHER_ARCHIVE_INFO;
+    public static final byte[] IMAGECIPHER_TRAILER_MAGIC =
+            com.fixcraft.basefwx.media.RetiredMediaConstants.IMAGECIPHER_TRAILER_MAGIC;
+    public static final byte[] IMAGECIPHER_KEY_TRAILER_MAGIC =
+            com.fixcraft.basefwx.media.RetiredMediaConstants.IMAGECIPHER_KEY_TRAILER_MAGIC;
+    public static final byte[] JMG_KEY_MAGIC =
+            com.fixcraft.basefwx.media.RetiredMediaConstants.JMG_KEY_MAGIC;
+    public static final int JMG_KEY_VERSION_LEGACY =
+            com.fixcraft.basefwx.media.RetiredMediaConstants.JMG_KEY_VERSION_LEGACY;
+    public static final int JMG_KEY_VERSION =
+            com.fixcraft.basefwx.media.RetiredMediaConstants.JMG_KEY_VERSION;
+    public static final int JMG_SECURITY_PROFILE_LEGACY =
+            com.fixcraft.basefwx.media.RetiredMediaConstants.JMG_SECURITY_PROFILE_LEGACY;
+    public static final int JMG_SECURITY_PROFILE_MAX =
+            com.fixcraft.basefwx.media.RetiredMediaConstants.JMG_SECURITY_PROFILE_MAX;
+    public static final int JMG_SECURITY_PROFILE_DEFAULT =
+            com.fixcraft.basefwx.media.RetiredMediaConstants.JMG_SECURITY_PROFILE_DEFAULT;
+    public static final byte[] JMG_MASK_INFO =
+            com.fixcraft.basefwx.media.RetiredMediaConstants.JMG_MASK_INFO;

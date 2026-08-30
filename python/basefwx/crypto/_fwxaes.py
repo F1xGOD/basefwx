@@ -2,9 +2,11 @@
 # Copyright (C) 2020-2026  FixCraft Inc.
 # Licensed under the GNU Lesser General Public License v3.0 or later.
 
-"""Extracted implementation cluster from legacy.py."""
+"""fwxAES raw, file, stream, live-stream, and plugin orchestration."""
 
 from __future__ import annotations
+
+from ..runtime._hardware import build_cpu_execution_plan, log_execution_plan
 
 
 class _LazyEngine:
@@ -678,7 +680,7 @@ class LiveDecryptor:
                 raise ValueError('Invalid live frame magic')
             if version != basefwx.LIVE_FRAME_VERSION:
                 raise ValueError('Unsupported live frame version')
-            if body_len > basefwx.KFM_MAX_PAYLOAD:
+            if body_len > basefwx.LIVE_MAX_BODY:
                 raise ValueError('Live frame too large')
             frame_len = header_len + body_len
             if buf_len - offset < frame_len:
@@ -813,8 +815,12 @@ def fwxAES_live_encrypt_ffmpeg(source_cmd: 'basefwx.typing.Sequence[str]', encry
     if not source_cmd:
         raise ValueError('source_cmd must not be empty')
     cmd = [str(part) for part in source_cmd]
-    hw_plan = basefwx.MediaCipher._build_hw_execution_plan('fwxAES_live_encrypt_ffmpeg', stream_type='live', prefer_cpu_decode=True)
-    basefwx.MediaCipher._log_hw_execution_plan(hw_plan)
+    hw_plan = build_cpu_execution_plan(
+        'fwxAES_live_encrypt_ffmpeg',
+        stream_type='live',
+        workers=basefwx._CPU_COUNT,
+    )
+    log_execution_plan(hw_plan)
     dest_handle = None
     close_dest = False
     if basefwx._is_pathlike_target(encrypted_dest):
@@ -872,8 +878,12 @@ def fwxAES_live_decrypt_ffmpeg(encrypted_source, sink_cmd: 'basefwx.typing.Seque
     if not sink_cmd:
         raise ValueError('sink_cmd must not be empty')
     cmd = [str(part) for part in sink_cmd]
-    hw_plan = basefwx.MediaCipher._build_hw_execution_plan('fwxAES_live_decrypt_ffmpeg', stream_type='live', prefer_cpu_decode=True)
-    basefwx.MediaCipher._log_hw_execution_plan(hw_plan)
+    hw_plan = build_cpu_execution_plan(
+        'fwxAES_live_decrypt_ffmpeg',
+        stream_type='live',
+        workers=basefwx._CPU_COUNT,
+    )
+    log_execution_plan(hw_plan)
     source_handle = None
     close_source = False
     if basefwx._is_pathlike_target(encrypted_source):
@@ -954,8 +964,11 @@ def fwxAES_file(file: 'basefwx.typing.Union[str, basefwx.pathlib.Path]', passwor
     def _set_bytes_hw_plan() -> None:
         if not local_reporter:
             return
-        plan = basefwx.MediaCipher._build_hw_execution_plan('fwxAES_file-heavy' if heavy else 'fwxAES_file', stream_type='bytes', allow_pixel_gpu=False, prefer_cpu_decode=True)
-        basefwx.MediaCipher._log_hw_execution_plan(plan)
+        plan = build_cpu_execution_plan(
+            'fwxAES_file-heavy' if heavy else 'fwxAES_file',
+            workers=basefwx._CPU_COUNT,
+        )
+        log_execution_plan(plan)
         local_reporter.set_hw_execution_plan(plan)
     try:
         if heavy:
@@ -1035,13 +1048,19 @@ def fwxAES_file(file: 'basefwx.typing.Union[str, basefwx.pathlib.Path]', passwor
                 local_reporter.update(0, 1.0, 'done', display_path)
             return str(out_path)
         basefwx._require_strong_password_for_encryption(password, 'fwxAES file')
-        if not ignore_media:
-            try:
-                media_ext = path.suffix.lower()
-                if media_ext in basefwx.MediaCipher.IMAGE_EXTS | basefwx.MediaCipher.VIDEO_EXTS | basefwx.MediaCipher.AUDIO_EXTS:
-                    return basefwx.MediaCipher.encrypt_media(str(path), password, output=output, keep_meta=keep_meta, archive_original=archive_original, keep_input=keep_input, reporter=local_reporter, file_index=0, display_path=display_path)
-            except Exception:
-                pass
+        retired_output = basefwx._try_encrypt_retired_media(
+            path,
+            password,
+            output=output,
+            ignore_media=ignore_media,
+            keep_meta=keep_meta,
+            archive_original=archive_original,
+            keep_input=keep_input,
+            reporter=local_reporter,
+            display_path=display_path,
+        )
+        if retired_output is not None:
+            return retired_output
         _set_bytes_hw_plan()
         if local_reporter:
             local_reporter.update(0, 0.05, 'read', display_path)

@@ -1,0 +1,10 @@
+    private static int dispatchProfileCommand(
+            String command, String[] args, int argc,
+            boolean useMaster) {
+        return RetiredCommands.handle(
+                command, args, argc, useMaster);
+    }
+
+    private static void printProfileUsage() {
+        RetiredCommands.printUsage();
+    }

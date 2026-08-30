@@ -13,6 +13,7 @@
 #include <limits>
 #include <stdexcept>
 #include <string_view>
+#include <utility>
 
 namespace {
 
@@ -58,10 +59,117 @@ basefwx::crypto::Bytes FromHex(std::string_view hex) {
 int main() {
     using basefwx::crypto::Bytes;
 
+    static_assert(noexcept(basefwx::crypto::SecureClear(
+        std::declval<std::uint8_t*>(), std::declval<std::size_t>())));
+    static_assert(noexcept(basefwx::crypto::SecureClear(
+        std::declval<Bytes&>())));
+    static_assert(noexcept(basefwx::crypto::SecureClear(
+        std::declval<std::string&>())));
+
     const Bytes key(32, 0x2a);
     const Bytes iv(basefwx::constants::kAeadNonceLen, 0x19);
     const Bytes aad{0x61, 0x61, 0x64};
     const Bytes plaintext{0x70, 0x6c, 0x61, 0x69, 0x6e};
+
+    if (!basefwx::crypto::RandomBytes(0).empty()) {
+        return Fail("zero-length random request was not empty");
+    }
+    if (!Throws<std::length_error>([]() {
+            (void)basefwx::crypto::RandomBytes(
+                static_cast<std::size_t>(
+                    std::numeric_limits<int>::max()) + 1);
+        })) {
+        return Fail("oversized random request was not rejected before allocation");
+    }
+
+    constexpr std::size_t hkdf_sha256_max = 255 * 32;
+    if (!basefwx::crypto::HkdfSha256(
+             Bytes{0x01}, Bytes{0x02}, "boundary", 0).empty()) {
+        return Fail("zero-length HKDF output was not empty");
+    }
+    if (basefwx::crypto::HkdfSha256(
+            Bytes{0x01}, Bytes{0x02}, "boundary", hkdf_sha256_max).size()
+        != hkdf_sha256_max) {
+        return Fail("RFC 5869 maximum HKDF output was not accepted");
+    }
+    if (!Throws<std::length_error>([]() {
+            (void)basefwx::crypto::HkdfSha256(
+                Bytes{0x01}, Bytes{0x02}, "boundary",
+                hkdf_sha256_max + 1);
+        })) {
+        return Fail("HKDF output beyond the RFC 5869 limit was accepted");
+    }
+
+    {
+        const std::string_view key_text = "compatibility-key";
+        const Bytes compat_key(key_text.begin(), key_text.end());
+        const Bytes compat_stream =
+            basefwx::crypto::CompatPrfStreamSha256(
+                compat_key, "basefwx.compat.prf.test", 256 * 32);
+        const auto block_matches = [&compat_stream](
+                                       std::size_t counter,
+                                       std::string_view expected_hex) {
+            const Bytes expected = FromHex(expected_hex);
+            const std::size_t offset = (counter - 1) * expected.size();
+            return offset <= compat_stream.size()
+                && expected.size() <= compat_stream.size() - offset
+                && std::equal(
+                    expected.begin(), expected.end(),
+                    compat_stream.begin()
+                        + static_cast<std::ptrdiff_t>(offset));
+        };
+        if (!block_matches(
+                1,
+                "52441fd524e5898966141ddac1212f0e282458a5fadea27f871d4cf6d9621cb5")
+            || !block_matches(
+                255,
+                "b9cfd313174c50ff195d80c3cdabd82bbb7b15c63391a19d08ad9ac10d7fe279")
+            || !block_matches(
+                256,
+                "1243c9a23c437ceaab6dfb5af5c5a01a5b34c474e9fd0ce9d9563f269255f383")) {
+            return Fail(
+                "compatibility PRF four-byte counter vector mismatch");
+        }
+    }
+
+    if (!Throws<std::invalid_argument>([]() {
+            (void)basefwx::crypto::Pbkdf2HmacSha256(
+                "password", Bytes{0x01}, 0, 32);
+        })) {
+        return Fail("zero PBKDF2 iterations were not rejected explicitly");
+    }
+    if (!Throws<std::length_error>([]() {
+            (void)basefwx::crypto::Pbkdf2HmacSha256(
+                "password", Bytes{0x01},
+                static_cast<std::size_t>(
+                    std::numeric_limits<int>::max()) + 1,
+                32);
+        })) {
+        return Fail("oversized PBKDF2 iteration count was not rejected");
+    }
+    if (!Throws<std::length_error>([]() {
+            (void)basefwx::crypto::Pbkdf2HmacSha256(
+                "password", Bytes{0x01}, 1,
+                static_cast<std::size_t>(
+                    std::numeric_limits<int>::max()) + 1);
+        })) {
+        return Fail("oversized PBKDF2 output was not rejected before allocation");
+    }
+
+    Bytes random_nonce_blob = basefwx::crypto::AesGcmEncrypt(
+        key, plaintext, aad);
+    if (basefwx::crypto::AesGcmDecrypt(key, random_nonce_blob, aad)
+        != plaintext) {
+        return Fail("random-nonce AES-GCM did not round-trip");
+    }
+    random_nonce_blob.back() ^= 0x01;
+    if (!Throws<basefwx::crypto::AuthenticationError>([&]() {
+            (void)basefwx::crypto::AesGcmDecrypt(
+                key, random_nonce_blob, aad);
+        })) {
+        return Fail("random-nonce AES-GCM accepted a forged tag");
+    }
+
     Bytes ciphertext = basefwx::crypto::AesGcmEncryptWithIv(
         key, iv, plaintext, aad);
 

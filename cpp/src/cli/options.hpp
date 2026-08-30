@@ -34,25 +34,18 @@ struct FwxAesArgs {
     std::size_t threshold = 8 * 1024;
     std::string cover_phrase = "low taper fade";
     bool compress = false;
+#if BASEFWX_HAS_RETIRED_MEDIA
     bool ignore_media = false;
     bool keep_meta = false;
+#endif
     bool keep_input = false;
+#if BASEFWX_HAS_RETIRED_MEDIA
     bool archive_original = false;
+#endif
     std::string plugin_path;
     std::string plugin_id_hex;
     std::string plugin_pos;
     std::string plugin_config_file;
-};
-
-struct ImageArgs {
-    std::string input;
-    std::string output;
-    std::string password;
-    bool password_provided = false;
-    bool use_master = false;
-    bool keep_meta = false;
-    bool keep_input = false;
-    bool archive_original = false;
 };
 
 struct An7Args {
@@ -70,7 +63,6 @@ struct FileArgs {
     bool password_provided = false;
     bool use_master = false;
     bool strip_metadata = false;
-    bool enable_aead = true;
     bool enable_obf = true;
     bool compress = false;
     bool keep_input = false;
@@ -86,7 +78,6 @@ bool HandleMasterFlag(const std::string& flag,
 ParsedOptions ParseCodecArgs(int argc, char** argv, int start_index);
 FileArgs ParseFileArgs(int argc, char** argv, int start_index);
 FwxAesArgs ParseFwxAesArgs(int argc, char** argv, int start_index);
-ImageArgs ParseImageArgs(int argc, char** argv, int start_index);
 An7Args ParseAn7Args(int argc, char** argv, int start_index, bool allow_force_any);
 
 }  // namespace basefwx::cli

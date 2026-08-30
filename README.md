@@ -20,12 +20,14 @@ cryptographic primitives. Python and Java remain part of the compatibility
 surface, and the three implementations share the same established on-disk and
 on-wire formats.
 
-The image-, audio-, and video-specific kFM/kFA/jMG codecs are retained for
-compatibility with existing callers and data, but are retired from active
-development after this change. They receive security, correctness, and
-compatibility fixes only: no new media formats, features, or performance work
-is planned. Retirement does not remove their APIs or existing format support
-from the 3.7.0+ line.
+The b256/A512/Bi512/Uhash513 text codecs and the image-, audio-, and
+video-specific kFM/kFA/jMG codecs are retired. Default C++, Java, and Python
+artifacts do not compile or package their implementations, commands, tests, or
+benchmarks. Existing callers and data can use an explicitly enabled
+compatibility artifact; that profile preserves the established APIs and bytes,
+but receives only security, correctness, and existing-data compatibility fixes.
+No new retired formats, features, performance work, or benchmark rows are
+planned.
 
 The version in this checkout is recorded in [`VERSION`](VERSION). This
 revision is the unreleased `3.8.0-dev1` development line; the latest tagged
@@ -54,9 +56,9 @@ What's in the box:
 - Password-based encryption via Argon2id (recommended) or PBKDF2
 - fwxAES file format with an optional normalize wrapper that hides bytes in zero-width Unicode markers
 - A packetized live-stream API so fwxAES works inside ffmpeg/SIP/transport pipes
-- b512 / pb512 reversible encodings and file modes
-- Retired compatibility codecs: kFM/kFA media carriers and the jMG
-  image/audio/video cipher
+- b512 / pb512 authenticated text encodings (v3 AES-256-GCM) and file modes
+- Optional retired-data compatibility artifacts for b256/A512/Bi512/Uhash513,
+  kFM/kFA carriers, and jMG
 - C++ and Java libraries + CLIs that read and write the same formats as the Python module
 
 Quick Start
@@ -68,13 +70,6 @@ python -m basefwx cryptin aes-light file.bin -p "correct-horse-battery" --strip
 python -m basefwx cryptin aes-light file.bin.fwx -p "correct-horse-battery"
 python -m basefwx n10-enc "hello"
 python -m basefwx n10-dec "<digits>"
-# Retired compatibility commands:
-python -m basefwx kFMe photo.png -o photo.wav            # image/media -> audio carrier
-python -m basefwx kFMe track.mp3 -o track.png --bw       # audio -> image carrier
-python -m basefwx kFMd photo.wav -o photo-restored.png   # strict decode
-python -m basefwx kFMd track.png -o track-restored.mp3
-python -m basefwx cryptin fwxaes video.mp4 -p "correct-horse-battery"            # Python default: no-archive
-python -m basefwx cryptin fwxaes video.mp4 -p "correct-horse-battery" --archive  # exact-restore trailer
 ```
 
 Notes:
@@ -88,25 +83,26 @@ Notes:
   streaming container. Streaming decode needs the public `ENC-MODE=STREAM`
   marker for safe format dispatch; omitting it would create an unreadable
   ciphertext rather than a metadata-free stream.
-- kFM/kFA/jMG are retired compatibility surfaces. Existing APIs and formats
-  remain available, but only security, correctness, and compatibility fixes
-  are planned.
-- Routine benchmarks exclude retired b256 and kFM/kFA/jMG performance rows.
-  Set `BASEFWX_BENCH_RETIRED=1` only when those compatibility surfaces need an
-  explicit performance run; their focused correctness coverage remains
-  separate.
-- `kFMd` only decodes BaseFWX carriers; it refuses plain WAV/PNG/MP3/M4A files.
-- `kFAe` / `kFAd` remain available as deprecated aliases to `kFMe` / `kFMd`.
+- Default artifacts exclude b256/A512/Bi512/Uhash513, jMG/kFM/kFA, and Pillow.
+  To read existing retired data, build and run a compatibility profile as shown
+  below. The historical switch remains named `BASEFWX_ENABLE_RETIRED_MEDIA` so
+  existing build automation keeps working.
+- New b512/pb512 text output is authenticated payload v3 and canonical
+  standard base64. Version 2 text payloads were malleable and are rejected by
+  default; `BASEFWX_ALLOW_LEGACY_TEXT_V2=1` is a trusted-data recovery switch,
+  not a normal compatibility setting. Cosmetic token-map output is opt-in
+  with `BASEFWX_OBFUSCATE_CODECS=1`.
+- b512file writers always use the outer AES-256-GCM container. The old
+  unauthenticated writer mode is retired; raw historical files require
+  `BASEFWX_ALLOW_LEGACY_B512FILE_RAW=1` only while recovering trusted data.
+- Benchmarks exercise only maintained methods. Compatibility mode restores
+  exact-byte and decode qualification for retired methods, but does not restore
+  their benchmark rows.
 - Release support policy is single-version: only the latest release is maintained; all older releases are immediately unsupported.
-- Optional kFM/kFA acceleration:
-  - `BASEFWX_KFM_ACCEL=auto|cuda|cpu` (default `auto`)
-  - `BASEFWX_KFM_ACCEL_MIN_BYTES=<bytes>` (default `1048576`, auto mode threshold)
 - CLI progress now includes live system telemetry (CPU/GPU/RAM/I/O/TEMP when available).
   Disable with `BASEFWX_PROGRESS_TELEMETRY=0`.
 - Python `n10` was optimized for large payloads, but compiled runtimes (C++/Java) are still expected to benchmark faster for very large text workloads.
 - C++/Java CLI global flags: `--no-log` (suppress non-essential logs) and `--verbose` (show hardware routing reasons).
-- jMG video remains disabled by default in Python/C++/Java;
-  `BASEFWX_ENABLE_JMG_VIDEO=1` exists for compatibility use.
 - Canonical release assets are architecture-qualified only; alias artifacts without arch suffixes are intentionally not published.
 - Every GitHub release includes detached signatures, checksum files, and `release-manifest.json`.
 
@@ -114,21 +110,12 @@ Python API quick refs:
 
 ```python
 from basefwx import n10encode, n10decode, n10encode_bytes, n10decode_bytes
-from basefwx import kFMe, kFMd
-from basefwx import LiveEncryptor, LiveDecryptor, jMGe, jMGd
+from basefwx import LiveEncryptor, LiveDecryptor
 
 digits = n10encode("hello")
 text = n10decode(digits)
 blob_digits = n10encode_bytes(b"\x00\x01\x02")
 blob = n10decode_bytes(blob_digits)
-
-carrier = kFMe("input.mp3", output="input.png", bw_mode=True)
-restored = kFMd("input.png", output="restored.mp3")
-
-# jMG Python default is no-archive (smaller, non-byte-identical restore)
-jMGe("clip.m4a", "correct-horse-battery", output="clip.small.m4a")
-jMGe("cover.png", "correct-horse-battery", output="cover.exact.png", archive_original=True)
-jMGd("clip.small.m4a", "correct-horse-battery", output="clip.out.m4a")
 
 # Live packetized stream encryption/decryption
 enc = LiveEncryptor("correct-horse-battery", use_master=False)
@@ -155,15 +142,34 @@ fwxAES_live_decrypt_ffmpeg(
 )
 ```
 
-Retired compatibility controls (Python jMG):
-- `BASEFWX_HWACCEL=auto` (default), `nvenc`, `qsv`, `vaapi`, or `off`
-- `BASEFWX_HWACCEL_STRICT=1` to fail instead of CPU fallback when requested accel is unavailable
+Retired-media compatibility is source-build-only and must be selected before
+Python imports BaseFWX. A default wheel does not contain these modules, so an
+environment variable cannot turn them back on afterward:
+
+```bash
+BASEFWX_ENABLE_RETIRED_MEDIA=1 \
+  python -m pip install './python[retired-media]'
+BASEFWX_ENABLE_RETIRED_MEDIA=1 \
+  python -m basefwx kFMd existing-carrier.wav -o restored.bin
+```
+
+Compatibility-only details:
+
+- `kFMd` refuses plain WAV/PNG/MP3/M4A files; it decodes BaseFWX carriers only.
+- `kFAe` / `kFAd` remain deprecated aliases to `kFMe` / `kFMd`.
+- `BASEFWX_KFM_ACCEL=auto|cuda|cpu` selects kFM acceleration.
+- `BASEFWX_HWACCEL=auto|nvenc|qsv|vaapi|off` selects jMG acceleration.
+- jMG video additionally requires `BASEFWX_ENABLE_JMG_VIDEO=1`.
 
 Optional extras:
 
 ```bash
 pip install basefwx[argon2]
 ```
+
+The `argon2` extra is a compatibility no-op; Argon2 is already a required
+dependency. The `retired-media` extra installs Pillow but does not by itself
+add retired code to a default wheel.
 
 Documentation
 -------------

@@ -470,13 +470,21 @@ section {
   color: #94a3b8;                          /* slate-400 */
 }
 
-.chip.lifecycle.lifecycle-retired {
+.chip.lifecycle.lifecycle-retired,
+.chip.lifecycle.lifecycle-retired-media {
   /* Retired carries the runtime banner and the "first method ever" note,
    * so it gets a slightly darker, more emphasized shade than plain
    * Deprecated — still slate, just heavier. */
   background: rgba(71, 85, 105, 0.22);     /* slate-600 @ 22% */
   border-color: rgba(71, 85, 105, 0.75);
   color: #cbd5e1;                          /* slate-300 */
+}
+
+.chip.lifecycle.lifecycle-retired-media {
+  /* retired-media differs from retired in one way that matters to a reader:
+   * the code is not in the artifact they downloaded. A dashed border marks
+   * "not present here" without inventing a second colour language. */
+  border-style: dashed;
 }
 
 .hash-block {

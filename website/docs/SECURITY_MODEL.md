@@ -16,6 +16,23 @@ BASEFWX is built around authenticated encryption with optional post-quantum mast
 
 BASEFWX does not implement a nonstandard "AES-512" primitive. The symmetric layer is AES-256-GCM.
 
+Current `b512` and `pb512` text writers emit authenticated payload version 3:
+one version byte, a four-byte plaintext length, then a 12-byte nonce,
+ciphertext, and a 16-byte AES-256-GCM tag. Distinct b512/pb512 HKDF and AAD
+domains bind the visible header and prevent cross-codec substitution.
+
+Text payload version 2 had no authentication tag over the message and was
+malleable. It is rejected by default. Use
+`BASEFWX_ALLOW_LEGACY_TEXT_V2=1` only to recover trusted old data and re-encrypt
+it. New output is canonical standard base64; the historical token-map output
+adds no security and is opt-in with `BASEFWX_OBFUSCATE_CODECS=1`.
+
+`b512file` writers also always use their outer AES-256-GCM container. The old
+unauthenticated writer mode is retired. Raw historical b512file input is
+disabled unless `BASEFWX_ALLOW_LEGACY_B512FILE_RAW=1` is set for a trusted
+recovery operation; authentication failures in recognized binary containers
+never downgrade into raw parsing.
+
 ## Version Support Policy
 
 BaseFWX uses a strict single-version maintenance model:
@@ -47,10 +64,6 @@ Set `BASEFWX_MASTER_PQ_ALG=ml-kem-1024` (or `BASEFWX_PQ_MAX=1`) to make key gene
 ## Metadata
 
 - File metadata inside the payload can be stripped with `--strip`.
-- Media metadata (jMG) is removed by default; use `--keep-meta` to preserve and encrypt it.
-- Python jMG defaults to `archive_original=False`, writing a tiny `JMG1` key trailer only (smaller output, decrypt may require media re-encode, not guaranteed byte-identical).
-- Use Python `--archive` or `archive_original=True` for exact-restore archive trailers (`JMG0`).
-- New Python no-archive outputs use `JMGK` v2 profile metadata (`max`) and remain backward-compatible with legacy `JMGK` v1 decode.
 - OS filesystem timestamps are not altered by default.
 
 ## Obfuscation
@@ -60,9 +73,34 @@ It is deterministic and reversible, designed to remove obvious plaintext structu
 It is not a substitute for encryption.
 Current AES payloads derive separate subkeys for AEAD and obfuscation.
 Current AES-heavy stream payloads derive the stream obfuscator from the wrapped session secret instead of the user password, so master-only decrypt flows remain viable and key reuse is reduced.
-Video/audio scrambling masks only low-order bits to preserve playability and will leak structure.
-Python no-archive `max` profile increases masking to full byte/sample transforms to reduce residual structure.
-Image encryption without trailers is deterministic and reuses keystream material; only enable it with explicit opt-in (BASEFWX_ALLOW_INSECURE_IMAGE_OBFUSCATION=1).
+
+## Retired Media Formats (jMG, kFM, kFA)
+
+As of 3.8.0 these formats are retired. Default C++, Java, and Python artifacts
+do not contain their code or commands, so nothing below applies to a default
+build. The properties are recorded here because they still govern existing
+files, and because reading those files requires a compatibility artifact built
+with `BASEFWX_ENABLE_RETIRED_MEDIA=1` at the same BaseFWX version.
+
+Treat these as constraints on old data, not as options for new work. Encrypt
+new media with `fwxAES` instead, which gives it the same AEAD guarantees as any
+other file.
+
+- Media metadata is removed by default; `--keep-meta` preserves and encrypts it.
+- Python jMG defaults to `archive_original=False`, writing a small `JMG1` key
+  trailer. Output is smaller, but decrypt may need a media re-encode and is not
+  guaranteed byte-identical.
+- Python `--archive` or `archive_original=True` writes an exact-restore archive
+  trailer (`JMG0`).
+- Python no-archive output carries `JMGK` v2 profile metadata (`max`) and still
+  decodes legacy `JMGK` v1.
+- Video and audio scrambling masks only low-order bits so the file stays
+  playable, which leaks structure by design. The no-archive `max` profile
+  raises this to full byte and sample transforms to cut residual structure.
+- Image encryption without trailers is deterministic and reuses keystream
+  material. It stays behind an explicit opt-in
+  (`BASEFWX_ALLOW_INSECURE_IMAGE_OBFUSCATION=1`) and should not be used for new
+  data.
 
 ## Live Stream Framing
 

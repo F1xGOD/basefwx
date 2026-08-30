@@ -181,6 +181,12 @@ question came up:
   for a password-only setting: AES-256 under Grover is ≈ 128-bit
   equivalent, the hardened KDF makes offline guessing expensive, and
   every blob has a fresh salt and IV.
+
+  **3.8 stabilization correction:** “PQ-safe” above was too broad. The
+  idealized Grover estimate applies to uniformly random AES-256 keys; the
+  effective strength of this password-only construction is normally bounded
+  by password entropy and KDF cost. Salts prevent precomputation but do not add
+  entropy. See the current `SECURITY.md` policy for the qualified statement.
 * **ML-KEM-768** is **opt-in only**, gated by `useMaster=true`
   (`--with-master` on the C++ CLI). When enabled, the mask key is
   *additionally* encapsulated to a master public key. Either path

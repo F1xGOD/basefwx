@@ -1,4 +1,4 @@
-.TH BASEFWX 1 "May 2026" "BaseFWX 3.6.4" "User Commands"
+.TH BASEFWX 1 "August 2026" "BaseFWX 3.8.0-dev1" "User Commands"
 .SH NAME
 basefwx \- command-line cryptographic codec tool
 .SH SYNOPSIS
@@ -14,13 +14,17 @@ basefwx completion bash
 .fi
 .SH DESCRIPTION
 basefwx is the command-line frontend for the BaseFWX cryptographic codec
-library. It can encrypt files, decode BaseFWX containers, inspect container
-metadata, run reversible text and binary encodings, process packetized live
-streams, and handle selected BaseFWX media carrier formats.
+library. It encrypts files, decodes BaseFWX containers, inspects container
+metadata, runs reversible text and binary encodings, and processes packetized
+live streams.
+.PP
+The retired media carrier commands are not part of a default build. See
+.B RETIRED MEDIA COMMANDS
+below.
 .PP
 The CLI is packaged separately from the shared library. Installing the
-basefwx package pulls in libbasefwx3 automatically; applications that only
-need the library can depend on libbasefwx3 or libbasefwx-dev without
+basefwx package pulls in libbasefwx4 automatically; applications that only
+need the library can depend on libbasefwx4 or libbasefwx-dev without
 installing the CLI.
 .SH GLOBAL FLAGS
 .TP
@@ -82,15 +86,30 @@ Base64 text encode/decode helpers.
 .B n10-enc, n10-dec, n10file-enc, n10file-dec
 BaseFWX n10 text and file encoders.
 .TP
-.B b256-enc, b256-dec, a512-enc, a512-dec, bi512-enc, b1024-enc
-Reversible BaseFWX text encoders.
-.TP
-.B hash512, uhash513
-Hash helper commands.
+.B hash512
+SHA-512 hash helper command.
 .TP
 .B b512-enc, b512-dec, pb512-enc, pb512-dec
 Password-backed text codec modes.
-.SH MEDIA AND CARRIER COMMANDS
+.SH RETIRED COMPATIBILITY COMMANDS
+b256, A512, Bi512, Uhash513, the jMG media cipher, and the kFM/kFA carrier
+codecs are retired. A default build does not compile or install them, and the
+commands below are absent from its help output and completion script.
+.PP
+They exist only in a compatibility build, configured with
+.BR -DBASEFWX_ENABLE_RETIRED_MEDIA=ON ,
+and is meant for reading retired data that already exists. That build preserves
+the historical commands, formats, and bytes; it receives security, correctness,
+and existing-data compatibility fixes only. Encrypt new media with
+.B fwxaes-enc
+instead.
+.PP
+Because the switch selects what gets compiled, it cannot restore these commands
+in an artifact that was built without them. Use a compatibility build of the
+same BaseFWX version that wrote the file.
+.TP
+.B b256-enc, b256-dec, a512-enc, a512-dec, bi512-enc, uhash513
+Historical text codecs retained for exact-byte and decode compatibility.
 .TP
 .B jmge \fImedia\fR [--password \fIpassword\fR] [--out \fIpath\fR]
 Encode media through the jMG media cipher path.
@@ -103,7 +122,10 @@ Encode into a strict BaseFWX carrier format.
 .TP
 .B kFMd \fIinput\fR [--out \fIpath\fR] [--bw]
 Decode a strict BaseFWX carrier. Plain media that is not a BaseFWX carrier
-should be rejected.
+is rejected.
+.TP
+.B kFAe, kFAd
+Deprecated aliases for the PNG-only carrier path.
 .SH KEY OPTIONS
 .TP
 .B --password \fIpassword\fR
@@ -128,7 +150,7 @@ Select key-derivation behavior where a command supports it.
 .nf
 +--------------------------------+
 |  INPUT                         |
-|  file, stream, text, media     |
+|  file, stream, or text         |
 +--------------------------------+
         |
         v
@@ -141,7 +163,7 @@ Select key-derivation behavior where a command supports it.
         v
 +--------------------------------+
 |  BASEFWX OUTPUT                |
-|  container, stream, carrier    |
+|  container or stream           |
 +--------------------------------+
 .fi
 .SH EXIT STATUS

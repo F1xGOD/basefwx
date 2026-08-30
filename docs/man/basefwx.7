@@ -1,4 +1,4 @@
-.TH BASEFWX 7 "May 2026" "BaseFWX 3.6.4" "BaseFWX Manual"
+.TH BASEFWX 7 "August 2026" "BaseFWX 3.8.0-dev1" "BaseFWX Manual"
 .SH NAME
 basefwx \- C++ cryptographic codec library and container family
 .SH SYNOPSIS
@@ -11,14 +11,14 @@ find_package(basefwx 3.8 CONFIG REQUIRED)
 target_link_libraries(app PRIVATE basefwx::basefwxcpp)
 .fi
 .SH DESCRIPTION
-BaseFWX is a cryptographic codec toolkit. It protects files, byte streams,
-and selected media carrier formats. It is not a network transport by itself
-and it does not provide anonymity by itself.
+BaseFWX is a cryptographic codec toolkit. It protects files and byte streams.
+It is not a network transport by itself and it does not provide anonymity by
+itself.
 .PP
 Applications such as YUME use BaseFWX as an inner cryptographic and encoding
 layer. The C++ library provides authenticated encryption, password hardening,
-post-quantum key encapsulation when built with liboqs support, live stream
-framing, and media carrier helpers.
+post-quantum key encapsulation when built with liboqs support, and live stream
+framing.
 .PP
 The Debian packaging in this source tree ships the C++ CLI, shared library,
 and development files as separate binary packages from one source package.
@@ -41,7 +41,7 @@ It does not install the Python or Java modules.
         v
 +--------------------------------+
 |  OUTPUT FORMAT                 |
-|  file, packet, media carrier   |
+|  file or packet                |
 +--------------------------------+
         |
         | stored or transported
@@ -65,7 +65,11 @@ passes.
 AES-GCM file encryption with metadata and optional wrappers.
 .TP
 .B pb512 / b512
-Password-backed heavy encodings and file modes.
+Authenticated AES-256-GCM text payloads with password or optional master-key
+wrapping, plus related file modes. Current writers emit payload version 3;
+version 2 decode requires
+.BR BASEFWX_ALLOW_LEGACY_TEXT_V2=1
+for trusted-data recovery.
 .TP
 .B livecipher
 Packetized stream encryption for pipes and transport use.
@@ -74,11 +78,28 @@ Packetized stream encryption for pipes and transport use.
 Password and master-key wrapping helpers, including ML-KEM-768/1024 when liboqs
 support is enabled.
 .TP
-.B kFM / jMG
-Strict media carrier encode/decode and media cipher flows.
-.TP
-.B n10 / b256 / b512
-Reversible text and binary encodings.
+.B n10 / b512
+Maintained reversible text and binary encodings.
+.SH RETIRED COMPATIBILITY FORMATS
+b256, A512, Bi512, Uhash513, the kFM/kFA carrier codecs, and the jMG media
+cipher are retired. A default build compiles and installs none of them: their
+implementations, CLI commands, tests, and benchmarks are all absent, and
+.B BASEFWX_HAS_RETIRED_MEDIA
+is 0 in the installed CMake and pkg-config metadata.
+.PP
+Configuring with
+.B -DBASEFWX_ENABLE_RETIRED_MEDIA=ON
+produces a compatibility library that carries them. The historical switch name
+is retained for build-script compatibility. That profile exists to read retired
+data that already exists. It preserves the historical APIs, formats, and bytes
+unchanged, and receives security, correctness, and existing-data compatibility
+fixes only; no new retired formats or features are planned.
+.PP
+The switch decides what gets compiled, so it cannot re-enable these formats in a
+library that was built without them. Link against a compatibility build of the
+same BaseFWX version that wrote the file. Protect new media with
+.B fwxAES
+instead, which gives it the same AEAD guarantees as any other file.
 .SH FILE CONTAINERS
 .nf
 +--------------------------------+
@@ -177,8 +198,8 @@ and finalize before treating the stream as complete.
 +--------------------------------+
 .fi
 .PP
-For packaged YUME builds, the yume binary links against libbasefwx.so.3
-through the libbasefwx-dev build package and the libbasefwx3 runtime package.
+For packaged YUME builds, the yume binary links against libbasefwx.so.4
+through the libbasefwx-dev build package and the libbasefwx4 runtime package.
 .SH PACKAGE LAYOUT
 .nf
 +--------------------------------+
@@ -188,7 +209,7 @@ through the libbasefwx-dev build package and the libbasefwx3 runtime package.
         |
         v
 +--------------------------------+
-|  libbasefwx3                   |
+|  libbasefwx4                   |
 |  runtime shared library        |
 +--------------------------------+
         ^
@@ -201,7 +222,7 @@ through the libbasefwx-dev build package and the libbasefwx3 runtime package.
         |
 +--------------------------------+
 |  yume                          |
-|  links to libbasefwx.so.3      |
+|  links to libbasefwx.so.4      |
 +--------------------------------+
 .fi
 .PP
@@ -209,15 +230,16 @@ Local development builds may use a prepared vendor liboqs staging directory
 to keep ML-KEM-768/1024 available. Debian archive builds should use a normal
 packaged liboqs-dev dependency instead of embedding liboqs into BaseFWX.
 .SH FAILURE MODEL
-BaseFWX should fail closed. A wrong password, changed ciphertext, missing
-PQ support for PQ-required containers, non-carrier media input, or truncated
-live stream should fail instead of releasing unauthenticated plaintext.
+BaseFWX fails closed. A wrong password, changed ciphertext, missing PQ support
+for a PQ-required container, or a truncated live stream fails instead of
+releasing unauthenticated plaintext. A compatibility build applies the same rule
+to retired carrier input that is not a BaseFWX carrier.
 .SH FILES
 .TP
 .I /usr/include/basefwx/
 C++ public headers.
 .TP
-.I /usr/lib/<multiarch>/libbasefwx.so.3
+.I /usr/lib/<multiarch>/libbasefwx.so.4
 BaseFWX runtime shared library.
 .TP
 .I /usr/lib/<multiarch>/cmake/basefwx/
@@ -226,7 +248,7 @@ CMake package files.
 .I /usr/lib/<multiarch>/pkgconfig/basefwx.pc
 pkg-config metadata.
 .TP
-.I /usr/share/doc/libbasefwx3/EXPLAINED.md.gz
+.I /usr/share/doc/libbasefwx4/EXPLAINED.md.gz
 Extended overview with reusable diagrams.
 .SH SEE ALSO
 .BR basefwx (1)

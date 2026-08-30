@@ -96,26 +96,21 @@ On platforms without AES-NI or with weaker JCA implementations the gap is wider;
 
 ## Scope (v1)
 
-The image-, audio-, and video-specific kFM/kFA/jMG codecs in this scope are
-retired compatibility surfaces after this change. They remain available in the
-3.7.0+ line, but receive only security, correctness, and compatibility fixes.
-Active development now targets mathematically grounded, high-performance C++
-cryptographic primitives.
+b256, A512, Bi512, Uhash513, and the image-, audio-, and video-specific
+kFM/kFA/jMG codecs are retired compatibility surfaces. Default builds omit
+their classes, methods, commands, and functional tests. An explicit Gradle
+source-set switch restores the established APIs and bytes; only security,
+correctness, and existing-data compatibility fixes are planned. Active
+development targets the reusable cryptographic engine.
 
 - fwxAES raw encrypt/decrypt (PBKDF2 or Argon2id KDF + optional ML-KEM-768/1024 / EC master-key wrap)
 - fwxAES streaming encrypt/decrypt (InputStream/OutputStream)
 - fwxAES live packet streaming encrypt/decrypt (frame-based, transport-agnostic)
-- retired jMG compatibility cipher for images/audio (video remains disabled by
-  default; `BASEFWX_ENABLE_JMG_VIDEO=1` exists for compatibility use)
-- b512 / pb512 encode/decode (PBKDF2 or Argon2id + optional ML-KEM-768/1024 / EC master-key wrap)
-- b256 encode/decode (deprecated; still decodes)
+- b512 / pb512 authenticated-v3 encode/decode (AES-256-GCM, PBKDF2 or
+  Argon2id + optional ML-KEM-768/1024 / EC master-key wrap)
 - n10 numeric encode/decode (text + bytes/file helpers)
-- retired kFM/kFA compatibility transforms (auto media/audio encode + strict
-  carrier decode)
 - b64 encode/decode
-- hash512 / uhash513 (uhash513 deprecated)
-- a512 encode/decode (deprecated)
-- bi512 encode (deprecated)
+- hash512
 - Minimal CLI entrypoint
 - b512file + pb512file bytes + streaming file helpers, including Argon2-heavy and PQ master-wrap paths
 
@@ -159,12 +154,29 @@ cd java
 gradle build
 ```
 
+The default JAR contains no retired classes or methods. Build the compatibility
+JAR for existing retired data with either the Gradle property or environment
+switch (the explicit property takes precedence):
+
+```bash
+BASEFWX_ENABLE_RETIRED_MEDIA=1 \
+  gradle clean build -PbasefwxEnableRetiredMedia=true
+java -jar build/libs/basefwx-java.jar version  # retired_media=ON
+```
+
 Manual build (no Gradle):
 ```
 cd java
 javac -source 8 -target 8 -d build/classes $(find src/main/java -name "*.java")
 jar cfe build/libs/basefwx-java.jar com.fixcraft.basefwx.cli.BaseFwxCli -C build/classes .
 ```
+
+Compatibility builds must use Gradle. Directly adding `src/retired/java` to a
+manual `javac` invocation omits the generated public-API overlay and is not a
+complete compatibility artifact. The `generateRetiredProfileSources` task
+retains the historical codec methods and `Constants.JMG_*`,
+`Constants.IMAGECIPHER_*`, and `Constants.MASK_AAD_JMG` fields without putting
+them back into active source files.
 On Windows PowerShell, you can build sources with:
 ```
 $sources = Get-ChildItem -Recurse src/main/java -Filter *.java | ForEach-Object { $_.FullName }
@@ -195,9 +207,6 @@ java -jar build/libs/basefwx-java.jar b512file-dec <in> <out> <password>
 java -jar build/libs/basefwx-java.jar pb512file-enc <in> <out> <password>
 java -jar build/libs/basefwx-java.jar pb512file-dec <in> <out> <password>
 
-java -jar build/libs/basefwx-java.jar jmge <in> <out> <password> [--no-archive]
-java -jar build/libs/basefwx-java.jar jmgd <in> <out> <password>
-
 java -jar build/libs/basefwx-java.jar b64-enc <text>
 java -jar build/libs/basefwx-java.jar b64-dec <text>
 
@@ -206,25 +215,28 @@ java -jar build/libs/basefwx-java.jar n10-dec <digits>
 java -jar build/libs/basefwx-java.jar n10file-enc <in> <out>
 java -jar build/libs/basefwx-java.jar n10file-dec <in> <out>
 
-java -jar build/libs/basefwx-java.jar kFMe <in> [--out <out>] [--bw]
-java -jar build/libs/basefwx-java.jar kFMd <carrier> [--out <out>] [--bw]
-java -jar build/libs/basefwx-java.jar kFAe <in> [--out <out>] [--bw]   # deprecated alias
-java -jar build/libs/basefwx-java.jar kFAd <carrier> [--out <out>]     # deprecated alias
-
 java -jar build/libs/basefwx-java.jar hash512 <text>
-java -jar build/libs/basefwx-java.jar uhash513 <text>
+```
 
-java -jar build/libs/basefwx-java.jar a512-enc <text>
-java -jar build/libs/basefwx-java.jar a512-dec <text>
+Compatibility-JAR-only commands:
 
-java -jar build/libs/basefwx-java.jar bi512-enc <text>
-
+```bash
 java -jar build/libs/basefwx-java.jar b256-enc <text>
 java -jar build/libs/basefwx-java.jar b256-dec <text>
+java -jar build/libs/basefwx-java.jar a512-enc <text>
+java -jar build/libs/basefwx-java.jar a512-dec <text>
+java -jar build/libs/basefwx-java.jar bi512-enc <text>
+java -jar build/libs/basefwx-java.jar uhash513 <text>
+java -jar build/libs/basefwx-java.jar jmge <in> <out> <password> [--no-archive]
+java -jar build/libs/basefwx-java.jar jmgd <in> <out> <password>
+java -jar build/libs/basefwx-java.jar kFMe <in> [--out <out>] [--bw]
+java -jar build/libs/basefwx-java.jar kFMd <carrier> [--out <out>] [--bw]
+java -jar build/libs/basefwx-java.jar kFAe <in> [--out <out>] [--bw]
+java -jar build/libs/basefwx-java.jar kFAd <carrier> [--out <out>]
 ```
 
 Notes:
-- jMG requires `ffmpeg` and `ffprobe` on PATH.
+- Compatibility jMG requires `ffmpeg` and `ffprobe` on PATH.
 - `jmge` supports `--keep-meta`, `--keep-input`, and `--no-archive`.
 - `--no-archive` stores only key material (`JMG1`) instead of a full embedded original payload (`JMG0`), so decode output may not be byte-identical.
 - `--no-log` suppresses telemetry/warnings while preserving primary outputs/errors.
@@ -234,39 +246,30 @@ Notes:
 - `kFMd` only decodes BaseFWX carriers and refuses plain WAV/PNG/MP3/M4A inputs (Java: `BaseFwxImage.kFMd`).
 
 ## Cross-compat notes
+- b512/pb512 text writers emit canonical standard base64 and authenticated
+  payload v3. Decoders accept historical token-map and URL-safe input;
+  unauthenticated v2 payloads require
+  `BASEFWX_ALLOW_LEGACY_TEXT_V2=1` for trusted-data recovery.
+- b512file writers require the outer AES-256-GCM container. The historical
+  `enableAead` overload rejects `false`; raw input requires
+  `BASEFWX_ALLOW_LEGACY_B512FILE_RAW=1` for trusted recovery.
 - For b512/pb512/fwxAES, use the same KDF label on all runtimes (`pbkdf2` or `argon2id`). Argon2id blobs require a peer that supports Argon2 (Java via BouncyCastle in `KeyWrap`/`Crypto`; C++/Python via libargon2).
 - fwxAES PBKDF2 mode is fully compatible across Python/C++/Java.
 - EC master-key wrap is supported using P-521 (secp521r1) and EC1 blobs.
 - AES-heavy file containers (pb512file) are implemented and cross-compatible with Python/C++ in PBKDF2 and Argon2id modes.
-- kFM containers are compatible across Python/C++/Java (including `--bw` PNG carrier mode).
+- Compatibility kFM containers are byte-compatible across Python/C++/Java
+  (including `--bw` PNG carrier mode).
 - `kFMe` is the primary encoder (`kFAe` is deprecated alias; Java API: `BaseFwxImage.kFMe`).
 - `kFMd` is the primary decoder (`kFAd` is deprecated alias; Java API: `BaseFwxImage.kFMd`).
 
-## API quick refs
+## Core API quick refs
 
 ```java
 import com.fixcraft.basefwx.BaseFwx;
-import com.fixcraft.basefwx.BaseFwxImage;
-import java.io.File;
 
 // n10 API
 String digits = BaseFwx.n10Encode("hello");
 String text = BaseFwx.n10Decode(digits);
-
-// kFM API (auto media/audio encode + strict decode)
-File carrier = BaseFwxImage.kFMe(new File("input.mp3"), new File("input.png"), true);
-File restored = BaseFwxImage.kFMd(new File("input.png"), new File("restored.mp3"));
-
-// jMG API (archive_original defaults to true)
-BaseFwxImage.jmgEncryptFile(
-    new File("input.mp4"),
-    new File("out.mp4"),
-    "password",
-    true,
-    false,
-    true,
-    false // archiveOriginal=false (no-archive mode)
-);
 
 // Live stream API (transport-agnostic framing)
 try (InputStream src = new FileInputStream("in.bin");
@@ -278,6 +281,12 @@ try (InputStream enc = new FileInputStream("out.live");
     BaseFwx.fwxAesLiveDecryptStream(enc, dec, "password", true);
 }
 ```
+
+`BaseFwxImage`, `MediaCipher`, and the retired text-codec methods are
+compatibility-JAR-only APIs. Source that uses them must compile against a JAR
+built with retired compatibility enabled. That JAR also preserves the
+historical retired-media fields directly on `Constants`; the default JAR and
+Android-oriented core source omit them.
 
 ### Master key paths (EC)
 Java reads EC public/private keys from:
@@ -291,7 +300,8 @@ falling back to the home-directory key.
 ## Android
 The library is pure Java and uses standard `javax.crypto` APIs. AES-GCM requires API 21+ on Android.
 File helpers are built on `java.io` to keep Android compatibility.
-The jMG media pipeline depends on `ffmpeg`/`ffprobe` and `ImageIO`, so it is not Android-compatible.
+The optional jMG compatibility pipeline depends on `ffmpeg`/`ffprobe` and
+`ImageIO`, so it is not Android-compatible.
 
 ## Testing overrides
 For fast tests, you can set `BASEFWX_TEST_KDF_ITERS` to reduce PBKDF2 iterations.

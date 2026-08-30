@@ -5,10 +5,9 @@ shapes fit together, and where the C++ library sits when YUME uses it. The
 diagrams are plain ASCII so the same content can be reused in a future
 `man basefwx` page.
 
-BaseFWX is a cryptographic codec toolkit. It protects files, byte streams,
-and selected media/carrier formats. It is not a transport by itself and it
-does not provide anonymity by itself. Applications such as YUME use BaseFWX
-as an inner crypto and encoding layer.
+BaseFWX is a cryptographic codec toolkit. It protects files and byte streams.
+It is not a transport by itself and it does not provide anonymity by itself.
+Applications such as YUME use BaseFWX as an inner crypto and encoding layer.
 
 ## Diagram Style
 
@@ -71,15 +70,18 @@ checks pass.
 BaseFWX includes several related codec families:
 
 - `fwxAES`: AES-GCM file encryption with metadata and optional wrappers.
-- `pb512` / `b512`: password-backed heavy encodings and file modes.
+- `pb512` / `b512`: authenticated AES-256-GCM text payloads with password or
+  optional master-key wrapping, plus related file modes.
 - `livecipher`: packetized stream encryption for pipe and transport use.
 - `keywrap`: password and master-key wrapping helpers.
 - `pq`: ML-KEM-768/1024 key encapsulation when liboqs support is enabled.
-- `kFM`: strict media carrier encode/decode.
-- `jMG`: media cipher flows with optional exact-restore archive payloads.
-- `n10`, `b256`, `b512`: reversible text and binary encodings.
+- `n10`, `b512`: maintained reversible text and binary encodings.
 
-The C++ package exports the shared library as `libbasefwx.so.3`, headers
+b256/A512/Bi512/Uhash513 and the kFM/kFA/jMG media codecs are not in this list,
+because a default build does not contain retired methods. See
+[Retired compatibility formats](#retired-compatibility-formats).
+
+The C++ package exports the shared library as `libbasefwx.so.4`, headers
 under `basefwx/`, a CMake package named `basefwx`, and a `basefwx.pc`
 pkg-config file.
 
@@ -209,11 +211,34 @@ lets an outer program move encrypted chunks through a pipe, socket, or
 transport. The receiver must process the stream in order and finalize it
 before treating the stream as complete.
 
-## Media Carrier Flow
+## Retired Compatibility Formats
 
-Carrier modes are wrappers around protected data. They are not magic
-security by themselves; the encryption comes from the BaseFWX container
-inside the carrier.
+b256, A512, Bi512, Uhash513, and the kFM/kFA/jMG media codecs are retired. A
+default build does not compile or package their code, commands, tests, or
+benchmarks, so none of this section describes a default artifact.
+
+They live in a compatibility build, configured with
+`-DBASEFWX_ENABLE_RETIRED_MEDIA=ON` for C++ and the matching
+`BASEFWX_ENABLE_RETIRED_MEDIA=1` for Java and Python. The historical switch
+name remains for build-script compatibility. That profile has one job: reading
+retired data you already have. It preserves the historical APIs, formats, and
+bytes unchanged, and receives security, correctness, and existing-data
+compatibility fixes only.
+
+Because the switch selects what gets compiled, it cannot re-enable these
+formats in an artifact built without them. Use a compatibility artifact of the
+same BaseFWX version that wrote the file.
+
+For new media, use `fwxAES`. A media file is bytes, and `fwxAES` gives those
+bytes the same AEAD guarantees it gives any other file.
+
+The two shapes below are recorded so existing files stay readable and
+diagnosable.
+
+### kFM and kFA carriers
+
+Carrier modes are wrappers around protected data. They are not security by
+themselves; the encryption comes from the BaseFWX container inside the carrier.
 
 ```text
 +--------------------------------+
@@ -241,13 +266,11 @@ inside the carrier.
 +--------------------------------+
 ```
 
-`kFMe` chooses carrier shapes based on input type and writes BaseFWX carrier
-files. `kFMd` strictly decodes BaseFWX carriers and should reject ordinary
-media files that are not BaseFWX output.
+`kFMe` picks a carrier shape from the input type and writes BaseFWX carrier
+files. `kFMd` decodes them strictly and rejects ordinary media that BaseFWX did
+not produce. `kFAe` and `kFAd` are deprecated aliases for the PNG-only path.
 
-## jMG Media Cipher
-
-`jMG` is meant for media-oriented workflows:
+### jMG media cipher
 
 ```text
 +--------------------------------+
@@ -275,9 +298,14 @@ media files that are not BaseFWX output.
 +--------------------------------+
 ```
 
-The key-only path favors smaller output and concealment. The archive path
-appends encrypted original bytes so decode can restore the original payload
-exactly. Video support may be gated by build and runtime flags.
+The key-only path keeps output small. The archive path appends the encrypted
+original so decode can restore it exactly. Video support was gated by build and
+runtime flags on top of the compatibility profile.
+
+🫡 b256 has been retired since BaseFWX 3.7.0. It was the first BaseFWX
+encoding method, born in V1 back when this was a proof of concept and not yet a
+project. Existing data still decodes through the compatibility profile, but
+for new work, it's time to go. ❤️
 
 ## YUME Integration
 
@@ -311,7 +339,7 @@ It uses the C++ BaseFWX library for inner crypto, not the BaseFWX CLI:
 ```
 
 For Debian-style YUME builds, `yume` should link against a packaged
-`libbasefwx3` runtime through `libbasefwx-dev`. This avoids using the
+`libbasefwx4` runtime through `libbasefwx-dev`. This avoids using the
 bundled BaseFWX tree or vendored dependency directories inside the YUME
 source package. The development package exposes the LGPL library headers,
 not the private GPL command-line headers. `ABI.md` defines the stable plugin
@@ -330,7 +358,7 @@ The intended package split is:
         |
         v
 +--------------------------------+
-|  libbasefwx3                   |
+|  libbasefwx4                   |
 |  runtime shared library        |
 +--------------------------------+
         ^
@@ -343,7 +371,7 @@ The intended package split is:
         |
 +--------------------------------+
 |  yume                          |
-|  links to libbasefwx.so.3      |
+|  links to libbasefwx.so.4      |
 +--------------------------------+
 ```
 
@@ -365,8 +393,9 @@ BaseFWX should fail closed:
 - Changed ciphertext: authentication fails.
 - Missing PQ support: PQ-required operations fail instead of silently
   downgrading.
-- Non-carrier media: strict carrier decoders reject it.
 - Truncated live stream: finalization fails or reports an incomplete stream.
+- Non-carrier media, in a compatibility build: strict carrier decoders reject
+  it.
 
 Callers should treat decode errors as integrity failures unless they have a
 format-specific reason to do otherwise.

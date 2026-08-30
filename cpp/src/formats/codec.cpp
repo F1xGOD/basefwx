@@ -235,37 +235,4 @@ std::vector<std::uint8_t> Base32HexDecode(const std::string& input, bool* ok) {
     return out;
 }
 
-std::string B256Encode(const std::string& input) {
-    std::string coded = Code(input);
-    std::vector<std::uint8_t> raw(coded.begin(), coded.end());
-    std::string encoded = Base32HexEncode(raw);
-    std::size_t padding_count = std::count(encoded.begin(), encoded.end(), '=');
-    encoded.erase(std::remove(encoded.begin(), encoded.end(), '='), encoded.end());
-    if (padding_count > 9) {
-        throw std::runtime_error("Base32 padding count exceeded single digit");
-    }
-    encoded.push_back(static_cast<char>('0' + padding_count));
-    return encoded;
-}
-
-std::string B256Decode(const std::string& input) {
-    if (input.empty()) {
-        return "";
-    }
-    char pad_char = input.back();
-    if (pad_char < '0' || pad_char > '9') {
-        throw std::runtime_error("Invalid b256 padding marker");
-    }
-    std::size_t padding_count = static_cast<std::size_t>(pad_char - '0');
-    std::string base32 = input.substr(0, input.size() - 1);
-    base32.append(padding_count, '=');
-    bool ok = false;
-    std::vector<std::uint8_t> decoded = Base32HexDecode(base32, &ok);
-    if (!ok) {
-        throw std::runtime_error("Invalid base32 payload");
-    }
-    std::string decoded_text(decoded.begin(), decoded.end());
-    return Decode(decoded_text);
-}
-
 }  // namespace basefwx::codec

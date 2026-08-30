@@ -2,7 +2,7 @@
 # Copyright (C) 2020-2026  FixCraft Inc.
 # Licensed under the GNU Lesser General Public License v3.0 or later.
 
-"""Extracted implementation cluster from legacy.py."""
+"""AES-heavy in-memory and streaming file container operations."""
 
 from __future__ import annotations
 
@@ -639,7 +639,10 @@ def _aes_heavy_decode_path_stream(path: 'basefwx.pathlib.Path', password: str, r
             if len(chunk_size_bytes) != 4:
                 raise ValueError('Malformed streaming payload: missing chunk size')
             chunk_size_value = int.from_bytes(chunk_size_bytes, 'big')
-            if chunk_size_value <= 0 or chunk_size_value > 16 << 20:
+            if (
+                chunk_size_value <= 0
+                or chunk_size_value > basefwx.STREAM_CHUNK_SIZE_MAX
+            ):
                 chunk_size_value = basefwx.STREAM_CHUNK_SIZE
             original_size_bytes = plain_handle.read(8)
             if len(original_size_bytes) != 8:

@@ -2,7 +2,7 @@
 # Copyright (C) 2020-2026  FixCraft Inc.
 # Licensed under the GNU General Public License v3.0 or later.
 
-"""Extracted implementation cluster from legacy.py."""
+"""Command-line parsing, dispatch, and user-facing error handling."""
 
 from __future__ import annotations
 
@@ -15,11 +15,15 @@ from ..crypto._primitives import (
     _python_build_origin_label,
     _runtime_arch_label,
 )
+from ..features import load_retired_cli
 from ..legacy import basefwx
+from ._hardware import build_cpu_execution_plan, log_execution_plan
 
 def cli(argv=None) -> int:
     _enable_large_int_string_conversion_for_cli()
     import argparse
+
+    retired_cli = load_retired_cli()
 
     def _cli_config_path() -> "basefwx.pathlib.Path":
         cfg = _os_module.getenv("BASEFWX_CLI_CONFIG")
@@ -402,7 +406,7 @@ def cli(argv=None) -> int:
         action="store_false",
         help="Disable pre-AEAD obfuscation layers"
     )
-    cryptin.set_defaults(use_master=False, obfuscate=True, archive_original=False)
+    cryptin.set_defaults(use_master=False, obfuscate=True)
     cryptin.add_argument(
         "--use-master-pub",
         dest="master_pub_path",
@@ -431,28 +435,6 @@ def cli(argv=None) -> int:
         help="Pack files/folders to tar.gz or tar.xz before encrypting; auto-unpack on decrypt"
     )
     cryptin.add_argument(
-        "--ignore-media",
-        action="store_true",
-        help="Disable media auto-detection for fwxAES (use normal encryption)"
-    )
-    cryptin.add_argument(
-        "--keep-meta",
-        action="store_true",
-        help="Preserve media metadata (encrypted) when using jMG media mode"
-    )
-    cryptin.add_argument(
-        "--no-archive",
-        dest="archive_original",
-        action="store_false",
-        help="jMG mode: do not embed full original payload (smaller output, non-byte-identical restore)"
-    )
-    cryptin.add_argument(
-        "--archive",
-        dest="archive_original",
-        action="store_true",
-        help="jMG mode: embed full original payload for exact restore"
-    )
-    cryptin.add_argument(
         "--keep-input",
         action="store_true",
         help="Do not delete the input after encryption"
@@ -467,6 +449,9 @@ def cli(argv=None) -> int:
         action="store_true",
         help="Force-enable live CPU/RAM/GPU telemetry in progress output"
     )
+
+    if retired_cli is not None:
+        retired_cli.configure_parser(subparsers, cryptin)
 
     n10_enc = subparsers.add_parser(
         "n10-enc",
@@ -493,45 +478,6 @@ def cli(argv=None) -> int:
     )
     n10file_dec.add_argument("input", help="Input n10 digit file")
     n10file_dec.add_argument("output", help="Output binary file path")
-
-    kfme = subparsers.add_parser(
-        "kFMe",
-        help="Encode data into a BaseFWX carrier (image/media->WAV, audio->PNG)"
-    )
-    kfme.add_argument("input", help="Input file path (audio or image/media)")
-    kfme.add_argument("-o", "--output", default=None, help="Output carrier path")
-    kfme.add_argument(
-        "--bw",
-        action="store_true",
-        help="When encoding audio->PNG, use black/white static mode"
-    )
-
-    kfmd = subparsers.add_parser(
-        "kFMd",
-        help="Decode BaseFWX carrier (audio/image) back to original payload"
-    )
-    kfmd.add_argument("input", help="Input carrier file path (audio/image)")
-    kfmd.add_argument("-o", "--output", default=None, help="Output file path")
-    kfmd.add_argument(
-        "--bw",
-        action="store_true",
-        help="Deprecated no-op (kept for compatibility)"
-    )
-
-    kfae = subparsers.add_parser(
-        "kFAe",
-        help="Deprecated alias for kFMe (auto-detect)"
-    )
-    kfae.add_argument("input", help="Input file path")
-    kfae.add_argument("-o", "--output", default=None, help="Output carrier path")
-    kfae.add_argument("--bw", action="store_true", help="When encoding audio->PNG, use black/white static mode")
-
-    kfad = subparsers.add_parser(
-        "kFAd",
-        help="Deprecated alias for kFMd (auto-detect)"
-    )
-    kfad.add_argument("input", help="Input carrier file path")
-    kfad.add_argument("-o", "--output", default=None, help="Output file path")
 
     an7 = subparsers.add_parser(
         "an7",
@@ -564,11 +510,12 @@ def cli(argv=None) -> int:
         except Exception:
             pq_state = "OFF"
         lzma_state = "ON" if getattr(basefwx, "lzma", None) is not None else "OFF"
-        pillow_state = "ON" if basefwx.Image is not None else "OFF"
         numpy_state = "ON" if basefwx.np is not None else "OFF"
-        # Trigger lazy load so `version` accurately reports cupy availability.
-        basefwx._ensure_cp()
-        cupy_state = "ON" if basefwx.cp is not None else "OFF"
+        retired_features = (
+            retired_cli.feature_text()
+            if retired_cli is not None
+            else "retired_media=OFF"
+        )
         build_utc = _os_module.getenv("BASEFWX_BUILD_UTC", "unavailable")
         print(f"basefwx_python {basefwx.ENGINE_VERSION}")
         print(f"build_time: {build_utc}")
@@ -582,7 +529,7 @@ def cli(argv=None) -> int:
         print(
             "features: "
             f"argon2={argon2_state} pq={pq_state} lzma={lzma_state} "
-            f"pillow={pillow_state} numpy={numpy_state} cupy={cupy_state}"
+            f"numpy={numpy_state} {retired_features}"
         )
         return 0
 
@@ -623,41 +570,10 @@ def cli(argv=None) -> int:
             print(theme.err(f"n10 file decode failed: {exc}"))
             return 1
 
-    if args.command == "kFMe":
-        try:
-            out_path = basefwx.kFMe(args.input, args.output, bw_mode=args.bw)
-            print(theme.ok(f"Wrote {out_path}"))
-            return 0
-        except Exception as exc:
-            print(theme.err(f"kFMe failed: {exc}"))
-            return 1
-
-    if args.command == "kFMd":
-        try:
-            out_path = basefwx.kFMd(args.input, args.output, bw_mode=args.bw)
-            print(theme.ok(f"Wrote {out_path}"))
-            return 0
-        except Exception as exc:
-            print(theme.err(f"kFMd failed: {exc}"))
-            return 1
-
-    if args.command == "kFAe":
-        try:
-            out_path = basefwx.kFAe(args.input, args.output, bw_mode=args.bw)
-            print(theme.ok(f"Wrote {out_path}"))
-            return 0
-        except Exception as exc:
-            print(theme.err(f"kFAe failed: {exc}"))
-            return 1
-
-    if args.command == "kFAd":
-        try:
-            out_path = basefwx.kFAd(args.input, args.output)
-            print(theme.ok(f"Wrote {out_path}"))
-            return 0
-        except Exception as exc:
-            print(theme.err(f"kFAd failed: {exc}"))
-            return 1
+    if retired_cli is not None:
+        retired_status = retired_cli.handle_command(args, theme)
+        if retired_status is not None:
+            return retired_status
 
     if args.command == "an7":
         try:
@@ -731,13 +647,10 @@ def cli(argv=None) -> int:
                 parser.error(f"Unsupported method '{args.method}'")
 
             if normalized in {"b512", "aes-light", "fwxaes-heavy"}:
-                hw_plan = basefwx.MediaCipher._build_hw_execution_plan(
-                    f"cryptin-{normalized}",
-                    stream_type="bytes",
-                    allow_pixel_gpu=False,
-                    prefer_cpu_decode=True,
+                hw_plan = build_cpu_execution_plan(
+                    f"cryptin-{normalized}", workers=basefwx._CPU_COUNT
                 )
-                basefwx.MediaCipher._log_hw_execution_plan(hw_plan)
+                log_execution_plan(hw_plan)
 
             if normalized in {"fwxaes", "fwxaes-heavy"}:
                 results = {}
@@ -753,9 +666,11 @@ def cli(argv=None) -> int:
                             normalize_threshold=args.normalize_threshold,
                             cover_phrase=args.cover_phrase,
                             compress=args.compress,
-                            ignore_media=args.ignore_media,
-                            keep_meta=args.keep_meta,
-                            archive_original=args.archive_original,
+                            ignore_media=getattr(args, "ignore_media", True),
+                            keep_meta=getattr(args, "keep_meta", False),
+                            archive_original=getattr(
+                                args, "archive_original", False
+                            ),
                             keep_input=args.keep_input
                         )
                         results[str(raw_path)] = "SUCCESS!"

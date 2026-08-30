@@ -32,6 +32,9 @@ namespace basefwx::crypto {
 
 namespace {
 
+constexpr std::size_t kSha256DigestLength = 32;
+constexpr std::size_t kHkdfSha256MaxOutput = 255 * kSha256DigestLength;
+
 void Ensure(bool ok, const char* message) {
     if (!ok) {
         throw std::runtime_error(message);
@@ -41,6 +44,26 @@ void Ensure(bool ok, const char* message) {
 void EnsureEvpIntLength(std::size_t length, const char* message) {
     if (length > static_cast<std::size_t>(std::numeric_limits<int>::max())) {
         throw std::length_error(message);
+    }
+}
+
+void EnsureHkdfSha256OutputLength(std::size_t length) {
+    // RFC 5869 section 2.3 limits expand output to 255 digest blocks.
+    if (length > kHkdfSha256MaxOutput) {
+        throw std::length_error("HKDF-SHA256 output exceeds RFC 5869 limit");
+    }
+}
+
+void EnsureCompatPrfStreamLength(std::size_t length) {
+    if (length == 0) {
+        return;
+    }
+    // `(length - 1) / digest` is the zero-based final block index. Requiring
+    // it to be below UINT32_MAX admits counters 1..UINT32_MAX without an
+    // overflowing ceil or multiplication on either 32- or 64-bit size_t.
+    if ((length - 1) / kSha256DigestLength >=
+        std::numeric_limits<std::uint32_t>::max()) {
+        throw std::length_error("compatibility PRF stream counter exhausted");
     }
 }
 
@@ -87,10 +110,9 @@ std::size_t DecryptAesGcmWithIvValidated(const Bytes& key,
                                          const std::uint8_t* blob,
                                          std::size_t ct_len,
                                          const Bytes& aad,
-                                         std::uint8_t* out) {
+                                         std::uint8_t* out,
+                                         std::size_t out_capacity) {
     const std::uint8_t* tag = blob + ct_len;
-    std::array<std::uint8_t, 1> empty_output{};
-    std::uint8_t* decrypt_out = ct_len == 0 ? empty_output.data() : out;
 
     using detail::UniqueCipherCtx;
     UniqueCipherCtx ctx(EVP_CIPHER_CTX_new());
@@ -98,7 +120,17 @@ std::size_t DecryptAesGcmWithIvValidated(const Bytes& key,
         throw std::runtime_error("AES-GCM context allocation failed");
     }
     int out_len_int = 0;
-    int total_len = 0;
+    std::size_t total_len = 0;
+    const auto advance = [&total_len, out_capacity](
+                             int produced, const char* message) {
+        if (produced < 0 ||
+            total_len > out_capacity ||
+            static_cast<std::size_t>(produced) >
+                out_capacity - total_len) {
+            throw std::runtime_error(message);
+        }
+        total_len += static_cast<std::size_t>(produced);
+    };
 
     Ensure(EVP_DecryptInit_ex(ctx.get(), EVP_aes_256_gcm(), nullptr, nullptr, nullptr) == 1,
            "AES-GCM init failed");
@@ -113,21 +145,22 @@ std::size_t DecryptAesGcmWithIvValidated(const Bytes& key,
                "AES-GCM aad failed");
     }
     if (ct_len > 0) {
-        Ensure(EVP_DecryptUpdate(ctx.get(), decrypt_out, &out_len_int, blob,
+        Ensure(EVP_DecryptUpdate(ctx.get(), out, &out_len_int, blob,
                                  static_cast<int>(ct_len)) == 1,
                "AES-GCM decrypt failed");
-        total_len += out_len_int;
+        advance(out_len_int, "AES-GCM decrypt overran its buffer");
     }
     Ensure(EVP_CIPHER_CTX_ctrl(ctx.get(), EVP_CTRL_GCM_SET_TAG,
                                static_cast<int>(constants::kAeadTagLen),
                                const_cast<unsigned char*>(tag)) == 1,
            "AES-GCM set tag failed");
-    if (EVP_DecryptFinal_ex(ctx.get(), decrypt_out + total_len,
+    if (EVP_DecryptFinal_ex(ctx.get(), out + total_len,
                             &out_len_int) != 1) {
         throw AuthenticationError("AES-GCM auth failed");
     }
-    total_len += out_len_int;
-    return static_cast<std::size_t>(total_len);
+    advance(out_len_int, "AES-GCM final overran its buffer");
+    Ensure(total_len == ct_len, "AES-GCM plaintext length mismatch");
+    return total_len;
 }
 
 // IETF ChaCha20-Poly1305 accepts exactly one nonce size, so the shared
@@ -227,10 +260,11 @@ std::size_t DecryptChaCha20Poly1305WithIvValidated(const Bytes& key,
 }  // namespace
 
 Bytes RandomBytes(std::size_t size) {
-    Bytes out(size);
     if (size == 0) {
-        return out;
+        return {};
     }
+    EnsureEvpIntLength(size, "random byte request is too large");
+    Bytes out(size);
     Ensure(RAND_bytes(out.data(), static_cast<int>(out.size())) == 1, "RAND_bytes failed");
     return out;
 }
@@ -239,6 +273,14 @@ Bytes HkdfSha256(const Bytes& key_material,
                  const Bytes& salt,
                  std::string_view info,
                  std::size_t length) {
+    EnsureEvpIntLength(key_material.size(), "HKDF key material is too large");
+    EnsureEvpIntLength(salt.size(), "HKDF salt is too large");
+    EnsureEvpIntLength(info.size(), "HKDF info is too large");
+    EnsureHkdfSha256OutputLength(length);
+    if (length == 0) {
+        return {};
+    }
+
     using detail::UniquePKEYCtx;
     UniquePKEYCtx pctx(EVP_PKEY_CTX_new_id(EVP_PKEY_HKDF, nullptr));
     if (!pctx) {
@@ -274,16 +316,19 @@ Bytes HkdfSha256(const Bytes& key_material, std::string_view info, std::size_t l
 
 // OpenSSL 3.x: use EVP_MAC for HMAC operations
 
-Bytes HkdfSha256Stream(const Bytes& key_material, std::string_view info, std::size_t length) {
+Bytes CompatPrfStreamSha256(const Bytes& key_material,
+                            std::string_view info,
+                            std::size_t length) {
     if (length == 0) {
         return {};
     }
+    EnsureCompatPrfStreamLength(length);
     // Use stack buffer for zero salt instead of heap
     static constexpr std::array<std::uint8_t, 32> zero_salt{};
-    Bytes prk = HmacSha256({zero_salt.begin(), zero_salt.end()}, key_material);
+    SecureBytes prk{
+        HmacSha256({zero_salt.begin(), zero_salt.end()}, key_material)};
     Bytes out(length);
-    // Stack buffer for prev digest (max SHA256 = 32 bytes)
-    std::array<std::uint8_t, 32> prev{};
+    SecureBytes prev{Bytes(kSha256DigestLength)};
     std::size_t prev_len = 0;
     std::size_t offset = 0;
     std::uint32_t counter = 1;
@@ -305,28 +350,34 @@ Bytes HkdfSha256Stream(const Bytes& key_material, std::string_view info, std::si
     }
 
     while (offset < length) {
-        Ensure(EVP_MAC_init(ctx.get(), prk.data(), prk.size(), params) == 1, "HKDF stream init failed");
+        Ensure(EVP_MAC_init(ctx.get(), prk.data(), prk.size(), params) == 1,
+               "compatibility PRF stream init failed");
         if (prev_len > 0) {
-            Ensure(EVP_MAC_update(ctx.get(), prev.data(), prev_len) == 1, "HKDF stream update failed");
+            Ensure(EVP_MAC_update(ctx.get(), prev.data(), prev_len) == 1,
+                   "compatibility PRF stream update failed");
         }
         if (!info.empty()) {
             Ensure(EVP_MAC_update(ctx.get(), reinterpret_cast<const unsigned char*>(info.data()), info.size()) == 1,
-                   "HKDF stream update failed");
+                   "compatibility PRF stream update failed");
         }
         counter_bytes[0] = static_cast<std::uint8_t>((counter >> 24) & 0xFF);
         counter_bytes[1] = static_cast<std::uint8_t>((counter >> 16) & 0xFF);
         counter_bytes[2] = static_cast<std::uint8_t>((counter >> 8) & 0xFF);
         counter_bytes[3] = static_cast<std::uint8_t>(counter & 0xFF);
-        Ensure(EVP_MAC_update(ctx.get(), counter_bytes.data(), counter_bytes.size()) == 1, "HKDF stream update failed");
+        Ensure(EVP_MAC_update(ctx.get(), counter_bytes.data(), counter_bytes.size()) == 1,
+               "compatibility PRF stream update failed");
         
         std::size_t digest_len = prev.size();
-        Ensure(EVP_MAC_final(ctx.get(), prev.data(), &digest_len, prev.size()) == 1, "HKDF stream final failed");
+        Ensure(EVP_MAC_final(ctx.get(), prev.data(), &digest_len, prev.size()) == 1,
+               "compatibility PRF stream final failed");
         prev_len = digest_len;
         
         std::size_t take = std::min<std::size_t>(digest_len, length - offset);
         std::memcpy(out.data() + offset, prev.data(), take);
         offset += take;
-        counter++;
+        if (offset < length) {
+            ++counter;
+        }
     }
     return out;
 }
@@ -363,49 +414,60 @@ Bytes HmacSha256(const Bytes& key, const Bytes& data) {
 
 #else // legacy OpenSSL: use HMAC_* APIs
 
-Bytes HkdfSha256Stream(const Bytes& key_material, std::string_view info, std::size_t length) {
+Bytes CompatPrfStreamSha256(const Bytes& key_material,
+                            std::string_view info,
+                            std::size_t length) {
     if (length == 0) {
         return {};
     }
+    EnsureCompatPrfStreamLength(length);
     static const Bytes zero_salt(32, 0);
-    Bytes prk = HmacSha256(zero_salt, key_material);
+    SecureBytes prk{HmacSha256(zero_salt, key_material)};
     Bytes out(length);
-    Bytes prev;
+    SecureBytes prev;
     std::size_t offset = 0;
     std::uint32_t counter = 1;
     unsigned char counter_bytes[4];
+    SecureBytes digest{Bytes(EVP_MAX_MD_SIZE)};
     std::unique_ptr<HMAC_CTX, decltype(&HMAC_CTX_free)> ctx(HMAC_CTX_new(), &HMAC_CTX_free);
     if (!ctx) {
-        throw std::runtime_error("HKDF stream context allocation failed");
+        throw std::runtime_error("compatibility PRF stream context allocation failed");
     }
     while (offset < length) {
         Ensure(HMAC_Init_ex(ctx.get(), prk.data(), static_cast<int>(prk.size()), EVP_sha256(), nullptr) == 1,
-               "HKDF stream init failed");
+               "compatibility PRF stream init failed");
         if (!prev.empty()) {
-            Ensure(HMAC_Update(ctx.get(), prev.data(), prev.size()) == 1, "HKDF stream update failed");
+            Ensure(HMAC_Update(ctx.get(), prev.data(), prev.size()) == 1,
+                   "compatibility PRF stream update failed");
         }
         if (!info.empty()) {
             Ensure(HMAC_Update(ctx.get(), reinterpret_cast<const unsigned char*>(info.data()), info.size()) == 1,
-                   "HKDF stream update failed");
+                   "compatibility PRF stream update failed");
         }
         counter_bytes[0] = static_cast<unsigned char>((counter >> 24) & 0xFF);
         counter_bytes[1] = static_cast<unsigned char>((counter >> 16) & 0xFF);
         counter_bytes[2] = static_cast<unsigned char>((counter >> 8) & 0xFF);
         counter_bytes[3] = static_cast<unsigned char>(counter & 0xFF);
-        Ensure(HMAC_Update(ctx.get(), counter_bytes, sizeof(counter_bytes)) == 1, "HKDF stream update failed");
-        unsigned char digest[EVP_MAX_MD_SIZE];
+        Ensure(HMAC_Update(ctx.get(), counter_bytes, sizeof(counter_bytes)) == 1,
+               "compatibility PRF stream update failed");
         unsigned int digest_len = 0;
-        Ensure(HMAC_Final(ctx.get(), digest, &digest_len) == 1, "HKDF stream final failed");
-        prev.assign(digest, digest + digest_len);
+        Ensure(HMAC_Final(ctx.get(), digest.data(), &digest_len) == 1,
+               "compatibility PRF stream final failed");
+        prev.bytes().assign(
+            digest.data(), digest.data() + digest_len);
         std::size_t take = std::min<std::size_t>(digest_len, length - offset);
         std::memcpy(out.data() + offset, prev.data(), take);
         offset += take;
-        counter++;
+        if (offset < length) {
+            ++counter;
+        }
     }
     return out;
 }
 
 Bytes HmacSha256(const Bytes& key, const Bytes& data) {
+    EnsureEvpIntLength(key.size(), "HMAC key is too large");
+    EnsureEvpIntLength(data.size(), "HMAC input is too large");
     unsigned int out_len = EVP_MAX_MD_SIZE;
     Bytes out(out_len);
     if (!HMAC(EVP_sha256(), key.data(), static_cast<int>(key.size()), data.data(),
@@ -418,7 +480,20 @@ Bytes HmacSha256(const Bytes& key, const Bytes& data) {
 
 #endif // OPENSSL_VERSION_NUMBER
 
+Bytes HkdfSha256Stream(const Bytes& key_material,
+                       std::string_view info,
+                       std::size_t length) {
+    return CompatPrfStreamSha256(key_material, info, length);
+}
+
 Bytes Pbkdf2HmacSha256(const std::string& password, const Bytes& salt, std::size_t iterations, std::size_t length) {
+    EnsureEvpIntLength(password.size(), "PBKDF2 password is too large");
+    EnsureEvpIntLength(salt.size(), "PBKDF2 salt is too large");
+    if (iterations == 0) {
+        throw std::invalid_argument("PBKDF2 iteration count must be positive");
+    }
+    EnsureEvpIntLength(iterations, "PBKDF2 iteration count is too large");
+    EnsureEvpIntLength(length, "PBKDF2 output is too large");
     Bytes out(length);
     Ensure(PKCS5_PBKDF2_HMAC(password.c_str(), static_cast<int>(password.size()), salt.data(),
                              static_cast<int>(salt.size()), static_cast<int>(iterations), EVP_sha256(),
@@ -451,55 +526,24 @@ Bytes Argon2idHashRaw(const std::string& password,
 }
 #endif
 
-// ... rest of file unchanged (AES-GCM, AES-CTR, Sha3_512 etc.)
-
 Bytes AesGcmEncrypt(const Bytes& key, const Bytes& plaintext, const Bytes& aad) {
     if (key.size() != 32) {
         throw std::runtime_error("AES-GCM expects 32-byte key");
     }
+    EnsureEvpIntLength(aad.size(), "AES-GCM AAD is too large");
+    EnsureEvpIntLength(plaintext.size(), "AES-GCM plaintext is too large");
+    if (plaintext.size() >
+        std::numeric_limits<std::size_t>::max()
+            - constants::kAeadNonceLen - constants::kAeadTagLen) {
+        throw std::length_error("AES-GCM output length overflow");
+    }
     Bytes nonce = RandomBytes(constants::kAeadNonceLen);
-    
-    using detail::UniqueCipherCtx;
-    UniqueCipherCtx ctx(EVP_CIPHER_CTX_new());
-    if (!ctx) {
-        throw std::runtime_error("AES-GCM context allocation failed");
-    }
-    
-    // Pre-allocate output with exact size needed
-    Bytes out;
-    out.reserve(nonce.size() + plaintext.size() + constants::kAeadTagLen);
-    out.insert(out.end(), nonce.begin(), nonce.end());
-    
-    std::size_t ct_offset = out.size();
-    out.resize(ct_offset + plaintext.size() + constants::kAeadTagLen);
-    
-    int out_len = 0;
-    int total_len = 0;
+    Bytes ciphertext = AesGcmEncryptWithIv(key, nonce, plaintext, aad);
 
-    Ensure(EVP_EncryptInit_ex(ctx.get(), EVP_aes_256_gcm(), nullptr, nullptr, nullptr) == 1,
-           "AES-GCM init failed");
-    Ensure(EVP_CIPHER_CTX_ctrl(ctx.get(), EVP_CTRL_GCM_SET_IVLEN, static_cast<int>(nonce.size()), nullptr) == 1,
-           "AES-GCM set iv length failed");
-    Ensure(EVP_EncryptInit_ex(ctx.get(), nullptr, nullptr, key.data(), nonce.data()) == 1,
-           "AES-GCM set key failed");
-    if (!aad.empty()) {
-        Ensure(EVP_EncryptUpdate(ctx.get(), nullptr, &out_len, aad.data(), static_cast<int>(aad.size())) == 1,
-               "AES-GCM aad failed");
-    }
-    if (!plaintext.empty()) {
-        Ensure(EVP_EncryptUpdate(ctx.get(), out.data() + ct_offset, &out_len, plaintext.data(),
-                                 static_cast<int>(plaintext.size())) == 1,
-               "AES-GCM encrypt failed");
-        total_len += out_len;
-    }
-    Ensure(EVP_EncryptFinal_ex(ctx.get(), out.data() + ct_offset + total_len, &out_len) == 1,
-           "AES-GCM final failed");
-    total_len += out_len;
-    Ensure(EVP_CIPHER_CTX_ctrl(ctx.get(), EVP_CTRL_GCM_GET_TAG, static_cast<int>(constants::kAeadTagLen),
-                               out.data() + ct_offset + total_len) == 1,
-           "AES-GCM get tag failed");
-    
-    out.resize(nonce.size() + total_len + constants::kAeadTagLen);
+    Bytes out;
+    out.reserve(nonce.size() + ciphertext.size());
+    out.insert(out.end(), nonce.begin(), nonce.end());
+    out.insert(out.end(), ciphertext.begin(), ciphertext.end());
     return out;
 }
 
@@ -509,6 +553,13 @@ Bytes AesGcmEncryptWithIv(const Bytes& key, const Bytes& iv, const Bytes& plaint
     }
     if (iv.empty()) {
         throw std::runtime_error("AES-GCM IV is required");
+    }
+    EnsureEvpIntLength(iv.size(), "AES-GCM IV is too large");
+    EnsureEvpIntLength(aad.size(), "AES-GCM AAD is too large");
+    EnsureEvpIntLength(plaintext.size(), "AES-GCM plaintext is too large");
+    if (plaintext.size() >
+        std::numeric_limits<std::size_t>::max() - constants::kAeadTagLen) {
+        throw std::length_error("AES-GCM output length overflow");
     }
     Bytes out(plaintext.size() + constants::kAeadTagLen);
     std::size_t written = AesGcmEncryptWithIvInto(
@@ -532,48 +583,14 @@ Bytes AesGcmDecrypt(const Bytes& key, const Bytes& blob, const Bytes& aad) {
         throw std::runtime_error("AES-GCM blob too short");
     }
     
-    const std::uint8_t* nonce_ptr = blob.data();
-    const std::uint8_t* ct_ptr = blob.data() + constants::kAeadNonceLen;
-    std::size_t ct_len = blob.size() - constants::kAeadNonceLen - constants::kAeadTagLen;
-    const std::uint8_t* tag_ptr = blob.data() + blob.size() - constants::kAeadTagLen;
-
-    using detail::UniqueCipherCtx;
-    UniqueCipherCtx ctx(EVP_CIPHER_CTX_new());
-    if (!ctx) {
-        throw std::runtime_error("AES-GCM context allocation failed");
-    }
-    
-    Bytes plaintext(ct_len);
-    int out_len = 0;
-    int total_len = 0;
-
-    Ensure(EVP_DecryptInit_ex(ctx.get(), EVP_aes_256_gcm(), nullptr, nullptr, nullptr) == 1,
-           "AES-GCM init failed");
-    Ensure(EVP_CIPHER_CTX_ctrl(ctx.get(), EVP_CTRL_GCM_SET_IVLEN, constants::kAeadNonceLen, nullptr) == 1,
-           "AES-GCM set iv length failed");
-    Ensure(EVP_DecryptInit_ex(ctx.get(), nullptr, nullptr, key.data(), nonce_ptr) == 1,
-           "AES-GCM set key failed");
-    if (!aad.empty()) {
-        Ensure(EVP_DecryptUpdate(ctx.get(), nullptr, &out_len, aad.data(), static_cast<int>(aad.size())) == 1,
-               "AES-GCM aad failed");
-    }
-    if (ct_len > 0) {
-        Ensure(EVP_DecryptUpdate(ctx.get(), plaintext.data(), &out_len, ct_ptr,
-                                 static_cast<int>(ct_len)) == 1,
-               "AES-GCM decrypt failed");
-        total_len += out_len;
-    }
-    Ensure(EVP_CIPHER_CTX_ctrl(ctx.get(), EVP_CTRL_GCM_SET_TAG, constants::kAeadTagLen,
-                               const_cast<std::uint8_t*>(tag_ptr)) == 1,
-           "AES-GCM set tag failed");
-    if (EVP_DecryptFinal_ex(
-            ctx.get(), plaintext.data() + total_len, &out_len) != 1) {
-        throw AuthenticationError("AES-GCM auth failed");
-    }
-    total_len += out_len;
-
-    plaintext.resize(static_cast<std::size_t>(total_len));
-    return plaintext;
+    const Bytes nonce(blob.begin(),
+                      blob.begin() + constants::kAeadNonceLen);
+    return AesGcmDecryptWithIvOwned(
+        key,
+        nonce,
+        blob.data() + constants::kAeadNonceLen,
+        blob.size() - constants::kAeadNonceLen,
+        aad);
 }
 
 Bytes AesGcmDecryptWithIv(const Bytes& key, const Bytes& iv, const Bytes& blob, const Bytes& aad) {
@@ -588,9 +605,11 @@ Bytes AesGcmDecryptWithIvOwned(const Bytes& key,
                                const Bytes& aad) {
     const std::size_t ct_len = ValidateAesGcmDecryptInput(
         key, iv, blob, blob_len, aad);
-    SecureBytes plaintext{Bytes(ct_len)};
+    // Keep tag-length slack for EVP_DecryptFinal_ex, then require the exact
+    // GCM plaintext length before releasing the wiping owner.
+    SecureBytes plaintext{Bytes(blob_len)};
     const std::size_t written = DecryptAesGcmWithIvValidated(
-        key, iv, blob, ct_len, aad, plaintext.data());
+        key, iv, blob, ct_len, aad, plaintext.data(), plaintext.size());
     plaintext.bytes().resize(written);
     return plaintext.Release();
 }
@@ -627,7 +646,16 @@ std::size_t AesGcmEncryptWithIvInto(const Bytes& key,
         throw std::runtime_error("AES-GCM context allocation failed");
     }
     int out_len_int = 0;
-    int total_len = 0;
+    std::size_t total_len = 0;
+    const auto advance = [&total_len, out_len](
+                             int produced, const char* message) {
+        if (produced < 0 ||
+            total_len > out_len ||
+            static_cast<std::size_t>(produced) > out_len - total_len) {
+            throw std::runtime_error(message);
+        }
+        total_len += static_cast<std::size_t>(produced);
+    };
     
     Ensure(EVP_EncryptInit_ex(ctx.get(), EVP_aes_256_gcm(), nullptr, nullptr, nullptr) == 1,
            "AES-GCM init failed");
@@ -643,18 +671,20 @@ std::size_t AesGcmEncryptWithIvInto(const Bytes& key,
         Ensure(EVP_EncryptUpdate(ctx.get(), out, &out_len_int, plaintext,
                                  static_cast<int>(plaintext_len)) == 1,
                "AES-GCM encrypt failed");
-        total_len += out_len_int;
+        advance(out_len_int, "AES-GCM encrypt overran its buffer");
     }
     Ensure(EVP_EncryptFinal_ex(ctx.get(), out + total_len, &out_len_int) == 1,
            "AES-GCM final failed");
-    total_len += out_len_int;
+    advance(out_len_int, "AES-GCM final overran its buffer");
+    Ensure(total_len <= out_len - constants::kAeadTagLen,
+           "AES-GCM has no room for the tag");
     Ensure(EVP_CIPHER_CTX_ctrl(ctx.get(), EVP_CTRL_GCM_GET_TAG,
                                static_cast<int>(constants::kAeadTagLen),
                                out + total_len) == 1,
            "AES-GCM get tag failed");
-    total_len += static_cast<int>(constants::kAeadTagLen);
-    
-    return static_cast<std::size_t>(total_len);
+    total_len += constants::kAeadTagLen;
+    Ensure(total_len == required_out, "AES-GCM ciphertext length mismatch");
+    return total_len;
 }
 
 std::size_t AesGcmDecryptWithIvInto(const Bytes& key,
@@ -675,9 +705,9 @@ std::size_t AesGcmDecryptWithIvInto(const Bytes& key,
     // authenticated by EVP_DecryptFinal_ex. Keep those bytes private until
     // authentication succeeds so a failed call cannot publish attacker-
     // controlled plaintext through the caller's output buffer.
-    SecureBytes staged{Bytes(ct_len)};
+    SecureBytes staged{Bytes(blob_len)};
     const std::size_t written = DecryptAesGcmWithIvValidated(
-        key, iv, blob, ct_len, aad, staged.data());
+        key, iv, blob, ct_len, aad, staged.data(), staged.size());
     if (written > 0) {
         std::memcpy(out, staged.data(), written);
     }
@@ -794,6 +824,10 @@ Bytes AesCtrTransform(const Bytes& key, const Bytes& iv, const Bytes& data) {
     if (iv.size() != 16) {
         throw std::runtime_error("AES-CTR expects 16-byte IV");
     }
+    if (data.empty()) {
+        return {};
+    }
+    EnsureEvpIntLength(data.size(), "AES-CTR input is too large");
 
     using detail::UniqueCipherCtx;
     UniqueCipherCtx ctx(EVP_CIPHER_CTX_new());
@@ -803,19 +837,26 @@ Bytes AesCtrTransform(const Bytes& key, const Bytes& iv, const Bytes& data) {
 
     Bytes out(data.size());
     int out_len = 0;
-    int total_len = 0;
+    std::size_t total_len = 0;
 
     Ensure(EVP_EncryptInit_ex(ctx.get(), EVP_aes_256_ctr(), nullptr, key.data(), iv.data()) == 1,
            "AES-CTR init failed");
     if (!data.empty()) {
         Ensure(EVP_EncryptUpdate(ctx.get(), out.data(), &out_len, data.data(), static_cast<int>(data.size())) == 1,
                "AES-CTR update failed");
-        total_len += out_len;
+        if (out_len < 0 || static_cast<std::size_t>(out_len) > out.size()) {
+            throw std::runtime_error("AES-CTR update overran its buffer");
+        }
+        total_len = static_cast<std::size_t>(out_len);
     }
     Ensure(EVP_EncryptFinal_ex(ctx.get(), out.data() + total_len, &out_len) == 1,
            "AES-CTR final failed");
-    total_len += out_len;
+    if (out_len < 0 || static_cast<std::size_t>(out_len) > out.size() - total_len) {
+        throw std::runtime_error("AES-CTR final overran its buffer");
+    }
+    total_len += static_cast<std::size_t>(out_len);
 
+    Ensure(total_len == data.size(), "AES-CTR output length mismatch");
     out.resize(static_cast<std::size_t>(total_len));
     return out;
 }
@@ -830,6 +871,7 @@ void AesCtrTransformInPlace(const Bytes& key, const Bytes& iv, Bytes& data) {
     if (data.empty()) {
         return;
     }
+    EnsureEvpIntLength(data.size(), "AES-CTR input is too large");
 
     using detail::UniqueCipherCtx;
     UniqueCipherCtx ctx(EVP_CIPHER_CTX_new());
@@ -845,10 +887,16 @@ void AesCtrTransformInPlace(const Bytes& key, const Bytes& iv, Bytes& data) {
     // zero-fill that the out-of-place form pays per chunk.
     Ensure(EVP_EncryptUpdate(ctx.get(), data.data(), &out_len, data.data(), static_cast<int>(data.size())) == 1,
            "AES-CTR update failed");
+    if (out_len < 0 || static_cast<std::size_t>(out_len) > data.size()) {
+        throw std::runtime_error("AES-CTR update overran its buffer");
+    }
     int final_len = 0;
-    Ensure(EVP_EncryptFinal_ex(ctx.get(), data.data() + out_len, &final_len) == 1,
+    const std::size_t update_len = static_cast<std::size_t>(out_len);
+    Ensure(EVP_EncryptFinal_ex(ctx.get(), data.data() + update_len, &final_len) == 1,
            "AES-CTR final failed");
-    if (static_cast<std::size_t>(out_len + final_len) != data.size()) {
+    if (final_len < 0 ||
+        static_cast<std::size_t>(final_len) > data.size() - update_len ||
+        update_len + static_cast<std::size_t>(final_len) != data.size()) {
         throw std::runtime_error("AES-CTR in-place length mismatch");
     }
 }
@@ -873,28 +921,42 @@ Bytes Sha3_512(const Bytes& data) {
     return Bytes(out.data(), out.data() + out_len);
 }
 
-void SecureClear(std::uint8_t* data, std::size_t length) {
+void SecureClear(std::uint8_t* data, std::size_t length) noexcept {
     if (!data || length == 0) {
         return;
     }
     OPENSSL_cleanse(data, length);
 }
 
-void SecureClear(Bytes& bytes) {
+void SecureClear(Bytes& bytes) noexcept {
+    // A secret vector may have been shrunk after processing its final chunk.
+    // The bytes between size() and capacity() can still contain data from an
+    // earlier, larger chunk. Grow within the existing allocation so that
+    // storage becomes part of the vector again, then cleanse the full extent.
+    // Resizing to capacity cannot allocate, and uint8_t construction cannot
+    // throw, which keeps this cleanup path nonthrowing.
+    const std::size_t allocated = bytes.capacity();
+    if (allocated > bytes.size()) {
+        bytes.resize(allocated);
+    }
     if (!bytes.empty()) {
         SecureClear(bytes.data(), bytes.size());
     }
     bytes.clear();
 }
 
-void SecureClear(std::string& text) {
+void SecureClear(std::string& text) noexcept {
+    const std::size_t allocated = text.capacity();
+    if (allocated > text.size()) {
+        text.resize(allocated, '\0');
+    }
     if (!text.empty()) {
         SecureClear(reinterpret_cast<std::uint8_t*>(text.data()), text.size());
     }
     text.clear();
 }
 
-SecretGuard::~SecretGuard() {
+SecretGuard::~SecretGuard() noexcept {
     for (Bytes* bytes : byte_buffers_) {
         if (bytes) {
             SecureClear(*bytes);
@@ -933,6 +995,13 @@ void SecureBytes::Reset(Bytes bytes) noexcept {
 }
 
 Bytes SecureBytes::Release() noexcept {
+    const std::size_t visible = bytes_.size();
+    const std::size_t allocated = bytes_.capacity();
+    if (allocated > visible) {
+        bytes_.resize(allocated);
+        SecureClear(bytes_.data() + visible, allocated - visible);
+        bytes_.resize(visible);
+    }
     Bytes out = std::move(bytes_);
     bytes_.clear();
     return out;

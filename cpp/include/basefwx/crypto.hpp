@@ -16,9 +16,8 @@
 namespace basefwx::crypto {
 
 // One-shot AEAD / KDF / MAC / RNG helpers. Prefer these over opening a
-// parallel EVP_* path. Chunked streaming codecs (fwxaes, filecodec,
-// imagecipher, obfuscation) may call OpenSSL EVP directly for
-// throughput — see SECURITY.md "Crypto helper boundaries".
+// parallel EVP_* path. Chunked file codecs and obfuscation may call OpenSSL
+// EVP directly for throughput — see SECURITY.md "Crypto helper boundaries".
 
 using Bytes = std::vector<std::uint8_t>;
 
@@ -36,6 +35,15 @@ Bytes HkdfSha256(const Bytes& key_material,
                  const Bytes& salt,
                  std::string_view info,
                  std::size_t length);
+// Released large-payload compatibility PRF. This is NOT RFC 5869 HKDF:
+// after a zero-salt HMAC-SHA256 extract, each block is
+// HMAC(PRK, previous || info || uint32_be(counter)). The four-byte counter is
+// intentionally preserved because mask payloads larger than 8160 bytes are
+// stored using this stream in existing BaseFWX formats.
+Bytes CompatPrfStreamSha256(const Bytes& key_material,
+                            std::string_view info,
+                            std::size_t length);
+[[deprecated("use CompatPrfStreamSha256; this compatibility stream is not RFC 5869 HKDF")]]
 Bytes HkdfSha256Stream(const Bytes& key_material, std::string_view info, std::size_t length);
 Bytes Pbkdf2HmacSha256(const std::string& password, const Bytes& salt, std::size_t iterations, std::size_t length);
 Bytes HmacSha256(const Bytes& key, const Bytes& data);
@@ -106,9 +114,9 @@ Bytes AesCtrTransform(const Bytes& key, const Bytes& iv, const Bytes& data);
 // loop). `data` is mutated to ciphertext / plaintext.
 void AesCtrTransformInPlace(const Bytes& key, const Bytes& iv, Bytes& data);
 Bytes Sha3_512(const Bytes& data);
-void SecureClear(std::uint8_t* data, std::size_t length);
-void SecureClear(Bytes& bytes);
-void SecureClear(std::string& text);
+void SecureClear(std::uint8_t* data, std::size_t length) noexcept;
+void SecureClear(Bytes& bytes) noexcept;
+void SecureClear(std::string& text) noexcept;
 
 // SecretGuard tracks pointers to externally-owned buffers and SecureClears
 // each one in its destructor. It does NOT own the buffers — they must
@@ -132,7 +140,7 @@ public:
     SecretGuard& operator=(const SecretGuard&) = delete;
     SecretGuard(SecretGuard&&) = delete;
     SecretGuard& operator=(SecretGuard&&) = delete;
-    ~SecretGuard();
+    ~SecretGuard() noexcept;
 
     void Add(Bytes& bytes);
     void Add(std::string& text);

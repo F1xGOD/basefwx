@@ -8,12 +8,27 @@ package com.fixcraft.basefwx;
 
 import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
+import java.security.GeneralSecurityException;
 import java.util.Arrays;
 import org.junit.Test;
 
 import static org.junit.Assert.assertArrayEquals;
 
 public class JavaCryptoBackendStreamingTest {
+    private static void expectClosed(CheckedAction action) throws Exception {
+        try {
+            action.run();
+            throw new AssertionError("closed AES-GCM context was reusable");
+        } catch (GeneralSecurityException expected) {
+            // Expected.
+        }
+    }
+
+    @FunctionalInterface
+    private interface CheckedAction {
+        void run() throws Exception;
+    }
+
     @Test
     public void decryptsPayloadLargerThanStreamingOutputBuffer() throws Exception {
         byte[] key = new byte[32];
@@ -58,5 +73,31 @@ public class JavaCryptoBackendStreamingTest {
         }
 
         assertArrayEquals(plaintext, restored.toByteArray());
+    }
+
+    @Test
+    public void closedStreamingContextsRejectReuse() throws Exception {
+        byte[] key = new byte[Constants.FWXAES_KEY_LEN];
+        byte[] nonce = Crypto.randomBytes(Constants.AEAD_NONCE_LEN);
+        byte[] input = new byte[1];
+        byte[] output = new byte[Constants.AEAD_TAG_LEN + 1];
+        try {
+            CryptoBackend.AeadEncryptor encryptor =
+                    CryptoBackends.java().newGcmEncryptor(key, nonce, null);
+            encryptor.close();
+            encryptor.close();
+            expectClosed(() -> encryptor.update(input, 0, 1, output, 0));
+
+            CryptoBackend.AeadDecryptor decryptor =
+                    CryptoBackends.java().newGcmDecryptor(key, nonce, null);
+            decryptor.close();
+            decryptor.close();
+            expectClosed(() -> decryptor.update(input, 0, 1, output, 0));
+        } finally {
+            Arrays.fill(key, (byte) 0);
+            Arrays.fill(nonce, (byte) 0);
+            Arrays.fill(input, (byte) 0);
+            Arrays.fill(output, (byte) 0);
+        }
     }
 }

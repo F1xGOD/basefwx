@@ -2,7 +2,7 @@
 # Copyright (C) 2020-2026  FixCraft Inc.
 # Licensed under the GNU Lesser General Public License v3.0 or later.
 
-"""Extracted implementation cluster from legacy.py."""
+"""Provisioned ML-KEM/EC master-key selection and recovery."""
 
 from __future__ import annotations
 

@@ -12,7 +12,6 @@
 #include "basefwx/crypto_utils.hpp"
 #include "basefwx/format.hpp"
 #include "basefwx/pb512.hpp"
-#include "basefwx/imagecipher.hpp"
 #include "basefwx/env.hpp"
 
 #include <algorithm>
@@ -25,9 +24,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
-#include <iostream>
 #include <limits>
-#include <mutex>
 #include <optional>
 #include <openssl/evp.h>
 #include <random>
@@ -72,180 +69,6 @@ std::string DigestHex(const std::string& input, const EVP_MD* md) {
     
     std::vector<std::uint8_t> result(out.data(), out.data() + out_len);
     return HexEncode(result);
-}
-
-std::string MdCode(const std::string& input) {
-    std::string out;
-    out.reserve(input.size() * 3);
-    for (unsigned char ch : input) {
-        unsigned int val = ch;
-        if (val < 10) {
-            out.push_back('1');
-            out.push_back('0' + val);
-        } else if (val < 100) {
-            out.push_back('2');
-            out.push_back('0' + val / 10);
-            out.push_back('0' + val % 10);
-        } else {
-            out.push_back('3');
-            out.push_back('0' + val / 100);
-            out.push_back('0' + (val / 10) % 10);
-            out.push_back('0' + val % 10);
-        }
-    }
-    return out;
-}
-
-std::string StripLeadingZeros(const std::string& input) {
-    std::size_t idx = 0;
-    while (idx < input.size() && input[idx] == '0') {
-        ++idx;
-    }
-    if (idx == input.size()) {
-        return "0";
-    }
-    return input.substr(idx);
-}
-
-int CompareMagnitude(const std::string& a, const std::string& b) {
-    std::string aa = StripLeadingZeros(a);
-    std::string bb = StripLeadingZeros(b);
-    if (aa.size() != bb.size()) {
-        return aa.size() < bb.size() ? -1 : 1;
-    }
-    if (aa == bb) {
-        return 0;
-    }
-    return aa < bb ? -1 : 1;
-}
-
-std::string AddMagnitude(const std::string& a, const std::string& b) {
-    int i = static_cast<int>(a.size()) - 1;
-    int j = static_cast<int>(b.size()) - 1;
-    int carry = 0;
-    std::string out;
-    while (i >= 0 || j >= 0 || carry > 0) {
-        int da = (i >= 0) ? (a[static_cast<std::size_t>(i)] - '0') : 0;
-        int db = (j >= 0) ? (b[static_cast<std::size_t>(j)] - '0') : 0;
-        int sum = da + db + carry;
-        out.push_back(static_cast<char>('0' + (sum % 10)));
-        carry = sum / 10;
-        --i;
-        --j;
-    }
-    std::reverse(out.begin(), out.end());
-    return StripLeadingZeros(out);
-}
-
-std::string SubtractMagnitude(const std::string& a, const std::string& b) {
-    int i = static_cast<int>(a.size()) - 1;
-    int j = static_cast<int>(b.size()) - 1;
-    int borrow = 0;
-    std::string out;
-    while (i >= 0) {
-        int da = (a[static_cast<std::size_t>(i)] - '0') - borrow;
-        int db = (j >= 0) ? (b[static_cast<std::size_t>(j)] - '0') : 0;
-        if (da < db) {
-            da += 10;
-            borrow = 1;
-        } else {
-            borrow = 0;
-        }
-        int diff = da - db;
-        out.push_back(static_cast<char>('0' + diff));
-        --i;
-        --j;
-    }
-    std::reverse(out.begin(), out.end());
-    return StripLeadingZeros(out);
-}
-
-struct SignedNumber {
-    bool negative = false;
-    std::string digits = "0";
-};
-
-SignedNumber ParseSigned(const std::string& input) {
-    SignedNumber result;
-    if (input.empty()) {
-        return result;
-    }
-    std::size_t start = 0;
-    if (input[0] == '-') {
-        result.negative = true;
-        start = 1;
-    }
-    result.digits = StripLeadingZeros(input.substr(start));
-    if (result.digits == "0") {
-        result.negative = false;
-    }
-    return result;
-}
-
-std::string AddSigned(const std::string& a, const std::string& b) {
-    SignedNumber sa = ParseSigned(a);
-    SignedNumber sb = ParseSigned(b);
-    if (sa.negative == sb.negative) {
-        std::string sum = AddMagnitude(sa.digits, sb.digits);
-        if (sum == "0") {
-            return sum;
-        }
-        return (sa.negative ? "-" : "") + sum;
-    }
-    int cmp = CompareMagnitude(sa.digits, sb.digits);
-    if (cmp == 0) {
-        return "0";
-    }
-    if (cmp > 0) {
-        std::string diff = SubtractMagnitude(sa.digits, sb.digits);
-        return (sa.negative ? "-" : "") + diff;
-    }
-    std::string diff = SubtractMagnitude(sb.digits, sa.digits);
-    return (sb.negative ? "-" : "") + diff;
-}
-
-std::string ReplaceAll(std::string input, const std::string& from, const std::string& to) {
-    if (from.empty()) {
-        return input;
-    }
-    std::size_t pos = 0;
-    while ((pos = input.find(from, pos)) != std::string::npos) {
-        input.replace(pos, from.size(), to);
-        pos += to.size();
-    }
-    return input;
-}
-
-std::string MCode(const std::string& input) {
-    std::string out;
-    out.reserve(input.size() / 2);  // Rough estimate
-    std::size_t idx = 0;
-    while (idx < input.size()) {
-        if (input[idx] < '0' || input[idx] > '9') {
-            throw std::runtime_error("Invalid mcode input");
-        }
-        int len = input[idx] - '0';
-        idx += 1;
-        if (idx + static_cast<std::size_t>(len) > input.size()) {
-            throw std::runtime_error("Invalid mcode length");
-        }
-        // Fast path for common lengths
-        int val = 0;
-        if (len == 1) {
-            val = input[idx] - '0';
-        } else if (len == 2) {
-            val = (input[idx] - '0') * 10 + (input[idx + 1] - '0');
-        } else if (len == 3) {
-            val = (input[idx] - '0') * 100 + (input[idx + 1] - '0') * 10 + (input[idx + 2] - '0');
-        } else {
-            // Fallback for unexpected length
-            std::string num = input.substr(idx, static_cast<std::size_t>(len));
-            val = std::stoi(num);
-        }
-        idx += static_cast<std::size_t>(len);
-        out.push_back(static_cast<char>(val));
-    }
-    return out;
 }
 
 constexpr std::uint64_t kN10Mod = 10000000000ULL;
@@ -591,47 +414,6 @@ InspectResult InspectBlob(const std::vector<std::uint8_t>& blob) {
     return result;
 }
 
-namespace {
-
-// One-time retirement notice for b256. Fires the first time either
-// the public B256Encode or B256Decode is called in a process. The
-// internal `basefwx::codec::B256Encode/Decode` helpers stay silent
-// because the surviving callers of those (the already-deprecated
-// Bi512Encode / A512Encode) would otherwise emit two retirement
-// messages per call.
-void WarnB256RetiredOnce() {
-    static std::once_flag flag;
-    std::call_once(flag, []() {
-        std::cerr <<
-            "🫡 b256 has been retired as of BaseFWX 3.7.0.\n"
-            "   b256 was the very first encoding method in BaseFWX —\n"
-            "   born in V1, back when this was a proof of concept and\n"
-            "   not a project. It served from day one. Existing\n"
-            "   b256-encoded blobs still decode; use base64 or\n"
-            "   Hash512 / Uhash513 for new code.\n"
-            "   ❤️  Thank you for the journey. It's time to go.\n";
-    });
-}
-
-}  // namespace
-
-// Public API: stays callable (existing blobs still decode), but
-// flags itself at compile time via [[deprecated]] in basefwx.hpp
-// and at runtime via WarnB256RetiredOnce. Internal callers
-// (Bi512Encode, A512Encode, …) go through `basefwx::codec::B256*`
-// instead — those helpers stay un-deprecated to keep the build
-// quiet, since their parent methods carry their own deprecation
-// notice already.
-std::string B256Encode(const std::string& input) {
-    WarnB256RetiredOnce();
-    return basefwx::codec::B256Encode(input);
-}
-
-std::string B256Decode(const std::string& input) {
-    WarnB256RetiredOnce();
-    return basefwx::codec::B256Decode(input);
-}
-
 std::string B64Encode(const std::string& input) {
     return basefwx::base64::Encode(std::string_view(input));
 }
@@ -737,86 +519,6 @@ std::string N10Decode(const std::string& input) {
 std::string Hash512(const std::string& input) {
     return DigestHex(input, EVP_sha512());
 }
-
-std::string Uhash513(const std::string& input) {
-    std::string h1 = DigestHex(input, EVP_sha256());
-    std::string h2 = DigestHex(h1, EVP_sha1());
-    std::string h3 = DigestHex(h2, EVP_sha512());
-    std::string h4 = DigestHex(input, EVP_sha512());
-    return DigestHex(h3 + h4, EVP_sha256());
-}
-
-std::string Bi512Encode(const std::string& input) {
-    if (input.empty()) {
-        throw std::runtime_error("bi512encode expects non-empty input");
-    }
-    std::string code;
-    code.push_back(input.front());
-    code.push_back(input.back());
-    std::string md = MdCode(input);
-    std::string md_code = MdCode(code);
-    std::string diff;
-    if (CompareMagnitude(md, md_code) >= 0) {
-        diff = SubtractMagnitude(md, md_code);
-    } else {
-        diff = "0" + SubtractMagnitude(md_code, md);
-    }
-    std::string packed = basefwx::codec::B256Encode(diff);
-    packed = ReplaceAll(packed, "=", "4G5tRA");
-    return DigestHex(packed, EVP_sha256());
-}
-
-std::string A512Encode(const std::string& input) {
-    std::string md = MdCode(input);
-    std::string md_len = std::to_string(md.size());
-    std::string prefix = std::to_string(md_len.size()) + md_len;
-    std::size_t len_val = md.size();
-    std::string code = std::to_string(len_val * len_val);
-    std::string md_code = MdCode(code);
-    std::string diff;
-    if (CompareMagnitude(md, md_code) >= 0) {
-        diff = SubtractMagnitude(md, md_code);
-    } else {
-        diff = "0" + SubtractMagnitude(md_code, md);
-    }
-    std::string packed = basefwx::codec::B256Encode(diff);
-    packed = ReplaceAll(packed, "=", "4G5tRA");
-    return prefix + packed;
-}
-
-std::string A512Decode(const std::string& input) {
-    try {
-        if (input.empty()) {
-            throw std::runtime_error("Empty a512 payload");
-        }
-        if (input[0] < '0' || input[0] > '9') {
-            throw std::runtime_error("Invalid a512 length marker");
-        }
-        int len_len = input[0] - '0';
-        if (len_len <= 0 || input.size() < static_cast<std::size_t>(len_len) + 1) {
-            throw std::runtime_error("Invalid a512 length encoding");
-        }
-        std::string len_str = input.substr(1, static_cast<std::size_t>(len_len));
-        std::size_t md_len = static_cast<std::size_t>(std::stoul(len_str));
-        std::string payload = input.substr(static_cast<std::size_t>(len_len) + 1);
-        std::string code = std::to_string(md_len * md_len);
-        std::string md_code = MdCode(code);
-        std::string restored = basefwx::codec::B256Decode(ReplaceAll(payload, "4G5tRA", "="));
-        if (!restored.empty() && restored[0] == '0') {
-            restored = "-" + restored.substr(1);
-        }
-        std::string sum = AddSigned(restored, md_code);
-        if (!sum.empty() && sum[0] == '-') {
-            throw std::runtime_error("Negative a512 value");
-        }
-        return MCode(sum);
-    } catch (...) {
-        return "AN ERROR OCCURED!";
-    }
-}
-
-// B1024Encode retired in 3.7.0 — was Bi512Encode(A512Encode(input));
-// see basefwx.hpp for rationale.
 
 std::string B512Encode(const std::string& input, const std::string& password, bool use_master, const KdfOptions& kdf) {
     std::string resolved = ResolvePassword(password);
@@ -928,34 +630,6 @@ std::string FwxAesFile(const std::string& path,
     basefwx::fwxaes::EncryptFile(path, out, resolved, fwxaes_opts, norm, pack_opts, keep_input);
     return out;
 }
-
-std::string Jmge(const std::string& path,
-                 const std::string& password,
-                 const std::string& output,
-                 bool keep_meta,
-                 bool keep_input,
-                 bool archive_original,
-                 bool use_master) {
-    std::string resolved = ResolvePassword(password);
-    RequireStrongPasswordForEncryption(resolved, "jMG");
-    return basefwx::imagecipher::EncryptMedia(
-        path,
-        resolved,
-        output,
-        keep_meta,
-        keep_input,
-        archive_original,
-        use_master
-    );
-}
-
-std::string Jmgd(const std::string& path,
-                 const std::string& password,
-                 const std::string& output,
-                 bool use_master) {
-    return basefwx::imagecipher::DecryptMedia(path, ResolvePassword(password), output, use_master);
-}
-
 
 std::uint64_t FwxAesLiveEncryptStream(std::istream& source,
                                       std::ostream& dest,

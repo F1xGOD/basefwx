@@ -32,7 +32,7 @@ Exit codes:
 Usage:
     python3 scripts/leak_detect.py
     python3 scripts/leak_detect.py --iters 200 --leak-kib-per-iter 8
-    python3 scripts/leak_detect.py --codecs hash512,uhash513,b64
+    python3 scripts/leak_detect.py --codecs hash512,b64
 """
 
 from __future__ import annotations
@@ -79,16 +79,6 @@ def _hash512_op() -> None:
     basefwx.hash512("leak-detector probe payload")
 
 
-def _uhash513_op() -> None:
-    # uhash513 is intentionally deprecated, but still included here so
-    # retirement does not hide leak regressions in the compatibility path.
-    import warnings as _w
-
-    with _w.catch_warnings():
-        _w.simplefilter("ignore", category=DeprecationWarning)
-        basefwx.uhash513("leak-detector probe payload")
-
-
 def _b64_op() -> None:
     enc = basefwx.b64encode("leak-detector probe payload")
     _ = basefwx.b64decode(enc)
@@ -105,26 +95,12 @@ def _pb512_op() -> None:
     _ = basefwx.pb512decode(enc, "leak-detector-pw-xx")
 
 
-def _b256_op() -> None:
-    # b256 is retired (3.7.0+) but we still smoke its leak behavior
-    # so its retirement doesn't mask any underlying issue. The
-    # DeprecationWarning is silenced for the leak run.
-    import warnings as _w
-
-    with _w.catch_warnings():
-        _w.simplefilter("ignore", category=DeprecationWarning)
-        enc = basefwx.b256encode("leak-detector probe payload")
-        _ = basefwx.b256decode(enc)
-
-
 CODECS: dict[str, Tuple[Callable[[], None], int]] = {
     # name: (op, default-iters)
     "hash512": (_hash512_op, 500),
-    "uhash513": (_uhash513_op, 500),
     "b64": (_b64_op, 500),
     "b512": (_b512_op, 50),  # b512 is KDF-heavy; fewer iters
     "pb512": (_pb512_op, 50),
-    "b256": (_b256_op, 200),
 }
 
 

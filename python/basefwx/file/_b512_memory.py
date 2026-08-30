@@ -2,7 +2,7 @@
 # Copyright (C) 2020-2026  FixCraft Inc.
 # Licensed under the GNU Lesser General Public License v3.0 or later.
 
-"""Extracted implementation cluster from legacy.py."""
+"""In-memory b512/pb512 text and file containers."""
 
 from __future__ import annotations
 
@@ -13,30 +13,127 @@ from ._b512_obfuscation import (
     _unpack_length_prefixed,
 )
 
-def pb512encode(t, p, use_master: bool=True):
-    """
-        Password-based reversible encoding with canonical standard base64.
 
-        Decoders continue accepting the URL-safe alphabet emitted by older
-        Python releases.
-        
-        Confidentiality comes from AEAD layers, not this routine.
-        """
+_AUTHENTICATED_TEXT_PAYLOAD_VERSION = 3
+_LEGACY_MASKED_TEXT_PAYLOAD_VERSION = 2
+_TEXT_PAYLOAD_HEADER_LEN = 5
+
+
+def _text_payload_aad(domain: bytes, payload: bytes) -> bytes:
+    if len(payload) < _TEXT_PAYLOAD_HEADER_LEN:
+        raise ValueError('Malformed text payload')
+    return domain + payload[:_TEXT_PAYLOAD_HEADER_LEN]
+
+
+def _encode_authenticated_text_payload(
+    mask_key,
+    plaintext: bytes,
+    *,
+    aead_info: bytes,
+    aad_domain: bytes,
+) -> bytes:
+    if len(plaintext) > 0xFFFFFFFF:
+        raise ValueError('Text payload is too large')
+    header = bytes([_AUTHENTICATED_TEXT_PAYLOAD_VERSION]) + len(plaintext).to_bytes(4, 'big')
+    payload_key = bytearray(basefwx._hkdf_sha256(
+        mask_key, info=aead_info, length=32))
+    try:
+        encrypted = basefwx._aead_encrypt(
+            bytes(payload_key), plaintext, _text_payload_aad(aad_domain, header))
+        return header + encrypted
+    finally:
+        basefwx._clear_secret(payload_key)
+
+
+def _validate_text_payload(payload: bytes) -> tuple[int, int]:
+    if len(payload) < _TEXT_PAYLOAD_HEADER_LEN:
+        raise ValueError('Malformed text payload')
+    version = payload[0]
+    expected_len = int.from_bytes(payload[1:5], 'big')
+    if version == _AUTHENTICATED_TEXT_PAYLOAD_VERSION:
+        overhead = (
+            _TEXT_PAYLOAD_HEADER_LEN
+            + basefwx.AEAD_NONCE_LEN
+            + basefwx.AEAD_TAG_LEN
+        )
+        if len(payload) != overhead + expected_len:
+            raise ValueError('Text payload length mismatch')
+        return version, expected_len
+    if version == _LEGACY_MASKED_TEXT_PAYLOAD_VERSION:
+        if not basefwx._env_enabled('BASEFWX_ALLOW_LEGACY_TEXT_V2'):
+            raise ValueError(
+                'Unauthenticated text payload v2 is disabled; set '
+                'BASEFWX_ALLOW_LEGACY_TEXT_V2=1 only to recover trusted legacy data'
+            )
+        if len(payload) != _TEXT_PAYLOAD_HEADER_LEN + expected_len:
+            raise ValueError('Text payload length mismatch')
+        return version, expected_len
+    raise ValueError('Unsupported text payload format')
+
+
+def _decode_text_payload(
+    payload: bytes,
+    mask_key,
+    *,
+    stream_info: bytes,
+    aead_info: bytes,
+    aad_domain: bytes,
+) -> bytes:
+    version, expected_len = _validate_text_payload(payload)
+    if version == _AUTHENTICATED_TEXT_PAYLOAD_VERSION:
+        payload_key = bytearray(basefwx._hkdf_sha256(
+            mask_key, info=aead_info, length=32))
+        try:
+            try:
+                clear = basefwx._aead_decrypt(
+                    bytes(payload_key),
+                    payload[_TEXT_PAYLOAD_HEADER_LEN:],
+                    _text_payload_aad(aad_domain, payload),
+                )
+            except basefwx.InvalidTag as exc:
+                raise ValueError('Text payload authentication failed') from exc
+        finally:
+            basefwx._clear_secret(payload_key)
+    else:
+        clear = basefwx._mask_payload(
+            mask_key,
+            payload[_TEXT_PAYLOAD_HEADER_LEN:],
+            info=stream_info,
+        )
+    if len(clear) != expected_len:
+        raise ValueError('Text payload length mismatch')
+    return clear
+
+
+def pb512encode(t, p, use_master: bool=True):
+    """Password-based authenticated encryption with canonical base64.
+
+    Decoders continue accepting the URL-safe alphabet emitted by older
+    Python releases. The v3 payload is protected by AES-256-GCM after key
+    wrapping.
+    """
     p = basefwx._resolve_password(p, use_master=use_master)
-    mask_key, user_blob, master_blob, _ = basefwx._prepare_mask_key(p, use_master, mask_info=b'basefwx.pb512.mask.v1', require_password=True, aad=b'pb512')
-    plain_bytes = t.encode('utf-8')
-    masked = basefwx._mask_payload(mask_key, plain_bytes, info=b'basefwx.pb512.stream.v1')
-    payload = bytearray(1 + 4 + len(masked))
-    payload[0] = 2
-    payload[1:5] = len(plain_bytes).to_bytes(4, 'big')
-    payload[5:] = masked
-    blob = basefwx._pack_length_prefixed(user_blob, master_blob, bytes(payload))
-    result = basefwx.base64.b64encode(blob).decode('utf-8')
-    result = basefwx._maybe_obfuscate_codecs(result)
-    basefwx._del('mask_key')
-    basefwx._del('plain_bytes')
-    basefwx._del('masked')
-    return result
+    mask_key_bytes, user_blob, master_blob, _ = basefwx._prepare_mask_key(
+        p,
+        use_master,
+        mask_info=basefwx.PB512_MASK_INFO,
+        require_password=True,
+        aad=basefwx.MASK_AAD_PB512,
+    )
+    mask_key = bytearray(mask_key_bytes)
+    mask_key_bytes = None
+    try:
+        payload = _encode_authenticated_text_payload(
+            mask_key,
+            t.encode('utf-8'),
+            aead_info=basefwx.PB512_PAYLOAD_AEAD_INFO,
+            aad_domain=basefwx.PB512_PAYLOAD_AAD,
+        )
+        blob = basefwx._pack_length_prefixed(user_blob, master_blob, payload)
+        encoded = basefwx.base64.b64encode(blob).decode('ascii')
+        return basefwx._maybe_obfuscate_codecs(encoded)
+    finally:
+        basefwx._clear_secret(mask_key)
 
 def pb512decode(digs, key, use_master: bool=True):
     key = basefwx._resolve_password(key, use_master=use_master)
@@ -58,30 +155,29 @@ def pb512decode(digs, key, use_master: bool=True):
             print('⚠️  Falling back to legacy pb512 decoder (BASEFWX_ALLOW_LEGACY_CODECS=1).')
             return basefwx._pb512decode_legacy(digs, key, use_master)
         raise
-    mask_key = basefwx._recover_mask_key_from_blob(user_blob, master_blob, key, use_master, mask_info=b'basefwx.pb512.mask.v1', aad=b'pb512')
-    if not payload or payload[0] != 2:
-        if basefwx.os.getenv('BASEFWX_ALLOW_LEGACY_CODECS') == '1':
-            print('⚠️  Falling back to legacy pb512 decoder (BASEFWX_ALLOW_LEGACY_CODECS=1).')
-            return basefwx._pb512decode_legacy(digs, key, use_master)
-        raise ValueError('Unsupported pb512 payload format')
-    if len(payload) < 5:
-        if basefwx.os.getenv('BASEFWX_ALLOW_LEGACY_CODECS') == '1':
-            print('⚠️  Falling back to legacy pb512 decoder (BASEFWX_ALLOW_LEGACY_CODECS=1).')
-            return basefwx._pb512decode_legacy(digs, key, use_master)
-        raise ValueError('Malformed pb512 payload')
-    expected_len = int.from_bytes(payload[1:5], 'big')
-    masked = payload[5:]
-    if expected_len != len(masked):
-        if basefwx.os.getenv('BASEFWX_ALLOW_LEGACY_CODECS') == '1':
-            print('⚠️  Falling back to legacy pb512 decoder (BASEFWX_ALLOW_LEGACY_CODECS=1).')
-            return basefwx._pb512decode_legacy(digs, key, use_master)
-        raise ValueError('pb512 payload length mismatch')
-    clear = basefwx._mask_payload(mask_key, masked, info=b'basefwx.pb512.stream.v1')
-    result = clear.decode('utf-8')
-    basefwx._del('mask_key')
-    basefwx._del('clear')
-    basefwx._del('masked')
-    return result
+    _validate_text_payload(payload)
+    mask_key_bytes = basefwx._recover_mask_key_from_blob(
+        user_blob,
+        master_blob,
+        key,
+        use_master,
+        mask_info=basefwx.PB512_MASK_INFO,
+        aad=basefwx.MASK_AAD_PB512,
+    )
+    mask_key = bytearray(mask_key_bytes)
+    mask_key_bytes = None
+    clear = None
+    try:
+        clear = _decode_text_payload(
+            payload,
+            mask_key,
+            stream_info=basefwx.PB512_STREAM_INFO,
+            aead_info=basefwx.PB512_PAYLOAD_AEAD_INFO,
+            aad_domain=basefwx.PB512_PAYLOAD_AAD,
+        )
+        return clear.decode('utf-8')
+    finally:
+        basefwx._clear_secret(mask_key)
 
 def _pb512decode_legacy(digs, key, use_master: bool=True) -> str:
     if not key and (not use_master):
@@ -172,20 +268,27 @@ def b512encode(string, user_key, use_master: bool=True):
     user_key = basefwx._resolve_password(user_key, use_master=use_master)
     if not user_key and (not use_master):
         raise ValueError('Password required when PQ master key wrapping is disabled')
-    mask_key, user_blob, master_blob, _ = basefwx._prepare_mask_key(user_key, use_master, mask_info=b'basefwx.b512.mask.v1', require_password=False, aad=b'b512')
-    plain_bytes = string.encode('utf-8')
-    masked = basefwx._mask_payload(mask_key, plain_bytes, info=b'basefwx.b512.stream.v1')
-    payload = bytearray(1 + 4 + len(masked))
-    payload[0] = 2
-    payload[1:5] = len(plain_bytes).to_bytes(4, 'big')
-    payload[5:] = masked
-    blob = basefwx._pack_length_prefixed(user_blob, master_blob, bytes(payload))
-    result = basefwx.base64.b64encode(blob).decode('utf-8')
-    result = basefwx._maybe_obfuscate_codecs(result)
-    basefwx._del('mask_key')
-    basefwx._del('plain_bytes')
-    basefwx._del('masked')
-    return result
+    mask_key_bytes, user_blob, master_blob, _ = basefwx._prepare_mask_key(
+        user_key,
+        use_master,
+        mask_info=basefwx.B512_MASK_INFO,
+        require_password=False,
+        aad=basefwx.MASK_AAD_B512,
+    )
+    mask_key = bytearray(mask_key_bytes)
+    mask_key_bytes = None
+    try:
+        payload = _encode_authenticated_text_payload(
+            mask_key,
+            string.encode('utf-8'),
+            aead_info=basefwx.B512_PAYLOAD_AEAD_INFO,
+            aad_domain=basefwx.B512_PAYLOAD_AAD,
+        )
+        blob = basefwx._pack_length_prefixed(user_blob, master_blob, payload)
+        encoded = basefwx.base64.b64encode(blob).decode('ascii')
+        return basefwx._maybe_obfuscate_codecs(encoded)
+    finally:
+        basefwx._clear_secret(mask_key)
 
 def b512decode(enc, key='', use_master: bool=True):
     key = basefwx._resolve_password(key, use_master=use_master)
@@ -206,30 +309,28 @@ def b512decode(enc, key='', use_master: bool=True):
             print('⚠️  Falling back to legacy b512 decoder (BASEFWX_ALLOW_LEGACY_CODECS=1).')
             return basefwx._b512decode_legacy(enc, key, use_master)
         raise
-    mask_key = basefwx._recover_mask_key_from_blob(user_blob, master_blob, key, use_master, mask_info=b'basefwx.b512.mask.v1', aad=b'b512')
-    if not payload or payload[0] != 2:
-        if basefwx.os.getenv('BASEFWX_ALLOW_LEGACY_CODECS') == '1':
-            print('⚠️  Falling back to legacy b512 decoder (BASEFWX_ALLOW_LEGACY_CODECS=1).')
-            return basefwx._b512decode_legacy(enc, key, use_master)
-        raise ValueError('Unsupported b512 payload format')
-    if len(payload) < 5:
-        if basefwx.os.getenv('BASEFWX_ALLOW_LEGACY_CODECS') == '1':
-            print('⚠️  Falling back to legacy b512 decoder (BASEFWX_ALLOW_LEGACY_CODECS=1).')
-            return basefwx._b512decode_legacy(enc, key, use_master)
-        raise ValueError('Malformed b512 payload')
-    expected_len = int.from_bytes(payload[1:5], 'big')
-    masked = payload[5:]
-    if expected_len != len(masked):
-        if basefwx.os.getenv('BASEFWX_ALLOW_LEGACY_CODECS') == '1':
-            print('⚠️  Falling back to legacy b512 decoder (BASEFWX_ALLOW_LEGACY_CODECS=1).')
-            return basefwx._b512decode_legacy(enc, key, use_master)
-        raise ValueError('b512 payload length mismatch')
-    clear = basefwx._mask_payload(mask_key, masked, info=b'basefwx.b512.stream.v1')
-    result = clear.decode('utf-8')
-    basefwx._del('mask_key')
-    basefwx._del('clear')
-    basefwx._del('masked')
-    return result
+    _validate_text_payload(payload)
+    mask_key_bytes = basefwx._recover_mask_key_from_blob(
+        user_blob,
+        master_blob,
+        key,
+        use_master,
+        mask_info=basefwx.B512_MASK_INFO,
+        aad=basefwx.MASK_AAD_B512,
+    )
+    mask_key = bytearray(mask_key_bytes)
+    mask_key_bytes = None
+    try:
+        clear = _decode_text_payload(
+            payload,
+            mask_key,
+            stream_info=basefwx.B512_STREAM_INFO,
+            aead_info=basefwx.B512_PAYLOAD_AEAD_INFO,
+            aad_domain=basefwx.B512_PAYLOAD_AAD,
+        )
+        return clear.decode('utf-8')
+    finally:
+        basefwx._clear_secret(mask_key)
 
 def _b512decode_legacy(enc, key='', use_master: bool=True) -> str:
     if not key and (not use_master):
@@ -318,6 +419,10 @@ def _b512decode_legacy(enc, key='', use_master: bool=True) -> str:
 def b512file_encode_bytes(data: bytes, ext: str, code: str, strip_metadata: bool=False, use_master: bool=True, *, enable_aead: 'basefwx.typing.Optional[bool]'=None) -> bytes:
     if not isinstance(data, (bytes, bytearray, memoryview)):
         raise TypeError('b512file_encode_bytes expects bytes')
+    if enable_aead is False:
+        raise ValueError(
+            'Unauthenticated b512file writing is retired; AES-GCM is required'
+        )
     approx_b64_len = (len(data) + 2) // 3 * 4
     if approx_b64_len > basefwx.HKDF_MAX_LEN:
         raise ValueError('b512file_encode_bytes payload too large; use file-based streaming APIs')
@@ -330,14 +435,11 @@ def b512file_encode_bytes(data: bytes, ext: str, code: str, strip_metadata: bool
     ext_token = basefwx.b512encode(ext or '', password, use_master=use_master_effective)
     data_token = basefwx.b512encode(b64_payload, password, use_master=use_master_effective)
     kdf_used = basefwx._resolve_kdf_label(None)
-    use_aead = basefwx.ENABLE_B512_AEAD if enable_aead is None else bool(enable_aead)
-    metadata_blob = basefwx._build_metadata('FWX512R', strip_metadata, use_master_effective, master_kem=master_selection.kem_label, aead='AESGCM' if use_aead else 'NONE', kdf=kdf_used)
+    metadata_blob = basefwx._build_metadata('FWX512R', strip_metadata, use_master_effective, master_kem=master_selection.kem_label, aead='AESGCM', kdf=kdf_used)
     body = f'{ext_token}{basefwx.FWX_DELIM}{data_token}'
     payload = f'{metadata_blob}{basefwx.META_DELIM}{body}' if metadata_blob else body
     payload_bytes = payload.encode('utf-8')
-    if not use_aead:
-        return payload_bytes
-    mask_key, user_blob, master_blob, _ = basefwx._prepare_mask_key(password, use_master_effective, mask_info=basefwx.B512_FILE_MASK_INFO, require_password=not use_master_effective, aad=b'b512file', master_selection=master_selection)
+    mask_key, user_blob, master_blob, _ = basefwx._prepare_mask_key(password, use_master_effective, mask_info=basefwx.B512_FILE_MASK_INFO, require_password=not use_master_effective, aad=basefwx.MASK_AAD_B512FILE, master_selection=master_selection)
     aead_key = basefwx._hkdf_sha256(mask_key, info=basefwx.B512_AEAD_INFO)
     ct_blob = basefwx._aead_encrypt(aead_key, payload_bytes, basefwx.B512_AEAD_INFO)
     return basefwx._pack_length_prefixed(user_blob, master_blob, ct_blob)
@@ -352,14 +454,18 @@ def b512file_decode_bytes(blob: bytes, code: str, strip_metadata: bool=False, us
     user_blob: bytes = b''
     master_blob: bytes = b''
     ct_blob: bytes = b''
-    if basefwx.ENABLE_B512_AEAD:
-        try:
-            user_blob, master_blob, ct_blob = basefwx._unpack_length_prefixed(raw_bytes, 3)
-            binary_mode = True
-        except ValueError:
-            binary_mode = False
+    try:
+        user_blob, master_blob, ct_blob = basefwx._unpack_length_prefixed(raw_bytes, 3)
+        binary_mode = True
+    except ValueError as exc:
+        if not basefwx._env_enabled('BASEFWX_ALLOW_LEGACY_B512FILE_RAW'):
+            raise ValueError(
+                'Unauthenticated raw b512file is disabled; set '
+                'BASEFWX_ALLOW_LEGACY_B512FILE_RAW=1 only to recover trusted legacy data'
+            ) from exc
+        binary_mode = False
     if binary_mode:
-        mask_key = basefwx._recover_mask_key_from_blob(user_blob, master_blob, password, use_master_effective, mask_info=basefwx.B512_FILE_MASK_INFO, aad=b'b512file', legacy_user_aad=basefwx.B512_AEAD_INFO)
+        mask_key = basefwx._recover_mask_key_from_blob(user_blob, master_blob, password, use_master_effective, mask_info=basefwx.B512_FILE_MASK_INFO, aad=basefwx.MASK_AAD_B512FILE, legacy_user_aad=basefwx.B512_AEAD_INFO)
         aead_key = basefwx._hkdf_sha256(mask_key, info=basefwx.B512_AEAD_INFO)
         payload_bytes = basefwx._aead_decrypt(aead_key, ct_blob, basefwx.B512_AEAD_INFO)
         content = payload_bytes.decode('utf-8')

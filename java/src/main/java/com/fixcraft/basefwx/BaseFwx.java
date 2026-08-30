@@ -36,13 +36,6 @@ import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.zip.CRC32;
-// 3.7.x: java.awt.image.* and javax.imageio.ImageIO imports were
-// removed from this file when kFMe/kFMd/kFAe/kFAd and the jmg*
-// entry points moved to BaseFwxImage.java. The carve-out was needed
-// so this file (the cross-language-syncable core) can be pulled into
-// the Android Gradle build without Android's missing-java.awt
-// breaking the sync. See BaseFwxImage.java for the carrier API.
 import javax.crypto.AEADBadTagException;
 import javax.crypto.Cipher;
 import javax.crypto.Mac;
@@ -55,17 +48,18 @@ import org.bouncycastle.crypto.params.Argon2Parameters;
 /**
  * BaseFWX Java implementation using native-backed standard library components.
  * 
- * Performance Strategy:
- * - Base64: Uses java.util.Base64 (native implementation, similar to Python's C-backed base64 module)
- * - Hashing: Uses java.security.MessageDigest (JVM native implementations for SHA-256, SHA-512, SHA-1)
- * - Crypto: Uses javax.crypto.Cipher (JVM native implementations for AES-GCM)
- * - PBKDF2: Uses javax.crypto.SecretKeyFactory (optimized native implementation)
+ * Performance strategy:
+ * - Base64 uses the JDK implementation.
+ * - Hashing, AES-GCM, and PBKDF2 use JCA providers selected by the runtime.
+ * - The optional JNI backend accelerates supported AES-GCM entry points.
+ * - Hot codec loops are ordinary Java so the JVM can JIT-compile them.
  * 
  * Memory Management:
  * - Pre-sized arrays and buffers to minimize allocations
  * - Direct char[] construction for string building instead of StringBuilder where beneficial
  * - Reuse of byte arrays in hot paths
- * - Java's garbage collector handles automatic memory cleanup
+ * - Mutable secret buffers are wiped explicitly where ownership permits;
+ *   garbage collection is not treated as secret erasure.
  */
 @SuppressWarnings("unused")
 public final class BaseFwx {
@@ -127,10 +121,6 @@ public final class BaseFwx {
     static final int AN7_ARGON2_PARALLELISM = 4;
     static final long AN7_TEN_DIGITS_MOD = 10_000_000_000L;
     static final byte[] AN7_TRAILER_VERSION = "AN7v1".getBytes(StandardCharsets.US_ASCII);
-    // KFM_* constants moved to BaseFwxImage.java together with the
-    // kFMe / kFMd / kFAe / kFAd / jmg* public API. See class header
-    // in BaseFwxImage.java for the rationale (java.awt-free core).
-
     public static byte[] fwxAesEncryptRaw(byte[] plaintext, String password, boolean useMaster) {
         return FwxAesCodec.fwxAesEncryptRaw(plaintext, password, useMaster);
     }
@@ -201,17 +191,7 @@ public final class BaseFwx {
         return TextCodecs.pb512DecodeBytes(blob, password, useMaster);
     }
 
-    @Deprecated
-    public static String b256Encode(String input) {
-        TextCodecs.warnB256RetiredOnce();
-        return Codec.b256Encode(input);
-    }
-
-    @Deprecated
-    public static String b256Decode(String input) {
-        TextCodecs.warnB256RetiredOnce();
-        return Codec.b256Decode(input);
-    }
+    // BASEFWX_PROFILE_METHODS
 
     public static String n10Encode(String input) { return Codec.n10Encode(input); }
     public static String n10EncodeBytes(byte[] input) { return Codec.n10EncodeBytes(input); }
@@ -230,29 +210,18 @@ public final class BaseFwx {
         return hash512Bytes(input.getBytes(StandardCharsets.UTF_8));
     }
 
-    @Deprecated
-    public static String uhash513(String input) {
-        return uhash513Bytes(input.getBytes(StandardCharsets.UTF_8));
-    }
-
     public static String hash512Bytes(byte[] input) { return TextCodecs.hash512Bytes(input); }
-
-    @Deprecated
-    public static String uhash513Bytes(byte[] inputBytes) { return TextCodecs.uhash513Bytes(inputBytes); }
-
-    @Deprecated
-    public static String bi512Encode(String input) { return TextCodecs.bi512EncodeImpl(input); }
-
-    @Deprecated
-    public static String a512Encode(String input) { return TextCodecs.a512EncodeImpl(input); }
-
-    @Deprecated
-    public static String a512Decode(String input) { return TextCodecs.a512DecodeImpl(input); }
 
     public static byte[] b512FileEncodeBytes(byte[] data, String extension, String password, boolean useMaster) {
         return FileCodecs.b512FileEncodeBytes(data, extension, password, useMaster);
     }
 
+    /**
+     * @deprecated Use the overload without {@code enableAead}. Passing
+     * {@code false} is rejected because unauthenticated b512file writing is
+     * retired.
+     */
+    @Deprecated
     public static byte[] b512FileEncodeBytes(byte[] data, String extension, String password,
                                              boolean useMaster, boolean stripMetadata, boolean enableAead) {
         return FileCodecs.b512FileEncodeBytes(data, extension, password, useMaster, stripMetadata, enableAead);
@@ -414,39 +383,12 @@ public final class BaseFwx {
             }
         }
     }
-    // Package-private (was private): BaseFwxImage calls this via
-    // BaseFwx.getExtension(input) for its image-carrier public API.
     static String getExtension(File file) {
         return BaseFwxUtil.getExtension(file);
     }
 
-    // Package-private (was private): used by BaseFwxImage for
-    // kfmResolveOutput AND by non-image callers in this file (lines 534, 690).
-    // Survived the kfm-cluster deletion by being re-declared here.
     static boolean samePath(File a, File b) {
         return BaseFwxUtil.samePath(a, b);
-    }
-
-    // replaceExtension / replaceExtensionWithTag / kfmResolveOutput / kfmCleanExt /
-    // kfmIsAudioExtension / kfmIsImageExtension / kfmWarn / kfmReadHead /
-    // kfmDetectCarrierKinds / kfmDecodeContainer / bytesToLong moved to BaseFwxImage.java in 3.7.x.
-
-    // Package-private (was private): byte[] overload, used by BaseFwxImage
-    // for kfmKeystream and kfmPackContainer.
-    static void writeU64(byte[] target, int offset, long value) {
-        BaseFwxUtil.writeU64(target, offset, value);
-    }
-
-    // Package-private (was private): byte[] overload, used by BaseFwxImage
-    // for kfmPackContainer.
-    static void writeU32(byte[] target, int offset, int value) {
-        BaseFwxUtil.writeU32(target, offset, value);
-    }
-
-    // Package-private (was private): byte[] overload, used by BaseFwxImage
-    // for kfmUnpackContainer.
-    static int readU32(byte[] source, int offset) {
-        return BaseFwxUtil.readU32(source, offset);
     }
 
     public static byte[] resolvePasswordBytes(String password, boolean useMaster) {
@@ -495,12 +437,10 @@ public final class BaseFwx {
         return new File(path);
     }
 
-    // Package-private (was private): used by BaseFwxImage carrier path.
     static byte[] readFileBytes(File file) {
         return BaseFwxUtil.readFileBytes(file);
     }
 
-    // Package-private (was private): used by BaseFwxImage carrier path.
     static void writeFileBytes(File file, byte[] data) {
         BaseFwxUtil.writeFileBytes(file, data);
     }

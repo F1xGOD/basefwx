@@ -50,6 +50,20 @@ public final class NativeCryptoBackend implements CryptoBackend {
         return buf;
     }
 
+    private static void wipeDirect(ByteBuffer buffer) {
+        if (buffer == null) {
+            return;
+        }
+        buffer.clear();
+        while (buffer.remaining() >= Long.BYTES) {
+            buffer.putLong(0L);
+        }
+        while (buffer.hasRemaining()) {
+            buffer.put((byte) 0);
+        }
+        buffer.clear();
+    }
+
     private static final class NativeGcmEncryptor implements AeadEncryptor {
         private long ctx;
 
@@ -57,7 +71,20 @@ public final class NativeCryptoBackend implements CryptoBackend {
             ByteBuffer keyBuf = toDirect(key);
             ByteBuffer ivBuf = toDirect(iv);
             ByteBuffer aadBuf = toDirect(aad == null ? new byte[0] : aad);
-            ctx = nativeGcmInit(true, keyBuf, key.length, ivBuf, iv.length, aadBuf, aadBuf.remaining());
+            try {
+                ctx = nativeGcmInit(
+                        true,
+                        keyBuf,
+                        key.length,
+                        ivBuf,
+                        iv.length,
+                        aadBuf,
+                        aadBuf.remaining());
+            } finally {
+                wipeDirect(keyBuf);
+                wipeDirect(ivBuf);
+                wipeDirect(aadBuf);
+            }
             if (ctx == 0) {
                 throw new GeneralSecurityException("Native GCM init failed");
             }
@@ -69,26 +96,39 @@ public final class NativeCryptoBackend implements CryptoBackend {
                 return 0;
             }
             ByteBuffer inBuf = ByteBuffer.allocateDirect(len);
-            inBuf.put(in, inOff, len);
-            inBuf.flip();
             ByteBuffer outBuf = ByteBuffer.allocateDirect(len + Constants.AEAD_TAG_LEN);
-            int written = nativeGcmUpdate(ctx, inBuf, len, outBuf, outBuf.capacity());
-            if (written < 0) {
-                throw new GeneralSecurityException("Native GCM update failed");
+            try {
+                inBuf.put(in, inOff, len);
+                inBuf.flip();
+                int written = nativeGcmUpdate(
+                        ctx, inBuf, len, outBuf, outBuf.capacity());
+                if (written < 0) {
+                    throw new GeneralSecurityException(
+                            "Native GCM update failed");
+                }
+                outBuf.get(out, outOff, written);
+                return written;
+            } finally {
+                wipeDirect(inBuf);
+                wipeDirect(outBuf);
             }
-            outBuf.get(out, outOff, written);
-            return written;
         }
 
         @Override
         public int doFinal(byte[] out, int outOff) throws GeneralSecurityException {
             ByteBuffer outBuf = ByteBuffer.allocateDirect(Constants.AEAD_TAG_LEN * 2);
-            int written = nativeGcmFinalEncrypt(ctx, outBuf, outBuf.capacity());
-            if (written < 0) {
-                throw new GeneralSecurityException("Native GCM final failed");
+            try {
+                int written = nativeGcmFinalEncrypt(
+                        ctx, outBuf, outBuf.capacity());
+                if (written < 0) {
+                    throw new GeneralSecurityException(
+                            "Native GCM final failed");
+                }
+                outBuf.get(out, outOff, written);
+                return written;
+            } finally {
+                wipeDirect(outBuf);
             }
-            outBuf.get(out, outOff, written);
-            return written;
         }
 
         @Override
@@ -107,7 +147,20 @@ public final class NativeCryptoBackend implements CryptoBackend {
             ByteBuffer keyBuf = toDirect(key);
             ByteBuffer ivBuf = toDirect(iv);
             ByteBuffer aadBuf = toDirect(aad == null ? new byte[0] : aad);
-            ctx = nativeGcmInit(false, keyBuf, key.length, ivBuf, iv.length, aadBuf, aadBuf.remaining());
+            try {
+                ctx = nativeGcmInit(
+                        false,
+                        keyBuf,
+                        key.length,
+                        ivBuf,
+                        iv.length,
+                        aadBuf,
+                        aadBuf.remaining());
+            } finally {
+                wipeDirect(keyBuf);
+                wipeDirect(ivBuf);
+                wipeDirect(aadBuf);
+            }
             if (ctx == 0) {
                 throw new GeneralSecurityException("Native GCM init failed");
             }
@@ -119,28 +172,39 @@ public final class NativeCryptoBackend implements CryptoBackend {
                 return 0;
             }
             ByteBuffer inBuf = ByteBuffer.allocateDirect(len);
-            inBuf.put(in, inOff, len);
-            inBuf.flip();
             ByteBuffer outBuf = ByteBuffer.allocateDirect(len);
-            int written = nativeGcmUpdate(ctx, inBuf, len, outBuf, outBuf.capacity());
-            if (written < 0) {
-                throw new GeneralSecurityException("Native GCM update failed");
+            try {
+                inBuf.put(in, inOff, len);
+                inBuf.flip();
+                int written = nativeGcmUpdate(
+                        ctx, inBuf, len, outBuf, outBuf.capacity());
+                if (written < 0) {
+                    throw new GeneralSecurityException(
+                            "Native GCM update failed");
+                }
+                outBuf.get(out, outOff, written);
+                return written;
+            } finally {
+                wipeDirect(inBuf);
+                wipeDirect(outBuf);
             }
-            outBuf.get(out, outOff, written);
-            return written;
         }
 
         @Override
         public int doFinal(byte[] tag, int tagOff, int tagLen, byte[] out, int outOff)
             throws AEADBadTagException, GeneralSecurityException {
             ByteBuffer tagBuf = ByteBuffer.allocateDirect(tagLen);
-            tagBuf.put(tag, tagOff, tagLen);
-            tagBuf.flip();
-            int rc = nativeGcmFinalDecrypt(ctx, tagBuf, tagLen);
-            if (rc < 0) {
-                throw new AEADBadTagException("Native GCM auth failed");
+            try {
+                tagBuf.put(tag, tagOff, tagLen);
+                tagBuf.flip();
+                int rc = nativeGcmFinalDecrypt(ctx, tagBuf, tagLen);
+                if (rc < 0) {
+                    throw new AEADBadTagException("Native GCM auth failed");
+                }
+                return 0;
+            } finally {
+                wipeDirect(tagBuf);
             }
-            return 0;
         }
 
         @Override

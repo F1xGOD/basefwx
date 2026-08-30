@@ -458,12 +458,13 @@ static final class Pcg64Rng {
         }
     }
 
-static final class StreamObfuscator {
+static final class StreamObfuscator implements AutoCloseable {
         private final Cipher ctrCipher;
         private final Mac permMac;
         private final byte[] permInfo;
         private final boolean fast;
         private long chunkIndex = 0L;
+        private boolean closed;
 
         private StreamObfuscator(Mac permMac, Cipher ctrCipher, boolean fast) {
             this.permMac = permMac;
@@ -611,6 +612,18 @@ static final class StreamObfuscator {
                 Arrays.fill(expanded, (byte) 0);
                 Arrays.fill(seedBytes, (byte) 0);
             }
+        }
+
+        @Override
+        public void close() {
+            if (closed) {
+                return;
+            }
+            closed = true;
+            Crypto.resetHmac(permMac);
+            Crypto.resetAesCtrCipher(ctrCipher);
+            Arrays.fill(permInfo, (byte) 0);
+            chunkIndex = 0L;
         }
 
         private static void swapNibbles(byte[] buffer) {

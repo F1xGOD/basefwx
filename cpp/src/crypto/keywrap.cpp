@@ -195,7 +195,7 @@ Bytes MaskPayload(const Bytes& mask_key, const Bytes& payload, std::string_view 
     basefwx::crypto::SecureBytes stream;
     if (payload.size() > basefwx::constants::kHkdfMaxLen) {
         stream.Reset(
-            basefwx::crypto::HkdfSha256Stream(
+            basefwx::crypto::CompatPrfStreamSha256(
                 mask_key, info, payload.size()));
     } else {
         stream.Reset(

@@ -19,12 +19,15 @@ namespace basefwx::filecodec {
 struct FileOptions {
     bool strip_metadata = false;
     bool use_master = false;
+    // Preserved for source compatibility. Writers reject false as of 3.8;
+    // b512file payloads must be authenticated.
     bool enable_aead = true;
     bool enable_obfuscation = true;
     bool compress = false;
     basefwx::archive::CompressionPreset compression = basefwx::archive::CompressionPreset::Auto;
     bool keep_input = false;
     std::size_t stream_threshold = basefwx::constants::kStreamThreshold;
+    // Streaming buffers are bounded before allocation and serialized as u32.
     std::size_t stream_chunk_size = basefwx::constants::kStreamChunkSize;
 };
 

@@ -795,6 +795,145 @@ public class SecurityPolicyTest {
     }
 
     @Test
+    public void malformedAuthenticatedB512StreamPreservesExistingDestination()
+            throws Exception {
+        File source = tmp.newFile("b512-stream-source.bin");
+        File encrypted = new File(
+                tmp.getRoot(), "b512-stream-source.fwx");
+        File destination = tmp.newFile(
+                "b512-stream-destination.bin");
+        byte[] plaintext = new byte[Constants.STREAM_CHUNK_SIZE + 29];
+        for (int i = 0; i < plaintext.length; ++i) {
+            plaintext[i] = (byte) (i * 17 + 3);
+        }
+        byte[] sentinel = "existing b512 destination"
+                .getBytes(StandardCharsets.UTF_8);
+        Files.write(source.toPath(), plaintext);
+        Files.write(destination.toPath(), sentinel);
+
+        String password = new String(PASSWORD, StandardCharsets.UTF_8);
+        B512FileCodec.b512FileEncodeFileStream(
+                source, encrypted, password, false);
+        byte[] stream = Files.readAllBytes(encrypted.toPath());
+        int lenUser = BaseFwxUtil.readU32(stream, 0);
+        int userStart = 4;
+        int userEnd = userStart + lenUser;
+        int lenMaster = BaseFwxUtil.readU32(stream, userEnd);
+        int masterStart = userEnd + 4;
+        int masterEnd = masterStart + lenMaster;
+        int payloadStart = masterEnd + 4;
+        int metadataLen = BaseFwxUtil.readU32(stream, payloadStart);
+        int metadataStart = payloadStart + 4;
+        int metadataEnd = metadataStart + metadataLen;
+        byte[] userBlob = Arrays.copyOfRange(
+                stream, userStart, userEnd);
+        byte[] masterBlob = Arrays.copyOfRange(
+                stream, masterStart, masterEnd);
+        byte[] metadataBytes = Arrays.copyOfRange(
+                stream, metadataStart, metadataEnd);
+        byte[] maskKey = KeyWrap.recoverMaskKey(
+                userBlob,
+                masterBlob,
+                PASSWORD,
+                false,
+                Constants.B512_FILE_MASK_INFO,
+                Constants.MASK_AAD_B512FILE,
+                new KeyWrap.KdfOptions(
+                        "pbkdf2", Constants.USER_KDF_ITERATIONS),
+                Constants.B512_AEAD_INFO);
+        byte[] aeadKey = KeyWrap.deriveKeyAndWipe(
+                maskKey, Constants.B512_AEAD_INFO, 32);
+        byte[] authenticatedPlaintext = null;
+        try {
+            authenticatedPlaintext = Crypto.aesGcmDecrypt(
+                    aeadKey,
+                    Arrays.copyOfRange(stream, metadataEnd, stream.length),
+                    metadataBytes);
+            int originalSizeOffset = metadataLen;
+            if (metadataLen > 0) {
+                originalSizeOffset += Constants.META_DELIM
+                        .getBytes(StandardCharsets.UTF_8).length;
+            }
+            originalSizeOffset += Constants.STREAM_MAGIC.length + 4;
+            BaseFwxUtil.writeU64(
+                    authenticatedPlaintext,
+                    originalSizeOffset,
+                    (long) plaintext.length + 1L);
+            byte[] sealed = Crypto.aesGcmEncrypt(
+                    aeadKey, authenticatedPlaintext, metadataBytes);
+            byte[] payload = new byte[4 + metadataLen + sealed.length];
+            BaseFwxUtil.writeU32(payload, 0, metadataLen);
+            System.arraycopy(
+                    metadataBytes, 0, payload, 4, metadataLen);
+            System.arraycopy(
+                    sealed, 0, payload, 4 + metadataLen, sealed.length);
+            Files.write(
+                    encrypted.toPath(),
+                    Format.packLengthPrefixed(
+                            Arrays.asList(userBlob, masterBlob, payload)));
+        } finally {
+            Arrays.fill(aeadKey, (byte) 0);
+            if (authenticatedPlaintext != null) {
+                Arrays.fill(authenticatedPlaintext, (byte) 0);
+            }
+        }
+
+        String[] before = tmp.getRoot().list();
+        Arrays.sort(before);
+        try {
+            B512FileCodec.b512FileDecodeFileStream(
+                    encrypted,
+                    destination,
+                    password,
+                    false,
+                    FileCodecs.peekMetadataBlob(encrypted));
+            fail("malformed authenticated b512 stream was accepted");
+        } catch (IllegalArgumentException expected) {
+            assertTrue(
+                    expected.getMessage(),
+                    expected.getMessage().contains("truncated"));
+        }
+        assertArrayEquals(
+                sentinel, Files.readAllBytes(destination.toPath()));
+        String[] after = tmp.getRoot().list();
+        Arrays.sort(after);
+        assertArrayEquals(before, after);
+    }
+
+    @Test
+    public void streamingEncodersSupportSamePathWithoutClobberingInput()
+            throws Exception {
+        byte[] plaintext = new byte[Constants.STREAM_CHUNK_SIZE + 29];
+        for (int index = 0; index < plaintext.length; ++index) {
+            plaintext[index] = (byte) (index * 17 + 3);
+        }
+        String password = new String(PASSWORD, StandardCharsets.UTF_8);
+
+        for (boolean heavy : new boolean[] {false, true}) {
+            String label = heavy ? "pb512" : "b512";
+            File source = tmp.newFile(label + "-same-path.bin");
+            File restored = tmp.newFile(label + "-same-path-restored.bin");
+            Files.write(source.toPath(), plaintext);
+
+            if (heavy) {
+                Pb512FileCodec.pb512FileEncodeFileStream(
+                        source, source, password, false);
+                BaseFwx.pb512FileDecodeFile(
+                        source, restored, password, false);
+            } else {
+                B512FileCodec.b512FileEncodeFileStream(
+                        source, source, password, false);
+                BaseFwx.b512FileDecodeFile(
+                        source, restored, password, false);
+            }
+            assertArrayEquals(
+                    label + " same-path stream roundtrip mismatch",
+                    plaintext,
+                    Files.readAllBytes(restored.toPath()));
+        }
+    }
+
+    @Test
     public void peerPbkdf2MaximumAppliesToSimpleAndStreamingFileCodecs()
             throws Exception {
         int overMax = Constants.PEER_PBKDF2_ITERATIONS_MAX + 1;
@@ -1094,17 +1233,39 @@ public class SecurityPolicyTest {
     }
 
     @Test
-    public void b512BinaryAuthenticationFailuresNeverDowngradeToRawText() {
+    public void b512RawRecoveryIsExplicitAndBinaryFailuresNeverDowngrade() {
         String password = new String(PASSWORD, StandardCharsets.UTF_8);
-        byte[] raw = B512FileCodec.b512FileEncodeBytes(
-                "payload".getBytes(StandardCharsets.UTF_8),
-                ".txt",
-                password,
-                false,
-                false,
-                false);
+        try {
+            B512FileCodec.b512FileEncodeBytes(
+                    "payload".getBytes(StandardCharsets.UTF_8),
+                    ".txt",
+                    password,
+                    false,
+                    false,
+                    false);
+            fail("unauthenticated b512file writer was accepted");
+        } catch (IllegalArgumentException expected) {
+            assertTrue(expected.getMessage().contains("retired"));
+        }
+
+        String rawBody = TextCodecs.b512EncodeString(
+                ".txt", password, false)
+                + Constants.FWX_DELIM
+                + TextCodecs.b512EncodeString(
+                        Base64Codec.encode(
+                                "payload".getBytes(StandardCharsets.UTF_8)),
+                        password,
+                        false);
+        byte[] raw = rawBody.getBytes(StandardCharsets.UTF_8);
+        try {
+            B512FileCodec.b512FileDecodeBytes(raw, password, false);
+            fail("unauthenticated raw b512file was accepted by default");
+        } catch (IllegalArgumentException expected) {
+            assertTrue(expected.getMessage().contains("disabled"));
+        }
         BaseFwx.DecodedFile rawDecoded =
-                B512FileCodec.b512FileDecodeBytes(raw, password, false);
+                B512FileCodec.b512FileDecodeBytes(
+                        raw, password, false, false, true);
         assertArrayEquals(
                 "payload".getBytes(StandardCharsets.UTF_8),
                 rawDecoded.data);

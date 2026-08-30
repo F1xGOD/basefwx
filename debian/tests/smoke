@@ -7,7 +7,7 @@ man -w basefwx >/dev/null
 man -w 7 basefwx >/dev/null
 
 multiarch="$(dpkg-architecture -qDEB_HOST_MULTIARCH)"
-test -e "/usr/lib/${multiarch}/libbasefwx.so.3"
+test -e "/usr/lib/${multiarch}/libbasefwx.so.4"
 test -e "/usr/lib/${multiarch}/libbasefwx.so"
 test -r /usr/include/basefwx/basefwx.hpp
 test -r /usr/include/basefwx/plugin.h

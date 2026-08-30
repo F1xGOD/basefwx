@@ -10,6 +10,109 @@
 | Python | ✅ (`argon2-cffi` is a hard dependency; `basefwx[argon2]` remains a no-op extra for old install scripts) | ✅ via `pqcrypto` | ✅ | ✅ | Feature-complete scripting/runtime path. |
 | Java | ✅ since 3.7.0 (BouncyCastle `Argon2BytesGenerator`; libargon2 JNI optional) | ✅ keywrap (BouncyCastle ML-KEM-768/1024; EC fallback only when PQ pub not configured) | ❌ | ✅ | Argon2id user-KDF wrap on fwxAES / b512 / pb512file / KeyWrap. Peer `ENC-ARGON2-*` costs fail closed above shared maxima. |
 
+## Retired-data artifact profiles
+
+b256, A512, Bi512, Uhash513, jMG, kFM, and kFA are compatibility-only. Default
+C++, Java, and Python artifacts exclude their implementations, CLI commands,
+functional tests, and benchmarks. Existing retired data therefore requires a
+compatibility artifact built from the same BaseFWX version; setting the switch
+on a default artifact cannot add code that was not packaged. The historical
+`BASEFWX_ENABLE_RETIRED_MEDIA` switch name is retained for build-script
+compatibility even though the profile now covers all retired methods.
+
+| Runtime | Default | Compatibility selection |
+| :-- | :-- | :-- |
+| C++ | `-DBASEFWX_ENABLE_RETIRED_MEDIA=OFF` | Configure with `-DBASEFWX_ENABLE_RETIRED_MEDIA=ON`; CMake and installed `pkg-config` metadata publish `BASEFWX_HAS_RETIRED_MEDIA=1`. |
+| Java | Only `src/main/java` / `src/test/java` | Set `BASEFWX_ENABLE_RETIRED_MEDIA=1` or Gradle property `-PbasefwxEnableRetiredMedia=true`; this adds `src/retired/java` and `src/retiredTest/java`. The explicit Gradle property takes precedence. |
+| Python | Default wheel excludes `basefwx.retired` and Pillow | Build from source with `BASEFWX_ENABLE_RETIRED_MEDIA=1` and install the `retired-media` extra for Pillow; set the same variable before importing BaseFWX at runtime. |
+
+Compatibility mode mechanically preserves existing APIs, domains, bytes,
+decode behavior, and failure ordering. The split is not a format migration.
+Compatibility implementations live under `cpp/src/retired`,
+`java/src/retired`, and `python/basefwx/retired`, keeping active crypto files
+focused and making default artifacts smaller and faster to build.
+
+Java's historical public codec methods and `Constants.JMG_*`,
+`Constants.IMAGECIPHER_*`, and `Constants.MASK_AAD_JMG` fields remain declared
+on their original classes in the compatibility JAR. Gradle generates those
+profile-specific classes from active templates plus the fragments under
+`src/retired/profile`; retired values and implementations stay outside the
+active source tree. The default sources remain independently compilable for
+bounded source-sync consumers such as Android, and the default JAR contains
+neither retired methods, fields, nor wire literals.
+
+Default CI exercises the core boundary and proves that retired modules,
+symbols, and commands are absent. A separate compatibility job exercises
+exact bytes and decoding across all three runtimes. Retired methods are not
+benchmarked in either profile; the benchmark matrix measures maintained code
+only.
+
+YUME consumes BaseFWX RNG, RFC HKDF, PBKDF2/Argon2id, AEAD, secure buffers,
+X25519, and ML-KEM-1024. It has no jMG/kFM/kFA or imagecipher dependency, so a
+default core-only BaseFWX build is the intended YUME integration profile.
+
+### b512/pb512 authenticated text payloads
+
+New C++, Java, and Python writers emit text payload version 3 with the exact
+layout:
+
+```text
+0x03 || uint32_be(plaintext_length) || nonce[12] || ciphertext[N] || tag[16]
+```
+
+The payload key is HKDF-SHA256 output from the recovered mask key:
+
+| Codec | HKDF info | AEAD AAD prefix |
+| :-- | :-- | :-- |
+| b512 | `basefwx.b512.payload.aead.v1` | `basefwx.b512.payload.v3` |
+| pb512 | `basefwx.pb512.payload.aead.v1` | `basefwx.pb512.payload.v3` |
+
+The full AAD is the listed prefix followed by the five-byte version/length
+header. All runtimes use AES-256-GCM, reject header or ciphertext changes, and
+emit canonical standard base64 by default. Decoders also accept the older
+URL-safe alphabet and historical token-map expansion. Token-map writing is
+cosmetic and opt-in with `BASEFWX_OBFUSCATE_CODECS=1`.
+
+Payload version 2 (`0x02 || length || XOR-masked plaintext`) had no message
+authentication tag. It is rejected by default and can be opened only with
+`BASEFWX_ALLOW_LEGACY_TEXT_V2=1` for trusted-data recovery. This gate and
+layout are identical across the three runtimes; authentication failures never
+fall through to older codec parsers.
+
+The related b512file writer always emits its outer AES-256-GCM container.
+Historical APIs retain their AEAD-selection parameter for source compatibility
+but reject `false`; the native CLI no longer advertises `--no-aead`, and
+the obsolete `BASEFWX_B512_AEAD` environment switch is not consulted by
+current writers. Raw-text
+b512file input requires `BASEFWX_ALLOW_LEGACY_B512FILE_RAW=1` and should be
+re-encrypted immediately. This is a recovery boundary, not an authenticated
+legacy format.
+
+### Runtime implementation and performance boundary
+
+The Python implementation is not a pure-Python cryptographic backend:
+AES-GCM/HKDF/PBKDF2 use `cryptography` and OpenSSL, Argon2id uses
+`argon2-cffi`, and ML-KEM uses `pqcrypto`. Python bytecode caches (`.pyc`)
+reduce import/compile work only; they do not make Python loops execute at C++
+speed. A broad C++ binding would add packaging, ABI, and secret-ownership risk
+without accelerating those already native-backed primitives.
+
+Java delegates cryptographic operations to JCA/Bouncy Castle (and can use the
+optional JNI AES-GCM backend), while HotSpot JIT-compiles codec loops. Its Java
+8 bytecode target is independent of the JDK 21 host used for qualification.
+
+The measured active CPython hotspot is the `n10` transform, whose numeric-only
+channel use remains legitimate but whose per-block loop is interpreter-bound.
+PyPy, Java, and C++ already execute that loop much faster. A narrow optional
+native `n10` accelerator is a reasonable future project only after a stable
+fallback and wheel/ABI plan; 3.8 stabilization does not introduce a general
+native binding or claim that `.pyc` solves runtime throughput.
+
+Streaming b512/pb512 writers use a 1 MiB chunk in all three runtimes, and
+decoders reject or normalize authenticated historical chunk hints above the
+shared 16 MiB allocation ceiling. C++ also exposes a configurable I/O chunk;
+zero or values above that ceiling are rejected before allocation or output.
+
 ### ChaCha20-Poly1305 explicit-nonce helper: C++ only, no parity claim
 
 `ChaCha20Poly1305EncryptWithIv` / `ChaCha20Poly1305DecryptWithIvOwned`
@@ -68,6 +171,28 @@ both ML-KEM sections are available, and stages each replacement in its
 destination directory. The two replacements are not one filesystem
 transaction; use `scripts/gen_protocol_kats.py --check-copies` to detect
 drift after an interruption.
+
+### RFC HKDF versus the released large-payload PRF
+
+`HkdfSha256` / `hkdfSha256` / `hkdf_sha256` are RFC 5869
+HKDF-SHA256 and reject output beyond 8160 bytes (`255 * HashLen`). Existing
+BaseFWX mask payloads can exceed that limit, so all three runtimes retain a
+separate byte-compatible stream with four-byte big-endian counters:
+
+```text
+PRK = HMAC-SHA256(32 zero bytes, key_material)
+T(i) = HMAC-SHA256(PRK, T(i-1) || info || uint32_be(i))
+```
+
+The precise names are C++ `CompatPrfStreamSha256`, Java
+`compatPrfStreamSha256`, and Python `_compat_prf_stream_sha256`. The C++
+`HkdfSha256Stream` and Python `_hkdf_stream_sha256` historical names remain
+direct aliases. Java's historical `hkdfSha256Stream` remains deliberately
+hybrid for source and byte compatibility: it uses RFC HKDF at lengths through
+8160 bytes and this PRF only above that limit. The construction itself is not
+RFC HKDF and is not a basis for new protocol designs. No file or wire bytes
+changed. C++, Java, and Python tests pin blocks 1, 255, and 256 so the
+four-byte counter remains exact across the RFC HKDF output boundary.
 
 ### Argon2 parallelism portability
 
@@ -271,7 +396,10 @@ independent password wrap already present on decrypt.
 
 Release policy:
 
-- Native release binaries are expected to ship with Argon2, OQS, and LZMA enabled.
+- Native release binaries are expected to ship with Argon2, OQS, and LZMA
+  enabled. OQS support requires both ML-KEM-768 and ML-KEM-1024 at configure
+  time; finding a liboqs installation without both does not satisfy the
+  release capability contract.
 - Language runtimes that do not implement a feature must report that explicitly in `version` output and docs.
 - Format changes must preserve declared cross-runtime compatibility or bump the format/version contract intentionally.
 

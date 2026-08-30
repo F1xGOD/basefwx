@@ -7,7 +7,6 @@
 package com.fixcraft.basefwx.cli;
 
 import com.fixcraft.basefwx.BaseFwx;
-import com.fixcraft.basefwx.BaseFwxImage;
 
 import java.io.BufferedInputStream;
 import java.io.BufferedOutputStream;
@@ -45,6 +44,10 @@ final class BenchCommands {
     @FunctionalInterface
     interface BenchWorker {
         long run(int workerId);
+    }
+
+    static void consume(long value) {
+        BENCH_SINK ^= (int) value;
     }
 
     static final class ComparingOutputStream extends OutputStream {
@@ -172,8 +175,6 @@ final class BenchCommands {
                 return benchB512file(args, argc, useMaster);
             case "bench-pb512file":
                 return benchPb512file(args, argc, useMaster);
-            case "bench-jmg":
-                return benchJmg(args, argc, useMaster);
             default:
                 return -1;
         }
@@ -224,12 +225,6 @@ final class BenchCommands {
         if (method.equals("hash512")) {
             worker = (idx) -> {
                 String digest = BaseFwx.hash512Bytes(textBytes);
-                BENCH_SINK ^= digest.length();
-                return digest.length();
-            };
-        } else if (method.equals("uhash513")) {
-            worker = (idx) -> {
-                String digest = BaseFwx.uhash513Bytes(textBytes);
                 BENCH_SINK ^= digest.length();
                 return digest.length();
             };
@@ -646,77 +641,6 @@ final class BenchCommands {
         }
     }
 
-    private static int benchJmg(String[] args, int argc, boolean useMaster) {
-        if (argc < 3) {
-            return 1;
-        }
-        File mediaFile = new File(args[1]);
-        String benchPass = args[2];
-        final String benchPassFinal = benchPass;
-        final boolean useMasterFlag = useMaster;
-        int warmup = benchWarmup();
-        int iters = benchIters();
-        int workers = benchWorkers();
-
-        if (!mediaFile.exists()) {
-            throw new RuntimeException("Media file not found: " + mediaFile.getAbsolutePath());
-        }
-
-        confirmSingleThreadCli(workers);
-        File[] tempDirs = new File[workers];
-        File[] encFiles = new File[workers];
-        File[] decFiles = new File[workers];
-
-        try {
-            String baseName = mediaFile.getName();
-            String ext = "";
-            int dotIdx = baseName.lastIndexOf('.');
-            if (dotIdx > 0) {
-                ext = baseName.substring(dotIdx);
-            }
-
-            for (int i = 0; i < workers; i++) {
-                try {
-                    tempDirs[i] = Files.createTempDirectory("basefwx-bench-jmg-" + i).toFile();
-                } catch (java.io.IOException exc) {
-                    throw new RuntimeException("Failed to create temp directory for bench-jmg worker " + i, exc);
-                }
-                encFiles[i] = new File(tempDirs[i], "bench_enc" + ext);
-                decFiles[i] = new File(tempDirs[i], "bench_dec" + ext);
-            }
-
-            BenchWorker worker = (idx) -> {
-                File encFile = encFiles[idx];
-                File decFile = decFiles[idx];
-                BaseFwxImage.jmgEncryptFile(mediaFile, encFile, benchPassFinal, useMasterFlag, false, true);
-                BaseFwxImage.jmgDecryptFile(encFile, decFile, benchPassFinal, useMasterFlag);
-                long size = decFile.length();
-                BENCH_SINK ^= (int) size;
-                encFile.delete();
-                decFile.delete();
-                return size;
-            };
-
-            long ns = workers > 1
-                ? benchParallelMedian(warmup, iters, workers, worker)
-                : benchMedian(warmup, iters, () -> worker.run(0));
-            System.out.println("BENCH_NS=" + ns);
-            return 0;
-        } finally {
-            for (int i = 0; i < workers; i++) {
-                if (encFiles[i] != null && encFiles[i].exists()) {
-                    encFiles[i].delete();
-                }
-                if (decFiles[i] != null && decFiles[i].exists()) {
-                    decFiles[i].delete();
-                }
-                if (tempDirs[i] != null && tempDirs[i].exists()) {
-                    tempDirs[i].delete();
-                }
-            }
-        }
-    }
-
     private static byte[] readAllBytes(File file) {
         try {
             return Files.readAllBytes(file.toPath());
@@ -829,11 +753,11 @@ final class BenchCommands {
         }
     }
 
-    private static int benchWarmup() {
+    static int benchWarmup() {
         return readEnvInt("BASEFWX_BENCH_WARMUP", 2, 0);
     }
 
-    private static int benchIters() {
+    static int benchIters() {
         return readEnvInt("BASEFWX_BENCH_ITERS", 50, 1);
     }
 
@@ -846,7 +770,7 @@ final class BenchCommands {
         return !(value.equals("0") || value.equals("false") || value.equals("off") || value.equals("no"));
     }
 
-    private static int benchWorkers() {
+    static int benchWorkers() {
         if (!benchParallelEnabled()) {
             return 1;
         }
@@ -857,7 +781,7 @@ final class BenchCommands {
         return readEnvInt("BASEFWX_BENCH_WORKERS", defaultWorkers, 1);
     }
 
-    private static void confirmSingleThreadCli(int workers) {
+    static void confirmSingleThreadCli(int workers) {
         String forceSingle = System.getenv("BASEFWX_FORCE_SINGLE_THREAD");
         int available = Runtime.getRuntime().availableProcessors();
         boolean forced = "1".equals(forceSingle) && available > 1;
@@ -891,7 +815,7 @@ final class BenchCommands {
         return low + (high - low) / 2;
     }
 
-    private static long benchMedian(int warmup, int iters, Runnable run) {
+    static long benchMedian(int warmup, int iters, Runnable run) {
         if (warmup < 0) {
             warmup = 0;
         }
@@ -961,7 +885,7 @@ final class BenchCommands {
         return totalBytes[0];
     }
 
-    private static long benchParallelMedian(int warmup, int iters, int workers, BenchWorker worker) {
+    static long benchParallelMedian(int warmup, int iters, int workers, BenchWorker worker) {
         ExecutorService pool = Executors.newFixedThreadPool(workers);
         try {
             for (int i = 0; i < warmup; i++) {

@@ -73,15 +73,12 @@ public final class KeyWrap {
         boolean hasPassword = password != null && password.length > 0;
         boolean useMasterEffective =
                 useMaster && selectedMaster != null && selectedMaster.usedMaster();
-        byte[] pqMasterBlob = null;
-        byte[] pqShared = null;
+        PQ.KemResult pqKem = null;
         EcKeys.EcKemResult ecKem = null;
         if (useMasterEffective) {
             if (selectedMaster.pqPublicKey != null) {
                 try {
-                    PQ.KemResult kem = PQ.kemEncrypt(selectedMaster.pqPublicKey);
-                    pqMasterBlob = kem.ciphertext;
-                    pqShared = kem.shared;
+                    pqKem = PQ.kemEncrypt(selectedMaster.pqPublicKey);
                     useMasterEffective = true;
                 } catch (Exception exc) {
                     if (exc instanceof RuntimeException) {
@@ -113,9 +110,10 @@ public final class KeyWrap {
             result.masterKem = useMasterEffective
                     ? selectedMaster.kemLabel
                     : "none";
-            if (useMasterEffective && pqShared != null) {
-                result.masterBlob = pqMasterBlob;
-                result.maskKey = FileCodecKdf.deriveKemKeyAndWipe(pqShared, maskInfo);
+            if (useMasterEffective && pqKem != null) {
+                result.masterBlob = pqKem.ciphertext;
+                result.maskKey = FileCodecKdf.deriveKemKeyAndWipe(
+                        pqKem.shared, maskInfo);
             } else if (useMasterEffective && ecKem != null) {
                 result.masterBlob = ecKem.masterBlob;
                 result.maskKey = FileCodecKdf.deriveKemKeyAndWipe(ecKem.shared, maskInfo);
@@ -158,6 +156,10 @@ public final class KeyWrap {
         } catch (RuntimeException | Error exc) {
             result.close();
             throw exc;
+        } finally {
+            if (pqKem != null) {
+                pqKem.close();
+            }
         }
     }
 

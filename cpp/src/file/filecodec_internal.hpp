@@ -210,6 +210,14 @@ Bytes Uint64Be(std::uint64_t value);
 
 Bytes Uint16Be(std::uint16_t value);
 
+std::uint32_t RequireStreamChunkSize(std::size_t value);
+
+std::uint32_t CheckedStreamPayloadLength(
+    std::uint64_t input_size,
+    std::size_t metadata_size,
+    std::size_t prefix_size,
+    std::size_t header_size);
+
 void ThrowIfInterrupted();
 
 std::uint64_t TellPosOrThrow(std::istream& stream);

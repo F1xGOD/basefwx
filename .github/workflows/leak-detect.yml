@@ -61,12 +61,6 @@ jobs:
             --iters 300 \
             --sample-every 20 \
             --leak-kib-per-iter 8
-      - name: Run Python leak detector (b256 only, retired-path smoke)
-        env:
-          BASEFWX_NO_GUARDS: "1"
-        run: |
-          python3 scripts/leak_detect.py --codecs b256 --iters 200
-
   cpp-asan-leak:
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -103,7 +97,6 @@ jobs:
           mkdir -p .leak-java
           cat > .leak-java/HeapLeakProbe.java <<'EOF'
           import com.fixcraft.basefwx.BaseFwx;
-          import com.fixcraft.basefwx.Codec;
           import java.lang.management.ManagementFactory;
           import java.lang.management.MemoryMXBean;
           import java.lang.management.MemoryUsage;
@@ -117,9 +110,7 @@ jobs:
                   // Warm-up: let HotSpot tier-up and the heap stabilise.
                   for (int i = 0; i < 100; i++) {
                       BaseFwx.hash512("warmup");
-                      BaseFwx.uhash513("warmup");
                       BaseFwx.b64Encode("warmup");
-                      Codec.b256Encode("warmup"); // internal helper, no warn
                   }
                   System.gc(); Thread.sleep(50); System.gc();
                   MemoryUsage baseline = mem.getHeapMemoryUsage();
@@ -127,9 +118,7 @@ jobs:
 
                   for (int i = 0; i < iters; i++) {
                       BaseFwx.hash512("leak-probe");
-                      BaseFwx.uhash513("leak-probe");
                       BaseFwx.b64Encode("leak-probe");
-                      Codec.b256Encode("leak-probe");
                   }
                   System.gc(); Thread.sleep(100); System.gc();
                   MemoryUsage end = mem.getHeapMemoryUsage();

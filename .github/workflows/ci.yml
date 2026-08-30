@@ -68,7 +68,7 @@ jobs:
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
-          java-version: '17'
+          java-version: '21'
 
       - name: Cache pip
         uses: actions/cache@v4
@@ -81,8 +81,8 @@ jobs:
       - name: Run fast test suite
         env:
           BASEFWX_OBFUSCATE: "1"
+          BASEFWX_ENABLE_RETIRED_MEDIA: "0"
           ALLOW_BAKED_PUB: "0"
-          BASEFWX_ENABLE_JMG_VIDEO: "0"
           BASEFWX_TEST_REQUIRE_ARGON2: "ON"
           BASEFWX_TEST_REQUIRE_OQS: "ON"
           BASEFWX_TEST_REQUIRE_LZMA: "ON"
@@ -90,7 +90,7 @@ jobs:
           chmod +x scripts/test_all.sh
           ./scripts/test_all.sh --fast
 
-      - name: Verify live/no-archive tests in CI
+      - name: Verify active live and retired-boundary tests in CI
         run: |
           PY_BIN="./.venv/bin/python"
           if [ ! -x "$PY_BIN" ]; then
@@ -99,8 +99,115 @@ jobs:
           "$PY_BIN" -m unittest \
             python.tests.test_basefwx.BaseFWXUnitTests.test_live_stream_roundtrip_chunked \
             python.tests.test_basefwx.BaseFWXUnitTests.test_live_stream_tamper_rejected \
-            python.tests.test_basefwx.BaseFWXUnitTests.test_jmg_image_no_archive_roundtrip_valid_image \
-            python.tests.test_basefwx.BaseFWXUnitTests.test_jmg_video_disabled_by_default \
-            python.tests.test_basefwx.BaseFWXUnitTests.test_probe_streams_ignores_attached_pic_video \
-            python.tests.test_basefwx.BaseFWXUnitTests.test_ffmpeg_video_codec_args_clamps_huge_bitrate \
-            python.tests.test_basefwx.BaseFWXUnitTests.test_kfm_xor_auto_falls_back_without_cupy
+            python.tests.test_retired_media_boundary
+
+  retired-media-compatibility:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      BASEFWX_ENABLE_RETIRED_MEDIA: "1"
+      BASEFWX_TESTING: "1"
+      BASEFWX_TEST_KDF_ITERS: "1000"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install compatibility build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake build-essential libssl-dev zlib1g-dev libargon2-dev liblzma-dev ffmpeg
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Verify Python compatibility profile
+        run: |
+          python3 -m pip install -e './python[retired-media]'
+          python3 -m unittest -v \
+            python.tests.test_retired_media_boundary \
+            python.tests.retired.test_retired_codecs \
+            python.tests.retired.test_media_compatibility.RetiredMediaCompatibilityTests.test_kfm_image_audio_roundtrip \
+            python.tests.retired.test_media_compatibility.RetiredMediaCompatibilityTests.test_jmg_key_header_v2_profile_max \
+            python.tests.retired.test_media_auth_publication \
+            python.tests.retired.test_media_process_lifecycle
+          python3 -m basefwx version | grep -q 'retired_media=ON'
+
+      - name: Verify Python wheel profile isolation
+        run: |
+          WHEEL_ROOT="$RUNNER_TEMP/basefwx-wheel-profiles"
+          mkdir -p "$WHEEL_ROOT/compat" "$WHEEL_ROOT/core"
+          python3 -m pip wheel --no-deps --no-build-isolation \
+            --wheel-dir "$WHEEL_ROOT/compat" ./python
+          env -u BASEFWX_ENABLE_RETIRED_MEDIA \
+            python3 -m pip wheel --no-deps --no-build-isolation \
+              --wheel-dir "$WHEEL_ROOT/core" ./python
+          python3 - "$WHEEL_ROOT" <<'PY'
+          import pathlib
+          import re
+          import sys
+          import zipfile
+
+          root = pathlib.Path(sys.argv[1])
+          profiles = {"compat": True, "core": False}
+          for profile, expected in profiles.items():
+              wheel = next((root / profile).glob("*.whl"))
+              with zipfile.ZipFile(wheel) as archive:
+                  names = archive.namelist()
+                  has_retired = any(
+                      name.startswith("basefwx/retired/")
+                      for name in names
+                  )
+                  if not expected:
+                      forbidden = (
+                          r"\bb256(?:encode|decode|-enc|-dec)?\b",
+                          r"\ba512(?:encode|decode|-enc|-dec)?\b",
+                          r"\bbi512(?:encode|-enc)?\b",
+                          r"\buhash513\b",
+                          r"\bjmg", r"\bkfm", r"\bkfa",
+                      )
+                      leaked = []
+                      for name in names:
+                          if (not name.startswith("basefwx/")
+                                  or not name.endswith(".py")):
+                              continue
+                          source = archive.read(name).decode(
+                              "utf-8", "replace").lower()
+                          for pattern in forbidden:
+                              if re.search(pattern, source):
+                                  leaked.append((name, pattern))
+                      if leaked:
+                          raise SystemExit(
+                              f"core wheel retired source leak: {leaked}"
+                          )
+              if has_retired != expected:
+                  raise SystemExit(
+                      f"{profile} wheel retired-media content={has_retired}, "
+                      f"expected {expected}"
+                  )
+          PY
+
+      - name: Verify Java compatibility profile
+        run: |
+          gradle -p java clean test jar --no-daemon -PbasefwxEnableRetiredMedia=true
+          java -jar java/build/libs/basefwx-java.jar version | grep -q 'retired_media=ON'
+
+      - name: Verify C++ compatibility profile
+        run: |
+          cmake -S cpp -B cpp/build-retired-ci \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBASEFWX_BUILD_TESTS=ON \
+            -DBASEFWX_ENABLE_RETIRED_MEDIA=ON \
+            -DBASEFWX_REQUIRE_ARGON2=ON \
+            -DBASEFWX_REQUIRE_OQS=OFF \
+            -DBASEFWX_REQUIRE_LZMA=ON
+          cmake --build cpp/build-retired-ci -j2
+          ctest --test-dir cpp/build-retired-ci --output-on-failure
+          cpp/build-retired-ci/basefwx version | grep -q 'retired_media=ON'

@@ -13,6 +13,7 @@
 #include <string_view>
 
 #include "basefwx/env.hpp"
+#include "basefwx/features.hpp"
 
 namespace basefwx::constants {
 
@@ -99,6 +100,7 @@ inline constexpr std::size_t kUserWrapFixedLen = kUserKdfSaltSize + kAeadNonceLe
 inline constexpr std::size_t kFwxAesMaxKeyHeaderLen = 64u * 1024u;
 
 inline constexpr std::size_t kStreamChunkSize = 1u << 20;
+inline constexpr std::size_t kStreamChunkSizeMax = 16u << 20;
 inline constexpr std::size_t kStreamThreshold = 250u * 1024u;
 inline constexpr std::size_t kPerfObfuscationThreshold = 1u << 20;
 inline constexpr std::size_t kHkdfMaxLen = 255u * 32u;
@@ -130,17 +132,6 @@ inline constexpr std::size_t kMasterEcPointLen = 133;
 
 inline constexpr std::string_view kStreamMagic = "STRMOBF1";
 
-inline constexpr std::string_view kImageCipherStreamInfo = "basefwx.imagecipher.stream.v1";
-inline constexpr std::string_view kImageCipherArchiveInfo = "basefwx.imagecipher.archive.v1";
-inline constexpr std::string_view kImageCipherTrailerMagic = "JMG0";
-inline constexpr std::string_view kImageCipherKeyTrailerMagic = "JMG1";
-inline constexpr std::string_view kJmgKeyMagic = "JMGK";
-inline constexpr std::uint8_t kJmgKeyVersionLegacy = 1;
-inline constexpr std::uint8_t kJmgKeyVersion = 2;
-inline constexpr std::uint8_t kJmgSecurityProfileLegacy = 0;
-inline constexpr std::uint8_t kJmgSecurityProfileMax = 1;
-inline constexpr std::uint8_t kJmgSecurityProfileDefault = kJmgSecurityProfileMax;
-inline constexpr std::string_view kJmgMaskInfo = "basefwx.jmg.mask.v1";
 inline constexpr std::string_view kFwxAesAad = "fwxAES";
 inline constexpr std::uint8_t kFwxAesAlgo = 0x01;
 inline constexpr std::uint8_t kFwxAesAlgoStreamV2 = 0x02;
@@ -175,6 +166,14 @@ inline constexpr std::string_view kB512MaskInfo = "basefwx.b512.mask.v1";
 inline constexpr std::string_view kPb512MaskInfo = "basefwx.pb512.mask.v1";
 inline constexpr std::string_view kB512StreamInfo = "basefwx.b512.stream.v1";
 inline constexpr std::string_view kPb512StreamInfo = "basefwx.pb512.stream.v1";
+inline constexpr std::string_view kB512PayloadAeadInfo =
+    "basefwx.b512.payload.aead.v1";
+inline constexpr std::string_view kPb512PayloadAeadInfo =
+    "basefwx.pb512.payload.aead.v1";
+inline constexpr std::string_view kB512PayloadAad =
+    "basefwx.b512.payload.v3";
+inline constexpr std::string_view kPb512PayloadAad =
+    "basefwx.pb512.payload.v3";
 inline constexpr std::string_view kB512FileMaskInfo = "basefwx.b512file.mask.v1";
 inline constexpr std::string_view kB512AeadInfo = "basefwx.b512file.v1";
 
@@ -189,6 +188,9 @@ inline constexpr std::string_view kStreamInfoPerm = "basefwx.stream.obf.perm.v1"
 inline constexpr std::string_view kMaskAadB512 = "b512";
 inline constexpr std::string_view kMaskAadPb512 = "pb512";
 inline constexpr std::string_view kMaskAadB512File = "b512file";
-inline constexpr std::string_view kMaskAadJmg = "jmg";
 
 }  // namespace basefwx::constants
+
+#if BASEFWX_HAS_RETIRED_MEDIA
+#include "basefwx/retired/constants.hpp"
+#endif

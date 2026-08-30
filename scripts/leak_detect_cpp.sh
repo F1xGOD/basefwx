@@ -5,8 +5,8 @@
 #
 # C++ leak detector. Builds a small probe binary against the BaseFWX
 # tree with AddressSanitizer + LeakSanitizer enabled, runs it for
-# N iterations across the main code paths (hash512, uhash513,
-# fwxAES encrypt/decrypt round-trip, b256, plugin smoke), and lets
+# N iterations across the maintained main code paths (hash512,
+# fwxAES encrypt/decrypt round-trip, base64, plugin smoke), and lets
 # LSan exit non-zero on any leak.
 #
 # Designed to run inside GitHub Actions and on dev hosts. Wraps
@@ -53,7 +53,6 @@ mkdir -p "$BUILD_DIR"
 # contract — no need to grep its output.
 cat > "$PROBE_SRC" <<'EOF'
 #include <basefwx/basefwx.hpp>
-#include <basefwx/codec.hpp>
 #include <basefwx/crypto.hpp>
 
 #include <cstdio>
@@ -66,8 +65,6 @@ void exercise_hashes(int iters) {
     for (int i = 0; i < iters; ++i) {
         volatile auto h = basefwx::Hash512("leak-probe payload");
         (void)h;
-        volatile auto u = basefwx::Uhash513("leak-probe payload");
-        (void)u;
     }
 }
 
@@ -93,16 +90,6 @@ void exercise_aead(int iters) {
     }
 }
 
-void exercise_b256(int iters) {
-    // b256 is retired; use the un-deprecated internal helpers so the
-    // build stays warning-clean.
-    for (int i = 0; i < iters; ++i) {
-        std::string enc = basefwx::codec::B256Encode("leak-probe payload");
-        std::string dec = basefwx::codec::B256Decode(enc);
-        (void)dec;
-    }
-}
-
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -110,7 +97,7 @@ int main(int argc, char** argv) {
     if (argc > 1) iters = std::atoi(argv[1]);
     if (iters < 1) iters = 1;
 
-    std::printf("[cpp-leak-probe] hashes (Hash512 + Uhash513) ...\n");
+    std::printf("[cpp-leak-probe] Hash512 ...\n");
     exercise_hashes(iters);
 
     std::printf("[cpp-leak-probe] base64 ...\n");
@@ -118,9 +105,6 @@ int main(int argc, char** argv) {
 
     std::printf("[cpp-leak-probe] AEAD (AES-256-GCM) ...\n");
     exercise_aead(iters);
-
-    std::printf("[cpp-leak-probe] b256 (retired) ...\n");
-    exercise_b256(iters);
 
     std::printf("[cpp-leak-probe] done.\n");
     return 0;
@@ -138,6 +122,7 @@ cmake -S cpp -B "$BUILD_DIR" \
       -DBASEFWX_BUILD_CLI=OFF \
       -DBASEFWX_BUILD_TESTS=OFF \
       -DBUILD_TESTING=OFF \
+      -DBASEFWX_ENABLE_RETIRED_MEDIA=OFF \
       -DBASEFWX_LEAK_PROBE_SOURCE="$PROBE_SRC" \
       -DCMAKE_CXX_FLAGS="-fsanitize=address,leak -fno-omit-frame-pointer -g -O1" \
       -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,leak" \

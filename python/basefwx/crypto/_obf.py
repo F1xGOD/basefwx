@@ -2,7 +2,7 @@
 # Copyright (C) 2020-2026  FixCraft Inc.
 # Licensed under the GNU Lesser General Public License v3.0 or later.
 
-"""Extracted implementation cluster from legacy.py."""
+"""Reversible payload transforms used only beneath authenticated formats."""
 
 from __future__ import annotations
 
@@ -57,7 +57,8 @@ def _mask_payload(mask_key: bytes, payload: bytes, *, info: bytes) -> bytes:
     if not payload:
         return b''
     if len(payload) > basefwx.HKDF_MAX_LEN:
-        stream = basefwx._hkdf_stream_sha256(mask_key, info, len(payload))
+        stream = basefwx._compat_prf_stream_sha256(
+            mask_key, info, len(payload))
     else:
         stream = basefwx._hkdf_sha256(mask_key, length=len(payload), info=info)
     data_arr = basefwx.np.frombuffer(payload, dtype=basefwx.np.uint8)

@@ -10,6 +10,7 @@ import java.nio.charset.StandardCharsets;
 
 public final class Constants {
     private Constants() {}
+    // BASEFWX_PROFILE_FIELDS
 
     public static final byte[] FWXAES_MAGIC = "FWX1".getBytes(StandardCharsets.US_ASCII);
     public static final int FWXAES_ALGO = 0x01;
@@ -93,12 +94,19 @@ public final class Constants {
     public static final byte[] PB512_MASK_INFO = "basefwx.pb512.mask.v1".getBytes(StandardCharsets.US_ASCII);
     public static final byte[] B512_STREAM_INFO = "basefwx.b512.stream.v1".getBytes(StandardCharsets.US_ASCII);
     public static final byte[] PB512_STREAM_INFO = "basefwx.pb512.stream.v1".getBytes(StandardCharsets.US_ASCII);
+    static final byte[] B512_PAYLOAD_AEAD_INFO =
+            "basefwx.b512.payload.aead.v1".getBytes(StandardCharsets.US_ASCII);
+    static final byte[] PB512_PAYLOAD_AEAD_INFO =
+            "basefwx.pb512.payload.aead.v1".getBytes(StandardCharsets.US_ASCII);
+    static final byte[] B512_PAYLOAD_AAD =
+            "basefwx.b512.payload.v3".getBytes(StandardCharsets.US_ASCII);
+    static final byte[] PB512_PAYLOAD_AAD =
+            "basefwx.pb512.payload.v3".getBytes(StandardCharsets.US_ASCII);
 
     public static final byte[] MASK_AAD_B512 = "b512".getBytes(StandardCharsets.US_ASCII);
     public static final byte[] MASK_AAD_PB512 = "pb512".getBytes(StandardCharsets.US_ASCII);
-    public static final byte[] MASK_AAD_JMG = "jmg".getBytes(StandardCharsets.US_ASCII);
     // Mask-wrap AEAD AAD for b512file — must match C++ kMaskAadB512File /
-    // Python aad=b'b512file'. Do NOT use B512_AEAD_INFO here (that string is
+    // Python MASK_AAD_B512FILE. Do NOT use B512_AEAD_INFO here (that string is
     // the HKDF info + payload AEAD AAD only).
     public static final byte[] MASK_AAD_B512FILE = "b512file".getBytes(StandardCharsets.US_ASCII);
 
@@ -110,24 +118,13 @@ public final class Constants {
             "basefwx.fwxaes.payload.obf.v1".getBytes(StandardCharsets.US_ASCII);
     public static final int STREAM_THRESHOLD = 250 * 1024;
     public static final int STREAM_CHUNK_SIZE = 1 << 20;
+    public static final int STREAM_CHUNK_SIZE_MAX = 16 << 20;
     public static final int HKDF_MAX_LEN = 255 * 32;
     public static final byte[] STREAM_MAGIC = "STRMOBF1".getBytes(StandardCharsets.US_ASCII);
     public static final byte[] STREAM_INFO_KEY = "basefwx.stream.obf.key.v1".getBytes(StandardCharsets.US_ASCII);
     public static final byte[] STREAM_INFO_IV = "basefwx.stream.obf.iv.v1".getBytes(StandardCharsets.US_ASCII);
     public static final byte[] STREAM_INFO_PERM = "basefwx.stream.obf.perm.v1".getBytes(StandardCharsets.US_ASCII);
     public static final int STREAM_SALT_LEN = 16;
-
-    public static final byte[] IMAGECIPHER_STREAM_INFO = "basefwx.imagecipher.stream.v1".getBytes(StandardCharsets.US_ASCII);
-    public static final byte[] IMAGECIPHER_ARCHIVE_INFO = "basefwx.imagecipher.archive.v1".getBytes(StandardCharsets.US_ASCII);
-    public static final byte[] IMAGECIPHER_TRAILER_MAGIC = "JMG0".getBytes(StandardCharsets.US_ASCII);
-    public static final byte[] IMAGECIPHER_KEY_TRAILER_MAGIC = "JMG1".getBytes(StandardCharsets.US_ASCII);
-    public static final byte[] JMG_KEY_MAGIC = "JMGK".getBytes(StandardCharsets.US_ASCII);
-    public static final int JMG_KEY_VERSION_LEGACY = 1;
-    public static final int JMG_KEY_VERSION = 2;
-    public static final int JMG_SECURITY_PROFILE_LEGACY = 0;
-    public static final int JMG_SECURITY_PROFILE_MAX = 1;
-    public static final int JMG_SECURITY_PROFILE_DEFAULT = JMG_SECURITY_PROFILE_MAX;
-    public static final byte[] JMG_MASK_INFO = "basefwx.jmg.mask.v1".getBytes(StandardCharsets.US_ASCII);
 
     public static final byte[] LIVE_FRAME_MAGIC = "LIVE".getBytes(StandardCharsets.US_ASCII);
     public static final int LIVE_FRAME_VERSION = 1;

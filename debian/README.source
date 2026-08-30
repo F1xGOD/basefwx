@@ -4,7 +4,7 @@ BaseFWX Debian source package notes
 The packaging builds three binary packages:
 
 * basefwx: command-line frontend
-* libbasefwx3: runtime shared library
+* libbasefwx4: runtime shared library
 * libbasefwx-dev: headers, CMake config, and pkg-config metadata
 
 The installed development surface contains only the LGPL C++ library and
@@ -33,6 +33,6 @@ directory when testing on a distro that does not yet provide liboqs-dev:
     BASEFWX_DEBIAN_VENDOR_DIR=../vendor/linux-x86_64
 
 Then YUME can Build-Depend on libbasefwx-dev and let dpkg-shlibdeps produce
-the runtime dependency on libbasefwx3 automatically.
-The current 3.8 package also supplies debian/libbasefwx3.shlibs so binaries
-using the new protocol primitives require libbasefwx3 >= 3.8.0~dev1-1.
+the runtime dependency on libbasefwx4 automatically.
+The current 3.8 package also supplies debian/libbasefwx4.shlibs so binaries
+using the new protocol primitives require libbasefwx4 >= 3.8.0~dev1-1.

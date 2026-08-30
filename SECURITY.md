@@ -31,19 +31,22 @@
   X25519) with C++/liboqs KATs under `testdata/protocol_kats/`. See
   `CHANGELOG.md` / `COMPATIBILITY.md`.
 
-### Retired media codecs
+### Retired compatibility codecs
 
-The image-, audio-, and video-specific kFM/kFA/jMG codecs remain available for
-compatibility in the 3.7.0+ line, but are retired from routine feature and
-performance maintenance after the current unreleased change. Security,
-correctness, and existing-data compatibility issues in the latest release
-remain in scope under this policy. Active development targets mathematically
-grounded, high-performance C++ cryptographic primitives.
+b256, A512, Bi512, Uhash513, and the image-, audio-, and video-specific
+kFM/kFA/jMG codecs are excluded from default C++, Java, and Python artifacts.
+This removes their parsers, SHA-1 Uhash construction, transcode pipeline,
+Pillow dependency, CLI surface, and performance code from the normal runtime
+boundary. Existing data requires a separately built compatibility artifact
+with `BASEFWX_ENABLE_RETIRED_MEDIA` enabled before build/import. The historical
+switch name is retained so existing build automation does not break.
 
-Routine benchmark runs omit those media codecs and retired b256. An explicit
-`BASEFWX_BENCH_RETIRED=1` enables their performance rows for a compatibility
-investigation. This benchmark policy does not remove their focused security,
-correctness, or existing-data compatibility coverage.
+The compatibility profile preserves released bytes, APIs, decoding, and
+failure behavior. Security, correctness, and existing-data compatibility bugs
+in that profile remain in scope for the latest BaseFWX release, but no new
+formats, features, or performance work is planned. Its exact-byte and decode
+tests are isolated from the default suite. Retired methods have no benchmark
+path in either profile.
 
 ### Historical: What's New in 3.6.4
 
@@ -84,16 +87,17 @@ ML-KEM-768 master-key wrap, and how to report vulnerabilities.
 When you run a `basefwx` encrypt with **no special flags**, what you
 actually get is:
 
-1. **AES-256-GCM** for the data step — already considered
-   post-quantum-safe (Grover halves the effective key strength, so
-   128-bit equivalent against a quantum adversary; symmetric AEAD with
-   a 32-byte key is fine).
+1. **AES-256-GCM** for the data step. Under the idealized Grover model,
+   generic key search has an approximately 128-bit margin. That statement is
+   about the symmetric primitive, not a claim that a password-only container
+   has 128 bits of effective security.
 2. **Argon2id (where available) or PBKDF2-HMAC-SHA256** for the
    password step, at the hardened 3.6.4 cost
    (see [RELEASE-NOTES-3.6.4 → KDF hardening](RELEASE-NOTES-3.6.4.md#1-kdf-hardening-cross-language)
    for the exact parameter table).
-3. **HKDF-SHA256** for all subkey derivation; SHA-256 is also PQ-safe
-   for this use.
+3. **HKDF-SHA256** for all subkey derivation. Its security depends on the
+   entropy of the input keying material and the standard hash assumptions;
+   HKDF cannot add entropy to a weak password-derived key.
 4. **HMAC-SHA256 + AES-256-GCM tags** for authenticity.
 
 | Runtime | Default password KDF (no env override)                        |
@@ -112,6 +116,41 @@ The KDF label is authenticated wire state. A runtime never silently
 switches an Argon2-labelled operation to PBKDF2 after allocation or
 runtime failure, because doing so would emit an undecryptable blob.
 
+#### b512/pb512 text payload integrity
+
+Current b512 and pb512 text writers emit payload version 3:
+
+```text
+0x03 || uint32_be(plaintext_length) || AES-256-GCM(nonce || ciphertext || tag)
+```
+
+The payload key is derived from the wrapped mask key with the distinct HKDF
+labels `basefwx.b512.payload.aead.v1` or
+`basefwx.pb512.payload.aead.v1`. GCM AAD is the corresponding
+`basefwx.{b512,pb512}.payload.v3` domain followed by the five-byte version and
+length header. The header is therefore visible for bounded parsing but cannot
+be changed without authentication failure. Decryption authenticates before it
+returns plaintext.
+
+Released payload version 2 protected the random mask key but only XOR-masked
+the message with a derived stream; the message itself had no authentication
+tag and was malleable. Current decoders reject v2 by default. Set
+`BASEFWX_ALLOW_LEGACY_TEXT_V2=1` only while recovering trusted legacy data,
+then re-encrypt it. This switch does not make v2 safe for hostile input.
+
+The optional codec token map is an output encoding, not cryptography. New
+writers use canonical standard base64 unless
+`BASEFWX_OBFUSCATE_CODECS=1`; decoders retain token-map and older URL-safe
+base64 acceptance for migration.
+
+b512file writers also always use the outer AES-256-GCM container. The former
+`--no-aead`, `enable_aead=false`, and `BASEFWX_B512_AEAD=0` writer paths are
+retired because their metadata/container structure was not authenticated as a
+whole. Raw historical b512file input is rejected unless
+`BASEFWX_ALLOW_LEGACY_B512FILE_RAW=1` is set for trusted-data recovery. Once a
+blob is structurally recognized as the binary container, key-wrap or payload
+authentication failure is terminal and cannot downgrade into raw parsing.
+
 AES-heavy simple and direct-stream files also authenticate the payload
 key-schedule marker. New non-stripped writers in C++, Java, and Python
 emit `ENC-KSEP=v1`, deriving independent 32-byte AES-GCM and
@@ -126,17 +165,23 @@ that wire decision during simple or direct-stream decode. Missing
 
 Unauthenticated wire lengths are bounded before allocation or KDF work:
 fwxAES, live, and JMG wrap/key headers share a 64 KiB maximum. Streaming
-decryptors stage plaintext in private storage, verify the GCM tag, then
-publish to the caller destination. A failed tag or hostile length must
-leave an existing destination unchanged.
+decryptors stage plaintext in private storage and verify the GCM tag before
+publication. C++, Java, and Python b512/pb512 file decoders additionally
+restore into an owner-only sibling file and replace the caller destination
+only after complete structural validation. Their streaming writers publish
+through a sibling staging file as well, so an interrupted write does not
+partially replace an existing destination. A failed tag or late structural
+failure leaves that destination unchanged. Stream work buffers are bounded at
+16 MiB before allocation; current writers emit the shared 1 MiB default.
 
-**This password-only default is already post-quantum-resistant.** AES-256
-under Grover is ≈ 128-bit-equivalent, the KDF salt is per-blob, and
-the hardened iteration counts make offline brute force expensive even
-under a quantum speedup of the inner hash. ML-KEM-768 is **not**
-mixed in here, because in a password-only setting it would not add
-security — every PQ private key would itself have to be unwrapped
-from the password, so cracking the password breaks every layer.
+The password-only path does not depend on a public-key hardness assumption.
+AES-256 has an approximately 128-bit generic-search margin under the idealized
+Grover model, but the effective security of this path is normally bounded by
+password entropy and the cost of Argon2id/PBKDF2. A per-blob salt prevents
+precomputation and amortization across identical passwords; it does not add
+entropy to a weak password. ML-KEM is not mixed into this path because a PQ
+private key protected by the same password would not create an independent
+factor: recovering that password would still unlock every layer.
 
 #### Optional: ML-KEM master-key wrap
 
@@ -163,7 +208,7 @@ they just use different backing libraries:
 
 | Runtime | ML-KEM implementation             | Build requirement                                                                                  |
 | ------- | --------------------------------- | -------------------------------------------------------------------------------------------------- |
-| C++     | **liboqs** (Open Quantum Safe)    | Linked at build time; release builds enforce this via `BASEFWX_REQUIRE_OQS=ON` (no silent downgrade). |
+| C++     | **liboqs** (Open Quantum Safe)    | Linked with ML-KEM-768 and ML-KEM-1024 enabled; release builds enforce this via `BASEFWX_REQUIRE_OQS=ON` (no silent downgrade). |
 | Java    | **BouncyCastle PQC** (ML-KEM-768/1024) | Bundled in the published JAR; no extra system package required.                              |
 | Python  | **`pqcrypto.kem.ml_kem_768/1024`** | Pulled in by the `basefwx` Python wheel.                                                          |
 
@@ -294,14 +339,29 @@ belong in the shared crypto helpers:
   `CryptoBackend` / `JavaCryptoBackend` / `NativeCryptoBackend`
   dispatch used only by that helper).
 
-**Streaming exception (intentional):** large-file / media pipelines
-reuse OpenSSL `EVP_*` (C++) or JCA `Cipher` (Java) directly for
+**Streaming exception (intentional):** large-file pipelines (and the
+compatibility-only media profile when built) reuse OpenSSL `EVP_*` (C++) or
+JCA `Cipher` (Java) directly for
 chunked GCM/CTR so they can avoid buffering whole payloads. Those
 call sites must still use the same algorithms, nonce/tag lengths,
 and AAD labels as the helpers (`kAeadNonceLen` / `AEAD_NONCE_LEN` =
 12, `kAeadTagLen` / `AEAD_TAG_LEN` = 16). New one-shot crypto must
 not invent a parallel `EVP_*` / `Cipher.getInstance` path outside
 the helpers.
+
+The helper boundary validates lengths before allocation and before narrowing
+to OpenSSL APIs that accept `int`. RFC 5869 HKDF-SHA256 output is capped at
+`255 * 32 = 8160` bytes. Released BaseFWX mask payloads larger than that use a
+separate compatibility PRF:
+`HMAC(PRK, previous || info || uint32_be(counter))` after a zero-salt
+HMAC-SHA256 extract. This stream is not HKDF and must not be used as a new
+protocol KDF; its precisely named APIs exist to preserve stored-format bytes.
+
+Both explicit-IV and random-nonce C++ AES-GCM decryptors keep OpenSSL's
+pre-authentication output in wiping private storage. They return or copy
+plaintext only after `EVP_DecryptFinal_ex` verifies the tag. Java KEM results
+similarly own their shared secret through `AutoCloseable`; callers should use
+try-with-resources or call `close()` after deriving the needed subkey.
 
 **Caller-supplied nonces are the caller's obligation.** The
 explicit-nonce forms — `AesGcmEncryptWithIv` and, since 3.8.0-dev1,

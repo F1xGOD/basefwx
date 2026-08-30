@@ -20,16 +20,15 @@ from .crypto import _an7
 from .crypto import _codecs_n10
 from .crypto import _codecs_str
 from .crypto import _fwxaes
-from .crypto import _jmg
 from .crypto import _kdf
-from .crypto import _kfm
 from .crypto import _master_key
 from .crypto import _obf
 from .crypto import _primitives as _prim
+from .features import RETIRED_MEDIA_ENABLED
 from .file import _b512file
 from .file import _file_ops
-from .media import _media
 from .runtime import _progress
+from .runtime import _hardware
 
 
 class basefwx:
@@ -44,21 +43,10 @@ class basefwx:
     import typing
     import json
     import struct
-    import wave
-    try:
-        from PIL import Image
-    except Exception:  # pragma: no cover - optional dependency
-        Image = None
-    from io import BytesIO
     try:
         import numpy as np
     except Exception:  # pragma: no cover - optional dependency
         np = None
-    # cupy is lazy-loaded — eager import costs ~300 ms (pulls in numpy,
-    # scipy, cupyx) and the CUDA path is opt-in via BASEFWX_KFM_ACCEL.
-    # _ensure_cp() runs the import right before the should-use-cuda gate.
-    cp = None
-    _cp_load_attempted = False
     import os
     import zlib
     import hashlib
@@ -147,26 +135,6 @@ class basefwx:
     N10_MUL_INV = pow(N10_MUL, -1, N10_MOD)
     N10_OFFSET_XOR = 0xA5A5F0F01234ABCD
     N10_OFFSET_CACHE = array.array("Q")
-    KFM_MAGIC = b"KFM!"
-    KFM_VERSION = 1
-    KFM_MODE_IMAGE_AUDIO = 1
-    KFM_MODE_AUDIO_IMAGE = 2
-    KFM_FLAG_BW = 1
-    KFM_HEADER_STRUCT = struct.Struct(">4sBBBBQIQI")
-    KFM_HEADER_LEN = KFM_HEADER_STRUCT.size
-    KFM_MAX_PAYLOAD = 1_073_741_824
-    KFM_AUDIO_RATE = 24000
-    KFM_ACCEL_ENV = "BASEFWX_KFM_ACCEL"
-    KFM_ACCEL_MIN_BYTES_ENV = "BASEFWX_KFM_ACCEL_MIN_BYTES"
-    KFM_ACCEL_DEFAULT_MIN_BYTES = 1 * 1024 * 1024
-    KFM_AUDIO_EXTENSIONS = frozenset({
-        ".wav", ".mp3", ".m4a", ".aac", ".flac", ".ogg", ".oga", ".opus",
-        ".wma", ".amr", ".aiff", ".aif", ".alac", ".m4b", ".caf", ".mka",
-    })
-    KFM_IMAGE_EXTENSIONS = frozenset({
-        ".png", ".jpg", ".jpeg", ".bmp", ".gif", ".webp", ".tif", ".tiff",
-        ".ico", ".heic", ".heif", ".ppm", ".pgm",
-    })
     MASTER_PQ_ALG = "ml-kem-768"
     MASTER_PQ_ALG_HIGH = "ml-kem-1024"
     MINIMUM_PASSWORD_LENGTH = 10
@@ -178,39 +146,29 @@ class basefwx:
     MASTER_EC_CURVE_NAME = "secp521r1"
     MASTER_EC_PUBLIC_ENV = "BASEFWX_MASTER_EC_PUB"
     MASTER_EC_PRIVATE_ENV = "BASEFWX_MASTER_EC_PRIV"
-    IMAGECIPHER_SCRAMBLE_CONTEXT = b'basefwx.imagecipher.scramble.v1'
-    IMAGECIPHER_OFFSET_CONTEXT = b'basefwx.imagecipher.offset.v1'
-    IMAGECIPHER_AEAD_INFO = b'basefwx.image.v1'
-    IMAGECIPHER_STREAM_INFO = b'basefwx.imagecipher.stream.v1'
-    IMAGECIPHER_ARCHIVE_INFO = b'basefwx.imagecipher.archive.v1'
-    IMAGECIPHER_TRAILER_MAGIC = b'JMG0'
-    IMAGECIPHER_KEY_TRAILER_MAGIC = b'JMG1'
-    JMG_KEY_MAGIC = b'JMGK'
-    JMG_KEY_VERSION_LEGACY = 1
-    JMG_KEY_VERSION = 2
-    JMG_SECURITY_PROFILE_LEGACY = 0
-    JMG_SECURITY_PROFILE_MAX = 1
-    JMG_SECURITY_PROFILE_DEFAULT = JMG_SECURITY_PROFILE_MAX
-    JMG_SECURITY_PROFILE_LABELS = {
-        JMG_SECURITY_PROFILE_LEGACY: "legacy",
-        JMG_SECURITY_PROFILE_MAX: "max",
-    }
-    JMG_SECURITY_PROFILE_NAMES = {
-        "legacy": JMG_SECURITY_PROFILE_LEGACY,
-        "max": JMG_SECURITY_PROFILE_MAX,
-    }
-    JMG_VIDEO_ENABLE_ENV = "BASEFWX_ENABLE_JMG_VIDEO"
-    JMG_MASK_INFO = b'basefwx.jmg.mask.v1'
-    JMG_MASK_AAD = b'jmg'
-    ENABLE_B512_AEAD = os.getenv("BASEFWX_B512_AEAD", "1") == "1"
+    # Kept as a public capability constant. 3.8 writers always require AEAD;
+    # BASEFWX_B512_AEAD=0 is no longer a security downgrade switch.
+    ENABLE_B512_AEAD = True
     B512_AEAD_INFO = b'basefwx.b512file.v1'
     B512_FILE_MASK_INFO = b'basefwx.b512file.mask.v1'
+    B512_MASK_INFO = b'basefwx.b512.mask.v1'
+    PB512_MASK_INFO = b'basefwx.pb512.mask.v1'
+    B512_STREAM_INFO = b'basefwx.b512.stream.v1'
+    PB512_STREAM_INFO = b'basefwx.pb512.stream.v1'
+    MASK_AAD_B512 = b'b512'
+    MASK_AAD_PB512 = b'pb512'
+    MASK_AAD_B512FILE = b'b512file'
+    B512_PAYLOAD_AEAD_INFO = b'basefwx.b512.payload.aead.v1'
+    PB512_PAYLOAD_AEAD_INFO = b'basefwx.pb512.payload.aead.v1'
+    B512_PAYLOAD_AAD = b'basefwx.b512.payload.v3'
+    PB512_PAYLOAD_AAD = b'basefwx.pb512.payload.v3'
     ENABLE_OBFUSCATION = os.getenv("BASEFWX_OBFUSCATE", "1") == "1"
-    ENABLE_CODEC_OBFUSCATION = os.getenv("BASEFWX_OBFUSCATE_CODECS", "1") == "1"
+    ENABLE_CODEC_OBFUSCATION = _prim._env_enabled("BASEFWX_OBFUSCATE_CODECS")
     OBF_INFO_MASK = b'basefwx.obf.mask.v1'
     OBF_INFO_PERM = b'basefwx.obf.perm.v1'
     STREAM_THRESHOLD = 250 * 1024
     STREAM_CHUNK_SIZE = 1 << 20  # 1 MiB streaming blocks
+    STREAM_CHUNK_SIZE_MAX = 16 << 20
     LIVE_STREAM_CHUNK_SIZE = 64 * 1024  # lower latency default for live stream framing
     PERF_OBFUSCATION_THRESHOLD = 1 << 20
     STREAM_MAGIC = b'STRMOBF1'
@@ -269,10 +227,7 @@ class basefwx:
     _WARNED_ARGON2_MISSING = False
     _MASTER_PUBKEY_OVERRIDE: typing.ClassVar[typing.Optional[bytes]] = None
     _CPU_COUNT_OVERRIDE = _os_module.getenv("BASEFWX_MAX_THREADS")
-    if _CPU_COUNT_OVERRIDE and _CPU_COUNT_OVERRIDE.strip().isdigit():
-        _CPU_COUNT = max(1, int(_CPU_COUNT_OVERRIDE.strip()))
-    else:
-        _CPU_COUNT = max(1, os.cpu_count() or 1)
+    _CPU_COUNT = _hardware.resolve_worker_count()
     # Single-thread mode only triggers with explicit BASEFWX_FORCE_SINGLE_THREAD=1
     _FORCE_SINGLE_THREAD_ENV = _os_module.getenv("BASEFWX_FORCE_SINGLE_THREAD")
     _SINGLE_THREAD_OVERRIDE = bool(_FORCE_SINGLE_THREAD_ENV == "1" and (os.cpu_count() or 1) > 1)
@@ -288,7 +243,7 @@ class basefwx:
         ansi_reset = "\033[0m"
         msg = (
             f"{ansi_orange}WARN: MULTI-THREAD DISABLED; PERFORMANCE MAY DETERIORATE."
-            f" Using BASEFWX_MAX_THREADS=1 with {_os_module.cpu_count() or 1} cores available.{ansi_reset}"
+            f" Using BASEFWX_FORCE_SINGLE_THREAD=1 with {_os_module.cpu_count() or 1} cores available.{ansi_reset}"
         )
         try:
             print(msg, file=basefwx.sys.stderr)
@@ -353,6 +308,7 @@ class basefwx:
     LIVE_NONCE_PREFIX_LEN = 4
     LIVE_HEADER_STRUCT = struct.Struct(">BBBBII")
     LIVE_FRAME_HEADER_STRUCT = struct.Struct(">4sBBQI")
+    LIVE_MAX_BODY = 1 << 30
     LIVE_MAX_HEADER_BODY = (
         LIVE_HEADER_STRUCT.size + FWXAES_MAX_KEY_HEADER_LEN + 2 * 0xFF
     )
@@ -388,15 +344,6 @@ class basefwx:
             _re_module.escape(token) for token in sorted(_DECODE_MAP, key=len, reverse=True)
         )
     )
-    _MD_CODE_TABLE: typing.ClassVar[tuple[str, ...]] = tuple(
-        f"{len(str(i))}{i}" for i in range(256)
-    )
-    # Pre-computed bytes lookup for faster _mdcode_ascii
-    _MD_CODE_TABLE_BYTES: typing.ClassVar[tuple[bytes, ...]] = tuple(
-        f"{len(str(i))}{i}".encode("ascii") for i in range(256)
-    )
-    _DECIMAL_BYTES_THRESHOLD = 4096
-
     # Base32hex alphabet for fast encoding
     _B32HEX_ALPHABET = b'0123456789ABCDEFGHIJKLMNOPQRSTUV'
     # Fast decode LUT: maps ASCII byte -> 5-bit value (255 = invalid)
@@ -405,17 +352,12 @@ class basefwx:
         list(range(10, 32)) + [255] * 153
     )
     _B32_FAST_THRESHOLD = 1024  # Use NumPy for data >= this size
-    # Threshold for _mdcode_ascii optimization (tuned via microbenchmarks)
-    # List comprehension is faster than generator for inputs > 500 chars
-    _MDCODE_ASCII_THRESHOLD = 500
     # Threshold for byte-path code translation (list join beats generator above this size)
     _CODE_BYTES_ASCII_THRESHOLD = 500
 
     _fast_b32hexencode = staticmethod(_prim._fast_b32hexencode)
 
     _fast_b32hexdecode = staticmethod(_prim._fast_b32hexdecode)
-
-    _require_pil = staticmethod(_prim._require_pil)
 
     _ProgressReporter = _progress._ProgressReporter
 
@@ -513,6 +455,8 @@ class basefwx:
 
     _hkdf_sha256 = staticmethod(_prim._hkdf_sha256)
 
+    _compat_prf_stream_sha256 = staticmethod(_prim._compat_prf_stream_sha256)
+
     _hkdf_stream_sha256 = staticmethod(_prim._hkdf_stream_sha256)
 
     from .crypto import _x25519 as _x25519_mod
@@ -524,10 +468,6 @@ class basefwx:
     kem_algorithm_for_public_key = staticmethod(_pq_helpers.kem_algorithm_for_public_key)
     _kem_encrypt = staticmethod(_pq_helpers.kem_encrypt)
     _kem_decrypt = staticmethod(_pq_helpers.kem_decrypt)
-
-    _mdcode_ascii = staticmethod(_codecs_str._mdcode_ascii)
-
-    _mcode_digits = staticmethod(_codecs_str._mcode_digits)
 
     _aead_encrypt = staticmethod(_prim._aead_encrypt)
 
@@ -552,28 +492,6 @@ class basefwx:
     _recover_mask_key_from_blob = staticmethod(_master_key._recover_mask_key_from_blob)
 
     _strict_pq_only = staticmethod(_master_key._strict_pq_only)
-
-    _jmg_security_profile_id = staticmethod(_jmg._jmg_security_profile_id)
-
-    _jmg_video_enabled = staticmethod(_jmg._jmg_video_enabled)
-
-    _jmg_stream_info_for_profile = staticmethod(_jmg._jmg_stream_info_for_profile)
-
-    _jmg_archive_info_for_profile = staticmethod(_jmg._jmg_archive_info_for_profile)
-
-    _jmg_build_key_header = staticmethod(_jmg._jmg_build_key_header)
-
-    _jmg_profile_from_key_header = staticmethod(_jmg._jmg_profile_from_key_header)
-
-    _jmg_parse_key_header = staticmethod(_jmg._jmg_parse_key_header)
-
-    _jmg_prepare_keys = staticmethod(_jmg._jmg_prepare_keys)
-
-    _append_balanced_trailer = staticmethod(_jmg._append_balanced_trailer)
-
-    _extract_balanced_trailer_from_bytes = staticmethod(_jmg._extract_balanced_trailer_from_bytes)
-
-    _extract_balanced_trailer_info = staticmethod(_jmg._extract_balanced_trailer_info)
 
     _kem_shared_to_digits = staticmethod(_master_key._kem_shared_to_digits)
 
@@ -758,64 +676,6 @@ class basefwx:
 
     n10decode_bytes = staticmethod(_codecs_n10.n10decode_bytes)
 
-    _kfm_clean_ext = staticmethod(_kfm._kfm_clean_ext)
-
-    _kfm_is_audio_ext = staticmethod(_kfm._kfm_is_audio_ext)
-
-    _kfm_is_image_ext = staticmethod(_kfm._kfm_is_image_ext)
-
-    _kfm_warn = staticmethod(_kfm._kfm_warn)
-
-    _kfm_accel_mode = staticmethod(_kfm._kfm_accel_mode)
-
-    _kfm_accel_min_bytes = staticmethod(_kfm._kfm_accel_min_bytes)
-
-    _ensure_cp = classmethod(_kfm._ensure_cp)
-
-    _kfm_should_use_cuda = staticmethod(_kfm._kfm_should_use_cuda)
-
-    _kfm_paths_equal = staticmethod(_kfm._kfm_paths_equal)
-
-    _kfm_default_output = staticmethod(_kfm._kfm_default_output)
-
-    _kfm_resolve_output = staticmethod(_kfm._kfm_resolve_output)
-
-    _kfm_keystream = staticmethod(_kfm._kfm_keystream)
-
-    _kfm_xor = staticmethod(_kfm._kfm_xor)
-
-    _kfm_pack_container = staticmethod(_kfm._kfm_pack_container)
-
-    _kfm_unpack_container = staticmethod(_kfm._kfm_unpack_container)
-
-    _kfm_bytes_to_wav = staticmethod(_kfm._kfm_bytes_to_wav)
-
-    _kfm_wav_to_bytes = staticmethod(_kfm._kfm_wav_to_bytes)
-
-    _kfm_pcm16le_to_bytes = staticmethod(_kfm._kfm_pcm16le_to_bytes)
-
-    _kfm_ffmpeg_audio_to_bytes = staticmethod(_kfm._kfm_ffmpeg_audio_to_bytes)
-
-    _kfm_audio_to_bytes = staticmethod(_kfm._kfm_audio_to_bytes)
-
-    _kfm_bytes_to_png = staticmethod(_kfm._kfm_bytes_to_png)
-
-    _kfm_png_to_bytes = staticmethod(_kfm._kfm_png_to_bytes)
-
-    _kfm_detect_carrier_kinds = staticmethod(_kfm._kfm_detect_carrier_kinds)
-
-    _kfm_decode_container = staticmethod(_kfm._kfm_decode_container)
-
-    kFMe = staticmethod(_kfm.kFMe)
-
-    _kfae_legacy_encode = staticmethod(_kfm._kfae_legacy_encode)
-
-    kFMd = staticmethod(_kfm.kFMd)
-
-    kFAe = staticmethod(_kfm.kFAe)
-
-    kFAd = staticmethod(_kfm.kFAd)
-
     hash512 = staticmethod(_prim.hash512)
 
     _looks_like_base64 = staticmethod(_obf._looks_like_base64)
@@ -823,8 +683,6 @@ class basefwx:
     _maybe_obfuscate_codecs = staticmethod(_obf._maybe_obfuscate_codecs)
 
     _maybe_deobfuscate_codecs = staticmethod(_obf._maybe_deobfuscate_codecs)
-
-    uhash513 = staticmethod(_prim.uhash513)
 
     # REVERSIBLE CODE ENCODE - SECURITY: ❙❙
     pb512encode = staticmethod(_b512file.pb512encode)
@@ -852,9 +710,6 @@ class basefwx:
 
     b512file = staticmethod(_b512file.b512file)
 
-    ImageCipher = _media.ImageCipher
-
-    MediaCipher = _media.MediaCipher
     _aes_light_encode_path = _aes_file._aes_light_encode_path
 
     _aes_light_decode_path = staticmethod(_aes_file._aes_light_decode_path)
@@ -878,18 +733,6 @@ class basefwx:
 
     _b32_padding_count = staticmethod(_codecs_str._b32_padding_count)
 
-    _strip_leading_zeros = staticmethod(_codecs_str._strip_leading_zeros)
-
-    _compare_magnitude = staticmethod(_codecs_str._compare_magnitude)
-
-    _decimal_diff = staticmethod(_codecs_str._decimal_diff)
-
-    _add_magnitude = staticmethod(_codecs_str._add_magnitude)
-
-    _subtract_magnitude = staticmethod(_codecs_str._subtract_magnitude)
-
-    _add_signed = staticmethod(_codecs_str._add_signed)
-
     decode = classmethod(_codecs_str.decode)
 
     fwx256unbin = classmethod(_codecs_str.fwx256unbin)
@@ -904,35 +747,28 @@ class basefwx:
 
     pb512file_decode_bytes = staticmethod(_b512file.pb512file_decode_bytes)
 
-    bi512encode = staticmethod(_codecs_str.bi512encode)
+    @staticmethod
+    def _try_encrypt_retired_media(*args, **kwargs):
+        if kwargs.get("keep_meta") or kwargs.get("archive_original"):
+            raise RuntimeError(
+                "Retired media compatibility is disabled; set "
+                "BASEFWX_ENABLE_RETIRED_MEDIA=1 before importing BaseFWX"
+            )
+        return None
 
-    # CODELESS ENCODE - SECURITY: ❙
-    a512encode = staticmethod(_codecs_str.a512encode)
 
-    a512decode = staticmethod(_codecs_str.a512decode)
+if RETIRED_MEDIA_ENABLED:
+    from .retired.codecs import install as _install_retired_codecs
+    from .retired.media.install import install as _install_retired_media
 
-    # b1024encode retired in 3.7.0 — was bi512encode(a512encode(string)).
-    # Caller code that needs the same byte-for-byte output should compose
-    # the two primitives directly. Removed for parity with the C++ and
-    # Java runtimes and to trim a large chunk of cross-runtime test time
-    # the alias contributed without adding any new behavior.
-
-    # CODELESS ENCODE - SECURITY: ❙
-    _coerce_text = staticmethod(_codecs_str._coerce_text)
-
-    b256decode = classmethod(_codecs_str.b256decode)
-
-    b256encode = classmethod(_codecs_str.b256encode)
+    _install_retired_codecs(basefwx)
+    _install_retired_media(basefwx)
 
 # ENCRYPTION TYPES:
 # BASE64 - b64encode/b64decode  V1.0
 # HASH512 - hash512  V1.0
-# HASH512U - uhash513 V1.2
 # FWX512RP - pb512encode/pb512encode V2.0
 # FWX512R - b512encode/b512decode V2.0 ★
-# FWX512I - bi512encode V3.4 ★
-# FWX512C - a512encode/a512decode V2.0 ❗❗❗ (NOT RECCOMENDED)
-# FWX256R - b256encode/b256decode V1.3 ❗❗❗ (NOT RECCOMENDED)
 
 # HOW TO USE: basefwx.ENCRYPTION-TYPE("text","password")
 

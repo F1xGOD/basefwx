@@ -11,6 +11,24 @@ endif()
 if(NOT DEFINED BASEFWX_NM OR BASEFWX_NM STREQUAL "")
     message(FATAL_ERROR "BASEFWX_NM is required")
 endif()
+if(NOT DEFINED BASEFWX_EXPECT_RETIRED_MEDIA)
+    message(FATAL_ERROR "BASEFWX_EXPECT_RETIRED_MEDIA is required")
+endif()
+if(NOT DEFINED BASEFWX_EXPECT_SOVERSION
+        OR BASEFWX_EXPECT_SOVERSION STREQUAL "")
+    message(FATAL_ERROR "BASEFWX_EXPECT_SOVERSION is required")
+endif()
+if(NOT DEFINED BASEFWX_SONAME_FILE_NAME
+        OR BASEFWX_SONAME_FILE_NAME STREQUAL "")
+    message(FATAL_ERROR "BASEFWX_SONAME_FILE_NAME is required")
+endif()
+
+set(expected_soname "libbasefwx.so.${BASEFWX_EXPECT_SOVERSION}")
+if(NOT BASEFWX_SONAME_FILE_NAME STREQUAL expected_soname)
+    message(FATAL_ERROR
+        "BaseFWX shared-library SONAME file is ${BASEFWX_SONAME_FILE_NAME}; "
+        "expected ${expected_soname}")
+endif()
 
 execute_process(
     COMMAND "${BASEFWX_NM}" -D -C --defined-only "${BASEFWX_LIBRARY}"
@@ -30,6 +48,7 @@ endif()
 
 foreach(required_symbol
         "basefwx::crypto::HkdfSha256"
+        "basefwx::crypto::CompatPrfStreamSha256"
         "basefwx::pq::GenerateKeyPair"
         "basefwx::x25519::GenerateKeyPair")
     string(FIND "${exported_symbols}" "${required_symbol}" symbol_offset)
@@ -39,4 +58,41 @@ foreach(required_symbol
     endif()
 endforeach()
 
-message(STATUS "BaseFWX core ABI exports contain required 3.8 APIs and no CLI symbols")
+set(retired_symbols
+    "basefwx::codec::B256Encode"
+    "basefwx::codec::B256Decode"
+    "basefwx::B256Encode"
+    "basefwx::B256Decode"
+    "basefwx::A512Encode"
+    "basefwx::A512Decode"
+    "basefwx::Bi512Encode"
+    "basefwx::Uhash513"
+    "basefwx::InspectKfmCarrierFile"
+    "basefwx::Jmge"
+    "basefwx::Jmgd"
+    "basefwx::Kfme"
+    "basefwx::Kfmd"
+    "basefwx::Kfae"
+    "basefwx::Kfad"
+    "basefwx::imagecipher::")
+
+if(BASEFWX_EXPECT_RETIRED_MEDIA)
+    foreach(required_symbol IN LISTS retired_symbols)
+        string(FIND "${exported_symbols}" "${required_symbol}" symbol_offset)
+        if(symbol_offset EQUAL -1)
+            message(FATAL_ERROR
+                "compatibility libbasefwx is missing retired API symbol: ${required_symbol}")
+        endif()
+    endforeach()
+else()
+    foreach(forbidden_symbol IN LISTS retired_symbols)
+        string(FIND "${exported_symbols}" "${forbidden_symbol}" symbol_offset)
+        if(NOT symbol_offset EQUAL -1)
+            message(FATAL_ERROR
+                "default libbasefwx exports retired API symbol: ${forbidden_symbol}")
+        endif()
+    endforeach()
+endif()
+
+message(STATUS
+    "BaseFWX ABI exports match the requested compatibility profile and contain no CLI symbols")

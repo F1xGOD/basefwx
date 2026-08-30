@@ -10,7 +10,162 @@ def repoVersion = file('../VERSION').text.trim()
 def buildUtc = System.getenv('BASEFWX_BUILD_UTC') ?: new Date().format("yyyy-MM-dd'T'HH:mm:ss'Z'", TimeZone.getTimeZone('UTC'))
 def buildOrigin = System.getenv('GITHUB_ACTIONS') ? 'github' : 'local'
 def gpgFingerprint = System.getenv('BASEFWX_GPG_FINGERPRINT') ?: ''
+def retiredMediaEnv = (System.getenv('BASEFWX_ENABLE_RETIRED_MEDIA') ?: '')
+        .trim().toLowerCase()
+def enableRetiredMedia = project.hasProperty('basefwxEnableRetiredMedia')
+        ? project.property('basefwxEnableRetiredMedia').toString().toBoolean()
+        : retiredMediaEnv in ['1', 'true', 'yes', 'on']
+def coreConstantsSource = file(
+        'src/main/java/com/fixcraft/basefwx/Constants.java')
+def retiredConstantsFields = file(
+        'src/retired/profile/Constants.fields')
+def coreBaseFwxSource = file(
+        'src/main/java/com/fixcraft/basefwx/BaseFwx.java')
+def retiredBaseFwxMethods = file(
+        'src/retired/profile/BaseFwx.methods')
+def coreCodecSource = file(
+        'src/main/java/com/fixcraft/basefwx/Codec.java')
+def retiredCodecMethods = file(
+        'src/retired/profile/Codec.methods')
+def coreBaseFwxCliSource = file(
+        'src/main/java/com/fixcraft/basefwx/cli/BaseFwxCli.java')
+def retiredBaseFwxCliMethods = file(
+        'src/retired/profile/BaseFwxCli.methods')
+def coreCliOptionsSource = file(
+        'src/main/java/com/fixcraft/basefwx/cli/CliOptions.java')
+def retiredCliOptionsMethods = file(
+        'src/retired/profile/CliOptions.methods')
+def generatedRetiredProfileRoot = file(
+        "$buildDir/generated/sources/retiredProfile/java")
+def generatedRetiredConstantsSource = new File(
+        generatedRetiredProfileRoot,
+        'com/fixcraft/basefwx/Constants.java')
+def generatedRetiredBaseFwxSource = new File(
+        generatedRetiredProfileRoot,
+        'com/fixcraft/basefwx/BaseFwx.java')
+def generatedRetiredCodecSource = new File(
+        generatedRetiredProfileRoot,
+        'com/fixcraft/basefwx/Codec.java')
+def generatedRetiredBaseFwxCliSource = new File(
+        generatedRetiredProfileRoot,
+        'com/fixcraft/basefwx/cli/BaseFwxCli.java')
+def generatedRetiredCliOptionsSource = new File(
+        generatedRetiredProfileRoot,
+        'com/fixcraft/basefwx/cli/CliOptions.java')
 version = repoVersion
+
+sourceSets {
+    main {
+        java {
+            if (enableRetiredMedia) {
+                srcDir 'src/retired/java'
+                srcDir generatedRetiredProfileRoot
+                exclude { details ->
+                    details.file.absolutePath in [
+                        coreConstantsSource.absolutePath,
+                        coreBaseFwxSource.absolutePath,
+                        coreCodecSource.absolutePath,
+                        coreBaseFwxCliSource.absolutePath,
+                        coreCliOptionsSource.absolutePath
+                    ]
+                }
+            }
+        }
+    }
+    test {
+        java {
+            if (enableRetiredMedia) {
+                srcDir 'src/retiredTest/java'
+            }
+        }
+    }
+}
+
+task generateRetiredProfileSources {
+    inputs.property('basefwxEnableRetiredMedia', enableRetiredMedia)
+    inputs.file(coreConstantsSource)
+    inputs.file(retiredConstantsFields)
+    inputs.file(coreBaseFwxSource)
+    inputs.file(retiredBaseFwxMethods)
+    inputs.file(coreCodecSource)
+    inputs.file(retiredCodecMethods)
+    inputs.file(coreBaseFwxCliSource)
+    inputs.file(retiredBaseFwxCliMethods)
+    inputs.file(coreCliOptionsSource)
+    inputs.file(retiredCliOptionsMethods)
+    outputs.files(
+            generatedRetiredConstantsSource,
+            generatedRetiredBaseFwxSource,
+            generatedRetiredCodecSource,
+            generatedRetiredBaseFwxCliSource,
+            generatedRetiredCliOptionsSource)
+    onlyIf { enableRetiredMedia }
+    doLast {
+        def renderProfile = { File source, File fragment,
+                              File destination, String marker ->
+            String sourceText = source.getText('UTF-8')
+            int markerOffset = sourceText.indexOf(marker)
+            if (markerOffset < 0
+                    || markerOffset != sourceText.lastIndexOf(marker)) {
+                throw new GradleException(
+                        source.name
+                        + ' must contain exactly one profile marker')
+            }
+            String profileText = fragment.getText('UTF-8')
+            destination.parentFile.mkdirs()
+            destination.setText(
+                    sourceText.replace(marker, profileText), 'UTF-8')
+        }
+        def renderProfileBlock = { File source, File fragment,
+                                   File destination ->
+            String sourceText = source.getText('UTF-8')
+            String beginMarker =
+                    '    // BASEFWX_PROFILE_METHODS_BEGIN\n'
+            String endMarker =
+                    '    // BASEFWX_PROFILE_METHODS_END\n'
+            int beginOffset = sourceText.indexOf(beginMarker)
+            int endOffset = sourceText.indexOf(endMarker)
+            if (beginOffset < 0 || endOffset < beginOffset
+                    || beginOffset != sourceText.lastIndexOf(beginMarker)
+                    || endOffset != sourceText.lastIndexOf(endMarker)) {
+                throw new GradleException(
+                        source.name
+                        + ' must contain exactly one ordered profile block')
+            }
+            String profileText = fragment.getText('UTF-8')
+            destination.parentFile.mkdirs()
+            destination.setText(
+                    sourceText.substring(0, beginOffset)
+                    + profileText
+                    + sourceText.substring(
+                            endOffset + endMarker.length()),
+                    'UTF-8')
+        }
+        renderProfile(
+                coreConstantsSource,
+                retiredConstantsFields,
+                generatedRetiredConstantsSource,
+                '    // BASEFWX_PROFILE_FIELDS\n')
+        renderProfile(
+                coreBaseFwxSource,
+                retiredBaseFwxMethods,
+                generatedRetiredBaseFwxSource,
+                '    // BASEFWX_PROFILE_METHODS\n')
+        renderProfile(
+                coreCodecSource,
+                retiredCodecMethods,
+                generatedRetiredCodecSource,
+                '    // BASEFWX_PROFILE_METHODS\n')
+        renderProfileBlock(
+                coreBaseFwxCliSource,
+                retiredBaseFwxCliMethods,
+                generatedRetiredBaseFwxCliSource)
+        renderProfileBlock(
+                coreCliOptionsSource,
+                retiredCliOptionsMethods,
+                generatedRetiredCliOptionsSource)
+    }
+}
 
 repositories {
     mavenCentral()
@@ -23,9 +178,20 @@ dependencies {
 }
 
 [compileJava, compileTestJava].forEach { task ->
+    task.inputs.property('basefwxEnableRetiredMedia', enableRetiredMedia)
     task.sourceCompatibility = '1.8'
     task.targetCompatibility = '1.8'
     task.options.encoding = 'UTF-8'
+    // Gradle 4 does not reliably remove class files whose sources disappear.
+    // Clear only this task's class directory when compilation actually runs so
+    // a compatibility-to-core rebuild cannot package stale retired classes.
+    task.doFirst {
+        delete task.destinationDir
+    }
+}
+
+if (enableRetiredMedia) {
+    compileJava.dependsOn generateRetiredProfileSources
 }
 
 processResources {
@@ -44,6 +210,8 @@ processResources {
 }
 
 jar {
+    inputs.property('basefwxEnableRetiredMedia', enableRetiredMedia)
+    includeEmptyDirs = false
     if (delegate.metaClass.hasProperty(delegate, 'duplicatesStrategy')) {
         duplicatesStrategy = 'exclude'
     }

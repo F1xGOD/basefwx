@@ -21,11 +21,7 @@ basefwx_benchmark_value_is_true() {
 }
 
 basefwx_benchmark_configure_methods() {
-    BASEFWX_BENCH_RETIRED_ENABLED=0
-    BASEFWX_BENCH_TEXT_METHODS=("b512" "pb512" "b64" "a512" "n10")
-
-    if basefwx_benchmark_value_is_true "${BASEFWX_BENCH_RETIRED:-0}"; then
-        BASEFWX_BENCH_RETIRED_ENABLED=1
-        BASEFWX_BENCH_TEXT_METHODS=("b256" "${BASEFWX_BENCH_TEXT_METHODS[@]}")
-    fi
+    # Compatibility codecs are intentionally never benchmarked. Their only
+    # supported qualification is exact-byte and decode compatibility.
+    BASEFWX_BENCH_TEXT_METHODS=("b512" "pb512" "b64" "n10")
 }

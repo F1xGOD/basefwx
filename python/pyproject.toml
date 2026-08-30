@@ -24,7 +24,6 @@ classifiers = [
 dependencies = [
     "cryptography>=41.0.0",
     "numpy>=1.24.0",
-    "pillow>=10.0.0",
     "pqcrypto>=0.3.4",
     # Argon2id is the default user-KDF (see Constants.USER_KDF_DEFAULT
     # in basefwx/legacy.py). Forcing argon2-cffi as a hard dependency
@@ -37,6 +36,7 @@ dependencies = [
 
 [project.optional-dependencies]
 argon2 = []
+retired-media = ["pillow>=10.0.0"]
 
 [project.entry-points."basefwx.plugins"]
 # Third-party plugins register a BasefwxPlugin subclass here, e.g.:
@@ -51,5 +51,5 @@ PrivacyPolicy = "https://www.fixcraft.org/privacy-policy"
 [tool.setuptools.dynamic]
 version = {attr = "basefwx.runtime._repo_version.__version__"}
 
-[tool.setuptools.packages.find]
-include = ["basefwx", "basefwx.*"]
+[tool.setuptools]
+include-package-data = false

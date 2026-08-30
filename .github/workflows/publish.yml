@@ -68,15 +68,15 @@ jobs:
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
-          java-version: '17'
+          java-version: '21'
 
       - name: Run comprehensive release test suite
         env:
           BASEFWX_OBFUSCATE: "1"
+          BASEFWX_ENABLE_RETIRED_MEDIA: "0"
           ALLOW_BAKED_PUB: "0"
           BASEFWX_BENCH_RESULTS_DIR: results
           BASEFWX_RELEASE_TAG: ${{ github.ref_name }}
-          BASEFWX_ENABLE_JMG_VIDEO: "0"
           BASEFWX_TEST_REQUIRE_ARGON2: "ON"
           BASEFWX_TEST_REQUIRE_OQS: "ON"
           BASEFWX_TEST_REQUIRE_LZMA: "ON"
@@ -112,7 +112,6 @@ jobs:
           }
           required = {
               "fwxAES-live": {"python", "cpp", "java"},
-              "kFAe": {"python"},
           }
           missing = []
           for label, langs in required.items():
@@ -826,7 +825,7 @@ jobs:
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
-          java-version: '17'
+          java-version: '21'
 
       - name: Build Java jar
         working-directory: java

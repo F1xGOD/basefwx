@@ -10,10 +10,10 @@
 #include "basefwx/filecodec.hpp"
 #include "basefwx/format.hpp"
 #include "basefwx/fwxaes.hpp"
-#include "basefwx/imagecipher.hpp"
 #include "basefwx/keywrap.hpp"
 #include "basefwx/livecipher.hpp"
 #include "basefwx/metadata.hpp"
+#include "basefwx/obfuscation.hpp"
 #include "basefwx/pq.hpp"
 #include "basefwx/secure_temp.hpp"
 #include "filecodec_internal.hpp"
@@ -51,6 +51,17 @@ void AppendU32Be(Bytes& out, std::uint32_t value) {
     const std::size_t offset = out.size();
     out.resize(offset + 4);
     WriteU32Be(out.data() + offset, value);
+}
+
+void AppendU64Be(Bytes& out, std::uint64_t value) {
+    for (int shift = 56; shift >= 0; shift -= 8) {
+        out.push_back(static_cast<std::uint8_t>(value >> shift));
+    }
+}
+
+void AppendU16Be(Bytes& out, std::uint16_t value) {
+    out.push_back(static_cast<std::uint8_t>((value >> 8) & 0xFF));
+    out.push_back(static_cast<std::uint8_t>(value & 0xFF));
 }
 
 void ExpectReject(const std::function<void()>& action,
@@ -160,6 +171,106 @@ Bytes MaliciousStreamingFileCodecBlob(std::uint32_t iterations) {
         + basefwx::constants::kAeadNonceLen
         + basefwx::constants::kAeadTagLen);
     return blob;
+}
+
+Bytes AuthenticatedMalformedStreamingBlob(
+    bool heavy,
+    const std::string& password,
+    const basefwx::pb512::KdfOptions& kdf) {
+    const std::string metadata = heavy
+        ? basefwx::metadata::Build(
+              "AES-HEAVY", false, false, "none", "AESGCM", "pbkdf2",
+              "STREAM", std::string_view{"no"}, 1u,
+              std::nullopt, std::nullopt, std::nullopt, {}, "v1")
+        : basefwx::metadata::Build(
+              "FWX512R", false, false, "none", "AESGCM", "pbkdf2",
+              "STREAM", std::string_view{"yes"});
+    const Bytes metadata_bytes(metadata.begin(), metadata.end());
+
+    Bytes plaintext = metadata_bytes;
+    plaintext.insert(
+        plaintext.end(),
+        basefwx::constants::kMetaDelim.begin(),
+        basefwx::constants::kMetaDelim.end());
+    plaintext.insert(
+        plaintext.end(),
+        basefwx::constants::kStreamMagic.begin(),
+        basefwx::constants::kStreamMagic.end());
+    AppendU32Be(plaintext, 1024u);
+    AppendU64Be(plaintext, 1u);
+    plaintext.resize(
+        plaintext.size()
+            + basefwx::obf::StreamObfuscator::kSaltLen,
+        0);
+    constexpr std::string_view extension = ".bin";
+    AppendU16Be(
+        plaintext, static_cast<std::uint16_t>(extension.size()));
+    plaintext.insert(
+        plaintext.end(), extension.begin(), extension.end());
+    // The authenticated header declares one data byte, but two follow. The
+    // decoder must reject this only after tag verification and full parsing.
+    plaintext.push_back(0x41);
+    plaintext.push_back(0x42);
+
+    Bytes user_blob;
+    basefwx::crypto::SecureBytes aead_key;
+    if (heavy) {
+        basefwx::crypto::SecureBytes root_key{
+            basefwx::crypto::RandomBytes(32)};
+        const Bytes salt = basefwx::crypto::RandomBytes(
+            basefwx::constants::kUserKdfSaltSize);
+        basefwx::crypto::SecureBytes user_key{
+            basefwx::keywrap::DeriveUserKeyWithLabel(
+                password, salt, "pbkdf2", kdf)};
+        const Bytes wrapped = basefwx::crypto::AeadEncrypt(
+            user_key.bytes(), root_key.bytes(), metadata_bytes);
+        user_blob = salt;
+        user_blob.insert(user_blob.end(), wrapped.begin(), wrapped.end());
+        auto payload_keys =
+            basefwx::filecodec::internal::DerivePayloadKeys(
+                root_key.bytes());
+        aead_key.Reset(std::move(payload_keys.aead));
+        basefwx::crypto::SecureClear(payload_keys.obf);
+    } else {
+        auto mask = basefwx::keywrap::PrepareMaskKey(
+            password,
+            false,
+            basefwx::constants::kB512FileMaskInfo,
+            true,
+            basefwx::constants::kMaskAadB512File,
+            kdf);
+        user_blob = mask.user_blob;
+        aead_key.Reset(basefwx::crypto::HkdfSha256(
+            mask.mask_key, basefwx::constants::kB512AeadInfo, 32));
+    }
+
+    const Bytes nonce = basefwx::crypto::RandomBytes(
+        basefwx::constants::kAeadNonceLen);
+    const Bytes ciphertext = basefwx::crypto::AesGcmEncryptWithIv(
+        aead_key.bytes(), nonce, plaintext, metadata_bytes);
+    const std::uint32_t payload_len = static_cast<std::uint32_t>(
+        4u + metadata_bytes.size() + nonce.size() + ciphertext.size());
+
+    Bytes blob;
+    AppendU32Be(blob, static_cast<std::uint32_t>(user_blob.size()));
+    blob.insert(blob.end(), user_blob.begin(), user_blob.end());
+    AppendU32Be(blob, 0u);
+    AppendU32Be(blob, payload_len);
+    AppendU32Be(blob, static_cast<std::uint32_t>(metadata_bytes.size()));
+    blob.insert(blob.end(), metadata_bytes.begin(), metadata_bytes.end());
+    blob.insert(blob.end(), nonce.begin(), nonce.end());
+    blob.insert(blob.end(), ciphertext.begin(), ciphertext.end());
+    return blob;
+}
+
+std::set<std::filesystem::path> DirectoryEntryNames(
+    const std::filesystem::path& directory) {
+    std::set<std::filesystem::path> entries;
+    for (const auto& entry :
+         std::filesystem::directory_iterator(directory)) {
+        entries.insert(entry.path().filename());
+    }
+    return entries;
 }
 
 class ScopedTempDirectory {
@@ -535,6 +646,159 @@ int main() {
 
         ScopedTempDirectory temp_dir;
         {
+            basefwx::pb512::KdfOptions kdf;
+            kdf.label = "pbkdf2";
+            kdf.pbkdf2_iterations = 1;
+            for (const bool heavy : {false, true}) {
+                const std::string label = heavy ? "pb512" : "b512";
+                const auto source =
+                    temp_dir.path() / ("invalid-" + label + "-chunk.bin");
+                basefwx::filecodec::internal::WriteFileBytes(
+                    source, Bytes{0x01});
+                basefwx::filecodec::FileOptions options;
+                options.keep_input = true;
+                options.stream_threshold = 1;
+                options.stream_chunk_size = 0;
+                const auto encode = [&]() {
+                    if (heavy) {
+                        (void)basefwx::filecodec::Pb512EncodeFile(
+                            source.string(),
+                            "peer-stream-chunk-password",
+                            options,
+                            kdf);
+                    } else {
+                        (void)basefwx::filecodec::B512EncodeFile(
+                            source.string(),
+                            "peer-stream-chunk-password",
+                            options,
+                            kdf);
+                    }
+                };
+                ExpectReject(
+                    encode,
+                    label + " zero streaming chunk size",
+                    "chunk size");
+                options.stream_chunk_size =
+                    basefwx::constants::kStreamChunkSizeMax + 1u;
+                ExpectReject(
+                    encode,
+                    label + " oversized streaming chunk size",
+                    "chunk size");
+                auto output = source;
+                output.replace_extension(".fwx");
+                if (std::filesystem::exists(output)) {
+                    throw std::runtime_error(
+                        "rejected streaming chunk size left output");
+                }
+            }
+        }
+        {
+            ScopedEnvironment heavy_iterations(
+                "BASEFWX_HEAVY_PBKDF2_ITERS", "1");
+            basefwx::pb512::KdfOptions kdf;
+            kdf.label = "pbkdf2";
+            kdf.pbkdf2_iterations = 1;
+            const Bytes expected(
+                basefwx::constants::kStreamChunkSize + 29u,
+                static_cast<std::uint8_t>(0x5c));
+            for (const bool heavy : {false, true}) {
+                const std::string label = heavy ? "pb512" : "b512";
+                const auto source = temp_dir.path()
+                    / (label + "-same-path.fwx");
+                basefwx::filecodec::internal::WriteFileBytes(
+                    source, expected);
+                basefwx::filecodec::FileOptions options;
+                options.keep_input = true;
+                options.stream_threshold = 1;
+                options.stream_chunk_size = 4096;
+                const std::string encoded = heavy
+                    ? basefwx::filecodec::Pb512EncodeFile(
+                          source.string(),
+                          "same-path-stream-password",
+                          options,
+                          kdf)
+                    : basefwx::filecodec::B512EncodeFile(
+                          source.string(),
+                          "same-path-stream-password",
+                          options,
+                          kdf);
+                if (std::filesystem::path(encoded) != source) {
+                    throw std::runtime_error(
+                        label + " same-path encode returned wrong path");
+                }
+                const std::string decoded = heavy
+                    ? basefwx::filecodec::Pb512DecodeFile(
+                          encoded,
+                          "same-path-stream-password",
+                          options,
+                          kdf)
+                    : basefwx::filecodec::B512DecodeFile(
+                          encoded,
+                          "same-path-stream-password",
+                          options,
+                          kdf);
+                if (basefwx::filecodec::internal::ReadFileBytes(decoded)
+                    != expected) {
+                    throw std::runtime_error(
+                        label + " same-path streaming roundtrip mismatch");
+                }
+            }
+        }
+        {
+            constexpr std::string_view password =
+                "peer-stream-publication-password";
+            basefwx::pb512::KdfOptions kdf;
+            kdf.label = "pbkdf2";
+            kdf.pbkdf2_iterations = 1;
+            const Bytes sentinel{
+                'e', 'x', 'i', 's', 't', 'i', 'n', 'g'};
+            for (const bool heavy : {false, true}) {
+                const std::string label = heavy ? "pb512" : "b512";
+                const auto candidate = temp_dir.path()
+                    / (label + "-late-structure.bin.fwx");
+                const auto target = temp_dir.path()
+                    / (label + "-late-structure.bin");
+                basefwx::filecodec::internal::WriteFileBytes(
+                    candidate,
+                    AuthenticatedMalformedStreamingBlob(
+                        heavy, std::string(password), kdf));
+                basefwx::filecodec::internal::WriteFileBytes(
+                    target, sentinel);
+                const auto before = DirectoryEntryNames(temp_dir.path());
+
+                basefwx::filecodec::FileOptions options;
+                options.keep_input = true;
+                options.stream_chunk_size = 4096;
+                ExpectReject(
+                    [&]() {
+                        if (heavy) {
+                            (void)basefwx::filecodec::Pb512DecodeFile(
+                                candidate.string(),
+                                std::string(password),
+                                options,
+                                kdf);
+                        } else {
+                            (void)basefwx::filecodec::B512DecodeFile(
+                                candidate.string(),
+                                std::string(password),
+                                options,
+                                kdf);
+                        }
+                    },
+                    label + " authenticated late structure publication",
+                    "unexpected trailing data");
+                if (basefwx::filecodec::internal::ReadFileBytes(target)
+                    != sentinel) {
+                    throw std::runtime_error(
+                        label + " late structure failure clobbered target");
+                }
+                if (DirectoryEntryNames(temp_dir.path()) != before) {
+                    throw std::runtime_error(
+                        label + " late structure failure leaked temp data");
+                }
+            }
+        }
+        {
             const auto source = temp_dir.path() / "stripped-stream.bin";
             basefwx::filecodec::internal::WriteFileBytes(
                 source, Bytes{0x01, 0x02, 0x03});
@@ -725,96 +989,6 @@ int main() {
                 != expected) {
                 throw std::runtime_error(
                     "PB512 obfuscation-off stream roundtrip mismatch");
-            }
-        }
-        {
-            const auto carrier =
-                temp_dir.path() / "hostile-jmg.bin";
-            const auto destination =
-                temp_dir.path() / "hostile-jmg-output.bin";
-            Bytes key_header(
-                basefwx::constants::kJmgKeyMagic.begin(),
-                basefwx::constants::kJmgKeyMagic.end());
-            key_header.push_back(
-                basefwx::constants::kJmgKeyVersion);
-            AppendU32Be(
-                key_header,
-                std::numeric_limits<std::int32_t>::max());
-            Bytes length;
-            AppendU32Be(
-                length,
-                static_cast<std::uint32_t>(
-                    key_header.size()));
-            {
-                std::ofstream output(carrier, std::ios::binary);
-                output << "carrier";
-                output.write(
-                    basefwx::constants::
-                        kImageCipherTrailerMagic.data(),
-                    static_cast<std::streamsize>(
-                        basefwx::constants::
-                            kImageCipherTrailerMagic.size()));
-                output.write(
-                    reinterpret_cast<const char*>(
-                        length.data()),
-                    static_cast<std::streamsize>(
-                        length.size()));
-                output.write(
-                    reinterpret_cast<const char*>(
-                        key_header.data()),
-                    static_cast<std::streamsize>(
-                        key_header.size()));
-                output.write(
-                    basefwx::constants::
-                        kImageCipherTrailerMagic.data(),
-                    static_cast<std::streamsize>(
-                        basefwx::constants::
-                            kImageCipherTrailerMagic.size()));
-                output.write(
-                    reinterpret_cast<const char*>(
-                        length.data()),
-                    static_cast<std::streamsize>(
-                        length.size()));
-            }
-            {
-                std::ofstream(destination, std::ios::binary)
-                    << "existing authenticated destination";
-            }
-            std::set<std::filesystem::path> before;
-            for (const auto& entry :
-                 std::filesystem::directory_iterator(
-                     temp_dir.path())) {
-                before.insert(entry.path().filename());
-            }
-            ExpectReject(
-                [&]() {
-                    (void)basefwx::imagecipher::DecryptMedia(
-                        carrier.string(),
-                        "media-trailer-test-password",
-                        destination.string(),
-                        false);
-                },
-                "JMG inner key header allocation cap",
-                "Invalid JMG key header length");
-            std::ifstream restored(
-                destination, std::ios::binary);
-            const std::string restored_text(
-                (std::istreambuf_iterator<char>(restored)),
-                std::istreambuf_iterator<char>());
-            if (restored_text
-                != "existing authenticated destination") {
-                throw std::runtime_error(
-                    "hostile JMG header clobbered destination");
-            }
-            std::set<std::filesystem::path> after;
-            for (const auto& entry :
-                 std::filesystem::directory_iterator(
-                     temp_dir.path())) {
-                after.insert(entry.path().filename());
-            }
-            if (before != after) {
-                throw std::runtime_error(
-                    "hostile JMG header leaked temp output");
             }
         }
         {

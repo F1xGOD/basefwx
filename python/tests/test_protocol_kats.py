@@ -14,7 +14,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import basefwx
-from basefwx.crypto import _pq
+from basefwx.crypto import _pq, _primitives
 
 VECTORS = Path(__file__).resolve().parents[2] / "testdata" / "protocol_kats" / "vectors.json"
 KAT_SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "gen_protocol_kats.py"
@@ -54,6 +54,35 @@ class ProtocolKatTests(unittest.TestCase):
             info=v["info_utf8"].encode("ascii"),
         )
         self.assertEqual(out, out2)
+
+    def test_large_payload_compat_prf_alias_preserves_bytes(self):
+        length = 256 * 32
+        key_material = b"compatibility-key"
+        info = b"basefwx.compat.prf.test"
+        precise = _primitives._compat_prf_stream_sha256(
+            key_material, info, length)
+        legacy = _primitives._hkdf_stream_sha256(
+            key_material, info, length)
+        self.assertEqual(precise, legacy)
+        self.assertEqual(len(precise), length)
+        self.assertEqual(
+            precise[:32].hex(),
+            "52441fd524e5898966141ddac1212f0e"
+            "282458a5fadea27f871d4cf6d9621cb5",
+        )
+        self.assertEqual(
+            precise[254 * 32:255 * 32].hex(),
+            "b9cfd313174c50ff195d80c3cdabd82b"
+            "bb7b15c63391a19d08ad9ac10d7fe279",
+        )
+        self.assertEqual(
+            precise[255 * 32:256 * 32].hex(),
+            "1243c9a23c437ceaab6dfb5af5c5a01a"
+            "5b34c474e9fd0ce9d9563f269255f383",
+        )
+        with self.assertRaises(ValueError):
+            _primitives._compat_prf_stream_sha256(
+                key_material, info, -1)
 
     def test_x25519(self):
         v = self.data["x25519"]

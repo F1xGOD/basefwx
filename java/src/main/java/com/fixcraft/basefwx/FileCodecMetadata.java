@@ -6,37 +6,23 @@
 
 package com.fixcraft.basefwx;
 
-import java.io.BufferedInputStream;
-import java.io.BufferedOutputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileInputStream;
-import java.io.FileOutputStream;
 import java.io.IOException;
-import java.io.InputStream;
-import java.io.OutputStream;
-import java.nio.ByteBuffer;
-import java.nio.channels.FileChannel;
 import java.nio.charset.StandardCharsets;
-import java.security.GeneralSecurityException;
 import java.time.Instant;
-import java.util.Arrays;
 import java.util.LinkedHashMap;
-import java.util.List;
 import java.util.Map;
-import javax.crypto.Cipher;
-import javax.crypto.Mac;
-import javax.crypto.spec.IvParameterSpec;
-import javax.crypto.spec.SecretKeySpec;
+
 import static com.fixcraft.basefwx.FileCodecIo.*;
 import static com.fixcraft.basefwx.FileCodecKdf.*;
-import static com.fixcraft.basefwx.FileCodecMetadata.*;
 import static com.fixcraft.basefwx.FileCodecObfuscation.*;
 
 final class FileCodecMetadata {
     private FileCodecMetadata() {}
 
-static int parsePeerPbkdf2Iterations(String raw, int fallback) {
+    static int parsePeerPbkdf2Iterations(String raw, int fallback) {
         if (raw == null || raw.isEmpty()) {
             FileCodecKdf.requirePeerPbkdf2WithinLimits(fallback);
             return fallback;
@@ -67,7 +53,7 @@ static int parsePeerPbkdf2Iterations(String raw, int fallback) {
         return parsed;
     }
 
-static Integer parseMetadataIntOrNull(String raw) {
+    static Integer parseMetadataIntOrNull(String raw) {
         if (raw == null || raw.isEmpty()) {
             return null;
         }
@@ -100,7 +86,7 @@ static Integer parseMetadataIntOrNull(String raw) {
         return parsed;
     }
 
-static boolean isStreamMode(String metadataBlob) {
+    static boolean isStreamMode(String metadataBlob) {
         if (metadataBlob == null || metadataBlob.isEmpty()) {
             return false;
         }
@@ -108,7 +94,7 @@ static boolean isStreamMode(String metadataBlob) {
         return "stream".equalsIgnoreCase(mode);
     }
 
-static String peekMetadataBlob(File input) {
+    static String peekMetadataBlob(File input) {
         if (input.length() < 12L) {
             return "";
         }
@@ -159,10 +145,28 @@ static String peekMetadataBlob(File input) {
         }
     }
 
-static byte[] buildStreamHeader(long inputSize,
+    static byte[] buildStreamHeader(long inputSize,
                                             byte[] streamSalt,
                                             byte[] extBytes,
                                             int chunkSize) {
+        if (inputSize < 0L) {
+            throw new IllegalArgumentException(
+                    "Streaming input length must not be negative");
+        }
+        if (chunkSize <= 0
+                || chunkSize > Constants.STREAM_CHUNK_SIZE_MAX) {
+            throw new IllegalArgumentException(
+                    "Streaming chunk size must be between 1 byte and 16 MiB");
+        }
+        if (streamSalt == null
+                || streamSalt.length != Constants.STREAM_SALT_LEN) {
+            throw new IllegalArgumentException(
+                    "Streaming salt length mismatch");
+        }
+        if (extBytes == null || extBytes.length > 0xFFFF) {
+            throw new IllegalArgumentException(
+                    "Streaming file extension is too long");
+        }
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         try {
             out.write(Constants.STREAM_MAGIC);
@@ -179,7 +183,7 @@ static byte[] buildStreamHeader(long inputSize,
         return out.toByteArray();
     }
 
-static String buildMetadata(String method,
+    static String buildMetadata(String method,
                                         boolean strip,
                                         boolean useMaster,
                                         String masterKem,
@@ -189,7 +193,7 @@ static String buildMetadata(String method,
             null, null, null, null, null, null, null, null);
     }
 
-static String buildMetadata(String method,
+    static String buildMetadata(String method,
                                         boolean strip,
                                         boolean useMaster,
                                         String masterKem,
@@ -209,7 +213,7 @@ static String buildMetadata(String method,
                 argonMem, argonPar, pack, null);
     }
 
-static String buildMetadata(String method,
+    static String buildMetadata(String method,
                                         boolean strip,
                                         boolean useMaster,
                                         String masterKem,
@@ -283,7 +287,7 @@ static String buildMetadata(String method,
         return encoded;
     }
 
-static String encodeJson(Map<String, String> map) {
+    static String encodeJson(Map<String, String> map) {
         StringBuilder out = new StringBuilder();
         out.append('{');
         boolean first = true;
@@ -299,14 +303,14 @@ static String encodeJson(Map<String, String> map) {
         return out.toString();
     }
 
-static String escapeJson(String value) {
+    static String escapeJson(String value) {
         if (value == null) {
             return "";
         }
         return value.replace("\\", "\\\\").replace("\"", "\\\"");
     }
 
-static String[] splitMetadata(String payload) {
+    static String[] splitMetadata(String payload) {
         int idx = payload.indexOf(Constants.META_DELIM);
         if (idx >= 0) {
             return new String[]{payload.substring(0, idx),
@@ -315,7 +319,7 @@ static String[] splitMetadata(String payload) {
         return new String[]{"", payload};
     }
 
-static String metaValue(String metadataBlob, String key) {
+    static String metaValue(String metadataBlob, String key) {
         if (metadataBlob == null || metadataBlob.isEmpty()) {
             return "";
         }
@@ -327,7 +331,7 @@ static String metaValue(String metadataBlob, String key) {
         }
     }
 
-static String jsonValue(String json, String key) {
+    static String jsonValue(String json, String key) {
         int idx = skipJsonWhitespace(json, 0);
         if (idx >= json.length() || json.charAt(idx) != '{') {
             return "";
@@ -379,7 +383,7 @@ static String jsonValue(String json, String key) {
         return "";
     }
 
-static int skipJsonWhitespace(String json, int idx) {
+    static int skipJsonWhitespace(String json, int idx) {
         int len = json.length();
         int pos = idx;
         while (pos < len) {
@@ -393,7 +397,7 @@ static int skipJsonWhitespace(String json, int idx) {
         return pos;
     }
 
-static int parseJsonString(String json, int start, StringBuilder out) {
+    static int parseJsonString(String json, int start, StringBuilder out) {
         int len = json.length();
         if (start >= len || json.charAt(start) != '"') {
             return -1;
@@ -463,7 +467,7 @@ static int parseJsonString(String json, int start, StringBuilder out) {
         return -1;
     }
 
-static String[] splitWithDelims(String payload, String delim, String legacy, String label) {
+    static String[] splitWithDelims(String payload, String delim, String legacy, String label) {
         int idx = payload.indexOf(delim);
         if (idx >= 0) {
             return new String[]{payload.substring(0, idx), payload.substring(idx + delim.length())};

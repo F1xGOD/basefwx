@@ -25,9 +25,9 @@
 # Plugins are intended for ENCRYPTION pipelines (fwxAES, b512file,
 # pb512file, livecipher, etc.) where the AEAD wraps the plaintext and
 # the plugin transforms either the pre-AEAD plaintext or the
-# post-AEAD ciphertext. Hash methods (hash512, uhash513, bi512) are
-# one-way and have no AEAD step; the plugin contract doesn't apply
-# to them. The smoke here therefore tests the plugin API surface
+# post-AEAD ciphertext. Hash methods are one-way and have no AEAD
+# step; the plugin contract doesn't apply to them. The smoke here
+# therefore tests the plugin API surface
 # itself, not its (deferred) integration into specific crypto methods.
 # Since 3.7.0 the smoke also runs one fwxAES CLI round-trip with a
 # plugin (--plugin xor-rotate, PRE_AEAD) after the ABI steps.

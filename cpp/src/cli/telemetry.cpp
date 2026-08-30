@@ -376,27 +376,7 @@ CommandHwPlan BuildHwPlan(const std::string& command) {
     } else {
         plan.aes = "cpu";
     }
-    if (command == "jmge" || command == "jmgd") {
-        const std::string hwaccel = ToLower(basefwx::env::Get("BASEFWX_HWACCEL"));
-        if (hwaccel == "nvenc" || hwaccel == "cuda" || hwaccel == "nvidia") {
-            plan.encode = "NVENC";
-            plan.decode = "NVENC";
-            plan.expect_gpu = true;
-            plan.reason = "BASEFWX_HWACCEL requested NVIDIA encode/decode path";
-        } else if (hwaccel == "qsv" || hwaccel == "intel") {
-            plan.encode = "QSV";
-            plan.decode = "QSV";
-            plan.reason = "BASEFWX_HWACCEL requested Intel QSV path";
-        } else if (hwaccel == "vaapi") {
-            plan.encode = "VAAPI";
-            plan.decode = "VAAPI";
-            plan.reason = "BASEFWX_HWACCEL requested VAAPI path";
-        } else {
-            plan.reason = "auto hwaccel routing with CPU crypto";
-        }
-    } else {
-        plan.reason = "command uses CPU crypto path";
-    }
+    plan.reason = "command uses CPU crypto path";
     return plan;
 }
 

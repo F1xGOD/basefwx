@@ -386,7 +386,7 @@ public final class BaseFwxCli {
         if (code >= 0) {
             return code;
         }
-        code = MediaCommands.handle(command, args, argc, useMaster);
+        code = dispatchProfileCommand(command, args, argc, useMaster);
         if (code >= 0) {
             return code;
         }
@@ -500,15 +500,7 @@ public final class BaseFwxCli {
         System.out.println("  n10-dec <digits>");
         System.out.println("  n10file-enc <in> <out>");
         System.out.println("  n10file-dec <in> <out>");
-        System.out.println("  kFMe <in> [--out <out>] [--bw]");
-        System.out.println("  kFMd <in> [--out <out>] [--bw]");
-        System.out.println("  kFAe <in> [--out <out>] [--bw]   (deprecated alias)");
-        System.out.println("  kFAd <in> [--out <out>]          (deprecated alias)");
         System.out.println("  hash512 <text>");
-        System.out.println("  uhash513 <text>");
-        System.out.println("  a512-enc <text>");
-        System.out.println("  a512-dec <text>");
-        System.out.println("  bi512-enc <text>");
         System.out.println("  b512-enc <text> <password> [--use-master|--no-master]");
         System.out.println("  b512-dec <text> <password> [--use-master|--no-master]");
         System.out.println("  pb512-enc <text> <password> [--use-master|--no-master]");
@@ -519,10 +511,6 @@ public final class BaseFwxCli {
         System.out.println("  pb512file-enc <in> <out> <password> [--use-master|--no-master]");
         System.out.println("  pb512file-bytes-rt <in> <out> <password> [--use-master|--no-master]");
         System.out.println("  pb512file-dec <in> <out> <password> [--use-master|--no-master]");
-        System.out.println("  jmge <in> <out> <password> [--keep-meta] [--keep-input] [--no-archive] [--use-master|--no-master]");
-        System.out.println("  jmgd <in> <out> <password> [--use-master|--no-master]");
-        System.out.println("  b256-enc <text>");
-        System.out.println("  b256-dec <text>");
         System.out.println("  bench-text <method> <text-file> <password> [--use-master|--no-master]");
         System.out.println("  bench-hash <method> <text-file>");
         System.out.println("  bench-fwxaes <file> <password> [--use-master|--no-master]");
@@ -532,6 +520,16 @@ public final class BaseFwxCli {
         System.out.println("  bench-live <file> <password> [--use-master|--no-master]");
         System.out.println("  bench-b512file <file> <password> [--use-master|--no-master]");
         System.out.println("  bench-pb512file <file> <password> [--use-master|--no-master]");
-        System.out.println("  bench-jmg <media> <password> [--use-master|--no-master]");
+        printProfileUsage();
     }
+
+    // BASEFWX_PROFILE_METHODS_BEGIN
+    private static int dispatchProfileCommand(
+            String command, String[] args, int argc,
+            boolean useMaster) {
+        return -1;
+    }
+
+    private static void printProfileUsage() {}
+    // BASEFWX_PROFILE_METHODS_END
 }

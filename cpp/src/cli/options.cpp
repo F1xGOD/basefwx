@@ -5,6 +5,9 @@
  */
 
 #include "cli/options.hpp"
+#if BASEFWX_HAS_RETIRED_MEDIA
+#include "retired/cli.hpp"
+#endif
 
 #include <cstdlib>
 #include <iostream>
@@ -147,9 +150,6 @@ FileArgs ParseFileArgs(int argc, char** argv, int start_index) {
         } else if (flag == "--strip-meta") {
             opts.strip_metadata = true;
             idx += 1;
-        } else if (flag == "--no-aead") {
-            opts.enable_aead = false;
-            idx += 1;
         } else if (flag == "--no-obf") {
             opts.enable_obf = false;
             idx += 1;
@@ -265,21 +265,13 @@ FwxAesArgs ParseFwxAesArgs(int argc, char** argv, int start_index) {
         } else if (flag == "--compress") {
             opts.compress = true;
             idx += 1;
-        } else if (flag == "--ignore-media") {
-            opts.ignore_media = true;
-            idx += 1;
-        } else if (flag == "--keep-meta") {
-            opts.keep_meta = true;
-            idx += 1;
         } else if (flag == "--keep-input") {
             opts.keep_input = true;
             idx += 1;
-        } else if (flag == "--archive") {
-            opts.archive_original = true;
-            idx += 1;
-        } else if (flag == "--no-archive") {
-            opts.archive_original = false;
-            idx += 1;
+#if BASEFWX_HAS_RETIRED_MEDIA
+        } else if (basefwx::retired::cli::TryParseFwxAesFlag(
+                       flag, &idx, &opts)) {
+#endif
         } else if (flag == "--plugin") {
             if (idx + 1 >= argc) {
                 throw std::runtime_error("Missing plugin path");
@@ -304,49 +296,6 @@ FwxAesArgs ParseFwxAesArgs(int argc, char** argv, int start_index) {
             }
             opts.plugin_config_file = argv[idx + 1];
             idx += 2;
-        } else {
-            throw std::runtime_error("Unknown flag: " + flag);
-        }
-    }
-    return opts;
-}
-
-ImageArgs ParseImageArgs(int argc, char** argv, int start_index) {
-    ImageArgs opts;
-    if (start_index >= argc) {
-        throw std::runtime_error("Missing input path");
-    }
-    opts.input = argv[start_index];
-    int idx = start_index + 1;
-    while (idx < argc) {
-        std::string flag(argv[idx]);
-        if (flag == "-p" || flag == "--password") {
-            if (idx + 1 >= argc) {
-                throw std::runtime_error("Missing password value");
-            }
-            opts.password = argv[idx + 1];
-            opts.password_provided = true;
-            idx += 2;
-        } else if (HandleMasterFlag(flag, argc, argv, &idx, &opts.use_master)) {
-            idx += 1;
-        } else if (flag == "--out" || flag == "-o") {
-            if (idx + 1 >= argc) {
-                throw std::runtime_error("Missing output path");
-            }
-            opts.output = argv[idx + 1];
-            idx += 2;
-        } else if (flag == "--keep-meta") {
-            opts.keep_meta = true;
-            idx += 1;
-        } else if (flag == "--keep-input") {
-            opts.keep_input = true;
-            idx += 1;
-        } else if (flag == "--archive") {
-            opts.archive_original = true;
-            idx += 1;
-        } else if (flag == "--no-archive") {
-            opts.archive_original = false;
-            idx += 1;
         } else {
             throw std::runtime_error("Unknown flag: " + flag);
         }

@@ -2,10 +2,11 @@
 # Copyright (C) 2020-2026  FixCraft Inc.
 # SPDX-License-Identifier: LGPL-3.0-or-later AND GPL-3.0-or-later
 
-"""Compatibility module for the historical monolithic implementation.
+"""Stable import facade for the modular BaseFWX Python engine.
 
-The full implementation now lives in `legacy.py` so the package can be
-organized into smaller modules without changing public imports.
+The historical ``basefwx`` class is assembled in :mod:`basefwx.legacy` to
+preserve public imports, while its maintained implementations live in focused
+``crypto``, ``file``, and ``runtime`` modules.
 """
 
 from .legacy import basefwx

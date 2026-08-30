@@ -5,7 +5,8 @@
 foreach(required_var
         BASEFWX_BUILD_DIR
         BASEFWX_TEST_PREFIX
-        BASEFWX_CONSUMER_TEST)
+        BASEFWX_CONSUMER_TEST
+        BASEFWX_EXPECT_RETIRED_MEDIA)
     if(NOT DEFINED ${required_var} OR "${${required_var}}" STREQUAL "")
         message(FATAL_ERROR "${required_var} is required")
     endif()
@@ -35,6 +36,7 @@ endif()
 execute_process(
     COMMAND "${CMAKE_COMMAND}" -E env
         "BASEFWX_TEST_PREFIX=${BASEFWX_TEST_PREFIX}"
+        "BASEFWX_EXPECT_RETIRED_MEDIA=${BASEFWX_EXPECT_RETIRED_MEDIA}"
         /bin/sh "${BASEFWX_CONSUMER_TEST}"
     RESULT_VARIABLE consumer_result
     OUTPUT_VARIABLE consumer_output

@@ -46,7 +46,6 @@ BATCH_MODULES: dict[str, list[str]] = {
         "_check_ram_for_argon2",
         "_fast_b32hexencode",
         "_fast_b32hexdecode",
-        "_require_pil",
         "_human_readable_size",
         "_del",
         "_hkdf",
@@ -55,6 +54,7 @@ BATCH_MODULES: dict[str, list[str]] = {
         "_unpermute_inplace",
         "_xor_keystream_inplace",
         "_hkdf_sha256",
+        "_compat_prf_stream_sha256",
         "_hkdf_stream_sha256",
         "_aead_encrypt",
         "_aead_decrypt",
@@ -62,11 +62,8 @@ BATCH_MODULES: dict[str, list[str]] = {
         "b64encode",
         "b64decode",
         "hash512",
-        "uhash513",
     ],
     "_codecs_str": [
-        "_mdcode_ascii",
-        "_mcode_digits",
         "_code_chunk",
         "_code_bytes",
         "code",
@@ -75,18 +72,6 @@ BATCH_MODULES: dict[str, list[str]] = {
         "fwx256unbin",
         "_fwx256bin_bytes",
         "_b32_padding_count",
-        "_coerce_text",
-        "b256encode",
-        "b256decode",
-        "a512encode",
-        "a512decode",
-        "bi512encode",
-        "_strip_leading_zeros",
-        "_compare_magnitude",
-        "_decimal_diff",
-        "_add_magnitude",
-        "_subtract_magnitude",
-        "_add_signed",
     ],
     "_codecs_n10": [
         "_n10_mod_sub",
@@ -175,14 +160,6 @@ BATCH_MODULES: dict[str, list[str]] = {
         "fwxAES_live_decrypt_ffmpeg",
         "fwxAES_file",
     ],
-    "_kfm": [
-        "_ensure_cp",
-        "kFMe",
-        "kFMd",
-        "_kfae_legacy_encode",
-        "kFAe",
-        "kFAd",
-    ],
     "_master_key": [
         "_decode_pubkey_bytes",
         "_set_master_pubkey_override",
@@ -202,19 +179,6 @@ BATCH_MODULES: dict[str, list[str]] = {
         "_pq_wrap_secret",
         "_pq_unwrap_secret",
         "_pq_unwrap_secret_with_shared",
-    ],
-    "_jmg": [
-        "_jmg_security_profile_id",
-        "_jmg_video_enabled",
-        "_jmg_stream_info_for_profile",
-        "_jmg_archive_info_for_profile",
-        "_jmg_build_key_header",
-        "_jmg_profile_from_key_header",
-        "_jmg_parse_key_header",
-        "_jmg_prepare_keys",
-        "_append_balanced_trailer",
-        "_extract_balanced_trailer_from_bytes",
-        "_extract_balanced_trailer_info",
     ],
     "_b512file": [
         "_pack_length_prefixed",
@@ -248,7 +212,6 @@ BATCH_MODULES: dict[str, list[str]] = {
         "_aes_heavy_decode_path_stream",
         "AESfile",
     ],
-    "_media": ["ImageCipher", "MediaCipher"],
 }
 
 MODULE_PACKAGES = {
@@ -257,15 +220,12 @@ MODULE_PACKAGES = {
     "_codecs_n10": "crypto",
     "_codecs_str": "crypto",
     "_fwxaes": "crypto",
-    "_jmg": "crypto",
     "_kdf": "crypto",
-    "_kfm": "crypto",
     "_master_key": "crypto",
     "_obf": "crypto",
     "_primitives": "crypto",
     "_b512file": "file",
     "_file_ops": "file",
-    "_media": "media",
     "_progress": "runtime",
 }
 
@@ -497,11 +457,6 @@ try:
 except Exception:  # pragma: no cover
     np = None
 
-try:
-    from PIL import Image
-except Exception:  # pragma: no cover
-    Image = None
-
 from cryptography.hazmat.primitives import hashes, hmac
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
@@ -540,7 +495,6 @@ _B32HEX_DECODE_LUT: bytes = bytes(
     body = body.replace("basefwx.secrets", "secrets")
     body = body.replace("basefwx.string", "string")
     body = body.replace("basefwx.sys", "sys")
-    body = body.replace("basefwx.Image", "Image")
     body = body.replace("basefwx.typing.Optional", "Optional")
     body = body.replace("basefwx.typing.Tuple", "Tuple")
     body = body.replace("basefwx._perf_mode_enabled()", "_perf_mode_enabled()")
@@ -563,6 +517,24 @@ def main() -> int:
     source = remove_init_int_limit(source)
 
     tree = ast.parse(source)
+    expected_members = {
+        name for names in BATCH_MODULES.values() for name in names
+    }
+    extractable_members = {
+        name
+        for name in expected_members
+        if find_member(tree, source, name) is not None
+    }
+    if not extractable_members:
+        print("legacy.py is already split; no files changed")
+        return 0
+    if extractable_members != expected_members:
+        missing = sorted(expected_members - extractable_members)
+        raise RuntimeError(
+            "refusing a partial extraction that could overwrite existing "
+            f"modules; missing members: {missing}"
+        )
+
     all_delegations: dict[str, str] = {}
     modules_written: list[str] = []
 

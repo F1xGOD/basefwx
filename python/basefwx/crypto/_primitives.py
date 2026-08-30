@@ -2,18 +2,34 @@
 # Copyright (C) 2020-2026  FixCraft Inc.
 # Licensed under the GNU Lesser General Public License v3.0 or later.
 
-"""Extracted implementation cluster from legacy.py."""
+"""Native-backed cryptographic primitives and runtime capability helpers."""
 
 from __future__ import annotations
 
+import base64
+import binascii
+import hashlib
+import hmac as stdlib_hmac
+import os
+import secrets
+import string
+import struct
+import sys
+from typing import Optional, Tuple
 
-import os as _os_module
-import sys as _sys_module
+try:
+    import numpy as np
+except Exception:  # pragma: no cover
+    np = None
+
+from cryptography.hazmat.primitives import hashes, hmac
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 
 
 def _runtime_arch_label() -> str:
     try:
-        machine = _os_module.uname().machine.lower()
+        machine = os.uname().machine.lower()
     except AttributeError:
         machine = ""
     if machine in ("x86_64", "amd64"):
@@ -28,40 +44,12 @@ def _runtime_arch_label() -> str:
 
 
 def _python_build_origin_label() -> str:
-    return "GitHub Actions" if _os_module.getenv("GITHUB_ACTIONS") else "local/manual"
+    return "GitHub Actions" if os.getenv("GITHUB_ACTIONS") else "local/manual"
 
 
 def _enable_large_int_string_conversion_for_cli() -> None:
-    if hasattr(_sys_module, "set_int_max_str_digits"):
-        _sys_module.set_int_max_str_digits(0)
-
-
-import base64
-import hashlib
-import hmac as stdlib_hmac
-import os
-import os as _os_module
-import secrets
-import string
-import struct
-import sys
-import sys as _sys_module
-import typing
-from typing import Optional, Tuple
-
-try:
-    import numpy as np
-except Exception:  # pragma: no cover
-    np = None
-
-try:
-    from PIL import Image
-except Exception:  # pragma: no cover
-    Image = None
-
-from cryptography.hazmat.primitives import hashes, hmac
-from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+    if hasattr(sys, "set_int_max_str_digits"):
+        sys.set_int_max_str_digits(0)
 
 PERM_FAST_MIN = 4 * 1024
 OFB_FAST_MIN = 64 * 1024
@@ -69,12 +57,23 @@ OBF_INFO_MASK = b'basefwx.obf.mask.v1'
 PERF_OBFUSCATION_THRESHOLD = 1 << 20
 _B32HEX_ALPHABET = b'0123456789ABCDEFGHIJKLMNOPQRSTUV'
 _B32HEX_DECODE_LUT: bytes = bytes(
-    [255] * 48 + list(range(10)) + [255] * 7 + list(range(10, 32)) + [255] * 6 +
-    list(range(10, 32)) + [255] * 153
+    [255] * 48
+    + list(range(10))
+    + [255] * 7
+    + list(range(10, 32))
+    + [255] * 10
+    + list(range(10, 32))
+    + [255] * 137
 )
+_SHA256_DIGEST_LEN = 32
+_HKDF_SHA256_MAX_LEN = 255 * _SHA256_DIGEST_LEN
+_AES_256_KEY_LEN = 32
+_AEAD_NONCE_LEN = 12
+_AEAD_TAG_LEN = 16
+_ARGON2_MIN_AVAILABLE_RAM_MIB = 128.0
 
 def _env_int(name: str) -> 'Optional[int]':
-    value = _os_module.getenv(name)
+    value = os.getenv(name)
     if not value:
         return None
     try:
@@ -93,7 +92,7 @@ def _env_enabled_value(value: 'Optional[str]') -> bool:
 
 
 def _env_enabled(name: str) -> bool:
-    return _env_enabled_value(_os_module.getenv(name))
+    return _env_enabled_value(os.getenv(name))
 
 
 def _perf_mode_enabled() -> bool:
@@ -105,16 +104,14 @@ def _use_fast_obfuscation(length: int) -> bool:
 
 
 def _get_available_ram_mib():
-    """
-        Get available RAM in MiB. Returns None if unable to determine.
-        """
+    """Return available RAM in MiB, or ``None`` when it cannot be read."""
     try:
         import psutil
         return psutil.virtual_memory().available / (1024 * 1024)
-    except ImportError:
+    except Exception:
         pass
     try:
-        if _os_module.path.exists('/proc/meminfo'):
+        if os.path.exists('/proc/meminfo'):
             with open('/proc/meminfo', 'r') as f:
                 for line in f:
                     if line.startswith('MemAvailable:'):
@@ -134,39 +131,12 @@ def _get_available_ram_mib():
 
 
 def _check_ram_for_argon2():
-    """
-        Check if system has sufficient RAM for Argon2 (at least 128 MiB available).
-        Returns True if sufficient, False otherwise.
-        """
-    ram_mib = None
-    try:
-        import psutil
-        ram_mib = psutil.virtual_memory().available / (1024 * 1024)
-    except Exception:
-        pass
-    if ram_mib is None:
-        try:
-            if _os_module.path.exists('/proc/meminfo'):
-                with open('/proc/meminfo', 'r') as f:
-                    for line in f:
-                        if line.startswith('MemAvailable:'):
-                            kb = int(line.split()[1])
-                            ram_mib = kb / 1024
-                            break
-            if ram_mib is None:
-                import subprocess
-                result = subprocess.run(['sysctl', '-n', 'vm.stats.vm.v_free_count'], capture_output=True, text=True, timeout=1)
-                if result.returncode == 0:
-                    page_count = int(result.stdout.strip())
-                    page_size_result = subprocess.run(['sysctl', '-n', 'hw.pagesize'], capture_output=True, text=True, timeout=1)
-                    if page_size_result.returncode == 0:
-                        page_size = int(page_size_result.stdout.strip())
-                        ram_mib = page_count * page_size / (1024 * 1024)
-        except Exception:
-            ram_mib = None
-    if ram_mib is None:
-        return True
-    return ram_mib >= 128.0
+    """Return whether the host has enough reported free RAM for Argon2."""
+    ram_mib = _get_available_ram_mib()
+    return (
+        ram_mib is None
+        or ram_mib >= _ARGON2_MIN_AVAILABLE_RAM_MIB
+    )
 
 
 def _fast_b32hexencode(data: bytes) -> bytes:
@@ -199,13 +169,20 @@ def _fast_b32hexdecode(data: bytes) -> bytes:
     """NumPy-accelerated base32hex decoding."""
     import numpy as np
     pad_count = 0
-    while data and data[-1 - pad_count] == ord('='):
+    while pad_count < len(data) and data[-1 - pad_count] == ord('='):
         pad_count += 1
+    if len(data) % 8 != 0 or pad_count not in (0, 1, 3, 4, 6):
+        raise binascii.Error('Incorrect padding')
+    expected_remainder = {0: 0, 1: 7, 3: 5, 4: 4, 6: 2}[pad_count]
+    if (len(data) - pad_count) % 8 != expected_remainder:
+        raise binascii.Error('Incorrect padding')
     if pad_count:
         data = data[:-pad_count]
     arr = np.frombuffer(data, dtype=np.uint8)
     lut = np.frombuffer(_B32HEX_DECODE_LUT, dtype=np.uint8)
     vals = lut[arr]
+    if np.any(vals == 255):
+        raise binascii.Error('Non-base32 digit found')
     pad_to_8 = (8 - len(vals) % 8) % 8
     if pad_to_8:
         vals = np.concatenate([vals, np.zeros(pad_to_8, dtype=np.uint8)])
@@ -222,11 +199,6 @@ def _fast_b32hexdecode(data: bytes) -> bytes:
         if remove:
             result = result[:-remove]
     return result
-
-
-def _require_pil() -> None:
-    if Image is None:
-        raise RuntimeError('Pillow is required for image operations (pip install Pillow)')
 
 
 def _human_readable_size(num_bytes: int) -> str:
@@ -357,15 +329,29 @@ def _hkdf_sha256(
     salt: bytes | None = None,
 ) -> bytes:
     """HKDF-SHA256. ``salt=None`` / empty matches C++ empty-salt (HashLen zeros)."""
+    if length < 0:
+        raise ValueError('HKDF length must not be negative')
+    if length > _HKDF_SHA256_MAX_LEN:
+        raise ValueError('HKDF-SHA256 output exceeds RFC 5869 limit')
     extract_salt = None if not salt else salt
     hk = HKDF(algorithm=hashes.SHA256(), length=length, salt=extract_salt, info=info)
     return hk.derive(key_material)
 
 
-def _hkdf_stream_sha256(key_material: bytes, info: bytes, length: int) -> bytes:
-    """HKDF-Expand for arbitrary length output (optimized with memoryview)."""
-    if length <= 0:
+def _compat_prf_stream_sha256(key_material: bytes, info: bytes, length: int) -> bytes:
+    """Released large-payload PRF stream; not RFC 5869 HKDF.
+
+    The stream uses a zero-salt HMAC-SHA256 extract followed by
+    ``HMAC(PRK, previous || info || uint32_be(counter))`` blocks. Its bytes are
+    retained for existing BaseFWX masked payloads larger than 8160 bytes.
+    """
+    if length < 0:
+        raise ValueError('compatibility PRF length must not be negative')
+    if length == 0:
         return b''
+    blocks = (length + 31) // 32
+    if blocks > 0xFFFFFFFF:
+        raise ValueError('compatibility PRF stream counter exhausted')
     info_bytes = info or b''
     zero_salt = b'\x00' * 32
     prk = stdlib_hmac.new(zero_salt, key_material, hashlib.sha256).digest()
@@ -392,16 +378,25 @@ def _hkdf_stream_sha256(key_material: bytes, info: bytes, length: int) -> bytes:
     return bytes(out)
 
 
+def _hkdf_stream_sha256(key_material: bytes, info: bytes, length: int) -> bytes:
+    """Compatibility alias for :func:`_compat_prf_stream_sha256`."""
+    return _compat_prf_stream_sha256(key_material, info, length)
+
+
 def _aead_encrypt(key: bytes, plaintext: bytes, aad: 'Optional[bytes]') -> bytes:
-    nonce = os.urandom(12)
+    if len(key) != _AES_256_KEY_LEN:
+        raise ValueError('AES-GCM expects a 32-byte key')
+    nonce = os.urandom(_AEAD_NONCE_LEN)
     ct = AESGCM(key).encrypt(nonce, plaintext, aad or None)
     return nonce + ct
 
 
 def _aead_decrypt(key: bytes, blob: bytes, aad: 'Optional[bytes]') -> bytes:
-    if len(blob) < 13:
+    if len(key) != _AES_256_KEY_LEN:
+        raise ValueError('AES-GCM expects a 32-byte key')
+    if len(blob) < _AEAD_NONCE_LEN + _AEAD_TAG_LEN:
         raise ValueError('Malformed AEAD blob: too short')
-    nonce, ct = (blob[:12], blob[12:])
+    nonce, ct = (blob[:_AEAD_NONCE_LEN], blob[_AEAD_NONCE_LEN:])
     return AESGCM(key).decrypt(nonce, ct, aad or None)
 
 
@@ -421,28 +416,3 @@ def b64decode(string: str):
 
 def hash512(string: str):
     return hashlib.sha512(string.encode('utf-8')).hexdigest()
-
-
-def uhash513(string: str):
-    sti = string
-    if os.getenv('BASEFWX_UHASH_LEGACY') == '1':
-        input_bytes = sti.encode('utf-8')
-        first_digest = hashlib.sha256(input_bytes).hexdigest().encode('utf-8')
-        compatibility_sha1 = hashlib.sha1(
-            first_digest,
-            usedforsecurity=False,
-        ).hexdigest().encode('utf-8')
-        chained_digest = hashlib.sha512(compatibility_sha1).hexdigest()
-        input_digest = hashlib.sha512(input_bytes).hexdigest()
-        encoded = _lazy_b512encode(chained_digest, input_digest)
-        return hashlib.sha256(encoded.encode('utf-8')).hexdigest()
-    h1 = hashlib.sha256(sti.encode('utf-8')).hexdigest()
-    h2 = hashlib.sha1(h1.encode('utf-8'), usedforsecurity=False).hexdigest()
-    h3 = hashlib.sha512(h2.encode('utf-8')).hexdigest()
-    h4 = hashlib.sha512(sti.encode('utf-8')).hexdigest()
-    return hashlib.sha256((h3 + h4).encode('utf-8')).hexdigest()
-
-
-def _lazy_b512encode(*args, **kwargs):
-    from ..legacy import basefwx as _engine
-    return _engine.b512encode(*args, **kwargs)

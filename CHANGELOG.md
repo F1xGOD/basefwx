@@ -3,6 +3,68 @@
 ## [Unreleased]
 
 ### Security
+- **Authenticated b512/pb512 text payloads (`v3`).** All three writers now
+  emit `0x03 || uint32_be(plaintext_length) || nonce || ciphertext || tag`,
+  using AES-256-GCM with a payload key derived from the wrapped mask key.
+  Separate b512/pb512 HKDF and AAD domains bind the five-byte header and
+  prevent cross-codec substitution. The released v2 text payload encrypted
+  only the mask key and XOR-masked the message without a tag, so message
+  bytes were malleable. v2 decode is now disabled by default and is available
+  only for trusted-data recovery with
+  `BASEFWX_ALLOW_LEGACY_TEXT_V2=1`. Ciphertext/tag/header tampering and the
+  recovery policy are tested in C++, Java, and Python.
+- **Canonical text output by default.** b512/pb512 writers now emit standard
+  base64 directly. The historical token-map expansion is cosmetic, adds no
+  cryptographic strength, and is writer opt-in through
+  `BASEFWX_OBFUSCATE_CODECS=1`; decoders continue accepting expanded input.
+- **Unauthenticated b512file output retired.** C++, Java, and Python writers
+  now require the outer AES-256-GCM container. The C++ `--no-aead` CLI option
+  is removed; the retained C++ `FileOptions.enable_aead` and Java/Python
+  compatibility parameters reject `false`, and the obsolete
+  `BASEFWX_B512_AEAD` environment switch is no longer consulted by current
+  writers. Historical raw-text b512file input is rejected
+  by default and requires
+  `BASEFWX_ALLOW_LEGACY_B512FILE_RAW=1` for trusted-data recovery. A
+  structurally recognized binary container never falls through to raw decode
+  after key-wrap or payload authentication failure.
+- **Primitive boundary hardening.** C++ RNG, RFC 5869 HKDF, PBKDF2,
+  AES-GCM, AES-CTR, and legacy-OpenSSL HMAC paths now reject values that
+  cannot be represented by the downstream OpenSSL `int` API before
+  allocation or narrowing. PBKDF2 rejects zero iterations explicitly,
+  HKDF-SHA256 enforces the 8160-byte RFC limit, and AEAD length accounting
+  uses overflow-checked `size_t` totals. Random-nonce AES-GCM decrypt now
+  delegates to the private `SecureBytes` staging path and publishes
+  plaintext only after tag verification. Java applies the same RFC HKDF
+  length/negative checks and wipes HKDF intermediates.
+- **Secret lifetime cleanup.** C++ secure buffers cleanse their complete
+  reserved allocation, including bytes retained after a shrink, through
+  explicitly nonthrowing cleanup. Java wipes reusable direct buffers and
+  PBKDF2 intermediates, replaces cached one-shot AES/HMAC keyed state, and
+  makes closed streaming AES-GCM contexts unusable after neutralizing or
+  releasing provider state.
+- **Python fast-decoder validation.** The NumPy base32hex path now uses an
+  exact 256-entry ASCII lookup table, validates padding before array access,
+  and rejects every non-alphabet byte instead of mapping punctuation through
+  a misaligned lowercase range. Valid upper- and lowercase input remains
+  byte-identical to the standard-library decoder.
+- **Required ML-KEM capability detection.** `BASEFWX_HAS_OQS=1` now means
+  the selected liboqs headers enable both ML-KEM-768 and ML-KEM-1024, not
+  merely that a liboqs library was found. `BASEFWX_REQUIRE_OQS=ON` fails at
+  configure time when either parameter set is missing; optional builds
+  disable OQS rather than advertising a capability that can fail later.
+- **Java KEM secret ownership.** `PQ.KemResult` is `AutoCloseable` and
+  deterministically wipes its shared secret. In-tree master-wrap consumers
+  close it on success and failure, while KATs assert that close zeroes the
+  caller-visible secret buffer.
+- **Streaming file publication and bounds.** C++ and Java b512/pb512 streaming
+  writers publish through owner-only sibling staging files, and C++/Java/Python
+  decoders replace the caller destination only after authentication and
+  complete structural validation. Failure paths remove plaintext/staging
+  spools and preserve existing destinations, including on authenticated late
+  structure failures. C++ and Java wipe mutable password, payload-key, and
+  plaintext work buffers. The shared stream chunk format now centralizes its
+  16 MiB allocation ceiling; C++ rejects zero/oversized caller chunk settings
+  and overflow beyond the format's 32-bit payload length before output.
 - **Payload key separation (`ENC-KSEP=v1`).** New non-stripped
   AES-heavy simple and direct-stream file payloads from C++, Java, and
   Python derive independent AES-GCM and obfuscation subkeys from the
@@ -99,6 +161,15 @@
   secret-named members still fail before archive publication.
 
 ### Added
+- **Precisely named large-payload compatibility PRF.** C++
+  `CompatPrfStreamSha256`, Java `compatPrfStreamSha256`, and Python
+  `_compat_prf_stream_sha256` expose the released zero-salt HMAC-SHA256
+  stream with a four-byte big-endian counter. It is explicitly not RFC 5869
+  HKDF. The C++ `HkdfSha256Stream` and Python `_hkdf_stream_sha256`
+  names remain direct compatibility aliases. Java's historical
+  `hkdfSha256Stream` keeps its released hybrid behavior: RFC HKDF through
+  8160 bytes and the compatibility PRF above that limit. Stored mask payload
+  bytes and every historical entry point remain unchanged.
 - **ChaCha20-Poly1305 explicit-nonce one-shot (C++ only).**
   `basefwx::crypto::ChaCha20Poly1305EncryptWithIv` and
   `ChaCha20Poly1305DecryptWithIvOwned` add the RFC 8439 AEAD alongside the
@@ -147,21 +218,48 @@
   `pq=ml-kem-768|1024` instead of misleading `oqs=OFF`.
 
 ### Changed
+- **Retired-data artifact split.** b256, A512, Bi512, Uhash513, jMG, kFM, and
+  kFA implementations, CLI commands, functional tests, and cross-runtime lanes now live in
+  compatibility-only source trees and are excluded from default C++, Java,
+  and Python artifacts. `BASEFWX_ENABLE_RETIRED_MEDIA` is default-off; enabling
+  it restores the existing APIs and bytes without rewriting the retired
+  algorithms. Default wheels no longer depend on Pillow, and profile-specific
+  Python build directories prevent a compatibility build from contaminating a
+  later default wheel. A generated Java compatibility overlay retains the
+  historical public retired-media fields directly on `Constants`, while the
+  active `Constants.java` remains free of retired values and independently
+  usable by Android's bounded source sync. Generated overlays likewise retain
+  the historical Java codec methods on `BaseFwx` and `Codec`. CI verifies both
+  profiles. The legacy switch name remains for build-script compatibility.
+  Installed CMake and `pkg-config` consumers receive
+  the exact C++ profile macro, and shared-library tests reject retired symbols
+  from default artifacts while requiring them in compatibility artifacts.
+- **jMG profile-header parser expression.** Current-profile parsing removes
+  the already-validated profile byte in place instead of constructing an
+  iterator subrange that GCC 14 diagnosed as a possible wrapped allocation.
+  The format is unchanged; focused tests cover current-profile round trips,
+  missing-profile rejection, and the existing hostile length cap.
 - **Bounded, active-surface benchmark matrix.** Parallel fwxAES timing now
   applies the existing payload-memory worker cap consistently to Python, C++,
   and Java instead of launching one whole-file operation per CPU. Java's
   fwxAES worker failures are propagated to the benchmark process. Retired
-  b256 and kFM/kFA/jMG performance rows no longer run by default; set
-  `BASEFWX_BENCH_RETIRED=1` for an explicit compatibility-performance run.
-  Focused correctness and existing-data compatibility coverage is unchanged.
+  b256/A512/Bi512/Uhash513/jMG/kFM/kFA performance rows are removed from both
+  profiles; compatibility qualification uses exact bytes and decode behavior,
+  not speed measurements. Focused correctness and existing-data compatibility
+  coverage is unchanged.
 - **Media codec retirement.** The image-, audio-, and video-specific
-  kFM/kFA/jMG codecs remain available in the 3.7.0+ compatibility line,
-  including decode support for existing data, but retire from active
-  development after this change. Future work is limited to security,
+  kFM/kFA/jMG codecs remain available through explicit compatibility
+  artifacts, including decode support for existing data, but retire from
+  active development after this change. Future work is limited to security,
   correctness, and compatibility fixes; no new formats, features, or
   performance work is planned. Active development shifts to mathematically
-  grounded, high-performance C++ cryptographic primitives. This is a
-  maintenance-status change, not a wire-format or API removal.
+  grounded, high-performance cryptographic primitives. Compatibility mode
+  preserves the released wire formats and APIs; default artifacts omit them.
+- **Historical b256 retirement preserved.** 🫡 b256 has been retired since
+  BaseFWX 3.7.0. It was BaseFWX's first encoding method, born in V1 back when
+  this was a proof of concept and not yet a project. It served every release
+  from day one; now it is compatibility-only. Existing data still decodes, but
+  for new work, it's time to go. ❤️
 - **Native package boundary and ABI policy.** GPL CLI headers and color
   implementation now live under `cpp/src/cli` and link only into the
   executable; `libbasefwx.so.3` and installed headers remain LGPL. CMake

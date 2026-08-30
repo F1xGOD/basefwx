@@ -78,13 +78,13 @@ jobs:
         uses: actions/setup-java@v4
         with:
           distribution: "temurin"
-          java-version: "17"
+          java-version: "21"
 
       - name: Build basefwxcrypto JNI shared library
         run: |
           set -euo pipefail
           # 3.7.0: built BEFORE the main bench so test_all.sh can activate
-          # the JNI backend for Java fwxAES / kFMe / kFAe via
+          # the JNI backend for Java fwxAES via
           # -Dbasefwx.useJNI=true. Without this, the static
           # BaseFwx.fwxAesEncryptRawBytes path stays on pure Java and
           # fwxAES-light comes in ~25× slower than the JNI equivalent.
@@ -93,6 +93,7 @@ jobs:
           cmake -S cpp -B build/jni \
             -DBASEFWX_BUILD_CLI=OFF \
             -DBASEFWX_BUILD_JNI=ON \
+            -DBASEFWX_ENABLE_RETIRED_MEDIA=OFF \
             -DBASEFWX_REQUIRE_ARGON2=ON \
             -DBASEFWX_REQUIRE_OQS=OFF \
             -DBASEFWX_REQUIRE_LZMA=OFF
@@ -101,10 +102,10 @@ jobs:
       - name: Run full benchmark suite
         env:
           BASEFWX_OBFUSCATE: "1"
+          BASEFWX_ENABLE_RETIRED_MEDIA: "0"
           ALLOW_BAKED_PUB: "0"
           BASEFWX_BENCH_RESULTS_DIR: results
           BASEFWX_RELEASE_TAG: ${{ inputs.tag }}
-          BASEFWX_ENABLE_JMG_VIDEO: "0"
           BASEFWX_TEST_REQUIRE_ARGON2: "ON"
           BASEFWX_TEST_REQUIRE_OQS: "ON"
           BASEFWX_TEST_REQUIRE_LZMA: "ON"
@@ -137,7 +138,6 @@ jobs:
           }
           required = {
               "fwxAES-live": {"python", "cpp", "java"},
-              "kFAe": {"python"},
           }
           missing = []
           for label, langs in required.items():

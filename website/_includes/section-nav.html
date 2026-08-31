@@ -1,0 +1,9 @@
+<nav class="section-nav" aria-label="On this page">
+  {%- for item in page.section_nav -%}
+    {%- if item.url contains '#' or item.url contains '://' -%}
+      <a href="{{ item.url }}">{{ item.label }}</a>
+    {%- else -%}
+      <a href="{{ item.url | relative_url }}">{{ item.label }}</a>
+    {%- endif -%}
+  {%- endfor -%}
+</nav>

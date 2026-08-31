@@ -1,0 +1,25 @@
+# The site chrome reads these lists. Adding a nav entry means editing this
+# file, not four HTML pages.
+primary:
+  - label: Docs
+    url: /docs/CLI/
+  - label: Hashes
+    url: /hashes/
+  - label: Benchmark
+    url: /benchmark/
+  - label: GitHub
+    url: https://github.com/F1xGOD/basefwx
+    external: true
+
+footer:
+  - label: Portal
+    url: /
+  - label: Hashes
+    url: /hashes/
+  - label: Benchmark
+    url: /benchmark/
+  - label: Docs
+    url: /docs/CLI/
+  - label: GitHub
+    url: https://github.com/F1xGOD/basefwx
+    external: true

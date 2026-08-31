@@ -1,0 +1,21 @@
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+{%- if page.layout == 'doc' %}
+<title>{{ page.title }} | BaseFWX</title>
+<meta name="description" content="{{ page.title }} documentation for BaseFWX.">
+{%- else %}
+<title>{{ page.title }}</title>
+<meta name="description" content="{{ page.description | default: site.description | strip_newlines | strip }}">
+{%- endif %}
+<link rel="icon" type="image/svg+xml" href="{{ '/assets/basefwx-plain.svg' | relative_url }}">
+<meta name="theme-color" content="#0b090f" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#fbf9fd" media="(prefers-color-scheme: light)">
+<script>
+  // Runs before first paint so a stored choice never flashes the other theme.
+  try {
+    var t = localStorage.getItem("basefwx-theme");
+    if (t === "dark" || t === "light") document.documentElement.dataset.theme = t;
+  } catch (e) {}
+</script>
+<link rel="stylesheet" href="{{ '/assets/site.css' | relative_url }}?v={{ site.asset_version }}">
+<script src="{{ '/assets/site.js' | relative_url }}?v={{ site.asset_version }}" defer></script>

@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="en"{% if page.results_base %} data-results-base="{{ page.results_base | relative_url }}"{% endif %}>
+  <head>
+    {%- include head.html -%}
+  </head>
+  <body>
+    <a class="skip-link" href="#content">Skip to content</a>
+    <div class="container">
+      {% include site-header.html %}
+      {% if page.section_nav %}{% include section-nav.html %}{% endif %}
+      <main id="content">
+        {{ content }}
+      </main>
+      {% include site-footer.html %}
+    </div>
+  </body>
+</html>

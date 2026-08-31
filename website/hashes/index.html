@@ -1,240 +1,192 @@
-<!doctype html>
-<html lang="en" data-results-base="../results/">
-  <head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>BaseFWX release checksums</title>
-    <meta name="description" content="SHA-256 and MD5 manifests for BaseFWX release artifacts.">
-    <link rel="icon" type="image/svg+xml" href="../assets/basefwx-plain.svg">
-    <meta name="theme-color" content="#0b090f" media="(prefers-color-scheme: dark)">
-    <meta name="theme-color" content="#fbf9fd" media="(prefers-color-scheme: light)">
-    <script>
-      try {
-        var t = localStorage.getItem("basefwx-theme");
-        if (t === "dark" || t === "light") document.documentElement.dataset.theme = t;
-      } catch (e) {}
-    </script>
-    <link rel="stylesheet" href="../assets/site.css?v=7">
-    <script src="../assets/site.js?v=7" defer></script>
-  </head>
-  <body>
-    <a class="skip-link" href="#content">Skip to content</a>
-    <div class="container">
-      <header class="site-header">
-        <a class="brand" href="../" aria-label="BaseFWX home">
-          <img class="brand-logo" src="../assets/basefwx-plain.svg" alt="" width="36" height="36">
-          <span>
-            <span class="brand-name">BaseFWX</span>
-            <span class="brand-sub">A FixCraft cryptographic engine</span>
-          </span>
-        </a>
-        <nav aria-label="Primary navigation">
-          <a href="../docs/CLI/">Docs</a>
-          <a href="../benchmark/">Benchmark</a>
-          <a href="https://github.com/F1xGOD/basefwx" target="_blank" rel="noopener">GitHub</a>
-          <button class="theme-toggle" type="button" id="theme-toggle" aria-pressed="true" aria-label="Switch the theme" hidden>
-            <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-              <rect x="3.5" y="3.5" width="17" height="17" rx="1.5" fill="none" stroke="currentColor" stroke-width="2"></rect>
-              <path d="M12 3.5h7.5A1.5 1.5 0 0 1 21 5v14a1.5 1.5 0 0 1-1.5 1.5H12Z" fill="currentColor"></path>
-            </svg>
-          </button>
-        </nav>
-      </header>
-
-      <nav class="section-nav" aria-label="On this page">
-        <a href="../#downloads">Downloads</a>
-        <a href="#linux">Linux</a>
-        <a href="#windows">Windows</a>
-        <a href="#mac">macOS</a>
-        <a href="#java">Java</a>
-      </nav>
-
-      <main id="content">
-      <section class="hero">
-        <div>
-          <div class="hero-status"><span aria-hidden="true"></span>Release manifest</div>
-          <h1>Checksums</h1>
-          <p>
-            Values are read from the hash sidecars attached to the latest GitHub release.
-            SHA-256 is the security check. MD5 is here to identify a file, not to prove it
-            is the right one. Machine-readable metadata is published as
-            <a class="disabled" data-asset-link="release-manifest.json" aria-disabled="true" tabindex="-1">release-manifest.json</a>.
-          </p>
-          <div class="cta-row">
-            <a class="btn secondary" href="../#downloads">Back to downloads</a>
-            <a class="btn secondary" id="release-link" href="https://github.com/F1xGOD/basefwx/releases" target="_blank" rel="noopener">View release</a>
-          </div>
-        </div>
-
-        <aside class="hero-panel" aria-label="Latest release">
-          <div>
-            <div class="meta">Latest release</div>
-            <div class="panel-title" id="release-version">Release metadata requires JavaScript</div>
-            <div class="meta-row">
-              <span id="release-date">Use GitHub Releases for current files</span>
-              <span id="release-assets"></span>
-            </div>
-          </div>
-        </aside>
-
-        <noscript>
-          <div class="notice">Live hashes and manifests need JavaScript. Use GitHub Releases when they are unavailable.</div>
-        </noscript>
-      </section>
-
-      <section id="linux">
-        <div class="section-head">
-          <h2 class="section-title">Linux</h2>
-        </div>
-        <div class="table-scroll">
-          <table class="bench-table hash-manifest-table">
-            <thead>
-              <tr>
-                <th>Artifact</th>
-                <th>SHA-256</th>
-                <th>MD5</th>
-                <th>Sidecars</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr>
-                <td class="mono">basefwx-linux-amd64</td>
-                <td class="mono hash-digest" data-hash-file="basefwx-linux-amd64.sha256">No release metadata loaded</td>
-                <td class="mono hash-digest" data-hash-file="basefwx-linux-amd64.md5">No release metadata loaded</td>
-                <td class="mono">
-                  <a class="disabled" data-asset-link="basefwx-linux-amd64.sha256" aria-disabled="true" tabindex="-1">sha256</a>
-                  <a class="disabled" data-asset-link="basefwx-linux-amd64.md5" aria-disabled="true" tabindex="-1">md5</a>
-                </td>
-              </tr>
-              <tr>
-                <td class="mono">basefwx-linux-arm64</td>
-                <td class="mono hash-digest" data-hash-file="basefwx-linux-arm64.sha256">No release metadata loaded</td>
-                <td class="mono hash-digest" data-hash-file="basefwx-linux-arm64.md5">No release metadata loaded</td>
-                <td class="mono">
-                  <a class="disabled" data-asset-link="basefwx-linux-arm64.sha256" aria-disabled="true" tabindex="-1">sha256</a>
-                  <a class="disabled" data-asset-link="basefwx-linux-arm64.md5" aria-disabled="true" tabindex="-1">md5</a>
-                </td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-      </section>
-
-      <section id="windows">
-        <div class="section-head">
-          <h2 class="section-title">Windows</h2>
-        </div>
-        <div class="table-scroll">
-          <table class="bench-table hash-manifest-table">
-            <thead>
-              <tr>
-                <th>Artifact</th>
-                <th>SHA-256</th>
-                <th>MD5</th>
-                <th>Sidecars</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr>
-                <td class="mono">basefwx-windows-amd64.zip</td>
-                <td class="mono hash-digest" data-hash-file="basefwx-windows-amd64.zip.sha256">No release metadata loaded</td>
-                <td class="mono hash-digest" data-hash-file="basefwx-windows-amd64.zip.md5">No release metadata loaded</td>
-                <td class="mono">
-                  <a class="disabled" data-asset-link="basefwx-windows-amd64.zip.sha256" aria-disabled="true" tabindex="-1">sha256</a>
-                  <a class="disabled" data-asset-link="basefwx-windows-amd64.zip.md5" aria-disabled="true" tabindex="-1">md5</a>
-                </td>
-              </tr>
-              <tr>
-                <td class="mono">basefwx-windows-x86.zip</td>
-                <td class="mono hash-digest" data-hash-file="basefwx-windows-x86.zip.sha256">No release metadata loaded</td>
-                <td class="mono hash-digest" data-hash-file="basefwx-windows-x86.zip.md5">No release metadata loaded</td>
-                <td class="mono">
-                  <a class="disabled" data-asset-link="basefwx-windows-x86.zip.sha256" aria-disabled="true" tabindex="-1">sha256</a>
-                  <a class="disabled" data-asset-link="basefwx-windows-x86.zip.md5" aria-disabled="true" tabindex="-1">md5</a>
-                </td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-      </section>
-
-      <section id="mac">
-        <div class="section-head">
-          <h2 class="section-title">macOS</h2>
-        </div>
-        <div class="table-scroll">
-          <table class="bench-table hash-manifest-table">
-            <thead>
-              <tr>
-                <th>Artifact</th>
-                <th>SHA-256</th>
-                <th>MD5</th>
-                <th>Sidecars</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr>
-                <td class="mono">basefwx-mac-amd64</td>
-                <td class="mono hash-digest" data-hash-file="basefwx-mac-amd64.sha256">No release metadata loaded</td>
-                <td class="mono hash-digest" data-hash-file="basefwx-mac-amd64.md5">No release metadata loaded</td>
-                <td class="mono">
-                  <a class="disabled" data-asset-link="basefwx-mac-amd64.sha256" aria-disabled="true" tabindex="-1">sha256</a>
-                  <a class="disabled" data-asset-link="basefwx-mac-amd64.md5" aria-disabled="true" tabindex="-1">md5</a>
-                </td>
-              </tr>
-              <tr>
-                <td class="mono">basefwx-mac-arm64</td>
-                <td class="mono hash-digest" data-hash-file="basefwx-mac-arm64.sha256">No release metadata loaded</td>
-                <td class="mono hash-digest" data-hash-file="basefwx-mac-arm64.md5">No release metadata loaded</td>
-                <td class="mono">
-                  <a class="disabled" data-asset-link="basefwx-mac-arm64.sha256" aria-disabled="true" tabindex="-1">sha256</a>
-                  <a class="disabled" data-asset-link="basefwx-mac-arm64.md5" aria-disabled="true" tabindex="-1">md5</a>
-                </td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-      </section>
-
-      <section id="java">
-        <div class="section-head">
-          <h2 class="section-title">Java</h2>
-        </div>
-        <div class="table-scroll">
-          <table class="bench-table hash-manifest-table">
-            <thead>
-              <tr>
-                <th>Artifact</th>
-                <th>SHA-256</th>
-                <th>MD5</th>
-                <th>Sidecars</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr>
-                <td class="mono">basefwx-java.jar</td>
-                <td class="mono hash-digest" data-hash-file="basefwx-java.jar.sha256">No release metadata loaded</td>
-                <td class="mono hash-digest" data-hash-file="basefwx-java.jar.md5">No release metadata loaded</td>
-                <td class="mono">
-                  <a class="disabled" data-asset-link="basefwx-java.jar.sha256" aria-disabled="true" tabindex="-1">sha256</a>
-                  <a class="disabled" data-asset-link="basefwx-java.jar.md5" aria-disabled="true" tabindex="-1">md5</a>
-                </td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-      </section>
-      </main>
-
-      <footer>
-        <span>FixCraft BaseFWX</span>
-        <nav aria-label="Footer navigation">
-          <a href="../">Portal</a>
-          <a href="../benchmark/">Benchmark</a>
-          <a href="../docs/CLI/">Docs</a>
-          <a href="https://github.com/F1xGOD/basefwx" target="_blank" rel="noopener">GitHub</a>
-        </nav>
-      </footer>
+---
+layout: page
+title: BaseFWX release checksums
+description: SHA-256 and MD5 manifests for BaseFWX release artifacts.
+results_base: /results/
+nav_current: Hashes
+section_nav:
+  - label: Downloads
+    url: /#downloads
+  - label: Linux
+    url: "#linux"
+  - label: Windows
+    url: "#windows"
+  - label: macOS
+    url: "#mac"
+  - label: Java
+    url: "#java"
+---
+<section class="hero">
+  <div>
+    <div class="hero-status"><span aria-hidden="true"></span>Release manifest</div>
+    <h1>Checksums</h1>
+    <p>
+      Values are read from the hash sidecars attached to the latest GitHub release.
+      SHA-256 is the security check. MD5 is here to identify a file, not to prove it
+      is the right one. Machine-readable metadata is published as
+      <a class="disabled" data-asset-link="release-manifest.json" aria-disabled="true" tabindex="-1">release-manifest.json</a>.
+    </p>
+    <div class="cta-row">
+      <a class="btn secondary" href="{{ '/' | relative_url }}#downloads">Back to downloads</a>
+      <a class="btn secondary" id="release-link" href="https://github.com/F1xGOD/basefwx/releases" target="_blank" rel="noopener">View release</a>
     </div>
-  </body>
-</html>
+  </div>
+
+  <aside class="hero-panel" aria-label="Latest release">
+    <div>
+      <div class="meta">Latest release</div>
+      <div class="panel-title" id="release-version">Release metadata requires JavaScript</div>
+      <div class="meta-row">
+        <span id="release-date">Use GitHub Releases for current files</span>
+        <span id="release-assets"></span>
+      </div>
+    </div>
+  </aside>
+
+  <noscript>
+    <div class="notice">Live hashes and manifests need JavaScript. Use GitHub Releases when they are unavailable.</div>
+  </noscript>
+</section>
+
+<section id="linux">
+  <div class="section-head">
+    <h2 class="section-title">Linux</h2>
+  </div>
+  <div class="table-scroll">
+    <table class="bench-table hash-manifest-table">
+      <thead>
+        <tr>
+          <th>Artifact</th>
+          <th>SHA-256</th>
+          <th>MD5</th>
+          <th>Sidecars</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td class="mono">basefwx-linux-amd64</td>
+          <td class="mono hash-digest" data-hash-file="basefwx-linux-amd64.sha256">No release metadata loaded</td>
+          <td class="mono hash-digest" data-hash-file="basefwx-linux-amd64.md5">No release metadata loaded</td>
+          <td class="mono">
+            <a class="disabled" data-asset-link="basefwx-linux-amd64.sha256" aria-disabled="true" tabindex="-1">sha256</a>
+            <a class="disabled" data-asset-link="basefwx-linux-amd64.md5" aria-disabled="true" tabindex="-1">md5</a>
+          </td>
+        </tr>
+        <tr>
+          <td class="mono">basefwx-linux-arm64</td>
+          <td class="mono hash-digest" data-hash-file="basefwx-linux-arm64.sha256">No release metadata loaded</td>
+          <td class="mono hash-digest" data-hash-file="basefwx-linux-arm64.md5">No release metadata loaded</td>
+          <td class="mono">
+            <a class="disabled" data-asset-link="basefwx-linux-arm64.sha256" aria-disabled="true" tabindex="-1">sha256</a>
+            <a class="disabled" data-asset-link="basefwx-linux-arm64.md5" aria-disabled="true" tabindex="-1">md5</a>
+          </td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section id="windows">
+  <div class="section-head">
+    <h2 class="section-title">Windows</h2>
+  </div>
+  <div class="table-scroll">
+    <table class="bench-table hash-manifest-table">
+      <thead>
+        <tr>
+          <th>Artifact</th>
+          <th>SHA-256</th>
+          <th>MD5</th>
+          <th>Sidecars</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td class="mono">basefwx-windows-amd64.zip</td>
+          <td class="mono hash-digest" data-hash-file="basefwx-windows-amd64.zip.sha256">No release metadata loaded</td>
+          <td class="mono hash-digest" data-hash-file="basefwx-windows-amd64.zip.md5">No release metadata loaded</td>
+          <td class="mono">
+            <a class="disabled" data-asset-link="basefwx-windows-amd64.zip.sha256" aria-disabled="true" tabindex="-1">sha256</a>
+            <a class="disabled" data-asset-link="basefwx-windows-amd64.zip.md5" aria-disabled="true" tabindex="-1">md5</a>
+          </td>
+        </tr>
+        <tr>
+          <td class="mono">basefwx-windows-x86.zip</td>
+          <td class="mono hash-digest" data-hash-file="basefwx-windows-x86.zip.sha256">No release metadata loaded</td>
+          <td class="mono hash-digest" data-hash-file="basefwx-windows-x86.zip.md5">No release metadata loaded</td>
+          <td class="mono">
+            <a class="disabled" data-asset-link="basefwx-windows-x86.zip.sha256" aria-disabled="true" tabindex="-1">sha256</a>
+            <a class="disabled" data-asset-link="basefwx-windows-x86.zip.md5" aria-disabled="true" tabindex="-1">md5</a>
+          </td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section id="mac">
+  <div class="section-head">
+    <h2 class="section-title">macOS</h2>
+  </div>
+  <div class="table-scroll">
+    <table class="bench-table hash-manifest-table">
+      <thead>
+        <tr>
+          <th>Artifact</th>
+          <th>SHA-256</th>
+          <th>MD5</th>
+          <th>Sidecars</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td class="mono">basefwx-mac-amd64</td>
+          <td class="mono hash-digest" data-hash-file="basefwx-mac-amd64.sha256">No release metadata loaded</td>
+          <td class="mono hash-digest" data-hash-file="basefwx-mac-amd64.md5">No release metadata loaded</td>
+          <td class="mono">
+            <a class="disabled" data-asset-link="basefwx-mac-amd64.sha256" aria-disabled="true" tabindex="-1">sha256</a>
+            <a class="disabled" data-asset-link="basefwx-mac-amd64.md5" aria-disabled="true" tabindex="-1">md5</a>
+          </td>
+        </tr>
+        <tr>
+          <td class="mono">basefwx-mac-arm64</td>
+          <td class="mono hash-digest" data-hash-file="basefwx-mac-arm64.sha256">No release metadata loaded</td>
+          <td class="mono hash-digest" data-hash-file="basefwx-mac-arm64.md5">No release metadata loaded</td>
+          <td class="mono">
+            <a class="disabled" data-asset-link="basefwx-mac-arm64.sha256" aria-disabled="true" tabindex="-1">sha256</a>
+            <a class="disabled" data-asset-link="basefwx-mac-arm64.md5" aria-disabled="true" tabindex="-1">md5</a>
+          </td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section id="java">
+  <div class="section-head">
+    <h2 class="section-title">Java</h2>
+  </div>
+  <div class="table-scroll">
+    <table class="bench-table hash-manifest-table">
+      <thead>
+        <tr>
+          <th>Artifact</th>
+          <th>SHA-256</th>
+          <th>MD5</th>
+          <th>Sidecars</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td class="mono">basefwx-java.jar</td>
+          <td class="mono hash-digest" data-hash-file="basefwx-java.jar.sha256">No release metadata loaded</td>
+          <td class="mono hash-digest" data-hash-file="basefwx-java.jar.md5">No release metadata loaded</td>
+          <td class="mono">
+            <a class="disabled" data-asset-link="basefwx-java.jar.sha256" aria-disabled="true" tabindex="-1">sha256</a>
+            <a class="disabled" data-asset-link="basefwx-java.jar.md5" aria-disabled="true" tabindex="-1">md5</a>
+          </td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</section>

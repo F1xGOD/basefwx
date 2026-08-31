@@ -1,28 +1,21 @@
 title: BaseFWX
+description: >-
+  BaseFWX is a cryptographic container engine whose C++, Python, and Java
+  runtimes read and write the same authenticated formats.
+
 markdown: kramdown
 theme: null
+kramdown:
+  input: GFM
+  syntax_highlighter: rouge
+
+# Bumped whenever assets/site.css or assets/site.js changes, so returning
+# visitors are not served a cached stylesheet against new markup. One place,
+# read by _includes/head.html.
+asset_version: 8
+
+repo_url: https://github.com/F1xGOD/basefwx
+
 exclude:
-  - basefwx
-  - cpp
-  - tests
-  - scripts
-  - src
-  - .github
-  - .venv
-  - build
-  - dist
-  - pyproject.toml
-  - setup.py
-  - MANIFEST.in
+  - .jekyll-cache
   - README.md
-  - SECURITY.md
-  - LICENCE
-  - diagnose.log
-  - PR.txt
-  - PROGRESS_BAR_FIX.md
-  - PROGRESS_FINAL_FIX.md
-  - PROGRESS_FIX_SUMMARY.md
-  - PROGRESS_INPLACE_FIX.md
-  - test_progress_demo.py
-  - verify_progress.py
-  - test.txt

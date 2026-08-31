@@ -104,8 +104,7 @@ const initThemeToggle = () => {
 
   media.addEventListener("change", sync);
 
-  button?.addEventListener("click", () => {
-    const next = effectiveTheme() === "dark" ? "light" : "dark";
+  const applyTheme = (next) => {
     document.documentElement.dataset.theme = next;
     try {
       localStorage.setItem(THEME_KEY, next);
@@ -113,6 +112,19 @@ const initThemeToggle = () => {
       // Storage is blocked, so the choice lasts for this page only.
     }
     sync();
+  };
+
+  button?.addEventListener("click", () => {
+    const next = effectiveTheme() === "dark" ? "light" : "dark";
+    const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    // Where the browser has view transitions, the whole page cross-fades
+    // between palettes. Everywhere else this is the plain swap that shipped
+    // before, so the toggle never depends on the API being present.
+    if (reduced || typeof document.startViewTransition !== "function") {
+      applyTheme(next);
+      return;
+    }
+    document.startViewTransition(() => applyTheme(next));
   });
 
   sync();

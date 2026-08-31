@@ -1,0 +1,13 @@
+<header class="site-header">
+  {% include brand.html %}
+  <nav aria-label="Primary navigation">
+    {%- for item in site.data.nav.primary -%}
+      {%- if item.external -%}
+        <a href="{{ item.url }}" target="_blank" rel="noopener">{{ item.label }}</a>
+      {%- else -%}
+        <a href="{{ item.url | relative_url }}"{% if page.nav_current == item.label %} aria-current="page"{% endif %}>{{ item.label }}</a>
+      {%- endif -%}
+    {%- endfor -%}
+    {% include theme-toggle.html %}
+  </nav>
+</header>

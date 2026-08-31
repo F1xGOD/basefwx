@@ -747,21 +747,7 @@ a.card:hover h3 {
   box-shadow: var(--shadow-card);
 }
 
-.dl-os {
-  align-self: flex-start;
-  padding: 0.1rem var(--space-xs);
-  border: var(--rule-hairline) solid var(--accent-edge);
-  border-radius: var(--radius-edge);
-  color: var(--accent);
-  font-family: var(--font-mono);
-  font-size: var(--text-2xs);
-  font-weight: 600;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
 .dl-card h3 {
-  margin-top: var(--space-sm);
   font-size: var(--text-lg);
 }
 
@@ -795,13 +781,12 @@ a.card:hover h3 {
   border-bottom: var(--rule-hairline) solid var(--rule-soft);
 }
 
-.dl-arch {
-  overflow: hidden;
+.dl-file {
+  min-width: 0;
+  overflow-wrap: anywhere;
   color: var(--text-2);
   font-family: var(--font-mono);
   font-size: var(--text-xs);
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .dl-sig {
@@ -1465,17 +1450,29 @@ footer a:hover {
   margin-top: var(--space-md);
 }
 
-/* The one orchestrated moment */
-
-/*
- * The container map reveals field by field in wire order. It is the only
- * animation on the site, it runs once, and it says something the static
- * figure cannot: a container is read from the front.
+/* Motion
+ *
+ * Four things move on this site, and each earns it:
+ *
+ *   1. The page-load cascade. One orchestrated sequence on the hero, running
+ *      once, in reading order. Never on scroll: a fade-up on every section as
+ *      it enters the viewport is the single most recognisable generated-site
+ *      tell, and it makes a reference page slower to read.
+ *   2. The container map, which reveals field by field in wire order because a
+ *      container is read from the front. That is the signature.
+ *   3. State changes that would otherwise snap: the theme cross-fade and the
+ *      benchmark disclosures.
+ *   4. Direct feedback on press and hover.
+ *
+ * Durations are short and the easing never overshoots. This is an instrument,
+ * so nothing here bounces. Everything collapses under prefers-reduced-motion
+ * at the end of the file.
  */
-@keyframes map-field-in {
+
+@keyframes rise-in {
   from {
     opacity: 0;
-    transform: translateY(0.375rem);
+    transform: translateY(0.5rem);
   }
 
   to {
@@ -1484,7 +1481,7 @@ footer a:hover {
   }
 }
 
-@keyframes map-span-in {
+@keyframes span-in {
   from {
     opacity: 0;
     transform: scaleX(0);
@@ -1496,37 +1493,120 @@ footer a:hover {
   }
 }
 
+@keyframes disclosure-in {
+  from {
+    opacity: 0;
+    transform: translateY(-0.25rem);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* The cascade. Steps are 45ms apart, which is fast enough that the page reads
+   as one motion rather than as items arriving separately. */
+.hero > div > *,
+.hero > .hero-panel {
+  animation: rise-in var(--dur-short) var(--ease-out) both;
+}
+
+.hero > div > *:nth-child(1) { animation-delay: 20ms; }
+.hero > div > *:nth-child(2) { animation-delay: 65ms; }
+.hero > div > *:nth-child(3) { animation-delay: 110ms; }
+.hero > div > *:nth-child(4) { animation-delay: 155ms; }
+.hero > .hero-panel { animation-delay: 110ms; }
+
 .map-field {
-  animation: map-field-in var(--dur-short) var(--ease-out) both;
+  animation: rise-in var(--dur-short) var(--ease-out) both;
 }
 
-.map-field:nth-child(1) {
-  animation-delay: 60ms;
-}
-
-.map-field:nth-child(2) {
-  animation-delay: 120ms;
-}
-
-.map-field:nth-child(3) {
-  animation-delay: 180ms;
-}
-
-.map-field:nth-child(4) {
-  animation-delay: 240ms;
-}
-
-.map-field:nth-child(5) {
-  animation-delay: 300ms;
-}
-
-.map-field:nth-child(6) {
-  animation-delay: 360ms;
-}
+.map-field:nth-child(1) { animation-delay: 220ms; }
+.map-field:nth-child(2) { animation-delay: 265ms; }
+.map-field:nth-child(3) { animation-delay: 310ms; }
+.map-field:nth-child(4) { animation-delay: 355ms; }
+.map-field:nth-child(5) { animation-delay: 400ms; }
+.map-field:nth-child(6) { animation-delay: 445ms; }
 
 .map-span {
-  animation: map-span-in var(--dur-long) var(--ease-out) 420ms both;
+  animation: span-in var(--dur-long) var(--ease-out) 500ms both;
   transform-origin: left center;
+}
+
+/* Press feedback. One pixel, because an instrument key has a short throw. */
+.btn:active,
+.vt-btn:active {
+  transform: translateY(1px);
+}
+
+/* Disclosure. The summary grows a chevron so the row reads as expandable, and
+   the panel fades in rather than snapping into place. */
+.bench-detail summary::after,
+.doc-toc summary::after {
+  width: 0.4rem;
+  height: 0.4rem;
+  flex: 0 0 auto;
+  margin-left: var(--space-xs);
+  border: solid currentColor;
+  border-width: 0 1.5px 1.5px 0;
+  content: "";
+  transform: translateY(-0.1rem) rotate(45deg);
+  transition: transform var(--dur-short) var(--ease-out);
+}
+
+.bench-detail[open] > summary::after,
+.doc-toc[open] > summary::after {
+  transform: translateY(0.05rem) rotate(-135deg);
+}
+
+.doc-toc summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.bench-detail[open] > .table-scroll,
+.doc-toc[open] > nav {
+  animation: disclosure-in var(--dur-short) var(--ease-out) both;
+}
+
+/*
+ * Theme cross-fade. site.js routes the toggle through startViewTransition
+ * where the browser has it, so the whole page dissolves between palettes
+ * instead of snapping. Browsers without the API get the snap, which is the
+ * behaviour that shipped before this block existed.
+ */
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation-duration: 260ms;
+  animation-timing-function: var(--ease-in-out);
+}
+
+/*
+ * Reading progress on documentation pages, driven by scroll position rather
+ * than by a timer. The @supports guard matters: without scroll-driven
+ * animation the rule would fall back to the time timeline and sweep the bar
+ * once on load, which would be a lie about where the reader is.
+ */
+.doc-progress {
+  display: none;
+}
+
+@supports (animation-timeline: scroll()) {
+  @media (prefers-reduced-motion: no-preference) {
+    .doc-progress {
+      position: fixed;
+      z-index: var(--z-sticky);
+      display: block;
+      height: 2px;
+      inset: 0 0 auto;
+      transform-origin: 0 50%;
+      animation: span-in auto linear;
+      animation-timeline: scroll(root block);
+      background: var(--accent);
+    }
+  }
 }
 
 /* Responsive */
@@ -1635,7 +1715,12 @@ footer a:hover {
   }
 
   .dl-build {
-    gap: var(--space-xs);
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: var(--space-2xs) var(--space-xs);
+  }
+
+  .dl-file {
+    grid-column: 1 / -1;
   }
 
   .bench-detail summary {
@@ -1653,12 +1738,21 @@ footer a:hover {
   *,
   *::before,
   *::after {
-    /* The delay matters as much as the duration here: the container map's
-       staggered reveal would otherwise hold each field invisible for its
-       delay and then pop it in. */
+    /* The delay matters as much as the duration here: the load cascade would
+       otherwise hold each element invisible for its delay and then pop it in. */
     animation-delay: -1ms !important;
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
+  }
+
+  .btn:active,
+  .vt-btn:active {
+    transform: none;
+  }
+
+  ::view-transition-old(root),
+  ::view-transition-new(root) {
+    animation: none !important;
   }
 }

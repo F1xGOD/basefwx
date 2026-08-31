@@ -1,0 +1,12 @@
+<footer>
+  <span>FixCraft BaseFWX</span>
+  <nav aria-label="Footer navigation">
+    {%- for item in site.data.nav.footer -%}
+      {%- if item.external -%}
+        <a href="{{ item.url }}" target="_blank" rel="noopener">{{ item.label }}</a>
+      {%- else -%}
+        <a href="{{ item.url | relative_url }}">{{ item.label }}</a>
+      {%- endif -%}
+    {%- endfor -%}
+  </nav>
+</footer>

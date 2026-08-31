@@ -56,7 +56,7 @@ The caller supplies plaintext bytes and a password or key context. BaseFWX
 derives or unwraps encryption keys, encrypts and authenticates the payload,
 and writes a format another BaseFWX implementation can parse.
 .PP
-On decode, BaseFWX reads authenticated metadata, derives or unwraps the same
+On decode, BaseFWX reads and validates format metadata, derives or unwraps the same
 keys, verifies integrity, and releases plaintext only after verification
 passes.
 .SH CODEC FAMILIES
@@ -116,7 +116,7 @@ instead, which gives it the same AEAD guarantees as any other file.
         v
 +--------------------------------+
 |  AEAD ENCRYPTION               |
-|  AES-256-GCM + metadata        |
+|  AES-256-GCM payload           |
 +--------------------------------+
         |
         | ===>
@@ -127,15 +127,15 @@ instead, which gives it the same AEAD guarantees as any other file.
 +--------------------------------+
 .fi
 .PP
-At a high level, encrypted file containers carry authenticated metadata and
-encrypted payload bytes:
+At a high level, encrypted file containers carry bounded format and key
+headers followed by an authenticated encrypted payload:
 .nf
 +----------------------------------------------------------------------+
 |  BASEFWX ENCRYPTED CONTAINER                                         |
 |                                                                      |
 |  magic/version | KDF parameters | wrap data | metadata | ciphertext  |
 |                                                                      |
-|  metadata is authenticated; payload releases after verification      |
+|  headers are bounded; payload releases after tag verification        |
 +----------------------------------------------------------------------+
 .fi
 .PP

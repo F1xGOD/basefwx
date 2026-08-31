@@ -43,7 +43,9 @@ Use the named 4-point scale in `assets/tokens.css`. Corners stay between 0 and
 ## Motion
 
 - Header: static brutal slab
-- Homepage: selected racks enter once from the inline axis
+- Homepage: selected evidence racks enter once from the inline axis
+- Documentation catalog: copy uses opacity only; the violet scan stays clipped
+  inside its empty signal rail
 - Container diagram: fields scan in wire order
 - Documentation: the reading progress bar is functional motion
 - Reduced motion: content renders immediately, with no spatial travel

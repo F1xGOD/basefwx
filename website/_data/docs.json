@@ -1,50 +1,82 @@
 [
   {
-    "title": "BaseFWX explained",
-    "summary": "The container, unlock paths, live streams, and the failure model.",
-    "url": "https://github.com/F1xGOD/basefwx/blob/main/docs/EXPLAINED.md",
-    "source": "docs/EXPLAINED.md",
+    "title": "Start with BaseFWX",
+    "summary": "Maintained formats, installation, recovery boundaries, and links to each runtime.",
+    "url": "/docs/README/",
+    "source": "README.md",
     "group": "Understand",
     "order": 10
   },
   {
-    "title": "CLI and usage",
-    "summary": "Commands, flags, master-key workflows, and JVM entry points.",
-    "url": "/docs/CLI/",
-    "source": "website/docs/CLI.md",
-    "group": "Use",
+    "title": "BaseFWX explained",
+    "summary": "File encryption, unlock paths, portable variants, live streams, and failure handling.",
+    "url": "/docs/EXPLAINED/",
+    "source": "docs/EXPLAINED.md",
+    "group": "Understand",
     "order": 20
   },
   {
-    "title": "Security model",
-    "summary": "Threat boundaries, key paths, authenticated encryption, and recovery policy.",
+    "title": "Security policy",
+    "summary": "Cryptographic boundaries, password work, recovery policy, plugins, and private reporting.",
     "url": "/docs/SECURITY_MODEL/",
-    "source": "website/docs/SECURITY_MODEL.md",
+    "source": "SECURITY.md",
     "group": "Understand",
     "order": 30
   },
   {
-    "title": "Compatibility",
-    "summary": "Cross-runtime formats, retired-data recovery, and unsupported paths.",
-    "url": "https://github.com/F1xGOD/basefwx/blob/main/COMPATIBILITY.md",
-    "source": "COMPATIBILITY.md",
-    "group": "Reference",
+    "title": "CLI and API reference",
+    "summary": "C++, Python, and Java commands, flags, streaming APIs, and retired-data commands.",
+    "url": "/docs/CLI/",
+    "source": "docs/CLI.md",
+    "group": "Use",
     "order": 40
   },
   {
-    "title": "Testing",
-    "summary": "Correctness suites, benchmark modes, and the limits of each measurement.",
-    "url": "/docs/TESTING/",
-    "source": "website/docs/TESTING.md",
+    "title": "Compatibility",
+    "summary": "Portable variants, runtime exceptions, KDF limits, plugins, and retired-data recovery.",
+    "url": "/docs/COMPATIBILITY/",
+    "source": "COMPATIBILITY.md",
     "group": "Reference",
     "order": 50
   },
   {
-    "title": "Contributing",
-    "summary": "How to propose changes, run checks, and report issues.",
-    "url": "/docs/CONTRIBUTING/",
-    "source": "website/docs/CONTRIBUTING.md",
-    "group": "Contribute",
+    "title": "Native ABI policy",
+    "summary": "The frozen plugin C boundary and the pre-stable C++ library policy.",
+    "url": "/docs/ABI/",
+    "source": "ABI.md",
+    "group": "Reference",
     "order": 60
+  },
+  {
+    "title": "Testing",
+    "summary": "Focused checks, cross-runtime qualification, benchmark method, and supported overrides.",
+    "url": "/docs/TESTING/",
+    "source": "docs/TESTING.md",
+    "group": "Reference",
+    "order": 70
+  },
+  {
+    "title": "BaseFWX 3.7.0 release notes",
+    "summary": "The 3.7.0 plugin ABI, wire tag, compatibility boundary, and upgrade notes.",
+    "url": "/docs/RELEASE-NOTES-3.7.0/",
+    "source": "RELEASE-NOTES-3.7.0.md",
+    "group": "Reference",
+    "order": 80
+  },
+  {
+    "title": "BaseFWX 3.6.4 release notes",
+    "summary": "KDF hardening, security-normalized benchmarks, JNI changes, and upgrade notes.",
+    "url": "/docs/RELEASE-NOTES-3.6.4/",
+    "source": "RELEASE-NOTES-3.6.4.md",
+    "group": "Reference",
+    "order": 90
+  },
+  {
+    "title": "Contributing",
+    "summary": "Change scope, test expectations, licensing, security reports, and review process.",
+    "url": "/docs/CONTRIBUTING/",
+    "source": "CONTRIBUTING.md",
+    "group": "Contribute",
+    "order": 100
   }
 ]

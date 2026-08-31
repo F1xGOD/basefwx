@@ -1,7 +1,7 @@
 /* Hallmark · pre-emit critique: P5 H5 E5 S5 R5 V5 */
 /* Hallmark · genre: technical brutal · tone: bare metal · palette: violet 305 · macrostructure: Catalogue · nav: N7 · footer: Ft4 · design-system: DESIGN.md */
 /* Hallmark · slop: pass (58 gates) · contrast: pass (40–41) · honest: pass (46) · chrome: pass (47) · tokens: pass (48) · responsive/mobile: pass (34, 49–57) · icons: pass (30) */
-@import url("tokens.css?v=10");
+@import url("tokens.css?v=11");
 
 /*
  * BaseFWX release portal.
@@ -482,11 +482,9 @@ a.disabled {
 /* Container map: the page signature */
 
 /*
- * The proportions below are chosen for legibility, not measured from a file:
- * ciphertext dominates a real container so completely that a to-scale drawing
- * would be one bar. The figure is labelled as schematic for that reason. What
- * it does carry truthfully is the field order and the authentication span,
- * which is the property the caption has always claimed in words.
+ * The proportions below are chosen for legibility, not measured from a file.
+ * The figure shows parser order and tag-gated plaintext release. It does not
+ * claim exact byte widths or that the format and key headers are payload AAD.
  */
 .container-map {
   grid-column: 1 / -1;
@@ -581,15 +579,15 @@ a.disabled {
   color: var(--ok);
 }
 
-/* The measured span: the tag covers META and CIPHERTEXT, so the rule starts
-   at column 4 and runs to the end. It states the same claim as the note. */
+/* This span describes the release gate without implying that fwxAES format or
+   key headers are part of the payload AAD. */
 .map-scale {
   margin-top: var(--space-sm);
 }
 
 .map-span {
   position: relative;
-  grid-column: 4 / 6;
+  grid-column: 5 / 7;
   padding-top: var(--space-2xs);
   border-top: var(--rule-hairline) solid var(--ok);
   color: var(--ok);
@@ -713,14 +711,30 @@ section {
   border-block-end: var(--rule-hairline) solid var(--rule-soft);
 }
 
+.doc-catalog-signal {
+  position: relative;
+  width: 2.5rem;
+  height: 0.5rem;
+  overflow: hidden;
+}
+
+.doc-catalog-signal::before {
+  position: absolute;
+  inset: 50% 0 auto;
+  height: var(--rule-hairline);
+  background: var(--rule);
+  content: "";
+  transform: translateY(-50%);
+}
+
 .doc-catalog-mark {
-  width: 1.25rem;
-  height: 0.35rem;
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 1rem;
   border: var(--rule-hairline) solid var(--accent-edge);
   background: var(--accent-wash);
-  transform: scaleX(1);
-  transform-origin: left;
-  transition: transform var(--dur-short) var(--ease-out);
+  transform: translateX(0);
+  transition: opacity var(--dur-short) var(--ease-out), transform var(--dur-short) var(--ease-out);
 }
 
 .doc-catalog-copy,
@@ -756,11 +770,11 @@ section {
 
 .doc-catalog-item:hover .doc-catalog-mark,
 .doc-catalog-item:focus-visible .doc-catalog-mark {
-  transform: scaleX(1.55);
+  transform: translateX(1.5rem);
 }
 
 .doc-catalog-item:active .doc-catalog-mark {
-  transform: scaleX(0.75);
+  transform: translateX(0.75rem);
 }
 
 .docs-hero {
@@ -1690,7 +1704,15 @@ footer a:hover {
 .motion-ready [data-reveal="rack"]:not(.is-visible),
 .motion-ready [data-reveal="catalog"]:not(.is-visible) {
   opacity: 0;
+}
+
+.motion-ready [data-reveal="rack"]:not(.is-visible) {
   transform: translateX(calc(-1 * var(--space-md)));
+}
+
+.motion-ready [data-reveal="catalog"]:not(.is-visible) .doc-catalog-mark {
+  opacity: 0;
+  transform: translateX(-100%);
 }
 
 .motion-ready [data-reveal="scan"]:not(.is-visible) .map-field {
@@ -1864,8 +1886,8 @@ footer a:hover {
     grid-column: 1 / -1;
   }
 
-  /* Stacked, the span would sit under the TAG bar and read as though the tag
-     authenticates itself. The note below states the same fact in words. */
+  /* Stacked, the span loses its payload-release meaning. The note below keeps
+     the tag boundary explicit without attaching the line to one field. */
   .map-scale {
     display: none;
   }
@@ -1939,7 +1961,12 @@ footer a:hover {
   }
 
   .btn:active,
-  .vt-btn:active {
+  .vt-btn:active,
+  .doc-catalog-item:hover .doc-catalog-mark,
+  .doc-catalog-item:focus-visible .doc-catalog-mark,
+  .doc-catalog-item:active .doc-catalog-mark,
+  .motion-ready [data-reveal="catalog"]:not(.is-visible) .doc-catalog-mark,
+  .doc-catalog-mark {
     transform: none;
   }
 

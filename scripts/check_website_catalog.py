@@ -29,17 +29,29 @@ def load_catalog() -> list[dict[str, Any]]:
     return data
 
 
-def local_page_exists(url: str) -> bool:
+def local_page_path(url: str) -> Path | None:
     route = url.split("#", 1)[0].strip("/")
     if not route:
-        return (REPO_ROOT / "website" / "index.html").is_file()
+        path = REPO_ROOT / "website" / "index.html"
+        return path if path.is_file() else None
     route_path = Path(route)
     candidates = (
-        REPO_ROOT / "website" / route_path.with_suffix(".html"),
-        REPO_ROOT / "website" / route_path.with_suffix(".md"),
+        REPO_ROOT / "website" / f"{route_path}.md",
+        REPO_ROOT / "website" / f"{route_path}.html",
         REPO_ROOT / "website" / route_path / "index.html",
     )
-    return any(candidate.is_file() for candidate in candidates)
+    return next((candidate for candidate in candidates if candidate.is_file()), None)
+
+
+def generated_source(page_path: Path) -> str | None:
+    if page_path.suffix != ".md":
+        return None
+    for line in page_path.read_text(encoding="utf-8").splitlines():
+        if line.startswith("canonical_source:"):
+            return line.partition(":")[2].strip()
+        if line and line != "---" and not line.startswith(("layout:", "title:", "permalink:")):
+            break
+    return None
 
 
 def validate() -> None:
@@ -74,12 +86,23 @@ def validate() -> None:
             fail(f"{title}: duplicate order {order}")
         if not source.is_relative_to(REPO_ROOT):
             fail(f"{title}: source escapes the repository")
+        if source.is_relative_to(REPO_ROOT / "website"):
+            fail(f"{title}: source must be canonical repository Markdown, not website output")
         if not source.is_file():
             fail(f"{title}: source does not exist: {source.relative_to(REPO_ROOT)}")
         if not (url.startswith("/") or url.startswith("https://")):
             fail(f"{title}: URL must be a local route or HTTPS URL")
-        if url.startswith("/") and not local_page_exists(url):
-            fail(f"{title}: local page does not exist for {url}")
+        if url.startswith("/"):
+            page_path = local_page_path(url)
+            if page_path is None:
+                fail(f"{title}: local page does not exist for {url}")
+            declared_source = generated_source(page_path)
+            expected_source = source.relative_to(REPO_ROOT).as_posix()
+            if declared_source != expected_source:
+                fail(
+                    f"{title}: {page_path.relative_to(REPO_ROOT)} was not generated "
+                    f"from {expected_source}"
+                )
         if group not in GROUPS:
             fail(f"{title}: unknown group {group!r}")
         seen_urls.add(url)

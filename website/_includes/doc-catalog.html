@@ -12,7 +12,9 @@
             {%- assign external = false -%}
             {%- if entry.url contains "://" -%}{%- assign external = true -%}{%- endif -%}
             <a class="doc-catalog-item" href="{% if external %}{{ entry.url }}{% else %}{{ entry.url | relative_url }}{% endif %}"{% if external %} target="_blank" rel="noopener"{% endif %}>
-              <span class="doc-catalog-mark" aria-hidden="true"></span>
+              <span class="doc-catalog-signal" aria-hidden="true">
+                <span class="doc-catalog-mark"></span>
+              </span>
               <span class="doc-catalog-copy">
                 <strong>{{ entry.title }}</strong>
                 <span>{{ entry.summary }}</span>

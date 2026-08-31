@@ -13,6 +13,7 @@ from pathlib import Path
 
 
 _BENCH_RE = re.compile(r"^benchmarks-(.+)\.json$")
+_RELEASE_TAG_RE = re.compile(r"^v[0-9]+\.[0-9]+\.[0-9]+$")
 
 
 def read_release_tag(path: Path) -> str | None:
@@ -52,6 +53,8 @@ def main() -> int:
         if tag == "latest":
             latest_tag = read_release_tag(path) or latest_tag
             continue
+        if not _RELEASE_TAG_RE.fullmatch(tag):
+            continue
         snapshot = {
             "tag": tag,
             "results": path.name,
@@ -64,7 +67,14 @@ def main() -> int:
             snapshot["java_backends"] = sidecar.name
         snapshots.append(snapshot)
 
-    snapshots.sort(key=lambda s: s["tag"], reverse=True)
+    snapshots.sort(
+        key=lambda snapshot: tuple(
+            int(part) for part in snapshot["tag"].removeprefix("v").split(".")
+        ),
+        reverse=True,
+    )
+    if latest_tag is not None and not _RELEASE_TAG_RE.fullmatch(latest_tag):
+        latest_tag = None
 
     payload = {
         "schema": 1,

@@ -166,6 +166,28 @@ const initSectionNav = () => {
   tracked.forEach(({ section }) => observer.observe(section));
 };
 
+const initScrollReveals = () => {
+  const nodes = Array.from(document.querySelectorAll("[data-reveal]"));
+  if (!nodes.length) return;
+
+  const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  if (reduced || !("IntersectionObserver" in window)) {
+    nodes.forEach((node) => node.classList.add("is-visible"));
+    return;
+  }
+
+  document.documentElement.classList.add("motion-ready");
+  const observer = new IntersectionObserver((entries) => {
+    entries.forEach((entry) => {
+      if (!entry.isIntersecting) return;
+      entry.target.classList.add("is-visible");
+      observer.unobserve(entry.target);
+    });
+  }, { rootMargin: "0px 0px -10%", threshold: 0.16 });
+
+  nodes.forEach((node) => observer.observe(node));
+};
+
 const setLink = (selector, url) => {
   const el = document.querySelector(selector);
   if (!el) return;
@@ -615,40 +637,50 @@ const loadHashFiles = async () => {
 const loadVirusTotal = async () => {
   const summary = document.getElementById("vt-summary");
   const tableBody = document.querySelector("#vt-table tbody");
+  const releaseAssets = Array.isArray(latestReleaseData?.assets) ? latestReleaseData.assets : [];
+  const releaseReport = releaseAssets.find((asset) => asset.name === "virustotal-results.json");
+  const releaseReportText = releaseAssets.find((asset) => asset.name === "virustotal-results.txt");
+  if (releaseReport?.browser_download_url) {
+    setLink("#vt-results-json", releaseReport.browser_download_url);
+  }
+  if (releaseReportText?.browser_download_url) {
+    setLink("#vt-results-text", releaseReportText.browser_download_url);
+  }
+
   try {
     const pinnedBase = await getPinnedResultsBase();
     const localBase = getResultsLocalBase();
-    const releaseAssets = Array.isArray(latestReleaseData?.assets) ? latestReleaseData.assets : [];
-    const releaseReport = releaseAssets.find((asset) => asset.name === "virustotal-results.json");
     const candidates = [
-      releaseReport?.browser_download_url || "",
-      pinnedBase && latestReleaseTag ? `${pinnedBase}/virustotal-${latestReleaseTag}.json` : "",
-      latestReleaseTag ? `${localBase}virustotal-${latestReleaseTag}.json` : "",
+      pinnedBase ? `${pinnedBase}/virustotal-latest.json` : "",
       `${localBase}virustotal-latest.json`
     ].filter(Boolean);
 
     let resultsUrl = "";
     let response = null;
     for (const candidate of candidates) {
-      const attempt = await fetch(candidate);
-      if (attempt.ok) {
-        resultsUrl = candidate;
-        response = attempt;
-        break;
+      try {
+        const attempt = await fetch(candidate);
+        if (attempt.ok) {
+          resultsUrl = candidate;
+          response = attempt;
+          break;
+        }
+      } catch (_err) {
+        // One unavailable mirror must not suppress the remaining trusted copies.
       }
     }
     if (!response) {
       throw new Error("vt results not found");
     }
-    const resultsTxt = resultsUrl.replace(/\.json$/, ".txt");
-    setLink("#vt-results-text", resultsTxt);
-    setLink("#vt-results-json", resultsUrl);
     const data = await response.json();
     const files = data.files || [];
 
     if (latestReleaseTag && data.release_tag && data.release_tag !== latestReleaseTag) {
       throw new Error("VirusTotal report does not match the latest release");
     }
+
+    setLink("#vt-results-text", resultsUrl.replace(/\.json$/, ".txt"));
+    setLink("#vt-results-json", resultsUrl);
 
     summary.textContent = `Links generated ${new Date(data.generated_at).toLocaleString()} for ${data.release_tag || "latest"}. Review each report on VirusTotal.`;
     summary.className = "status-pill ok";
@@ -691,9 +723,13 @@ const loadVirusTotal = async () => {
       tableBody.appendChild(row);
     });
   } catch (err) {
-    summary.textContent = "VirusTotal links not available yet.";
+    summary.textContent = releaseReport
+      ? "Report files are available. Row preview awaits matching published metadata."
+      : "VirusTotal links not available yet.";
     summary.className = "status-pill warn";
-    tableBody.innerHTML = "<tr><td colspan=\"2\" class=\"mono\">No results found.</td></tr>";
+    tableBody.innerHTML = releaseReport
+      ? "<tr><td colspan=\"2\" class=\"mono\">Open the report files above.</td></tr>"
+      : "<tr><td colspan=\"2\" class=\"mono\">No results found.</td></tr>";
   }
 };
 
@@ -954,6 +990,7 @@ document.addEventListener("DOMContentLoaded", () => {
   initThemeToggle();
   initDisabledLinks();
   initSectionNav();
+  initScrollReveals();
   initDocToc();
   const run = async () => {
     if (document.getElementById("release-version") || document.getElementById("bench-release")) {

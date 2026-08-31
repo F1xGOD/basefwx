@@ -23,6 +23,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+      - name: Validate website catalog
+        run: |
+          python3 scripts/check_website_catalog.py
       - name: Setup Pages
         uses: actions/configure-pages@v5
       - name: Build site

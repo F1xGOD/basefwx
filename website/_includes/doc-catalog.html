@@ -1,0 +1,27 @@
+{%- assign catalog_groups = include.groups | split: "|" -%}
+<div class="doc-catalog">
+  {%- for group_name in catalog_groups -%}
+    <section class="doc-catalog-group" data-reveal="catalog">
+      <header class="doc-catalog-heading">
+        <h3>{{ group_name }}</h3>
+      </header>
+      <div class="doc-catalog-list">
+        {%- for entry in site.data.docs -%}
+          {%- assign entry_group = entry[include.group_field] -%}
+          {%- if entry_group == group_name -%}
+            {%- assign external = false -%}
+            {%- if entry.url contains "://" -%}{%- assign external = true -%}{%- endif -%}
+            <a class="doc-catalog-item" href="{% if external %}{{ entry.url }}{% else %}{{ entry.url | relative_url }}{% endif %}"{% if external %} target="_blank" rel="noopener"{% endif %}>
+              <span class="doc-catalog-mark" aria-hidden="true"></span>
+              <span class="doc-catalog-copy">
+                <strong>{{ entry.title }}</strong>
+                <span>{{ entry.summary }}</span>
+              </span>
+              <span class="doc-catalog-action">Open</span>
+            </a>
+          {%- endif -%}
+        {%- endfor -%}
+      </div>
+    </section>
+  {%- endfor -%}
+</div>

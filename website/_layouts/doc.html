@@ -11,10 +11,8 @@
         {% include brand.html %}
         <nav class="doc-nav" aria-label="Documentation navigation">
           <a href="{{ '/' | relative_url }}">Portal</a>
-          <a href="{{ '/docs/CLI/' | relative_url }}">CLI</a>
-          <a href="{{ '/docs/SECURITY_MODEL/' | relative_url }}">Security</a>
-          <a href="{{ '/docs/TESTING/' | relative_url }}">Testing</a>
-          <a href="{{ '/docs/CONTRIBUTING/' | relative_url }}">Contributing</a>
+          <a href="{{ '/docs/' | relative_url }}">All docs</a>
+          <a href="{{ site.repo_url }}" target="_blank" rel="noopener">GitHub</a>
           {% include theme-toggle.html %}
         </nav>
       </header>

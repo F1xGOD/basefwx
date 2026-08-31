@@ -1,0 +1,9 @@
+{
+  "date": "2026-08-31",
+  "scope": "website",
+  "framework": "Jekyll with vanilla HTML, CSS, and JavaScript",
+  "fonts": ["Archivo", "IBM Plex Sans", "IBM Plex Mono"],
+  "palette": "dark-first graphite and violet tokens in website/assets/tokens.css",
+  "spacing": "named 4-point scale in website/assets/tokens.css",
+  "motion": "CSS keyframes and vanilla JavaScript, with reduced-motion support"
+}

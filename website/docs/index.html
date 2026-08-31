@@ -1,42 +1,24 @@
-<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8">
-    <meta http-equiv="refresh" content="0; url=../">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>BaseFWX docs</title>
-    <link rel="canonical" href="../">
-    <link rel="icon" type="image/svg+xml" href="../assets/basefwx-plain.svg">
-    <meta name="theme-color" content="#0b090f" media="(prefers-color-scheme: dark)">
-    <meta name="theme-color" content="#fbf9fd" media="(prefers-color-scheme: light)">
-    <script>
-      try {
-        var t = localStorage.getItem("basefwx-theme");
-        if (t === "dark" || t === "light") document.documentElement.dataset.theme = t;
-      } catch (e) {}
-    </script>
-    <link rel="stylesheet" href="../assets/site.css?v=8">
-    <style>
-      body {
-        display: flex;
-        min-height: 100vh;
-        align-items: center;
-        justify-content: center;
-        padding: var(--space-lg);
-      }
-
-      .redirect {
-        max-width: 26rem;
-      }
-    </style>
-  </head>
-  <body>
-    <div class="card redirect">
-      <h3>Redirecting</h3>
-      <p>The documentation index lives on the release portal.</p>
-      <div class="card-foot">
-        <a class="btn" href="../">Open the portal</a>
-      </div>
+---
+layout: page
+title: BaseFWX documentation
+description: Container formats, CLI use, compatibility, security, testing, and contribution guidance for BaseFWX.
+nav_current: Docs
+---
+<section class="hero docs-hero">
+  <div class="hero-copy">
+    <div class="hero-status"><span aria-hidden="true"></span>Container formats, runtimes, and release checks</div>
+    <h1>BaseFWX docs</h1>
+    <p>Start with the container model. Use the CLI, security, compatibility, and testing references as needed.</p>
+    <div class="cta-row">
+      <a class="btn" href="{{ '/docs/CLI/' | relative_url }}">Open CLI reference</a>
+      <a class="btn secondary" href="{{ '/docs/SECURITY_MODEL/' | relative_url }}">Read security model</a>
     </div>
-  </body>
-</html>
+  </div>
+</section>
+
+<section class="docs-index" aria-labelledby="docs-index-title">
+  <div class="section-head">
+    <h2 class="section-title" id="docs-index-title">Documentation inventory</h2>
+  </div>
+  {% include doc-catalog.html groups="Understand|Use|Reference|Contribute" group_field="group" %}
+</section>

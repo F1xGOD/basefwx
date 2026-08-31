@@ -2,7 +2,7 @@
 # file, not four HTML pages.
 primary:
   - label: Docs
-    url: /docs/CLI/
+    url: /docs/
   - label: Hashes
     url: /hashes/
   - label: Benchmark
@@ -19,7 +19,7 @@ footer:
   - label: Benchmark
     url: /benchmark/
   - label: Docs
-    url: /docs/CLI/
+    url: /docs/
   - label: GitHub
     url: https://github.com/F1xGOD/basefwx
     external: true

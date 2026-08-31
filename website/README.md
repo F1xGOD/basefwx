@@ -11,6 +11,7 @@ than a hand-written `../` path.
 | --- | --- |
 | `_config.yml` | Site settings. `asset_version` is the cache buster for CSS and JS. |
 | `_data/nav.yml` | The header and footer link lists. Edit here, not in the pages. |
+| `_data/docs.json` | Titles, summaries, routes, sources, groups, and order for documentation indexes. |
 | `_includes/` | Shared chrome: `head`, `brand`, `site-header`, `section-nav`, `site-footer`, `theme-toggle`. |
 | `_layouts/page.html` | Wrapper for the hand-written pages. |
 | `_layouts/doc.html` | Wrapper for the Markdown docs. |
@@ -18,6 +19,7 @@ than a hand-written `../` path.
 | `assets/site.css` | Everything else. One pass, no override layer. |
 | `assets/site.js` | Release metadata, hashes, VirusTotal, benchmarks, theme toggle. |
 | `docs/*.md` | Documentation pages. Front matter picks the layout and the permalink. |
+| `DESIGN.md` | The locked visual and motion rules for every website route. |
 
 ## Common edits
 
@@ -34,9 +36,10 @@ permalink: /docs/SHORT_TITLE/
 ---
 ```
 
-The on-page table of contents builds itself from the `h2` and `h3` headings, so
-there is nothing to register. Link it from the Docs grid in `index.html` if it
-should be discoverable from the portal.
+The on-page table of contents builds itself from the `h2` and `h3` headings. Add
+the page once to `_data/docs.json` if it should appear on the portal or `/docs/`.
+`scripts/check_website_catalog.py` rejects missing sources and broken local
+routes.
 
 **Add a page.** Create an HTML file with `layout: page` front matter and a
 `title`. Optional keys: `description`, `nav_current` (marks a header link as the
@@ -65,9 +68,9 @@ There is one `:root`, in `tokens.css`. Do not start a second palette at the
 bottom of `site.css` and override the first, which is how the previous
 stylesheet reached 2000 lines with most of its first half unreachable.
 
-Motion is limited to the four cases documented at the top of the Motion section
-in `site.css`. Scroll-triggered reveals on ordinary sections are deliberately
-absent.
+Motion follows `DESIGN.md`. The container diagram scans in wire order and a few
+evidence racks enter once through `IntersectionObserver`. Content remains visible
+when JavaScript fails. Reduced motion removes spatial travel.
 
 Do not invent numbers. The container diagram is labelled schematic because its
 proportions are chosen for legibility, and headings state only what the copy
@@ -76,6 +79,7 @@ underneath can support.
 ## Working on it locally
 
 ```sh
+python3 scripts/check_website_catalog.py
 jekyll build -d /tmp/basefwx-site
 python3 -m http.server 8000 -d /tmp/basefwx-site
 ```

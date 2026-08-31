@@ -21,19 +21,19 @@ section_nav:
     url: "#support"
 ---
 <section class="hero" id="top">
-  <div>
-    <div class="hero-status"><span aria-hidden="true"></span>C++, Python, and Java write the same authenticated formats</div>
-    <h1>BaseFWX</h1>
+  <div class="hero-copy">
+    <div class="hero-status"><span aria-hidden="true"></span>One container format / three runtimes</div>
+    <h1>BaseFWX <small>Authenticated containers across C++, Python, and Java</small></h1>
     <p>
-      BaseFWX encrypts payloads with AES-256-GCM and derives keys with Argon2id or PBKDF2.
-      An optional master path also wraps the content key with ML-KEM. The C++, Python, and
-      Java runtimes read and write the same fwxAES, b512, and pb512 containers. This portal
-      carries the release trail: binaries, detached signatures, checksums, and scan reports.
+      BaseFWX encrypts payloads with AES-256-GCM. Keys come from Argon2id or PBKDF2; the
+      optional master path wraps the content key with ML-KEM. Every runtime reads and writes
+      the same fwxAES, b512, and pb512 formats. This portal holds the binaries, signatures,
+      hashes, and scan reports.
     </p>
     <div class="cta-row">
-      <a class="btn" href="#downloads">Download the CLI</a>
-      <a class="btn secondary" href="{{ '/docs/CLI/' | relative_url }}">CLI reference</a>
-      <a class="btn secondary" href="https://github.com/F1xGOD/basefwx#readme" target="_blank" rel="noopener">Read the README</a>
+      <a class="btn" href="#downloads">Download CLI</a>
+      <a class="btn secondary" href="{{ '/docs/' | relative_url }}">Read docs</a>
+      <a class="btn secondary" href="https://github.com/F1xGOD/basefwx#readme" target="_blank" rel="noopener">View source</a>
     </div>
   </div>
 
@@ -55,7 +55,7 @@ section_nav:
     <div class="notice">Live download links need JavaScript, so they stay disabled without it. Use the GitHub Releases link above.</div>
   </noscript>
 
-  <figure class="container-map">
+  <figure class="container-map" data-reveal="scan">
     <figcaption class="map-caption">
       <span class="map-kicker">Schematic</span>
       <span class="map-title">Anatomy of a BaseFWX container</span>
@@ -79,7 +79,7 @@ section_nav:
   </figure>
 </section>
 
-<section id="downloads">
+<section id="downloads" data-reveal="rack">
   <div class="section-head">
     <h2 class="section-title">Download the CLI</h2>
     <p class="section-lead">One row per build. Every binary ships a detached signature and a SHA-256 sidecar.</p>
@@ -154,7 +154,7 @@ section_nav:
   </div>
 </section>
 
-<section id="verify">
+<section id="verify" data-reveal="rack">
   <div class="section-head">
     <h2 class="section-title">Verify a download</h2>
     <p class="section-lead">Two independent checks. The signature proves who built the file, the checksum proves it arrived intact.</p>
@@ -236,37 +236,12 @@ section_nav:
   </div>
 </section>
 
-<section id="docs">
+<section id="docs" data-reveal="rack">
   <div class="section-head">
-    <h2 class="section-title">Docs</h2>
-    <p class="section-lead">The container format, the runtimes that share it, and what happens when a check fails.</p>
+    <h2 class="section-title">Documentation inventory</h2>
+    <p class="section-lead">Container format, runtime use, failure handling, and release checks.</p>
   </div>
-  <div class="grid">
-    <a class="card" href="https://github.com/F1xGOD/basefwx/blob/main/docs/EXPLAINED.md" target="_blank" rel="noopener">
-      <h3>BaseFWX explained</h3>
-      <p>The container, unlock paths, live streams, and the failure model.</p>
-    </a>
-    <a class="card" href="{{ '/docs/CLI/' | relative_url }}">
-      <h3>CLI and usage</h3>
-      <p>Commands, flags, master-key workflows, and the JVM entry points.</p>
-    </a>
-    <a class="card" href="{{ '/docs/SECURITY_MODEL/' | relative_url }}">
-      <h3>Security model</h3>
-      <p>Threat model, key paths, and AEAD details.</p>
-    </a>
-    <a class="card" href="https://github.com/F1xGOD/basefwx/blob/main/COMPATIBILITY.md" target="_blank" rel="noopener">
-      <h3>Compatibility</h3>
-      <p>Cross-runtime formats, retired-data recovery, and unsupported paths.</p>
-    </a>
-    <a class="card" href="{{ '/docs/TESTING/' | relative_url }}">
-      <h3>Testing</h3>
-      <p>Correctness suites, benchmark modes, and what the measurements do not cover.</p>
-    </a>
-    <a class="card" href="{{ '/docs/CONTRIBUTING/' | relative_url }}">
-      <h3>Contributing</h3>
-      <p>How to propose changes and report issues.</p>
-    </a>
-  </div>
+  {% include doc-catalog.html groups="Understand|Use|Reference|Contribute" group_field="group" %}
 </section>
 
 <section id="support">

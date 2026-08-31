@@ -17,6 +17,8 @@
 namespace basefwx::filecodec {
 
 struct FileOptions {
+    // B512 streaming and all AES-heavy PB512 authoring require metadata for
+    // format dispatch or KDF recovery and reject this option.
     bool strip_metadata = false;
     bool use_master = false;
     // Preserved for source compatibility. Writers reject false as of 3.8;

@@ -12,6 +12,7 @@
 #include "basefwx/env.hpp"
 #include "basefwx/format.hpp"
 #include "basefwx/runtime.hpp"
+#include "basefwx/secure_temp.hpp"
 #include "basefwx/system_info.hpp"
 
 #include <chrono>
@@ -142,6 +143,28 @@ public:
 
 private:
     CountingOutputBuffer buffer_;
+};
+
+class ScopedDirectoryCleanup final {
+public:
+    ScopedDirectoryCleanup(const ScopedDirectoryCleanup&) = delete;
+    ScopedDirectoryCleanup& operator=(const ScopedDirectoryCleanup&) = delete;
+
+    ScopedDirectoryCleanup() = default;
+
+    void Add(std::filesystem::path directory) {
+        directories_.push_back(std::move(directory));
+    }
+
+    ~ScopedDirectoryCleanup() noexcept {
+        for (const auto& directory : directories_) {
+            std::error_code error;
+            std::filesystem::remove_all(directory, error);
+        }
+    }
+
+private:
+    std::vector<std::filesystem::path> directories_;
 };
 
 std::uint64_t LiveBenchMemoryLimitBytes() {
@@ -667,20 +690,27 @@ int main(int argc, char** argv) {
             int warmup = basefwx::cli::BenchWarmup();
             int iters = basefwx::cli::BenchIters();
 
-            auto stamp = std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
             std::vector<std::filesystem::path> worker_dirs;
             std::vector<std::filesystem::path> seed_fwx;
             std::vector<std::filesystem::path> seed_an7;
+            std::vector<basefwx::temp::SecureTempPath> workspaces;
             worker_dirs.reserve(workers);
             seed_fwx.reserve(workers);
             seed_an7.reserve(workers);
+            workspaces.reserve(workers);
+            ScopedDirectoryCleanup cleanup;
 
             basefwx::fwxaes::Options fwx_opts;
             fwx_opts.use_master = use_master;
             for (std::size_t i = 0; i < workers; ++i) {
-                std::filesystem::path temp_dir = std::filesystem::temp_directory_path()
-                    / ("basefwx-bench-an7-" + stamp + "-" + std::to_string(i));
-                std::filesystem::create_directories(temp_dir);
+                workspaces.push_back(
+                    basefwx::temp::SecureTempPath::CreateSibling(
+                        std::filesystem::temp_directory_path()
+                            / ("basefwx-bench-an7-" + std::to_string(i)),
+                        "workspace"));
+                const std::filesystem::path temp_dir =
+                    workspaces.back().path().parent_path();
+                cleanup.Add(temp_dir);
                 worker_dirs.push_back(temp_dir);
 
                 std::filesystem::path worker_input = temp_dir / src_path.filename();
@@ -762,21 +792,9 @@ int main(int argc, char** argv) {
                 }
             };
 
-            long long ns = 0;
-            try {
-                ns = basefwx::cli::BenchMedian(warmup, iters, run);
-            } catch (...) {
-                for (const auto& dir : worker_dirs) {
-                    std::error_code ec;
-                    std::filesystem::remove_all(dir, ec);
-                }
-                throw;
-            }
+            const long long ns =
+                basefwx::cli::BenchMedian(warmup, iters, run);
             std::cout << "BENCH_NS=" << ns << "\n";
-            for (const auto& dir : worker_dirs) {
-                std::error_code ec;
-                std::filesystem::remove_all(dir, ec);
-            }
             return 0;
         }
         if (command == "bench-live") {
@@ -871,16 +889,23 @@ int main(int argc, char** argv) {
                 basefwx::cli::ConfirmSingleThreadCli(workers);
                 std::vector<std::filesystem::path> temp_dirs;
                 std::vector<std::filesystem::path> bench_inputs;
+                std::vector<basefwx::temp::SecureTempPath> workspaces;
                 temp_dirs.reserve(workers);
                 bench_inputs.reserve(workers);
-                auto stamp = std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
+                workspaces.reserve(workers);
+                ScopedDirectoryCleanup cleanup;
                 for (std::size_t i = 0; i < workers; ++i) {
-                    std::filesystem::path temp_dir = std::filesystem::temp_directory_path()
-                        / ("basefwx-bench-" + stamp + "-" + std::to_string(i));
-                    std::filesystem::create_directories(temp_dir);
+                    workspaces.push_back(
+                        basefwx::temp::SecureTempPath::CreateSibling(
+                            std::filesystem::temp_directory_path()
+                                / ("basefwx-bench-" + std::to_string(i)),
+                            "workspace"));
+                    const std::filesystem::path temp_dir =
+                        workspaces.back().path().parent_path();
+                    cleanup.Add(temp_dir);
+                    temp_dirs.push_back(temp_dir);
                     std::filesystem::path bench_input = temp_dir / src_path.filename();
                     std::filesystem::copy_file(src_path, bench_input, std::filesystem::copy_options::overwrite_existing);
-                    temp_dirs.push_back(temp_dir);
                     bench_inputs.push_back(bench_input);
                 }
 
@@ -922,12 +947,8 @@ int main(int argc, char** argv) {
 
                 long long ns = basefwx::cli::BenchMedian(warmup, iters, run);
                 std::cout << "BENCH_NS=" << ns << "\n";
-                for (const auto& dir : temp_dirs) {
-                    std::error_code ec;
-                    std::filesystem::remove_all(dir, ec);
-                }
                 return 0;
-            } catch (const std::exception& exc) {
+            } catch (const std::exception&) {
                 throw;
             }
         }

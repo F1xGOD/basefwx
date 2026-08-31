@@ -96,8 +96,10 @@ which algorithms and containers are byte-compatible across runtimes.
 
 The default artifacts contain the maintained formats only. Historical
 b256/A512/Bi512/Uhash513 text methods and the kFM/kFA/jMG media paths are
-available only in an explicitly built recovery profile. Use that profile to
-read existing data, then re-encrypt it with a maintained format.
+available only in an explicitly built recovery profile. That profile still
+contains their encoders so retired output can be reproduced exactly, but new
+data should not be written with them: read existing data, then re-encrypt it
+with a maintained format.
 
 Legacy recovery switches are opt-in and should be scoped to trusted old data:
 

@@ -41,6 +41,10 @@ std::string Pb512EncodeFileSimple(const std::filesystem::path& input,
                                   const FileOptions& options,
                                   const basefwx::pb512::KdfOptions& kdf,
                                   std::string_view pack_flag) {
+    if (options.strip_metadata) {
+        throw std::invalid_argument(
+            "AES-heavy encode requires metadata for KDF cost recovery");
+    }
     std::string resolved = basefwx::ResolvePassword(password);
     const std::uint32_t heavy_pbkdf2_iterations =
         basefwx::constants::HeavyPbkdf2Iterations();
@@ -723,6 +727,10 @@ std::vector<std::uint8_t> Pb512EncodeBytes(const std::vector<std::uint8_t>& data
                                            const std::string& password,
                                            const FileOptions& options,
                                            const basefwx::pb512::KdfOptions& kdf) {
+    if (options.strip_metadata) {
+        throw std::invalid_argument(
+            "AES-heavy encode requires metadata for KDF cost recovery");
+    }
     std::string resolved = basefwx::ResolvePassword(password);
     const std::uint32_t heavy_pbkdf2_iterations =
         basefwx::constants::HeavyPbkdf2Iterations();

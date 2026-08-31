@@ -47,6 +47,13 @@ void WriteU32Be(std::uint8_t* out, std::uint32_t value) {
     out[3] = static_cast<std::uint8_t>(value & 0xFF);
 }
 
+std::uint32_t ReadU32Be(const std::uint8_t* input) {
+    return (static_cast<std::uint32_t>(input[0]) << 24)
+        | (static_cast<std::uint32_t>(input[1]) << 16)
+        | (static_cast<std::uint32_t>(input[2]) << 8)
+        | static_cast<std::uint32_t>(input[3]);
+}
+
 void AppendU32Be(Bytes& out, std::uint32_t value) {
     const std::size_t offset = out.size();
     out.resize(offset + 4);
@@ -812,6 +819,27 @@ int main() {
             kdf.pbkdf2_iterations = 1;
             ExpectReject(
                 [&]() {
+                    (void)basefwx::filecodec::Pb512EncodeBytes(
+                        Bytes{0x01, 0x02, 0x03},
+                        ".bin",
+                        "correct-password",
+                        options,
+                        kdf);
+                },
+                "stripped pb512 byte authoring",
+                "requires metadata");
+            options.stream_threshold =
+                std::numeric_limits<std::size_t>::max();
+            ExpectReject(
+                [&]() {
+                    (void)basefwx::filecodec::Pb512EncodeFile(
+                        source.string(), "correct-password", options, kdf);
+                },
+                "stripped pb512 simple authoring",
+                "requires metadata");
+            options.stream_threshold = 1;
+            ExpectReject(
+                [&]() {
                     (void)basefwx::filecodec::B512EncodeFile(
                         source.string(), "correct-password", options, kdf);
                 },
@@ -1403,6 +1431,38 @@ int main() {
         if (!producer_output.str().empty()) {
             throw std::runtime_error(
                 "stream producer wrote output before KDF-cap rejection");
+        }
+        {
+            ScopedEnvironment allow_weak_env(
+                "BASEFWX_ALLOW_WEAK_PASSWORD", "");
+            ScopedEnvironment min_password_env(
+                "BASEFWX_MIN_PASSWORD_LEN", "");
+            ScopedEnvironment test_iterations_env(
+                "BASEFWX_TEST_KDF_ITERS", "");
+            basefwx::livecipher::LiveEncryptor live("short", false);
+            ExpectReject(
+                [&]() { (void)live.Start(); },
+                "live public API weak password",
+                "UTF-8 bytes");
+        }
+        {
+            ScopedEnvironment iterations_env(
+                "BASEFWX_FWXAES_PBKDF2_ITERS", "");
+            ScopedEnvironment test_iterations_env(
+                "BASEFWX_TEST_KDF_ITERS", "");
+            basefwx::livecipher::LiveEncryptor live(
+                "correct-password", false);
+            const Bytes header = live.Start();
+            const std::size_t iterations_offset =
+                basefwx::constants::kLiveFrameHeaderLen + 8u;
+            if (header.size() < iterations_offset + sizeof(std::uint32_t)
+                || ReadU32Be(header.data() + iterations_offset)
+                    != static_cast<std::uint32_t>(
+                        basefwx::constants::kUserKdfIterations)) {
+                throw std::runtime_error(
+                    "live producer did not serialize the shared default "
+                    "PBKDF2 iterations");
+            }
         }
         {
             ScopedEnvironment iterations_env(

@@ -31,12 +31,21 @@ no retired symbols or command strings. `BASEFWX_HAS_RETIRED_MEDIA` is
 published through both the CMake target and installed `pkg-config` metadata so
 consumers can guard compatibility-only includes and calls.
 
-If you want to build without Argon2 or ML-KEM support (not cross-compatible with those modes):
+Argon2 is required by default. liboqs is optional by default, so a plain build
+silently omits ML-KEM if it is absent; release and Debian builds pass
+`-DBASEFWX_REQUIRE_OQS=ON` to make that a configure error.
+
+To permit a reduced-capability build when Argon2 or liboqs is unavailable (not
+cross-compatible with those modes):
 
 ```bash
 cmake -S cpp -B cpp/build -DBASEFWX_REQUIRE_ARGON2=OFF -DBASEFWX_REQUIRE_OQS=OFF
 cmake --build cpp/build
 ```
+
+These switches relax missing-backend errors; they do not disable a backend that
+CMake finds. Use the generated capability macros to inspect the resulting
+build.
 
 ## CLI (current)
 
@@ -107,7 +116,9 @@ data instead of being mislabeled as a corrupted BaseFWX container.
   `BASEFWX_ALLOW_LEGACY_B512FILE_RAW=1` for trusted recovery.
 - Compatibility kFM carriers are byte-reversible across Python/C++/Java for
   BaseFWX-made files, including legacy raw-byte carriers.
-- New encrypt operations reject passwords shorter than 10 characters unless `BASEFWX_ALLOW_WEAK_PASSWORD=1` is set.
+- New encrypt operations reject passwords shorter than 10 UTF-8 bytes unless
+  `BASEFWX_ALLOW_WEAK_PASSWORD=1` is set. `BASEFWX_MIN_PASSWORD_LEN=<n>`
+  overrides the threshold, and `0` disables the check.
 - Default user KDF targets are hardened to `PBKDF2=600000` / `Argon2id=4 x 64 MiB`, and heavy mode advertises `PBKDF2=2000000` / `Argon2id=6 x 256 MiB`.
 - In compatibility builds, `kFMe` auto-detects source type:
   - audio input -> PNG carrier
@@ -115,8 +126,11 @@ data instead of being mislabeled as a corrupted BaseFWX container.
 - `kFMe` only emits `.png` or `.wav` carrier files; explicit mismatched output extensions are rejected.
 - `kFMd` strictly decodes BaseFWX carriers and refuses non-carrier files.
 - `kFAe` / `kFAd` are kept as compatibility aliases but are deprecated.
-- The fwxaes raw format uses the FWX1 header and PBKDF2 + AES-256-GCM, with an
-  optional normalize wrapper that hides bytes in zero-width Unicode markers.
+- The fwxaes raw format uses the FWX1 header with an AES-256-GCM payload. The
+  content key is wrapped under Argon2id by default, or PBKDF2 when the Argon2
+  backend is absent; `--legacy-pbkdf2` selects the historical direct-PBKDF2
+  header. An optional normalize wrapper hides bytes in zero-width Unicode
+  markers.
 - Live streaming uses packetized `LIVE` v1 AES-GCM frames and is cross-compatible
   with Python/Java `fwxAES_live_*` APIs.
 - `fwxaes-live-enc` / `fwxaes-live-dec` accept `-` for stdin/stdout so they can be

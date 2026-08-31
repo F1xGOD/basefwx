@@ -15,7 +15,7 @@
 | **AN7 / DEAN7** stealth-anonymization round-trip available in C++, Python, Java | New protocol layer; see CLI docs. |
 | **Release metadata unified** across C++, Java, Python | All three runtimes now read the same `VERSION` file and expose the same build stamp. |
 | **CI rejects partial-crypto builds** | Argon2/OQS/LZMA are now hard requirements for published builds; no more silent downgrades. |
-| **CLI master-key opt-in tightened** | C++ CLI requires `--with-master` explicitly to engage the master-key path; richer version/build reporting. |
+| **CLI master-key opt-in tightened** | C++ CLI requires `--use-master` explicitly to engage the master-key path; richer version/build reporting. |
 | **Java build hygiene** | CLI / version-packaging regressions fixed, release and CI builds stay green. |
 
 The full security-policy section lives in the
@@ -189,7 +189,7 @@ question came up:
   by password entropy and KDF cost. Salts prevent precomputation but do not add
   entropy. See the current `SECURITY.md` policy for the qualified statement.
 * **ML-KEM-768** is **opt-in only**, gated by `useMaster=true`
-  (`--with-master` on the C++ CLI). When enabled, the mask key is
+  (`--use-master` on the C++ CLI). When enabled, the mask key is
   *additionally* encapsulated to a master public key. Either path
   (password or master-private-key) can decrypt.
 * Master-pubkey sources, in priority order:
@@ -227,7 +227,7 @@ the full opt-in picture.
   LZMA support is missing from the build. No more silent downgrades
   to "works but weaker" releases.
 * **Master-key opt-in tightened.** The C++ CLI now requires explicit
-  `--with-master` and surfaces the chosen master-key mode in its
+  `--use-master` and surfaces the chosen master-key mode in its
   version banner.
 * **Canonical asset naming.** Release assets follow a single naming
   convention; manifests are generated automatically; redundant

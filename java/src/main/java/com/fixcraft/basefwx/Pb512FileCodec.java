@@ -366,6 +366,7 @@ final class Pb512FileCodec {
             if ("no".equalsIgnoreCase(masterHint)) {
                 useMasterEffective = false;
             }
+            FileCodecs.requireSupportedPackMode(metadataBlob);
             String obfHint = FileCodecs.requirePayloadObfuscationMode(
                     metaValue(metadataBlob, "ENC-OBF"));
             obfuscateStream = !"no".equals(obfHint);
@@ -561,6 +562,10 @@ final class Pb512FileCodec {
         if (data == null) {
             throw new IllegalArgumentException("pb512file_encode_bytes expects bytes");
         }
+        if (stripMetadata) {
+            throw new IllegalArgumentException(
+                    "AES-heavy encode requires metadata for KDF cost recovery");
+        }
         long approxB64Len = ((data.length + 2L) / 3L) * 4L;
         if (approxB64Len > Constants.HKDF_MAX_LEN) {
             throw new IllegalArgumentException("pb512file_encode_bytes payload too large; use file-based streaming APIs");
@@ -658,6 +663,11 @@ final class Pb512FileCodec {
         String[] metaSplit = splitMetadata(plaintext);
         String metadataBlob = metaSplit[0];
         String body = metaSplit[1];
+        // The outer metadata is authenticated as AEAD AAD and checked by the
+        // length-prefixed decoder. The encrypted plaintext carries its own
+        // metadata copy, so validate that copy too: a packed inner payload
+        // must not bypass Java's no-unpacker refusal via an empty outer ENC-P.
+        FileCodecs.requireSupportedPackMode(metadataBlob);
         String masterHint = metaValue(metadataBlob, "ENC-MASTER");
         if ("no".equalsIgnoreCase(masterHint)) {
             useMasterEffective = false;

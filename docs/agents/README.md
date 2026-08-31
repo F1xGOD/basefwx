@@ -31,6 +31,13 @@ Keep secret keys, generated payloads, test credentials, benchmark artifacts,
 machine logs, and private task state out of Git. Run focused tests first, then
 the cross-runtime and packaging checks required by the touched contract.
 
+A behavior change is not finished until every document that describes that
+behavior is corrected in the same change. `COMPATIBILITY.md`, `SECURITY.md`,
+`ABI.md`, `docs/man/basefwx.1`, and the pages under `website/docs/` go stale
+first. Describe the boundary the code now enforces, not the intent behind the
+change: a guard that covers one decode path is not a runtime-wide refusal, and
+a document that claims the wider behavior is a defect in its own right.
+
 ## Documentation boundary
 
 Public human docs describe current behavior, supported recovery, and durable

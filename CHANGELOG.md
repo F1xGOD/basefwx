@@ -27,6 +27,13 @@
   `BASEFWX_ALLOW_LEGACY_B512FILE_RAW=1` for trusted-data recovery. A
   structurally recognized binary container never falls through to raw decode
   after key-wrap or payload authentication failure.
+- **Unrecoverable AES-heavy output refused.** C++, Java, and Python now reject
+  AES-heavy file authoring with metadata stripping on both in-memory and file
+  paths. Heavy KDF costs live in the metadata block, so stripping it produced a
+  container that the correct password could not reopen.
+- **Java packed-container refusal.** Java has no tar/gzip/xz unpacker and now
+  rejects every non-empty `ENC-P` value on b512file and pb512file in-memory and
+  streaming decode paths instead of returning the packed archive as plaintext.
 - **Primitive boundary hardening.** C++ RNG, RFC 5869 HKDF, PBKDF2,
   AES-GCM, AES-CTR, and legacy-OpenSSL HMAC paths now reject values that
   cannot be represented by the downstream OpenSSL `int` API before
@@ -65,6 +72,10 @@
   plaintext work buffers. The shared stream chunk format now centralizes its
   16 MiB allocation ceiling; C++ rejects zero/oversized caller chunk settings
   and overflow beyond the format's 32-bit payload length before output.
+- **Private benchmark scratch ownership.** C++ file benchmarks now allocate
+  exclusive owner-only scratch directories and remove them through scoped
+  cleanup on setup, codec, timing, and success paths. Failures no longer leave
+  per-worker plaintext or ciphertext copies in the shared temporary root.
 - **Payload key separation (`ENC-KSEP=v1`).** New non-stripped
   AES-heavy simple and direct-stream file payloads from C++, Java, and
   Python derive independent AES-GCM and obfuscation subkeys from the
@@ -110,7 +121,9 @@
   the C++ `kMinimumPasswordLength=10` policy (override with
   `BASEFWX_ALLOW_WEAK_PASSWORD=1` / `BASEFWX_MIN_PASSWORD_LEN`).
   Negative/invalid minimum overrides no longer weaken the default, and
-  Python stream/live/file entry points enforce the same policy.
+  Python stream/live/file entry points enforce the same policy. The installed
+  C++ `livecipher::LiveEncryptor` authoring API now enforces it directly too,
+  rather than relying on its higher-level wrapper.
 - **KEM selection is blob-derived.** Compatibility encrypt/decrypt
   overloads infer ML-KEM-768 versus ML-KEM-1024 from standardized
   key/ciphertext sizes, so recovery no longer depends on matching
@@ -218,6 +231,13 @@
   `pq=ml-kem-768|1024` instead of misleading `oqs=OFF`.
 
 ### Changed
+- **C++ LIVE password KDF parity.** The C++ password-mode LIVE writer now uses
+  the shared 600,000-iteration PBKDF2 default instead of a stale 200,000
+  literal. The iteration count is serialized in each session header, so older
+  streams remain readable.
+- **Core CMake header boundary.** Default C++ installs exclude retired-media
+  headers whose symbols the core library does not export. The compatibility
+  profile installs them together with the matching implementations.
 - **Retired-data artifact split.** b256, A512, Bi512, Uhash513, jMG, kFM, and
   kFA implementations, CLI commands, functional tests, and cross-runtime lanes now live in
   compatibility-only source trees and are excluded from default C++, Java,
@@ -391,31 +411,6 @@ Compare: <https://github.com/F1xGOD/basefwx/compare/v3.6.4...v3.7.0>
 - Wire format byte-identical to 3.6.4 for blobs **without** a plugin tag. Plugin-tagged blobs use `algo=0x03` and require 3.7.0+ with the matching plugin loaded.
 - See [RELEASE-NOTES-3.7.0.md](RELEASE-NOTES-3.7.0.md) for the upgrade walkthrough.
 
-## [v3.6.3] - 2026-03-19
-
-Compare: <https://github.com/F1xGOD/basefwx/compare/v3.6.2...v3.6.3>
-
-### Added
-- New `AN7` / `DEAN7` reversible stealth anonymization support in C++, Python, and Java.
-- Shared repository `VERSION` source with cross-runtime build/version metadata plumbing.
-- Release manifest generation and version-sync validation for packaged artifacts.
-- C++ CLI completion and stronger version/build reporting for release diagnostics.
-
-### Changed
-- Release workflows now enforce full-support artifacts instead of silently accepting degraded Argon2/OQS/LZMA builds.
-- Release asset handling was tightened around canonical, architecture-qualified outputs and shared metadata.
-- C++, Python, and Java version/capability reporting was aligned around the same repository version and build inputs.
-- Documentation, compatibility notes, and website release metadata were synchronized around the new release process.
-
-### Fixed
-- Java CLI build regression caused by missing version-command wiring/import coverage.
-- Redundant CI/release pre-build work, including unnecessary repeated `liboqs` setup in cached workflow paths.
-- Workflow/package inconsistencies that could ship artifacts without the intended full crypto feature set.
-
-### Notes
-- `v3.6.3` is a release-hardening and interoperability release: stealth anonymization, stricter packaging, and consistent metadata are the main user-visible changes.
-- Python and Java now follow the repository `VERSION` file directly, so version bumps no longer need separate per-runtime edits beyond the shared source.
-
 ## [v3.6.4] - 2026-05-16
 
 Compare: <https://github.com/F1xGOD/basefwx/compare/v3.6.3...v3.6.4>
@@ -473,5 +468,30 @@ Compare: <https://github.com/F1xGOD/basefwx/compare/v3.6.3...v3.6.4>
 - Java media operations require `ffmpeg` available on `PATH`; missing ffmpeg will fail jMG Java tests/benchmarks.
 - Benchmark/website datasets now include newer methods (`n10`, live suites, carrier suites) and are consumed by `website/results/benchmarks-latest.json`.
 - **Performance at constant security strength.** Once 3.6.3 benchmark numbers are rescaled to the 3.6.4 KDF cost (PBKDF2 × 3.00; Argon2 default × 2.667 where applicable), the overall test suite is **−55 % to −60 % faster** across C++ / Java / Python and the KDF-heavy paths (`fwxAES`, `b512`, `pb512`, `b512file`, `pb512file`, `kFMe`, `kFAe`, `an7`, `dean7`) are **−60 % to −80 % faster**. Non-KDF micros (`b256`, `b64`, `hash512`, `n10`, `bi512`, `uhash513`) are flat within ±2 %. Headline "fwxAES looks slower than 3.6.3" comparisons against the raw numbers are entirely the security-tax effect, not a code regression. Full methodology in `RELEASE-NOTES-3.6.4.md`.
-- ML-KEM-768 is **opt-in** via `useMaster=true` / `--with-master`. Default password-only mode does not engage the PQ KEM but is already PQ-resistant via AES-256 (Grover ≈ 128-bit equivalent) + hardened Argon2id/PBKDF2 + HKDF-SHA256.
+- ML-KEM-768 is **opt-in** via `useMaster=true` / `--use-master`. Default password-only mode does not engage the PQ KEM but is already PQ-resistant via AES-256 (Grover ≈ 128-bit equivalent) + hardened Argon2id/PBKDF2 + HKDF-SHA256.
 - Releases are **frozen at publish time**: 3.6.4 will never receive in-place patches. A vulnerability fixed against 3.6.4 ships as 3.6.5 (or 3.7.0, etc.), and the vulnerable 3.6.4 binary is left as published. See `SECURITY.md` → *Maintenance policy* for the full roll-forward model.
+
+## [v3.6.3] - 2026-03-19
+
+Compare: <https://github.com/F1xGOD/basefwx/compare/v3.6.2...v3.6.3>
+
+### Added
+- New `AN7` / `DEAN7` reversible stealth anonymization support in C++, Python, and Java.
+- Shared repository `VERSION` source with cross-runtime build/version metadata plumbing.
+- Release manifest generation and version-sync validation for packaged artifacts.
+- C++ CLI completion and stronger version/build reporting for release diagnostics.
+
+### Changed
+- Release workflows now enforce full-support artifacts instead of silently accepting degraded Argon2/OQS/LZMA builds.
+- Release asset handling was tightened around canonical, architecture-qualified outputs and shared metadata.
+- C++, Python, and Java version/capability reporting was aligned around the same repository version and build inputs.
+- Documentation, compatibility notes, and website release metadata were synchronized around the new release process.
+
+### Fixed
+- Java CLI build regression caused by missing version-command wiring/import coverage.
+- Redundant CI/release pre-build work, including unnecessary repeated `liboqs` setup in cached workflow paths.
+- Workflow/package inconsistencies that could ship artifacts without the intended full crypto feature set.
+
+### Notes
+- `v3.6.3` is a release-hardening and interoperability release: stealth anonymization, stricter packaging, and consistent metadata are the main user-visible changes.
+- Python and Java now follow the repository `VERSION` file directly, so version bumps no longer need separate per-runtime edits beyond the shared source.

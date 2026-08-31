@@ -485,6 +485,10 @@ def b512file_decode_bytes(blob: bytes, code: str, strip_metadata: bool=False, us
 def pb512file_encode_bytes(data: bytes, ext: str, code: str, strip_metadata: bool=False, use_master: bool=True) -> bytes:
     if not isinstance(data, (bytes, bytearray, memoryview)):
         raise TypeError('pb512file_encode_bytes expects bytes')
+    if strip_metadata:
+        raise ValueError(
+            'AES-heavy encode requires metadata for KDF cost recovery'
+        )
     heavy_iters = basefwx.HEAVY_PBKDF2_ITERATIONS
     basefwx._require_peer_pbkdf2_within_limits(heavy_iters)
     approx_b64_len = (len(data) + 2) // 3 * 4

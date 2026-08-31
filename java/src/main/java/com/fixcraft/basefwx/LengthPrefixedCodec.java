@@ -260,6 +260,7 @@ final class LengthPrefixedCodec {
             ? ""
             : new String(metadataBytes, StandardCharsets.UTF_8);
 
+        FileCodecs.requireSupportedPackMode(metadataBlob);
         String obfHint = FileCodecs.requirePayloadObfuscationMode(
                 FileCodecs.metaValue(metadataBlob, "ENC-OBF"));
         boolean shouldDeobfuscate = !"no".equals(obfHint);

@@ -899,19 +899,33 @@ class BaseFWXUnitTests(unittest.TestCase):
         self.assertEqual(decoded_path.read_bytes(), payload)
         self.assertEqual(decoded_path, self.tmp_path / "legacy.bin")
 
-    def test_aes_heavy_memory_strip_output_is_owner_usable(self):
+    def test_aes_heavy_memory_strip_is_rejected_before_output(self):
+        # Stripping discards the metadata block that records the heavy KDF
+        # costs, so a reader falls back to standard costs and can never
+        # recover the key. Refuse at write time rather than emit a container
+        # that the correct password cannot open.
         src = self.tmp_path / "heavy-memory.bin"
         src.write_bytes(b"memory-path" * 64)
 
-        encoded_path, _ = basefwx._aes_heavy_encode_path(
-            src,
-            TEST_PASSWORD,
-            strip_metadata=True,
-            use_master=False,
-        )
+        with self.assertRaisesRegex(ValueError, "requires metadata"):
+            basefwx._aes_heavy_encode_path(
+                src,
+                TEST_PASSWORD,
+                strip_metadata=True,
+                use_master=False,
+            )
+        self.assertTrue(src.exists())
+        self.assertFalse(src.with_suffix(".fwx").exists())
 
-        self.assertEqual(
-            stat.S_IMODE(encoded_path.stat().st_mode), 0o600)
+    def test_pb512_bytes_strip_is_rejected_before_kdf(self):
+        with self.assertRaisesRegex(ValueError, "requires metadata"):
+            basefwx.pb512file_encode_bytes(
+                b"memory-path",
+                ".bin",
+                TEST_PASSWORD,
+                strip_metadata=True,
+                use_master=False,
+            )
 
     def test_aes_heavy_streaming_roundtrip(self):
         src = self.tmp_path / "stream.bin"

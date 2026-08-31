@@ -42,6 +42,10 @@ final class FileCodecs {
         return FileCodecObfuscation.requirePayloadObfuscationMode(raw);
     }
 
+    static void requireSupportedPackMode(String metadataBlob) {
+        FileCodecMetadata.requireSupportedPackMode(metadataBlob);
+    }
+
     static boolean perfModeEnabled() {
         return FileCodecObfuscation.perfModeEnabled();
     }

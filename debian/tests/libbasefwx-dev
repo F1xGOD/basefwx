@@ -22,6 +22,12 @@ esac
 export BASEFWX_EXPECT_RETIRED_MEDIA="$expected_retired"
 
 prefix="${BASEFWX_TEST_PREFIX:-/usr}"
+retired_include_dir="$prefix/include/basefwx/retired"
+if [ "$expected_retired" = "1" ]; then
+    test -f "$retired_include_dir/codecs.hpp"
+else
+    test ! -e "$retired_include_dir"
+fi
 multiarch="$(dpkg-architecture -qDEB_HOST_MULTIARCH)"
 if [ "$prefix" != "/usr" ]; then
     unset PKG_CONFIG_PATH
@@ -34,6 +40,9 @@ cat > check.cpp <<'EOF'
 #include <basefwx/crypto.hpp>
 #include <basefwx/pq.hpp>
 #include <basefwx/x25519.hpp>
+#if BASEFWX_HAS_RETIRED_MEDIA
+#include <basefwx/retired/codecs.hpp>
+#endif
 
 #include <cstdlib>
 #include <iostream>
@@ -54,6 +63,13 @@ int main() {
     if (decoded != value) {
         return 1;
     }
+
+#if BASEFWX_HAS_RETIRED_MEDIA
+    if (basefwx::codec::B256Decode(
+            basefwx::codec::B256Encode(value)) != value) {
+        return 6;
+    }
+#endif
 
     const basefwx::crypto::Bytes ikm{1, 2, 3, 4};
     const basefwx::crypto::Bytes salt{5, 6, 7, 8};

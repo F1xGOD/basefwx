@@ -60,9 +60,18 @@ python -m basefwx cryptin fwxaes photo.jpg -p "correct-horse-battery"
 python -m basefwx cryptin fwxaes track.m4a -p "correct-horse-battery"
 ```
 
-`--strip` is not available when b512 or AES-heavy file encryption selects the
-streaming container. The stream marker is required for unambiguous decode
-dispatch, so the encoder rejects that combination before creating output.
+`--strip` is rejected outright for AES-heavy file encryption at any size,
+because the heavy KDF costs are recorded only in the metadata block and a
+stripped container could never be reopened. For b512 it is rejected only once
+the file is large enough to select the streaming container, where the stream
+marker is required for unambiguous decode dispatch. Either way the encoder
+refuses before creating output.
+
+C++ and Python unpack authenticated `--compress` output. Java implements no
+tar/gzip/xz unpacking and refuses every container carrying an `ENC-P` pack
+marker on both b512file and pb512file decode paths. Use C++ or Python for those
+containers. If packing was combined with metadata stripping, no marker remains;
+decode that combination with C++ or Python as well.
 
 n10 helpers:
 
@@ -217,10 +226,15 @@ cpp/build/basefwx fwxaes-stream-enc <file> -p <password> [--out <path>]
 cpp/build/basefwx fwxaes-stream-dec <file> -p <password> [--out <path>]
 cpp/build/basefwx fwxaes-live-enc <file> -p <password> [--out <path>]
 cpp/build/basefwx fwxaes-live-dec <file> -p <password> [--out <path>]
+cpp/build/basefwx an7 <file.fwx> -p <password> [--out <path>] [--keep-input] [--force-any]
+cpp/build/basefwx dean7 <file> -p <password> [--out <path>] [--keep-input]
 cpp/build/basefwx n10-enc <text>
 cpp/build/basefwx n10-dec <digits>
 cpp/build/basefwx n10file-enc <in-file> <out-file>
 cpp/build/basefwx n10file-dec <in-file> <out-file>
+cpp/build/basefwx b64-enc <text>
+cpp/build/basefwx b64-dec <text>
+cpp/build/basefwx hash512 <text>
 
 cpp/build/basefwx b512-enc <text> -p <password>
 cpp/build/basefwx b512-dec <text> -p <password>
@@ -239,6 +253,24 @@ Notes:
 - `--verbose` adds detailed hardware routing reason lines.
 - `fwxaes-live-*` implements the packetized `LIVE` v1 stream format used by Python/Java.
 - `fwxaes-live-*` supports `-` for stdin/stdout, so you can pipe media streams (for example with `ffmpeg`).
+- `an7` applies the reversible AN7 stealth transform to a file that is already
+  encrypted, and `dean7` reverses it and prints the restored path. Keys come
+  from Argon2id over a fresh 16-byte salt at time cost 5, 128 MiB, and
+  parallelism 4. The payload is rewritten in 1 MiB chunks, then an encrypted
+  trailer and a 64-byte footer are appended.
+- `an7` and `dean7` take their arguments in a different shape from the other
+  commands. The input path comes first and everything after it must be a flag,
+  so the password is always `-p`/`--password` and never a positional argument.
+  In the Java CLI they are the only commands whose password is a flag, and a
+  second positional there is read as the output path.
+- `an7` requires a `.fwx` input unless `--force-any` is given. Without `--out`
+  it writes beside the input as `data` followed by ten random digits, and an
+  `--out` path naming an existing directory receives that generated name.
+  `dean7` recovers the original name, extension, and SHA-256 digest from the
+  encrypted trailer and verifies the digest before reporting success. Both
+  delete the input on success unless `--keep-input` is given.
+- `b64-enc`, `b64-dec`, and `hash512` are single-argument text helpers that
+  print to stdout. `hash512` prints a lowercase hex SHA-512 digest.
 
 Example live audio pipe (C++):
 
@@ -247,6 +279,61 @@ ffmpeg -hide_banner -loglevel error -i input.m4a -vn -ac 1 -ar 16000 -f wav pipe
   | cpp/build/basefwx fwxaes-live-enc - -p correct-horse-battery --no-master --out - \
   | cpp/build/basefwx fwxaes-live-dec - -p correct-horse-battery --no-master --out - > restored.wav
 ```
+
+### Benchmark commands
+
+```
+cpp/build/basefwx bench-text <method> <text-file> [-p <password>]
+cpp/build/basefwx bench-hash <method> <text-file>
+cpp/build/basefwx bench-fwxaes <file> <password>
+cpp/build/basefwx bench-fwxaes-par <file> <password>
+cpp/build/basefwx bench-an7 <file> <password>
+cpp/build/basefwx bench-dean7 <file> <password>
+cpp/build/basefwx bench-live <file> <password>
+cpp/build/basefwx bench-b512file <file> <password>
+cpp/build/basefwx bench-pb512file <file> <password>
+```
+
+| Command | What it times |
+| :-- | :-- |
+| `bench-text` | One encode plus decode round trip of the file's text. `<method>` is `b64`, `n10`, `b512`, or `pb512`, and the last two take a password. |
+| `bench-hash` | Hashing of the file's text. `<method>` is `hash512`. |
+| `bench-fwxaes` | One in-memory fwxAES encrypt plus decrypt round trip over the file bytes. Single-threaded. |
+| `bench-fwxaes-par` | The same fwxAES round trip spread across worker threads. |
+| `bench-an7` | `an7` over a per-worker fwxAES-encrypted seed built from the input. |
+| `bench-dean7` | `dean7` over a per-worker AN7 seed built the same way. |
+| `bench-live` | A packetized live encrypt plus decrypt round trip in memory, with the restored length verified. |
+| `bench-b512file` | A b512 file encode plus decode round trip on a per-worker copy of the input. |
+| `bench-pb512file` | The same round trip through the pb512 file codec. |
+
+Notes:
+
+- These are measurement helpers, not data-processing commands. Each prints a
+  `BENCH_NS=<n>` line holding the median wall-clock nanoseconds of one timed
+  iteration. C++ and Java `bench-fwxaes-par` also print
+  `THROUGHPUT_GiBps=<value> WORKERS=<n>` when usable; Java `bench-live` adds
+  `BENCH_VERIFIED_BYTES=<n>`.
+- All leave the named input in place. `bench-an7`, `bench-dean7`,
+  `bench-b512file`, and `bench-pb512file` build per-worker inputs under
+  owner-only temporary directories. The fwxAES commands read the named input into memory;
+  `bench-live` reads it directly and uses temporary storage only for its
+  ciphertext where the runtime needs it.
+- Iteration and thread counts come from the environment:
+  `BASEFWX_BENCH_WARMUP` (default `2`), `BASEFWX_BENCH_ITERS` (default `50`),
+  `BASEFWX_BENCH_WORKERS` (default the detected hardware concurrency), and
+  `BASEFWX_BENCH_PARALLEL` set to `0`, `false`, `off`, or `no` to force a
+  single worker.
+- C++ `bench-live` caps the worker count to fit the input size and available
+  memory and warns when it lowers the count.
+  `BASEFWX_BENCH_MEMORY_LIMIT_BYTES` overrides the detected C++ budget. Java
+  `bench-live` currently uses the configured worker count without that cap.
+- Every bench command except `bench-hash` also accepts the master-key flags,
+  and `bench-text` additionally accepts `--kdf`, `--pbkdf2-iters`, and
+  `--no-fallback`.
+- `--no-fallback` is retained as a deprecated compatibility spelling but has
+  no effect. The unauthenticated second-chance PBKDF2 path was removed in
+  3.7.0, and current authentication failure is terminal.
+- The Java CLI carries the same nine bench commands. The Python CLI has none.
 
 ## C++ API
 

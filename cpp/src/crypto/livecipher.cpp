@@ -232,7 +232,11 @@ Bytes LiveEncryptor::InitSession() {
             throw std::runtime_error("Password required when live stream master key wrapping is disabled");
         }
         salt = basefwx::crypto::RandomBytes(basefwx::constants::kUserKdfSaltSize);
-        iters = HardenFwxAesIterations(password_, ResolveFwxAesIterations(200000));
+        iters = HardenFwxAesIterations(
+            password_,
+            ResolveFwxAesIterations(
+                static_cast<std::uint32_t>(
+                    basefwx::constants::kUserKdfIterations)));
         basefwx::keywrap::RequirePeerPbkdf2WithinLimits(iters);
         key_ = basefwx::crypto::Pbkdf2HmacSha256(password_, salt, iters, 32);
     }
@@ -249,6 +253,11 @@ Bytes LiveEncryptor::Start() {
     if (finalized_) {
         throw std::runtime_error("LiveEncryptor already finalized");
     }
+    // This class is an installed authoring API, not merely an internal helper.
+    // Enforce the same producer policy as FwxAesLiveEncryptStream before any
+    // KDF work or session-header output.
+    basefwx::RequireStrongPasswordForEncryption(
+        password_, "fwxAES live");
     Bytes frame = InitSession();
     started_ = true;
     return frame;

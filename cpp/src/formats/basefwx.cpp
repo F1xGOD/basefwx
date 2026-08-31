@@ -350,7 +350,7 @@ void RequireStrongPasswordForEncryption(const std::string& password, std::string
     std::string label = context.empty() ? "Encryption" : std::string(context);
     throw std::runtime_error(
         label + " requires a password of at least " + std::to_string(min_len)
-        + " characters (set BASEFWX_ALLOW_WEAK_PASSWORD=1 to override)");
+        + " UTF-8 bytes (set BASEFWX_ALLOW_WEAK_PASSWORD=1 to override)");
 }
 
 InspectResult InspectBlob(const std::vector<std::uint8_t>& blob) {

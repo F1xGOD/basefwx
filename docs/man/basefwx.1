@@ -76,6 +76,41 @@ Stream-oriented fwxAES file modes.
 Packetized live stream encryption and decryption. Use "-" for stdin or
 stdout where supported.
 .TP
+.B an7 \fIfile.fwx\fR [--password \fIpassword\fR] [--out \fIpath\fR] [--keep-input] [--force-any]
+Apply the reversible AN7 stealth transform to a file that is already
+encrypted. Unlike the commands above, an7 never reads the password as a
+positional argument. It takes the input path, then only the flags listed here,
+and the password arrives through
+.B --password
+or
+.BR -p .
+Keys come from Argon2id over a fresh 16-byte salt at time cost 5, 128 MiB, and
+parallelism 4. The payload is rewritten in 1 MiB chunks, then an encrypted
+trailer and a 64-byte footer are appended. The input must end in .fwx unless
+.B --force-any
+is given. Without
+.B --out
+the result is written beside the input as "data" followed by ten random digits,
+and an
+.B --out
+path that names an existing directory receives that generated name. The input
+file is removed on success unless
+.B --keep-input
+is given.
+.TP
+.B dean7 \fIfile\fR [--password \fIpassword\fR] [--out \fIpath\fR] [--keep-input]
+Reverse an AN7 file and print the restored path. The original name, extension,
+and SHA-256 digest are read from the encrypted trailer, and the digest is
+checked before the command reports success. The password is supplied the same
+way as for an7, and
+.B --force-any
+is rejected here. Without
+.B --out
+the restored file is written beside the input under its recovered original
+name. The input file is removed on success unless
+.B --keep-input
+is given.
+.TP
 .B b512file-enc, b512file-dec, pb512file-enc, pb512file-dec
 Password-backed file codec modes.
 .SH TEXT AND BINARY CODECS
@@ -91,6 +126,74 @@ SHA-512 hash helper command.
 .TP
 .B b512-enc, b512-dec, pb512-enc, pb512-dec
 Password-backed text codec modes.
+.SH BENCHMARK COMMANDS
+The bench commands are measurement helpers, not data-processing commands. Each
+one prints
+.B BENCH_NS=\fIn\fR
+with the median wall-clock nanoseconds of one timed iteration. Some commands
+also print a verification or throughput line. All leave the named input in
+place, but only bench-an7, bench-dean7, bench-b512file, and bench-pb512file copy
+or seed per-worker inputs in owner-only temporary directories. The fwxAES commands read
+the named input into memory, and bench-live reads it directly.
+.PP
+Iteration and thread counts come from the environment:
+.B BASEFWX_BENCH_WARMUP
+(default 2),
+.B BASEFWX_BENCH_ITERS
+(default 50),
+.B BASEFWX_BENCH_WORKERS
+(default the detected hardware concurrency), and
+.B BASEFWX_BENCH_PARALLEL
+set to 0, false, off, or no to force a single worker. Every bench command
+except bench-hash also accepts the master-key flags described in
+.B KEY OPTIONS
+below.
+.TP
+.B bench-text \fImethod\fR \fItext-file\fR [--password \fIpassword\fR]
+Time one encode plus decode round trip of the file's text. \fImethod\fR is
+b64, n10, b512, or pb512. The b512 and pb512 methods take a password and also
+accept --kdf, --pbkdf2-iters, and --no-fallback.
+.TP
+.B bench-hash \fImethod\fR \fItext-file\fR
+Time hashing of the file's text. \fImethod\fR is hash512. This command takes
+no flags.
+.TP
+.B bench-fwxaes \fIfile\fR \fIpassword\fR
+Time one in-memory fwxAES encrypt plus decrypt round trip over the file bytes.
+This one is single-threaded and ignores the worker setting.
+.TP
+.B bench-fwxaes-par \fIfile\fR \fIpassword\fR
+Time the same fwxAES round trip spread across worker threads. It prints an
+extra
+.B THROUGHPUT_GiBps=\fIvalue\fR WORKERS=\fIn\fR
+line when the measurement is usable.
+.TP
+.B bench-an7 \fIfile\fR \fIpassword\fR
+Time an7 over a per-worker fwxAES-encrypted seed built from the input.
+.TP
+.B bench-dean7 \fIfile\fR \fIpassword\fR
+Time dean7 over a per-worker AN7 seed built the same way.
+.TP
+.B bench-live \fIfile\fR \fIpassword\fR
+Time a packetized live encrypt plus decrypt round trip in memory and verify the
+restored length. In the C++ CLI the worker count is capped to fit the input size
+and available memory, and a warning names the reduced count.
+.B BASEFWX_BENCH_MEMORY_LIMIT_BYTES
+overrides that C++ memory budget. The Java command uses the configured worker
+count without this extra cap and prints
+.BR BENCH_VERIFIED_BYTES=\fIn\fR .
+.TP
+.B bench-b512file \fIfile\fR \fIpassword\fR
+Time a b512 file encode plus decode round trip on a per-worker copy of the
+input.
+.TP
+.B bench-pb512file \fIfile\fR \fIpassword\fR
+Time the same round trip through the pb512 file codec.
+.PP
+Both C++ and Java bench-fwxaes-par print
+.B THROUGHPUT_GiBps=\fIvalue\fR WORKERS=\fIn\fR
+when the measurement is usable. Java bench-live also prints the verified-byte
+line described above.
 .SH RETIRED COMPATIBILITY COMMANDS
 b256, A512, Bi512, Uhash513, the jMG media cipher, and the kFM/kFA carrier
 codecs are retired. A default build does not compile or install them, and the
@@ -139,13 +242,26 @@ Enable or disable master-key wrapping where a command supports it.
 Use a master public key file where supported.
 .TP
 .B --master-autogen
-Generate master-key material where supported.
+Deprecated and has no effect since 3.7.0. It only implies
+.BR --use-master .
+Silent EC master autogeneration was removed.
 .TP
 .B --allow-embedded-master
 Allow embedded master-key metadata where supported.
 .TP
+.B --strip-meta
+Omit file-container metadata where supported. AES-heavy pb512file authoring
+rejects this option because its KDF costs require metadata for recovery.
+B512file authoring also rejects it when the input selects the streaming
+container, whose metadata carries the required dispatch marker.
+.TP
 .B --kdf \fIlabel\fR, --pbkdf2-iters \fIn\fR
 Select key-derivation behavior where a command supports it.
+.TP
+.B --no-fallback
+Deprecated compatibility spelling with no effect. The unauthenticated
+second-chance PBKDF2 path was removed in 3.7.0; authentication failure is
+terminal.
 .SH DATA FLOW
 .nf
 +--------------------------------+

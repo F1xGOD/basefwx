@@ -13,11 +13,31 @@ belongs in [CHANGELOG.md](CHANGELOG.md).
 | ML-KEM-768 and ML-KEM-1024 | liboqs | `pqcrypto` | Bouncy Castle PQC |
 | LZMA/XZ | yes | yes | no |
 | `fwxAES`, `b512`, `pb512`, live stream, `n10` | yes | yes | yes |
+| fwxAES stream variant for unsized input (algo `0x02`) | C++ only | no | no |
+| `ENC-P` pack marker (`--compress` output) | reads | reads | refuses |
 | Explicit-IV ChaCha20-Poly1305 helper | C++ only | no | no |
 
 Published native builds are expected to include Argon2id and both ML-KEM
 parameter sets. A missing required backend is a capability error, not permission
 to emit a weaker or differently labelled container.
+
+Two rows above need care.
+
+The C++ writer selects fwxAES algo `0x02` when it cannot learn the input length
+up front. That happens in the C++ API `basefwx::fwxaes::EncryptStream` when the
+source stream is not seekable, and for any input larger than about 4 GiB.
+Python and Java reject `0x02` on every decode path, so a container written
+either way is readable by C++ alone. The ordinary `fwxaes-stream-enc` path on a
+normal file writes `0x01` and stays portable, and `fwxaes-live-enc` is
+unaffected because it writes the separate `LIVE` frame format rather than an
+fwxAES container.
+
+Java writes no `ENC-P` and cannot unpack one, so a container carrying that
+marker is refused instead of returning the packed archive in place of the
+original file. Decode those with the C++ or Python runtime. One combination
+still returns the archive silently: `--compress` together with metadata
+stripping writes no marker at all, and C++ and Python then recover the pack
+mode from the stored `.tgz` or `.txz` extension, which Java does not read.
 
 Java targets Java 8 bytecode. The JDK used to build or test a release may be
 newer. Python cryptographic primitives use native-backed packages even though
@@ -77,14 +97,36 @@ clock synchronization.
 
 ## KDF compatibility and limits
 
-Argon2id parallelism defaults to 4 in every runtime because the historical wrap
-header does not store that value. Changing the default would make output depend
-on the producing host. Callers can set an explicit parallelism when the API and
-format record enough information to reproduce it.
+File-container metadata stores the KDF label. The ordinary b512file user-wrap
+blob repeats that label before its salt and wrapped key, while the AES-heavy
+pb512file user-wrap blob contains the salt and wrapped key without another
+label copy. AES-heavy metadata additionally records the PBKDF2 iteration count
+and Argon2id costs, so AES-heavy authoring refuses metadata stripping: without
+those values the correct password cannot reproduce the wrapping key. Ordinary
+b512file containers do not record costs and rely on the shared defaults (or
+matching caller-supplied options where an API exposes them).
 
-Peer-controlled PBKDF2 counts must be in `1..4,000,000`. Ordinary writers use
-600,000 iterations and the heavy profile uses 2,000,000. The upper bound is a
-CPU-amplification limit, not a recommendation to choose the maximum.
+This rule is specific to file-container metadata. Direct PBKDF2 `FWX1` and
+`LIVE` headers serialize their iteration count in the header itself. Their
+wrap-mode variants carry no file metadata and rely on the matching KDF defaults
+used by the password-wrap implementation.
+
+The default authoring label is runtime-specific: C++ and Python select
+Argon2id when that backend is available, while Java defaults to PBKDF2 unless
+`BASEFWX_USER_KDF` selects another supported label. The chosen label and salt
+are serialized as described above, so readers do not guess the producer's
+default and cross-runtime decode remains interoperable.
+
+Argon2id parallelism defaults to 4 in every runtime. Changing that shared
+default would break wrap-mode output that does not record the cost separately.
+Set an explicit parallelism only where the producing format records it or when
+you control both the writer and reader.
+
+Peer-controlled PBKDF2 counts generally must be in `1..4,000,000`. The C++
+direct-PBKDF2 `FWX1` raw and stream decoders retain an additional 10,000
+minimum; Java and Python apply the generic lower bound there. Ordinary writers
+use 600,000 iterations and the heavy profile uses 2,000,000. The upper bound is
+a CPU-amplification limit, not a recommendation to choose the maximum.
 
 Peer Argon2id parameters cannot exceed time cost 16, 256 MiB, or parallelism
 16. All runtimes reject invalid decimal syntax, zero, overflow, and values above
@@ -98,6 +140,11 @@ Local environment overrides are not a shared cross-runtime API. For portable
 output, leave them unset or keep PBKDF2 in the peer-safe range. An operator can
 make recovery-only local media work unexpectedly expensive with a trusted
 override, but ciphertext metadata cannot trigger work above the decoder caps.
+
+The C++ `allow_pbkdf2_fallback` struct field and `--no-fallback` CLI spelling
+remain for source/ABI and command-line compatibility only. They have no effect:
+the unauthenticated second-chance PBKDF2 path was removed in 3.7.0, and current
+authentication failure is terminal.
 
 ## Protocol-building APIs
 
@@ -152,8 +199,9 @@ closed. The plugin C ABI has its own compatibility policy in [ABI.md](ABI.md).
 ## Retired-data profile
 
 The old b256, A512, Bi512, Uhash513, kFM, kFA, and jMG surfaces are excluded
-from default artifacts. The build-time profile exists only to recover existing
-data:
+from default artifacts. The build-time profile exists for data that already
+exists. Its encoders are retained so retired output can be reproduced
+byte-for-byte; they are not a supported target for new data:
 
 | Runtime | Select the compatibility profile |
 | --- | --- |

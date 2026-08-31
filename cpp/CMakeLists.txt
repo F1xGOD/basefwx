@@ -1055,10 +1055,25 @@ if(BASEFWX_INSTALL)
         )
     endif()
 
+    # The core profile must not ship headers whose symbols it does not export.
+    # include/basefwx/retired/ declares B256Encode, A512Encode, Uhash513 and the
+    # media APIs, which only the compatibility profile builds and exports, so a
+    # core install would hand consumers headers that compile and then fail to
+    # link. Debian also globs usr/include/basefwx/*.hpp, which does not descend
+    # into retired/, so installing them unconditionally leaves files no package
+    # claims and dh_missing --fail-missing (the debhelper 13 default) fails.
     install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/include/basefwx
         DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
         FILES_MATCHING PATTERN "*.hpp" PATTERN "*.h"
+        PATTERN "retired" EXCLUDE
     )
+
+    if(BASEFWX_ENABLE_RETIRED_MEDIA)
+        install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/include/basefwx/retired
+            DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/basefwx
+            FILES_MATCHING PATTERN "*.hpp" PATTERN "*.h"
+        )
+    endif()
 
     install(EXPORT basefwxTargets
         FILE basefwxTargets.cmake

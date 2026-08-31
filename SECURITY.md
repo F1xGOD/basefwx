@@ -139,7 +139,7 @@ built only in the explicit compatibility profile to recover existing data.
 That profile receives security, correctness, and decode-compatibility fixes in
 the latest release, but no new writers, features, or performance work.
 
-Legacy AES-CBC decrypt is also recovery-only and requires
+Legacy AES-CBC decrypt (Python runtime only) is also recovery-only and requires
 `ALLOW_CBC_DECRYPT=1`. Re-encrypt recovered plaintext with a maintained AEAD
 format.
 

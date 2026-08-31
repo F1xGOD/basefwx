@@ -241,6 +241,10 @@ def _aes_heavy_encode_path(path: 'basefwx.pathlib.Path', password: str, reporter
     approx_b64_len = (input_size + 2) // 3 * 4
     if input_size >= basefwx.STREAM_THRESHOLD or approx_b64_len > basefwx.HKDF_MAX_LEN:
         return basefwx._aes_heavy_encode_path_stream(path, password, reporter, file_index, strip_metadata, use_master, master_pubkey, pack_flag=pack_flag, output_path=output_path, display_path=display_path, input_size=input_size, keep_input=keep_input)
+    if strip_metadata:
+        raise ValueError(
+            'AES-heavy encode requires metadata for KDF cost recovery'
+        )
     estimated_hint: 'basefwx.typing.Optional[basefwx.typing.Tuple[int, int]]' = None
     if reporter:
         reporter.update(file_index, 0.05, 'prepare', display_path)

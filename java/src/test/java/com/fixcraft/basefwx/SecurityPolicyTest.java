@@ -190,6 +190,65 @@ public class SecurityPolicyTest {
         return blob;
     }
 
+    private static byte[] packedPb512Container(
+            String password, String pack) {
+        return packedPb512Container(password, pack, pack);
+    }
+
+    private static byte[] packedPb512Container(
+            String password, String outerPack, String innerPack) {
+        int iterations = 10000;
+        String outerMetadata = FileCodecs.buildMetadata(
+                "AES-HEAVY", false, false, "none", "AESGCM", "pbkdf2",
+                null, false, "no", iterations,
+                null, null, null, outerPack);
+        String innerMetadata = FileCodecs.buildMetadata(
+                "AES-HEAVY", false, false, "none", "AESGCM", "pbkdf2",
+                null, false, "no", iterations,
+                null, null, null, innerPack);
+        byte[] plaintext = (innerMetadata + Constants.META_DELIM
+                + "authenticated packed payload")
+                .getBytes(StandardCharsets.UTF_8);
+        return LengthPrefixedCodec.encryptAesPayloadBytes(
+                plaintext, password, false, outerMetadata, "pbkdf2", iterations,
+                false, false);
+    }
+
+    // These minimal stream candidates intentionally stop at capability
+    // negotiation. ENC-P and ENC-MODE are visible AEAD AAD, so a runtime that
+    // implements no pack mode rejects them before key recovery or allocation.
+    // The valid authenticated B512 and PB512 fixtures in the same test cover
+    // the user-visible refusal; these two additionally pin both stream routes.
+    private static byte[] packedStreamingFile(String method, String pack) {
+        String metadata = FileCodecs.buildMetadata(
+                method, false, false, "none", "AESGCM", "pbkdf2",
+                "STREAM", false, "no", Constants.USER_KDF_ITERATIONS,
+                null, null, null, pack);
+        byte[] metadataBytes = metadata.getBytes(StandardCharsets.UTF_8);
+        int payloadLen = 4 + metadataBytes.length
+                + Constants.AEAD_NONCE_LEN
+                + Constants.AEAD_TAG_LEN;
+        byte[] blob = new byte[12 + payloadLen];
+        BaseFwxUtil.writeU32(blob, 0, 0);
+        BaseFwxUtil.writeU32(blob, 4, 0);
+        BaseFwxUtil.writeU32(blob, 8, payloadLen);
+        BaseFwxUtil.writeU32(blob, 12, metadataBytes.length);
+        System.arraycopy(metadataBytes, 0, blob, 16, metadataBytes.length);
+        return blob;
+    }
+
+    private static void assertPackedContainerRejected(
+            ThrowingAction action, String pack) throws Exception {
+        try {
+            action.run();
+            fail("packed container accepted");
+        } catch (IllegalArgumentException expected) {
+            assertTrue(
+                    expected.getMessage(),
+                    expected.getMessage().contains("ENC-P=" + pack));
+        }
+    }
+
     private static byte[] legacyB512UserWrap(byte[] maskKey) {
         byte[] label = "pbkdf2".getBytes(StandardCharsets.US_ASCII);
         byte[] salt = new byte[Constants.USER_KDF_SALT_SIZE];
@@ -1377,5 +1436,118 @@ public class SecurityPolicyTest {
                 System.setProperty("user.home", originalHome);
             }
         }
+    }
+
+    /**
+     * Java has no tar/gzip/xz unpacking, so a container written by C++ or
+     * Python with --compress must be refused rather than handed back as the
+     * packed archive. The guard has to sit on every decode path: anything
+     * under STREAM_THRESHOLD takes the in-memory route, not the streaming one.
+     */
+    private byte[] packedB512Container(byte[] payload, String password) {
+        byte[] pw = BaseFwx.resolvePasswordBytes(password, false);
+        KeyWrap.MaskKeyResult mask = null;
+        try {
+            mask = KeyWrap.prepareMaskKey(
+                    pw,
+                    false,
+                    Constants.B512_FILE_MASK_INFO,
+                    true,
+                    Constants.MASK_AAD_B512FILE,
+                    new KeyWrap.KdfOptions(
+                            "pbkdf2", Constants.USER_KDF_ITERATIONS));
+            String extToken =
+                    TextCodecs.b512EncodeString(".txz", password, false);
+            String dataToken = TextCodecs.b512EncodeString(
+                    Base64Codec.encode(payload), password, false);
+            String metadata = FileCodecs.buildMetadata(
+                    "FWX512R", false, false, "none", "AESGCM", "pbkdf2",
+                    null, Boolean.FALSE, "no", null, null, null, null, "x");
+            String plaintext = metadata + Constants.META_DELIM
+                    + extToken + Constants.FWX_DELIM + dataToken;
+            byte[] aeadKey = KeyWrap.deriveKeyAndWipe(
+                    mask.maskKey, Constants.B512_AEAD_INFO, 32);
+            try {
+                byte[] ctBlob = Crypto.aesGcmEncrypt(
+                        aeadKey,
+                        plaintext.getBytes(StandardCharsets.UTF_8),
+                        Constants.B512_AEAD_INFO);
+                return Format.packLengthPrefixed(
+                        Arrays.asList(mask.userBlob, mask.masterBlob, ctBlob));
+            } finally {
+                Arrays.fill(aeadKey, (byte) 0);
+            }
+        } finally {
+            if (mask != null) {
+                mask.close();
+            }
+            Arrays.fill(pw, (byte) 0);
+        }
+    }
+
+    @Test
+    public void packedContainerIsRefusedOnEveryJavaDecodePath() throws Exception {
+        String password = "correct-password";
+        byte[] blob = packedB512Container(
+                "packed-payload".getBytes(StandardCharsets.UTF_8), password);
+        assertTrue(blob.length < Constants.STREAM_THRESHOLD);
+
+        assertPackedContainerRejected(
+                () -> BaseFwx.b512FileDecodeBytes(blob, password, false),
+                "x");
+        assertPackedContainerRejected(
+                () -> BaseFwx.pb512FileDecodeBytes(
+                        packedPb512Container(password, "x"),
+                        password,
+                        false),
+                "x");
+        assertPackedContainerRejected(
+                () -> BaseFwx.pb512FileDecodeBytes(
+                        packedPb512Container(password, null, "x"),
+                        password,
+                        false),
+                "x");
+
+        File b512Stream = tmp.newFile("packed-b512-stream.fwx");
+        File b512Output = new File(tmp.getRoot(), "packed-b512-stream.out");
+        Files.write(
+                b512Stream.toPath(),
+                packedStreamingFile("FWX512R", "g"));
+        assertPackedContainerRejected(
+                () -> BaseFwx.b512FileDecodeFile(
+                        b512Stream, b512Output, password, false),
+                "g");
+        assertFalse(b512Output.exists());
+
+        File pb512Stream = tmp.newFile("packed-pb512-stream.fwx");
+        File pb512Output = new File(tmp.getRoot(), "packed-pb512-stream.out");
+        Files.write(
+                pb512Stream.toPath(),
+                packedStreamingFile("AES-HEAVY", "g"));
+        assertPackedContainerRejected(
+                () -> BaseFwx.pb512FileDecodeFile(
+                        pb512Stream, pb512Output, password, false),
+                "g");
+        assertFalse(pb512Output.exists());
+
+        String unknownPackMetadata = FileCodecs.buildMetadata(
+                "FWX512R", false, false, "none", "AESGCM", "pbkdf2",
+                null, false, "no", Constants.USER_KDF_ITERATIONS,
+                null, null, null, "unknown");
+        assertPackedContainerRejected(
+                () -> FileCodecs.requireSupportedPackMode(
+                        unknownPackMetadata),
+                "unknown");
+    }
+
+    @Test
+    public void unpackedContainerStillRoundTrips() throws Exception {
+        String password = "correct-password";
+        byte[] payload = "unpacked-payload".getBytes(StandardCharsets.UTF_8);
+        byte[] blob = BaseFwx.b512FileEncodeBytes(payload, ".bin", password, false);
+        BaseFwx.DecodedFile decoded =
+                BaseFwx.b512FileDecodeBytes(blob, password, false);
+        assertArrayEquals(payload, decoded.data);
+        assertEquals(".bin", decoded.extension);
     }
 }

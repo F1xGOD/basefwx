@@ -370,7 +370,9 @@ def cli(argv=None) -> int:
     )
     cryptin.add_argument(
         "method",
-        help="Method name: 512, b512, pb512, aes, aes-light, aes-heavy, fwxaes-heavy"
+        help="Method name: fwxaes, fwxaes-light, fwxaes-heavy, b512 (512, fwx512), "
+             "aes-light (aes, 256, light), aes-heavy (heavy, pb512, aes512). "
+             "Note: pb512 here selects fwxaes-heavy, not the pb512 file codec."
     )
     cryptin.add_argument(
         "paths",
@@ -380,7 +382,7 @@ def cli(argv=None) -> int:
     cryptin.add_argument(
         "-p", "--password",
         default="",
-        help="Password text or path (leave blank to rely on the master key)"
+        help="Literal password, or file://<path> (leave blank to rely on the master key)"
     )
     cryptin.add_argument(
         "--strip", "--trim",

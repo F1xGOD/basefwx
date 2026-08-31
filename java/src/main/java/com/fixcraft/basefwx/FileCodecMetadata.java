@@ -53,6 +53,27 @@ final class FileCodecMetadata {
         return parsed;
     }
 
+    /**
+     * Java implements no tar/gzip/xz unpacking, so a container written with
+     * --compress carries an ENC-P pack flag this runtime cannot honour. Reading
+     * it silently would hand the caller the packed archive in place of their
+     * file, so refuse instead. "g" is tgz and "x" is txz. An absent key means
+     * the payload is not marked as packed; any non-empty value must fail closed
+     * because this runtime implements no pack mode it could safely honor.
+     */
+    static void requireSupportedPackMode(String metadataBlob) {
+        String pack = metaValue(metadataBlob, "ENC-P");
+        if (pack == null || pack.isEmpty()) {
+            return;
+        }
+        String detail = "Container is packed or uses an unsupported pack mode "
+                + "(ENC-P=" + pack + "); this runtime cannot unpack it";
+        if ("g".equals(pack) || "x".equals(pack)) {
+            detail += "; decode it with the C++ or Python runtime";
+        }
+        throw new IllegalArgumentException(detail);
+    }
+
     static Integer parseMetadataIntOrNull(String raw) {
         if (raw == null || raw.isEmpty()) {
             return null;

@@ -251,6 +251,7 @@ final class B512FileCodec {
                 if ("no".equalsIgnoreCase(masterHint)) {
                     useMasterEffective = false;
                 }
+                FileCodecs.requireSupportedPackMode(metadataBlob);
                 String obfHint = metaValue(metadataBlob, "ENC-OBF");
                 obfuscateStream = !"no".equalsIgnoreCase(obfHint);
                 fastObfStream = "fast".equalsIgnoreCase(obfHint);
@@ -601,6 +602,7 @@ final class B512FileCodec {
             if ("no".equalsIgnoreCase(masterHint)) {
                 useMasterEffective = false;
             }
+            FileCodecs.requireSupportedPackMode(metadataBlob);
             String[] parts = splitWithDelims(body, Constants.FWX_DELIM, Constants.LEGACY_FWX_DELIM, "FWX container");
             String ext = TextCodecs.b512DecodeString(parts[0], password, useMasterEffective);
             String dataB64 = TextCodecs.b512DecodeString(parts[1], password, useMasterEffective);

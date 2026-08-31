@@ -23,6 +23,7 @@ struct KdfOptions {
     std::uint32_t argon2_time_cost = constants::kArgon2TimeCost;
     std::uint32_t argon2_memory_cost = constants::kArgon2MemoryCost;
     std::uint32_t argon2_parallelism = constants::DefaultArgon2Parallelism();
+    // ABI-retained compatibility field. PBKDF2 fallback was removed in 3.7.0.
     bool allow_pbkdf2_fallback = true;
 };
 

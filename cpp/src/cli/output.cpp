@@ -399,8 +399,8 @@ void PrintUsage() {
     std::cout << "  b512file-enc <file> [--password <password>] " << master_flags << " [--strip-meta] [--compress] [--keep-input] [--kdf <label>] [--pbkdf2-iters <n>] [--no-fallback]\n";
     std::cout << "  b512file-dec <file.fwx> [--password <password>] " << master_flags << " [--strip-meta] [--kdf <label>] [--pbkdf2-iters <n>] [--no-fallback]\n";
     std::cout << "  b512file-bytes-rt <in> <out> [--password <password>] " << master_flags << " [--strip-meta] [--kdf <label>] [--pbkdf2-iters <n>] [--no-fallback]\n";
-    std::cout << "  pb512file-bytes-rt <in> <out> [--password <password>] " << master_flags << " [--strip-meta] [--kdf <label>] [--pbkdf2-iters <n>] [--no-fallback]\n";
-    std::cout << "  pb512file-enc <file> [--password <password>] " << master_flags << " [--strip-meta] [--no-obf] [--compress] [--keep-input] [--kdf <label>] [--pbkdf2-iters <n>] [--no-fallback]\n";
+    std::cout << "  pb512file-bytes-rt <in> <out> [--password <password>] " << master_flags << " [--kdf <label>] [--pbkdf2-iters <n>] [--no-fallback]\n";
+    std::cout << "  pb512file-enc <file> [--password <password>] " << master_flags << " [--no-obf] [--compress] [--keep-input] [--kdf <label>] [--pbkdf2-iters <n>] [--no-fallback]\n";
     std::cout << "  pb512file-dec <file.fwx> [--password <password>] " << master_flags << " [--strip-meta] [--kdf <label>] [--pbkdf2-iters <n>] [--no-fallback]\n";
     std::cout << "\n";
     std::cout << "fwxAES commands:\n";
@@ -435,6 +435,7 @@ void PrintUsage() {
     std::cout << "  bench-pb512file <file> <password> " << master_flags << "\n";
     std::cout << "\n";
     std::cout << "Passworded commands prompt on a TTY when --password is omitted.\n";
+    std::cout << "--no-fallback is a deprecated compatibility no-op; the unsafe PBKDF2 fallback was removed in 3.7.0.\n";
 }
 
 void PrintBashCompletion(const std::string& argv0) {
@@ -470,8 +471,17 @@ void PrintBashCompletion(const std::string& argv0) {
         << "    b512-enc|b512-dec|pb512-enc|pb512-dec)\n"
         << "      COMPREPLY=( $(compgen -W \"-p --password --kdf --pbkdf2-iters --no-fallback $master_opts\" -- \"$cur\") )\n"
         << "      ;;\n"
-        << "    b512file-enc|b512file-dec|b512file-bytes-rt|pb512file-bytes-rt|pb512file-enc|pb512file-dec)\n"
-        << "      COMPREPLY=( $(compgen -W \"-p --password --strip-meta --no-obf --compress --keep-input --kdf --pbkdf2-iters --no-fallback $master_opts\" -- \"$cur\") )\n"
+        << "    b512file-enc)\n"
+        << "      COMPREPLY=( $(compgen -W \"-p --password --strip-meta --compress --keep-input --kdf --pbkdf2-iters --no-fallback $master_opts\" -- \"$cur\") )\n"
+        << "      ;;\n"
+        << "    b512file-dec|b512file-bytes-rt|pb512file-dec)\n"
+        << "      COMPREPLY=( $(compgen -W \"-p --password --strip-meta --kdf --pbkdf2-iters --no-fallback $master_opts\" -- \"$cur\") )\n"
+        << "      ;;\n"
+        << "    pb512file-enc)\n"
+        << "      COMPREPLY=( $(compgen -W \"-p --password --no-obf --compress --keep-input --kdf --pbkdf2-iters --no-fallback $master_opts\" -- \"$cur\") )\n"
+        << "      ;;\n"
+        << "    pb512file-bytes-rt)\n"
+        << "      COMPREPLY=( $(compgen -W \"-p --password --kdf --pbkdf2-iters --no-fallback $master_opts\" -- \"$cur\") )\n"
         << "      ;;\n"
         << "    fwxaes-enc|fwxaes-dec|fwxaes-heavy-enc|fwxaes-heavy-dec|fwxaes-stream-enc|fwxaes-stream-dec|fwxaes-live-enc|fwxaes-live-dec)\n"
         << "      COMPREPLY=( $(compgen -W \"-p --password --out -o --heavy --light --normalize --threshold --cover-phrase --compress --keep-input ";

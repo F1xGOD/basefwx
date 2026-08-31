@@ -185,8 +185,13 @@ dependencies {
     // Gradle 4 does not reliably remove class files whose sources disappear.
     // Clear only this task's class directory when compilation actually runs so
     // a compatibility-to-core rebuild cannot package stale retired classes.
+    // destinationDir was replaced by destinationDirectory in modern Gradle.
     task.doFirst {
-        delete task.destinationDir
+        if (task.hasProperty('destinationDirectory')) {
+            delete task.destinationDirectory.get().asFile
+        } else {
+            delete task.destinationDir
+        }
     }
 }
 

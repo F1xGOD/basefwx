@@ -61,11 +61,6 @@ const setText = (id, value) => {
   }
 };
 
-const getAssetBase = () => {
-  const base = document.documentElement.dataset.assetBase;
-  return base || "assets/";
-};
-
 const getResultsLocalBase = () => {
   const base = document.documentElement.dataset.resultsBase;
   if (base) {
@@ -74,21 +69,89 @@ const getResultsLocalBase = () => {
   return new URL("results/", window.location.href).toString();
 };
 
-const initBrandMask = () => {
-  if (!window.CSS || !CSS.supports) {
+const THEME_KEY = "basefwx-theme";
+const THEME_COLORS = { dark: "#0b090f", light: "#fbf9fd" };
+
+const lightMedia = () => window.matchMedia("(prefers-color-scheme: light)");
+
+// Dark is this site's default, so an unset preference resolves to dark.
+const effectiveTheme = () => {
+  const forced = document.documentElement.dataset.theme;
+  if (forced === "dark" || forced === "light") {
+    return forced;
+  }
+  return lightMedia().matches ? "light" : "dark";
+};
+
+const initThemeToggle = () => {
+  const button = document.getElementById("theme-toggle");
+  const media = lightMedia();
+
+  const sync = () => {
+    const theme = effectiveTheme();
+    document.querySelectorAll('meta[name="theme-color"]').forEach((meta) => {
+      meta.setAttribute("content", THEME_COLORS[theme]);
+    });
+    if (!button) {
+      return;
+    }
+    const next = theme === "dark" ? "light" : "dark";
+    button.hidden = false;
+    button.setAttribute("aria-pressed", String(theme === "dark"));
+    button.setAttribute("aria-label", `Switch to the ${next} theme`);
+    button.title = `Switch to the ${next} theme`;
+  };
+
+  media.addEventListener("change", sync);
+
+  button?.addEventListener("click", () => {
+    const next = effectiveTheme() === "dark" ? "light" : "dark";
+    document.documentElement.dataset.theme = next;
+    try {
+      localStorage.setItem(THEME_KEY, next);
+    } catch (_err) {
+      // Storage is blocked, so the choice lasts for this page only.
+    }
+    sync();
+  });
+
+  sync();
+};
+
+const initSectionNav = () => {
+  const nav = document.querySelector(".section-nav");
+  if (!nav || !("IntersectionObserver" in window)) {
     return;
   }
-  const base = getAssetBase();
-  const maskUrl = new URL(`${base}basefwx-white.svg`, window.location.href).toString();
-  const supportsMask =
-    CSS.supports("mask-image", `url(\"${maskUrl}\")`) ||
-    CSS.supports("-webkit-mask-image", `url(\"${maskUrl}\")`);
-  if (!supportsMask) {
+  const links = Array.from(nav.querySelectorAll('a[href^="#"]'));
+  const tracked = links
+    .map((link) => {
+      const id = link.getAttribute("href")?.slice(1);
+      const section = id ? document.getElementById(id) : null;
+      return section ? { link, section } : null;
+    })
+    .filter(Boolean);
+  if (!tracked.length) {
     return;
   }
-  const img = new Image();
-  img.onload = () => document.documentElement.classList.add("mask-ready");
-  img.src = maskUrl;
+
+  const observer = new IntersectionObserver(
+    (entries) => {
+      const visible = entries
+        .filter((entry) => entry.isIntersecting)
+        .sort((a, b) => b.intersectionRatio - a.intersectionRatio);
+      if (!visible.length) {
+        return;
+      }
+      const id = visible[0].target.id;
+      links.forEach((link) => {
+        link.classList.toggle("active", link.getAttribute("href") === `#${id}`);
+      });
+    },
+    { rootMargin: "-20% 0px -55% 0px", threshold: [0.1, 0.35, 0.6] }
+  );
+
+  tracked.forEach(({ section }) => observer.observe(section));
 };
 
 const setLink = (selector, url) => {
@@ -366,7 +429,7 @@ const renderLifecycleChip = (label) => {
 const renderBenchDetails = async (container, tests, epsilon) => {
   container.innerHTML = "";
   if (!tests.length) {
-    container.innerHTML = "<div class=\"card\">No detailed benchmark data available.</div>";
+    container.innerHTML = "<div class=\"card\"><p>No detailed benchmark data available.</p></div>";
     return;
   }
   // Make sure the heaviness manifest is loaded BEFORE the forEach
@@ -392,7 +455,7 @@ const renderBenchDetails = async (container, tests, epsilon) => {
     `;
     details.appendChild(summary);
     const table = document.createElement("table");
-    table.className = "bench-table bench-table-compact";
+    table.className = "bench-table";
     table.innerHTML = `
       <thead>
         <tr>
@@ -404,7 +467,12 @@ const renderBenchDetails = async (container, tests, epsilon) => {
       <tbody></tbody>
     `;
     renderBenchTable(table.querySelector("tbody"), entry.times || {}, epsilon);
-    details.appendChild(table);
+    // The table has a min-width, so it needs its own scroll container or it
+    // pushes the whole page sideways on a phone.
+    const scroll = document.createElement("div");
+    scroll.className = "table-scroll";
+    scroll.appendChild(table);
+    details.appendChild(scroll);
     container.appendChild(details);
   });
 };
@@ -447,7 +515,6 @@ const loadRelease = async () => {
     );
     setText("release-assets", `${assets.length} assets`);
     setLink("#release-link", data.html_url);
-    setLink("#download-cta", data.html_url);
 
     Object.entries(assetMap).forEach(([key, values]) => {
       const binAsset = assetLookup.get(values.bin);
@@ -872,8 +939,9 @@ const initDocToc = () => {
 };
 
 document.addEventListener("DOMContentLoaded", () => {
-  initBrandMask();
+  initThemeToggle();
   initDisabledLinks();
+  initSectionNav();
   initDocToc();
   const run = async () => {
     if (document.getElementById("release-version") || document.getElementById("bench-release")) {

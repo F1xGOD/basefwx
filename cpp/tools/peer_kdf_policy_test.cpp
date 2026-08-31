@@ -1217,6 +1217,7 @@ int main() {
                         + spelling);
             }
         }
+#if defined(BASEFWX_HAS_OQS) && BASEFWX_HAS_OQS
         auto pair_768 = basefwx::pq::GenerateKeyPair(
             basefwx::pq::KemAlgorithm::MlKem768);
         auto pair_1024 = basefwx::pq::GenerateKeyPair(
@@ -1272,6 +1273,7 @@ int main() {
             basefwx::pq::KemAlgorithm::MlKem768, pair_768);
         exercise_prepare_kem(
             basefwx::pq::KemAlgorithm::MlKem1024, pair_1024);
+#endif
         for (const char* const label : {
                  "ml-kem-768", "ml-kem-1024", "EC"}) {
             const std::string metadata = basefwx::metadata::Build(

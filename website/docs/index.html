@@ -4,38 +4,39 @@
     <meta charset="utf-8">
     <meta http-equiv="refresh" content="0; url=../">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>About BaseFWX</title>
+    <title>BaseFWX docs</title>
     <link rel="canonical" href="../">
-    <link rel="icon" type="image/svg+xml" href="../assets/basefwx-white.svg">
+    <link rel="icon" type="image/svg+xml" href="../assets/basefwx-plain.svg">
+    <meta name="theme-color" content="#0b090f" media="(prefers-color-scheme: dark)">
+    <meta name="theme-color" content="#fbf9fd" media="(prefers-color-scheme: light)">
+    <script>
+      try {
+        var t = localStorage.getItem("basefwx-theme");
+        if (t === "dark" || t === "light") document.documentElement.dataset.theme = t;
+      } catch (e) {}
+    </script>
+    <link rel="stylesheet" href="../assets/site.css?v=7">
     <style>
       body {
-        margin: 0;
-        min-height: 100vh;
-        font-family: "Trebuchet MS", "Segoe UI", sans-serif;
-        background-color: #0a0c0d;
-        background-image:
-          linear-gradient(rgba(255, 255, 255, 0.025) 1px, transparent 1px),
-          linear-gradient(90deg, rgba(255, 255, 255, 0.025) 1px, transparent 1px);
-        background-size: 32px 32px;
-        color: #f1f1ec;
         display: flex;
+        min-height: 100vh;
         align-items: center;
         justify-content: center;
+        padding: var(--space-lg);
       }
-      a { color: #d477df; text-underline-offset: 3px; }
-      .card {
-        border: 1px solid #555f63;
-        border-left: 6px solid #974ace;
-        background: #111416;
-        padding: 24px;
-        box-shadow: 12px 14px 0 rgba(0, 0, 0, 0.34);
+
+      .redirect {
+        max-width: 26rem;
       }
     </style>
   </head>
   <body>
-    <div class="card">
-      <p>Redirecting to the BaseFWX portal.</p>
-      <p><a href="../">Open the release portal</a></p>
+    <div class="card redirect">
+      <h3>Redirecting</h3>
+      <p>The documentation index lives on the release portal.</p>
+      <div class="card-foot">
+        <a class="btn" href="../">Open the portal</a>
+      </div>
     </div>
   </body>
 </html>

@@ -1,81 +1,99 @@
 <!doctype html>
-<html lang="en" data-asset-base="../assets/" data-results-base="../results/">
+<html lang="en" data-results-base="../results/">
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>BaseFWX Benchmarks</title>
+    <title>BaseFWX benchmark results</title>
     <meta name="description" content="BaseFWX benchmark results across Python, PyPy, C++, and Java.">
-    <link rel="icon" type="image/svg+xml" href="../assets/basefwx-white.svg">
-    <link rel="stylesheet" href="../assets/site.css">
-    <script src="../assets/site.js" defer></script>
+    <link rel="icon" type="image/svg+xml" href="../assets/basefwx-plain.svg">
+    <meta name="theme-color" content="#0b090f" media="(prefers-color-scheme: dark)">
+    <meta name="theme-color" content="#fbf9fd" media="(prefers-color-scheme: light)">
+    <script>
+      try {
+        var t = localStorage.getItem("basefwx-theme");
+        if (t === "dark" || t === "light") document.documentElement.dataset.theme = t;
+      } catch (e) {}
+    </script>
+    <link rel="stylesheet" href="../assets/site.css?v=7">
+    <script src="../assets/site.js?v=7" defer></script>
   </head>
   <body>
+    <a class="skip-link" href="#content">Skip to content</a>
     <div class="container">
       <header class="site-header">
-        <div class="brand">
-          <div class="brand-mark" aria-hidden="true">
-            <span class="brand-icon" aria-hidden="true"></span>
-            <span class="brand-cutout" aria-hidden="true"></span>
-          </div>
-          <div>
-            <div class="brand-name">BaseFWX</div>
-            <div class="brand-sub">A FixCraft cryptographic engine</div>
-          </div>
-        </div>
+        <a class="brand" href="../" aria-label="BaseFWX home">
+          <img class="brand-logo" src="../assets/basefwx-plain.svg" alt="" width="36" height="36">
+          <span>
+            <span class="brand-name">BaseFWX</span>
+            <span class="brand-sub">A FixCraft cryptographic engine</span>
+          </span>
+        </a>
         <nav aria-label="Primary navigation">
-          <a href="../#downloads">Downloads</a>
+          <a href="../docs/CLI/">Docs</a>
           <a href="../hashes/">Hashes</a>
-          <a href="../#integrity">Integrity</a>
-          <a href="../#virustotal">VirusTotal</a>
-          <a href="./">Benchmark</a>
-          <a href="../#docs">Docs</a>
-          <a href="../#support">Support</a>
+          <a href="https://github.com/F1xGOD/basefwx" target="_blank" rel="noopener">GitHub</a>
+          <button class="theme-toggle" type="button" id="theme-toggle" aria-pressed="true" aria-label="Switch the theme" hidden>
+            <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+              <rect x="3.5" y="3.5" width="17" height="17" rx="1.5" fill="none" stroke="currentColor" stroke-width="2"></rect>
+              <path d="M12 3.5h7.5A1.5 1.5 0 0 1 21 5v14a1.5 1.5 0 0 1-1.5 1.5H12Z" fill="currentColor"></path>
+            </svg>
+          </button>
         </nav>
       </header>
 
-      <main>
+      <nav class="section-nav" aria-label="On this page">
+        <a href="../#downloads">Downloads</a>
+        <a href="#overall">Overall</a>
+        <a href="#detail">Per benchmark</a>
+        <a href="#java-backends">Java backends</a>
+      </nav>
+
+      <main id="content">
       <section class="hero" id="top">
         <div>
           <div class="hero-status"><span aria-hidden="true"></span>Measured runtime evidence</div>
-          <h1>Benchmark results</h1>
+          <h1>Benchmarks</h1>
           <p>
-            These results capture steady-state performance across Python, PyPy, C++, and Java.
-            Each run records its warmup and median-sampling method.
+            Steady-state timings for Python, PyPy, C++, and Java on the same workloads.
+            Each run records its own warmup and median-sampling method, so read the method
+            line before comparing two snapshots.
           </p>
           <div class="link-row">
-            <a id="bench-results-text" href="https://github.com/F1xGOD/basefwx/releases" target="_blank" rel="noopener">Benchmark report</a>
-            <a id="bench-results-json" href="https://github.com/F1xGOD/basefwx/releases" target="_blank" rel="noopener">Benchmark JSON</a>
-          </div>
-          <div class="link-row link-row-spaced">
-            <label for="bench-history" class="meta">History:</label>
+            <a id="bench-results-text" href="https://github.com/F1xGOD/basefwx/releases" target="_blank" rel="noopener">Report</a>
+            <a id="bench-results-json" href="https://github.com/F1xGOD/basefwx/releases" target="_blank" rel="noopener">JSON</a>
+            <label for="bench-history" class="meta">History</label>
             <select id="bench-history" class="bench-history-select" aria-label="Browse historical benchmark snapshots" disabled>
               <option value="">JavaScript required</option>
             </select>
           </div>
         </div>
-        <div class="hero-panel">
+
+        <aside class="hero-panel" aria-label="Latest benchmark">
           <div>
-            <div class="meta">Latest benchmark</div>
+            <div class="meta">Latest snapshot</div>
             <div class="panel-title" id="bench-release">No benchmark loaded</div>
             <div class="meta-row">
-              <span id="bench-date">Use the text or JSON links for static access</span>
+              <span id="bench-date">Use the report or JSON links for static access</span>
               <span id="bench-meta">iters: -- · warmup: -- · workers: --</span>
             </div>
           </div>
           <div class="panel-foot">
-            <a class="btn secondary" href="../#downloads">Download CLI</a>
+            <a class="btn secondary" href="../#downloads">Download the CLI</a>
           </div>
-        </div>
-      </section>
-      <noscript>
-        <div class="notice">Interactive benchmark tables require JavaScript. The text and JSON reports above remain available.</div>
-      </noscript>
+        </aside>
 
-      <section>
-        <h2 class="section-title">Overall</h2>
-        <p class="section-lead">Aggregated totals across the full benchmark suite.</p>
+        <noscript>
+          <div class="notice">The interactive tables need JavaScript. The report and JSON links above stay available without it.</div>
+        </noscript>
+      </section>
+
+      <section id="overall">
+        <div class="section-head">
+          <h2 class="section-title">Overall</h2>
+          <p class="section-lead">Totals across the full suite, with Python as the baseline.</p>
+        </div>
         <div id="bench-status" class="status-pill warn">Benchmark data requires JavaScript.</div>
-        <div class="table-scroll">
+        <div class="table-scroll" style="margin-top: var(--space-md)">
           <table class="bench-table" id="bench-overall-table">
             <thead>
               <tr>
@@ -93,17 +111,21 @@
         </div>
       </section>
 
-      <section>
-        <h2 class="section-title">Detailed results</h2>
-        <p class="section-lead">Expand each benchmark to see per-runtime breakdowns.</p>
-        <div id="bench-details"><div class="card">No detailed benchmark data loaded.</div></div>
+      <section id="detail">
+        <div class="section-head">
+          <h2 class="section-title">Per benchmark</h2>
+          <p class="section-lead">Expand a row for the per-runtime breakdown. The right-hand chip is the cost class, the left-hand chip marks a retired or deprecated method.</p>
+        </div>
+        <div id="bench-details"><div class="card"><p>No detailed benchmark data loaded.</p></div></div>
       </section>
 
       <section id="java-backends">
-        <h2 class="section-title">Java backends: pure Java vs JNI</h2>
-        <p class="section-lead">Side-by-side fwxAES throughput for the two Java backends. Shown only when the snapshot has a <code>java-backends-&lt;tag&gt;.json</code> sidecar.</p>
+        <div class="section-head">
+          <h2 class="section-title">Java backends</h2>
+          <p class="section-lead">fwxAES throughput for pure Java against JNI. Shown only when the snapshot carries a <code>java-backends-&lt;tag&gt;.json</code> sidecar.</p>
+        </div>
         <div id="java-backends-status" class="status-pill warn">No Java-backend data in this snapshot.</div>
-        <div class="table-scroll table-scroll-spaced">
+        <div class="table-scroll" style="margin-top: var(--space-md)">
           <table class="bench-table" id="java-backends-table" hidden>
             <thead>
               <tr>
@@ -111,7 +133,7 @@
                 <th>Backend</th>
                 <th>Encrypt</th>
                 <th>Decrypt</th>
-                <th>Speedup vs pure-Java</th>
+                <th>Speedup vs pure Java</th>
               </tr>
             </thead>
             <tbody></tbody>
@@ -121,7 +143,13 @@
       </main>
 
       <footer>
-        FixCraft BaseFWX Documentation and Release Portal
+        <span>FixCraft BaseFWX</span>
+        <nav aria-label="Footer navigation">
+          <a href="../">Portal</a>
+          <a href="../hashes/">Hashes</a>
+          <a href="../docs/TESTING/">Testing</a>
+          <a href="https://github.com/F1xGOD/basefwx" target="_blank" rel="noopener">GitHub</a>
+        </nav>
       </footer>
     </div>
   </body>

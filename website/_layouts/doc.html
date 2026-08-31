@@ -1,22 +1,28 @@
 <!doctype html>
-<html lang="en" data-asset-base="{{ '/assets/' | relative_url }}">
+<html lang="en">
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{{ page.title }} | BaseFWX</title>
     <meta name="description" content="{{ page.title }} documentation for BaseFWX.">
-    <link rel="icon" type="image/svg+xml" href="{{ '/assets/basefwx-white.svg' | relative_url }}">
-    <link rel="stylesheet" href="{{ '/assets/site.css' | relative_url }}">
-    <script src="{{ '/assets/site.js' | relative_url }}" defer></script>
+    <link rel="icon" type="image/svg+xml" href="{{ '/assets/basefwx-plain.svg' | relative_url }}">
+    <meta name="theme-color" content="#0b090f" media="(prefers-color-scheme: dark)">
+    <meta name="theme-color" content="#fbf9fd" media="(prefers-color-scheme: light)">
+    <script>
+      try {
+        var t = localStorage.getItem("basefwx-theme");
+        if (t === "dark" || t === "light") document.documentElement.dataset.theme = t;
+      } catch (e) {}
+    </script>
+    <link rel="stylesheet" href="{{ '/assets/site.css' | relative_url }}?v=7">
+    <script src="{{ '/assets/site.js' | relative_url }}?v=7" defer></script>
   </head>
   <body>
+    <a class="skip-link" href="#content">Skip to content</a>
     <div class="doc-container">
       <header class="doc-header">
-        <a class="doc-brand" href="{{ '/' | relative_url }}">
-          <span class="brand-mark" aria-hidden="true">
-            <span class="brand-icon" aria-hidden="true"></span>
-            <span class="brand-cutout" aria-hidden="true"></span>
-          </span>
+        <a class="doc-brand" href="{{ '/' | relative_url }}" aria-label="BaseFWX home">
+          <img class="brand-logo" src="{{ '/assets/basefwx-plain.svg' | relative_url }}" alt="" width="36" height="36">
           <span>
             <span class="brand-name">BaseFWX</span>
             <span class="brand-sub">A FixCraft cryptographic engine</span>
@@ -28,10 +34,15 @@
           <a href="{{ '/docs/SECURITY_MODEL/' | relative_url }}">Security</a>
           <a href="{{ '/docs/TESTING/' | relative_url }}">Testing</a>
           <a href="{{ '/docs/CONTRIBUTING/' | relative_url }}">Contributing</a>
-          <a href="https://github.com/F1xGOD/basefwx" target="_blank" rel="noopener">GitHub</a>
+          <button class="theme-toggle" type="button" id="theme-toggle" aria-pressed="true" aria-label="Switch the theme" hidden>
+            <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+              <rect x="3.5" y="3.5" width="17" height="17" rx="1.5" fill="none" stroke="currentColor" stroke-width="2"></rect>
+              <path d="M12 3.5h7.5A1.5 1.5 0 0 1 21 5v14a1.5 1.5 0 0 1-1.5 1.5H12Z" fill="currentColor"></path>
+            </svg>
+          </button>
         </nav>
       </header>
-      <main class="doc-shell">
+      <main class="doc-shell" id="content">
         <details class="doc-toc" open>
           <summary>On this page</summary>
           <nav id="doc-toc-list" aria-label="On this page"></nav>
@@ -40,6 +51,15 @@
           {{ content }}
         </article>
       </main>
+      <footer>
+        <span>FixCraft BaseFWX</span>
+        <nav aria-label="Footer navigation">
+          <a href="{{ '/' | relative_url }}">Portal</a>
+          <a href="{{ '/hashes/' | relative_url }}">Hashes</a>
+          <a href="{{ '/benchmark/' | relative_url }}">Benchmark</a>
+          <a href="https://github.com/F1xGOD/basefwx" target="_blank" rel="noopener">GitHub</a>
+        </nav>
+      </footer>
     </div>
   </body>
 </html>

@@ -1,6 +1,7 @@
 <nav class="section-nav" aria-label="On this page">
   {%- for item in page.section_nav -%}
-    {%- if item.url contains '#' or item.url contains '://' -%}
+    {%- assign first_character = item.url | slice: 0 -%}
+    {%- if item.url contains '://' or first_character == '#' -%}
       <a href="{{ item.url }}">{{ item.label }}</a>
     {%- else -%}
       <a href="{{ item.url | relative_url }}">{{ item.label }}</a>

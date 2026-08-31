@@ -5,22 +5,22 @@
     "low": {
       "label": "Low",
       "color": "#1aa260",
-      "explanation": "Under 100 ms in Python at bench scale. Cheap and bounded. Safe to run on any host."
+      "explanation": "Under 100 ms in the cited Python benchmark configuration. Measure the intended input and host before setting an operational limit."
     },
     "medium": {
       "label": "Medium",
       "color": "#d4a017",
-      "explanation": "100 ms to 1 s in Python at bench scale. Modest CPU + RAM. Fine on laptops."
+      "explanation": "100 ms to 1 s in the cited Python benchmark configuration. Runtime and memory use depend on the input, KDF policy, and host."
     },
     "high": {
       "label": "High",
       "color": "#d97706",
-      "explanation": "1 s to 5 s in Python at bench scale, or hundreds of MiB peak RSS. Use a dedicated build box if your laptop is small."
+      "explanation": "1 s to 5 s, or hundreds of MiB peak RSS, in the cited Python benchmark configuration. Measure resource use for the intended workload."
     },
     "extreme": {
       "label": "Extreme",
       "color": "#dc2626",
-      "explanation": "Over 5 s in Python at bench scale, or multi-GiB peak RSS. Do not run on machines under 32 GiB RAM for production-scale inputs."
+      "explanation": "Over 5 s, or multi-GiB peak RSS, in the cited Python benchmark configuration. Measure resource use for the intended input and host."
     }
   },
   "lifecycle": {
@@ -42,47 +42,47 @@
     }
   },
   "methods": [
-    { "match": "hash512",       "level": "low",     "notes": "SHA-512, fixed-size output. ~7 ms in Python at 2 MiB — near the OpenSSL throughput ceiling; C++/Java are within 30%.",
+    { "match": "hash512",       "level": "low",     "notes": "SHA-512 with fixed-size output.",
                                                        "status": "active" },
-    { "match": "uhash513",      "level": "low",     "notes": "Retired in 3.8.0 — non-standard chained hash (SHA-256 → SHA-1 → SHA-512 → SHA-256). Includes a SHA-1 compatibility hop and adds no sound security property. It is absent from default artifacts and current benchmarks; existing callers need a compatibility build. Use hash512 (SHA-512) or SHA3-512 for new code.",
+    { "match": "uhash513",      "level": "low",     "notes": "Retired in 3.8.0. This non-standard hash chain includes a SHA-1 compatibility hop and adds no security property. Existing callers need a compatibility build. Use hash512 or SHA3-512 for new code.",
                                                        "status": "retired", "since": "3.8.0" },
-    { "match": "b64",           "level": "low",     "notes": "stdlib base64 — memory-bandwidth bound. ~21 ms in Python at 2 MiB.",
+    { "match": "b64",           "level": "low",     "notes": "Standard Base64 encoding. Work scales with input size.",
                                                        "status": "active" },
-    { "match": "fwxaes-light",  "level": "medium",  "notes": "Lightweight AEAD variant — Argon2id at reduced cost + AES-256-GCM. ~180 ms in Python at 2 MiB; the KDF dominates wall time.",
+    { "match": "fwxaes-light",  "level": "medium",  "notes": "AES-256-GCM benchmarked with the test-only 32,768-iteration PBKDF2 override.",
                                                        "status": "active" },
-    { "match": "bi512",         "level": "medium",  "notes": "Retired in 3.8.0 — SHA-256 with a custom prefilter and no added security. It is absent from default artifacts and current benchmarks; existing callers need a compatibility build. Use hash512 or SHA3-512 instead.",
+    { "match": "bi512",         "level": "medium",  "notes": "Retired in 3.8.0. Its custom SHA-256 prefilter adds no security property. Existing callers need a compatibility build. Use hash512 or SHA3-512 instead.",
                                                        "status": "retired", "since": "3.8.0" },
-    { "match": "kFMe",          "level": "medium",  "notes": "Encodes a file as a carrier PNG (audio source) or WAV (image source) — lossless container packing for steganographic transport. ~440 ms in Python at the historical 2 MiB run; C++ was ~17× faster because Python's Pillow PNG encoder has per-pixel dispatch overhead libpng doesn't. Output is structurally whole-buffer. Retired in 3.8.0 and dropped from default artifacts and current benchmarks; decoding existing files needs a compatibility build (BASEFWX_ENABLE_RETIRED_MEDIA=1).",
+    { "match": "kFMe",          "level": "medium",  "notes": "Retired lossless carrier packing for PNG or WAV output. It is absent from default artifacts and current benchmarks. Decode existing files with a compatibility build using BASEFWX_ENABLE_RETIRED_MEDIA=1.",
                                                        "status": "retired-media" },
-    { "match": "kFMd",          "level": "medium",  "notes": "Inverse of kFMe — decodes the carrier PNG/WAV back to original bytes. Retired in 3.8.0 and dropped from default artifacts and current benchmarks; decoding existing files needs a compatibility build (BASEFWX_ENABLE_RETIRED_MEDIA=1).",
+    { "match": "kFMd",          "level": "medium",  "notes": "Retired decoder for kFMe carrier PNG and WAV files. Decode existing files with a compatibility build using BASEFWX_ENABLE_RETIRED_MEDIA=1.",
                                                        "status": "retired-media" },
-    { "match": "fwxaes-live",   "level": "medium",  "notes": "Streaming AEAD with chunked frames (1 MiB chunks) + optional ffmpeg pipe. ~470 ms in Python at 2 MiB. Note: Java is currently SLOWER than Python here because the small bench input doesn't amortize the per-frame AES-GCM Cipher init overhead; at 200 MiB Java overtakes by ~3×.",
+    { "match": "fwxaes-live",   "level": "medium",  "notes": "Streaming AEAD with runtime-configurable authenticated frames and optional ffmpeg piping. Python defaults to 64 KiB frames; C++ and Java default to 1 MiB. The cited Python 2 MiB run measured about 470 ms.",
                                                        "status": "active" },
-    { "match": "kFAe",          "level": "medium",  "notes": "Legacy PNG-only carrier encoder (kFMe with the auto-detection removed). ~480 ms in Python in the historical run. Retired in 3.8.0 and dropped from default artifacts and current benchmarks; decoding existing files needs a compatibility build (BASEFWX_ENABLE_RETIRED_MEDIA=1).",
+    { "match": "kFAe",          "level": "medium",  "notes": "Retired PNG-only carrier encoder. It is absent from default artifacts and current benchmarks. Existing callers need a compatibility build using BASEFWX_ENABLE_RETIRED_MEDIA=1.",
                                                        "status": "retired-media" },
-    { "match": "kFAd",          "level": "medium",  "notes": "Inverse of kFAe — decodes the legacy PNG carrier. Retired in 3.8.0 and dropped from default artifacts and current benchmarks; decoding existing files needs a compatibility build (BASEFWX_ENABLE_RETIRED_MEDIA=1).",
+    { "match": "kFAd",          "level": "medium",  "notes": "Retired decoder for legacy kFAe PNG carriers. Decode existing files with a compatibility build using BASEFWX_ENABLE_RETIRED_MEDIA=1.",
                                                        "status": "retired-media" },
-    { "match": "dean7",         "level": "medium",  "notes": "Inverse of AN7. ~500 ms in Python at 2 MiB. Java is unexpectedly slower at this scale; see an7 note.",
+    { "match": "dean7",         "level": "medium",  "notes": "Decodes AN7 numeric transport output.",
                                                        "status": "active" },
-    { "match": "an7",           "level": "medium",  "notes": "AN7 stealth anonymisation — chunked AES-CTR + sparse-flip + super-block permutation. ~520 ms in Python at 2 MiB. At this size Java is ~1.8× slower than Python because the per-chunk Cipher.init overhead doesn't amortize over only 2 chunks; the Java path is already optimized (cached ThreadLocal Cipher + Mac, in-place AES-CTR per commit 92a8a68). At ≥50 MiB inputs Java overtakes Python decisively.",
+    { "match": "an7",           "level": "medium",  "notes": "AN7 combines chunked AES-CTR, sparse bit flips, and a super-block permutation. Compare runtimes only at the same input size and chunk configuration.",
                                                        "status": "active" },
-    { "match": "fwxaes",        "level": "medium",  "notes": "Full AEAD — Argon2id at default cost + AES-256-GCM. ~710 ms in Python at 2 MiB; the KDF is ~90% of wall time and cannot be sped up without weakening security parameters.",
+    { "match": "fwxaes",        "level": "medium",  "notes": "AES-256-GCM benchmarked with the suite's PBKDF2 policy. Check the report's recorded iteration count before comparing results.",
                                                        "status": "active" },
-    { "match": "n10",           "level": "high",    "notes": "Numeric encoding — turns arbitrary bytes into fixed-10-digit blocks with embedded FNV-1a checksum, for channels that only carry digits (SMS, phone fields, numeric-only DB columns). ~1.5 s in Python at 2 MiB. The bottleneck is the Python interpreter dispatch loop: ~524k iterations × ~4 arithmetic ops per iteration approaches the CPython speed ceiling for this algorithm. The arithmetic itself is on machine-sized integers (not bigints over the whole buffer), so NumPy can't help — uint64 overflows during the multiply step. The real fix is a C extension; PyPy already runs this ~30× faster than CPython by JIT-compiling the same loop. C++/Java are 18–30× faster than CPython for the same reason. Active because digit-only output has a legitimate purpose; the chip honestly reflects the interpreter gap.",
+    { "match": "n10",           "level": "high",    "notes": "Numeric encoding for channels that accept digits only. Each fixed-width block includes an FNV-1a checksum. The Python path performs the transform in an interpreter loop, so runtime differences are expected.",
                                                        "status": "active" },
-    { "match": "b256",          "level": "high",    "notes": "🫡 b256 has been retired since BaseFWX 3.7.0. It was the first encoding method in BaseFWX, born in V1 back when this was a proof of concept and not yet a project. It served from day one; now it is absent from default artifacts and current benchmarks. Existing blobs still decode through a compatibility build. Use base64 / hash512 for new work. It's time to go. ❤️",
+    { "match": "b256",          "level": "high",    "notes": "Retired in BaseFWX 3.7.0 and absent from default artifacts and current benchmarks. Existing blobs still decode through a compatibility build. Use base64 for reversible transport encoding or hash512 for a digest.",
                                                        "status": "retired", "since": "3.7.0" },
-    { "match": "a512",          "level": "high",    "notes": "Retired in 3.8.0 — reversible obfuscation with no security goal and an internal dependency on retired b256. It is absent from default artifacts and current benchmarks; existing callers need a compatibility build. Use standard base64 for transport or authenticated encryption for secrecy.",
+    { "match": "a512",          "level": "high",    "notes": "Retired in 3.8.0. This reversible obfuscation method depends on retired b256 and has no security goal. Existing callers need a compatibility build. Use Base64 for transport or authenticated encryption for secrecy.",
                                                        "status": "retired", "since": "3.8.0" },
     { "match": "pb512",         "level": "high",    "notes": "Password-required authenticated text payload. Version 3 uses AES-256-GCM with distinct HKDF/AAD domains and canonical standard base64. The password KDF dominates runtime; historical token expansion adds no cryptographic strength.",
                                                        "status": "active" },
     { "match": "b512",          "level": "high",    "notes": "Password-or-master-keyed authenticated text payload. Version 3 uses AES-256-GCM with distinct HKDF/AAD domains and canonical standard base64. The password KDF dominates runtime; historical token expansion adds no cryptographic strength.",
                                                        "status": "active" },
-    { "match": "jmg",           "level": "high",    "notes": "Media cipher — AEAD over a whole pixel/sample buffer, with an optional archive trailer that stores the encrypted original for exact restore. Retired in 3.8.0 and dropped from default artifacts and current benchmarks; decoding existing files needs a compatibility build (BASEFWX_ENABLE_RETIRED_MEDIA=1).",
+    { "match": "jmg",           "level": "high",    "notes": "Retired whole-buffer media cipher with an optional archive trailer for exact restore. Decode existing files with a compatibility build using BASEFWX_ENABLE_RETIRED_MEDIA=1.",
                                                        "status": "retired-media" },
-    { "match": "b512file",      "level": "extreme", "notes": "File-mode wrapper around b512 — KDF + AEAD over the whole file. ~7.3 s in Python at the bench input; multi-GiB files extend linearly.",
+    { "match": "b512file",      "level": "extreme", "notes": "File-mode b512 wrapper with KDF work and whole-file authenticated encryption.",
                                                        "status": "active" },
-    { "match": "pb512file",     "level": "extreme", "notes": "File-mode wrapper around pb512. ~8.6 s in Python at the bench input; multi-GiB files extend linearly.",
+    { "match": "pb512file",     "level": "extreme", "notes": "File-mode pb512 wrapper with KDF work and whole-file authenticated encryption.",
                                                        "status": "active" }
   ]
 }

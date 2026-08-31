@@ -1,7 +1,7 @@
 title: BaseFWX
 description: >-
-  BaseFWX is a cryptographic container engine whose C++, Python, and Java
-  runtimes read and write the same authenticated formats.
+  BaseFWX is a cryptographic container engine with portable authenticated
+  format variants across C++, Python, and Java.
 
 markdown: kramdown
 theme: null
@@ -12,7 +12,7 @@ kramdown:
 # Bumped whenever assets/site.css or assets/site.js changes, so returning
 # visitors are not served a cached stylesheet against new markup. One place,
 # read by _includes/head.html.
-asset_version: 10
+asset_version: 11
 
 repo_url: https://github.com/F1xGOD/basefwx
 

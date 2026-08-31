@@ -1,7 +1,7 @@
 ---
 layout: page
 title: "BaseFWX: cryptographic container engine"
-description: Download and verify BaseFWX artifacts, inspect its authenticated container stages, and read the cross-runtime documentation.
+description: Download and verify BaseFWX artifacts, inspect the fwxAES layout and tag boundary, and read the cross-runtime documentation.
 results_base: /results/
 nav_current: Portal
 section_nav:
@@ -22,13 +22,14 @@ section_nav:
 ---
 <section class="hero" id="top">
   <div class="hero-copy">
-    <div class="hero-status"><span aria-hidden="true"></span>One container format / three runtimes</div>
+    <div class="hero-status"><span aria-hidden="true"></span>Maintained containers / three runtimes</div>
     <h1>BaseFWX <small>Authenticated containers across C++, Python, and Java</small></h1>
     <p>
       BaseFWX encrypts payloads with AES-256-GCM. Keys come from Argon2id or PBKDF2; the
-      optional master path wraps the content key with ML-KEM. Every runtime reads and writes
-      the same fwxAES, b512, and pb512 formats. This portal holds the binaries, signatures,
-      hashes, and scan reports.
+      optional master path wraps the content key with ML-KEM. C++, Python, and Java share
+      the portable fwxAES, b512, and pb512 variants; the compatibility reference records
+      the C++ stream and Java packing exceptions. This portal holds the binaries,
+      signatures, hashes, and scan reports.
     </p>
     <div class="cta-row">
       <a class="btn" href="#downloads">Download CLI</a>
@@ -58,23 +59,23 @@ section_nav:
   <figure class="container-map" data-reveal="scan">
     <figcaption class="map-caption">
       <span class="map-kicker">Schematic</span>
-      <span class="map-title">Anatomy of a BaseFWX container</span>
+      <span class="map-title">Anatomy of a current fwxAES container</span>
     </figcaption>
     <div class="map-track">
       <span class="map-field" data-field="magic"><b>FWX1</b><i>magic</i></span>
-      <span class="map-field" data-field="kdf"><b>KDF</b><i>parameters</i></span>
-      <span class="map-field" data-field="wrap"><b>WRAP</b><i>key material</i></span>
-      <span class="map-field" data-field="meta"><b>META</b><i>headers</i></span>
+      <span class="map-field" data-field="kdf"><b>MODE</b><i>algorithm + KDF</i></span>
+      <span class="map-field" data-field="wrap"><b>KEY</b><i>wrap header or salt</i></span>
+      <span class="map-field" data-field="meta"><b>NONCE</b><i>IV bytes</i></span>
       <span class="map-field" data-field="ciphertext"><b>CIPHERTEXT</b><i>AES-256-GCM</i></span>
       <span class="map-field" data-field="tag"><b>TAG</b><i>16 bytes</i></span>
     </div>
     <div class="map-scale" aria-hidden="true">
-      <span class="map-span">authenticated by the tag</span>
+      <span class="map-span">plaintext gated by tag verification</span>
     </div>
     <p class="map-note">
-      Field order is real, widths are not: to scale, an actual container is one long
-      ciphertext bar. The tag covers the metadata as well as the payload, and plaintext is
-      released only after it verifies.
+      Field order is schematic and widths are not to scale. fwxAES uses a fixed domain
+      string as AAD; its format and key headers are outside the payload tag. Parsers check
+      their structure and bounds, and release plaintext only after the payload tag verifies.
     </p>
   </figure>
 </section>
@@ -141,7 +142,7 @@ section_nav:
 
     <article class="dl-card">
       <h3>Java</h3>
-      <p>The JVM artifact. Reads and writes the containers the CLI produces.</p>
+      <p>The JVM artifact. Reads and writes the portable fwxAES, b512, and pb512 variants.</p>
       <ul class="dl-builds">
         <li class="dl-build">
           <span class="dl-file">basefwx-java.jar</span>
@@ -196,7 +197,7 @@ section_nav:
 <section id="scans">
   <div class="section-head">
     <h2 class="section-title">VirusTotal reports</h2>
-    <p class="section-lead">One public report per release binary. Engine results stay on <a href="https://www.virustotal.com" target="_blank" rel="noopener">VirusTotal</a>, this page only links to them.</p>
+    <p class="section-lead">One submitted VirusTotal report link per release artifact. Windows links cover the executable inside each ZIP. These scans are informational and do not gate publication.</p>
   </div>
   <div class="grid grid-2 scan-layout">
     <div>
@@ -228,9 +229,9 @@ section_nav:
         draws heuristic flags on its own.
       </p>
       <p>
-        Check that the SHA-256 shown on the report matches the value on the
-        <a href="{{ '/hashes/' | relative_url }}">checksum page</a> first. If it does not match, the report
-        describes a different file.
+        For direct binaries and the Java archive, compare the report SHA-256 with the
+        <a href="{{ '/hashes/' | relative_url }}">checksum page</a>. A Windows report covers
+        the inner executable, so verify its release ZIP separately with the ZIP checksum.
       </p>
     </div>
   </div>
@@ -239,7 +240,7 @@ section_nav:
 <section id="docs" data-reveal="rack">
   <div class="section-head">
     <h2 class="section-title">Documentation inventory</h2>
-    <p class="section-lead">Container format, runtime use, failure handling, and release checks.</p>
+    <p class="section-lead">Container formats, runtime use, failure handling, and release checks.</p>
   </div>
   {% include doc-catalog.html groups="Understand|Use|Reference|Contribute" group_field="group" %}
 </section>

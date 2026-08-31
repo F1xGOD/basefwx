@@ -828,7 +828,6 @@ const escapeHtml = (s) =>
   String(s).replace(/[&<>"']/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]));
 
 let benchHistorySnapshots = [];
-let benchHistoryLatestTag = "";
 
 const populateBenchHistory = async () => {
   const select = document.getElementById("bench-history");
@@ -839,9 +838,10 @@ const populateBenchHistory = async () => {
     const res = await fetch(`${base}/index.json`);
     if (!res.ok) throw new Error("no history index");
     const idx = await res.json();
-    benchHistorySnapshots = Array.isArray(idx.snapshots) ? idx.snapshots : [];
-    benchHistoryLatestTag = idx.latest || "";
-    const opts = [`<option value="">latest</option>`];
+    benchHistorySnapshots = Array.isArray(idx.snapshots)
+      ? idx.snapshots.filter((snapshot) => /^v\d+\.\d+\.\d+$/.test(String(snapshot.tag || "")))
+      : [];
+    const opts = [`<option value="">latest release</option>`];
     for (const snap of benchHistorySnapshots) {
       opts.push(`<option value="${escapeHtml(snap.tag)}">${escapeHtml(snap.tag)}</option>`);
     }
@@ -849,7 +849,7 @@ const populateBenchHistory = async () => {
     select.disabled = benchHistorySnapshots.length === 0;
     select.addEventListener("change", () => loadBenchmarks(select.value || ""));
   } catch (err) {
-    select.innerHTML = `<option value="">latest</option>`;
+    select.innerHTML = `<option value="">latest release</option>`;
     select.disabled = true;
   }
 };

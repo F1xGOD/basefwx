@@ -395,7 +395,6 @@ bool IsEcMasterBlob(const Bytes& blob) {
 }
 
 std::optional<Bytes> LoadMasterPublicKey(bool create_if_missing) {
-    (void)create_if_missing;
     std::string env_pub = basefwx::env::Get("BASEFWX_MASTER_EC_PUB");
     if (!env_pub.empty()) {
         std::filesystem::path pub_path = ExpandUser(env_pub);
@@ -416,7 +415,10 @@ std::optional<Bytes> LoadMasterPublicKey(bool create_if_missing) {
             ReadFileBytes(priv_path)};
         EvpPkeyPtr key = LoadPrivateKey(priv_bytes.bytes());
         Bytes pub_bytes = PublicPemFromKey(key.get());
-        if (!std::filesystem::exists(pub_path)) {
+        // Deriving the public half is read-only; materializing it on disk is
+        // the side effect the caller controls. keywrap passes false so a
+        // password-only encrypt never writes into the home directory.
+        if (create_if_missing && !std::filesystem::exists(pub_path)) {
             WriteFileBytes(pub_path, pub_bytes);
             SetPublicPermissions(pub_path);
         }

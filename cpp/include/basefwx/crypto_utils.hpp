@@ -7,7 +7,7 @@
 #pragma once
 
 #include <openssl/evp.h>
-#include <openssl/hmac.h>
+#include <openssl/opensslv.h>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -35,7 +35,18 @@ struct EVPPKEYCtxDeleter {
     }
 };
 
-#if OPENSSL_VERSION_NUMBER >= 0x30000000L
+// BaseFWX requires OpenSSL 3.0 or newer. src/crypto/crypto.cpp includes
+// <openssl/core_names.h> and <openssl/params.h> unconditionally and both
+// arrived with the 3.0 provider API, so no build of this library against
+// 1.1.1, LibreSSL or BoringSSL has ever been possible. The pre-3.0
+// HMAC_CTX wrappers that used to sit behind an #else here were therefore
+// unreachable in every build rather than merely every configured one.
+// Stating the requirement fails a wrong toolchain here instead of inside
+// a preprocessor error deep in a source file.
+#if OPENSSL_VERSION_NUMBER < 0x30000000L
+#error "BaseFWX requires OpenSSL 3.0 or newer"
+#endif
+
 struct EVPMACDeleter {
     void operator()(EVP_MAC* mac) const noexcept {
         if (mac) EVP_MAC_free(mac);
@@ -50,15 +61,6 @@ struct EVPMACCtxDeleter {
 
 using UniqueMac = std::unique_ptr<EVP_MAC, EVPMACDeleter>;
 using UniqueMacCtx = std::unique_ptr<EVP_MAC_CTX, EVPMACCtxDeleter>;
-#else
-struct HMACCtxDeleter {
-    void operator()(HMAC_CTX* ctx) const noexcept {
-        if (ctx) HMAC_CTX_free(ctx);
-    }
-};
-
-using UniqueHmacCtx = std::unique_ptr<HMAC_CTX, HMACCtxDeleter>;
-#endif
 
 using UniqueCipherCtx = std::unique_ptr<EVP_CIPHER_CTX, EVPCipherCtxDeleter>;
 using UniqueMDCtx = std::unique_ptr<EVP_MD_CTX, EVPMDCtxDeleter>;

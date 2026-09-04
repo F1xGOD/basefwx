@@ -49,6 +49,7 @@ endif()
 foreach(required_symbol
         "basefwx::crypto::HkdfSha256"
         "basefwx::crypto::CompatPrfStreamSha256"
+        "basefwx::crypto::AeadContext::"
         "basefwx::pq::GenerateKeyPair"
         "basefwx::x25519::GenerateKeyPair")
     string(FIND "${exported_symbols}" "${required_symbol}" symbol_offset)

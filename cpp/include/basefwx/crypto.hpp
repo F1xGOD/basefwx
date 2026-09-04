@@ -8,6 +8,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -84,6 +85,92 @@ std::size_t AesGcmDecryptWithIvInto(const Bytes& key,
                                     const Bytes& aad,
                                     std::uint8_t* out,
                                     std::size_t out_len);
+
+// Reusable AES-256-GCM context.
+//
+// Every one-shot helper above builds a fresh EVP_CIPHER_CTX and redoes the
+// full AES-256 key schedule per call. That is the right shape for a file
+// codec that seals one payload. It is the wrong shape for a per-frame
+// protocol, where the same process seals thousands of small records a second
+// and pays the allocation and the schedule every time.
+//
+// AeadContext keeps the cipher contexts and the key schedule alive across
+// calls and takes the nonce and AAD per record. Both entry points write into
+// caller-provided storage, so a caller that already owns an output buffer
+// does not pay for a second std::vector zero-fill.
+//
+// Nonce discipline is the caller's: GCM fails catastrophically if a nonce
+// repeats under one key, and a long-lived context is exactly where that
+// mistake becomes possible. Seal rejects an immediate repeat of the previous
+// nonce as a misuse guard. That is a backstop against the obvious bug, NOT a
+// uniqueness proof -- the caller still owns a counter or a random nonce.
+//
+// Not thread-safe. One context per direction per connection, the way a
+// directional ratchet already holds one key schedule per direction.
+class AeadContext {
+public:
+    static constexpr std::size_t kKeyLength = 32;
+    static constexpr std::size_t kTagLength = 16;
+    static constexpr std::size_t kDefaultNonceLength = 12;
+
+    // Builds both cipher contexts and installs the key schedule. `key` must
+    // be exactly 32 bytes. `nonce_length` is fixed for the life of the
+    // context because GCM's IV length is part of the cipher setup rather
+    // than per-message state.
+    explicit AeadContext(const Bytes& key,
+                         std::size_t nonce_length = kDefaultNonceLength);
+    ~AeadContext();
+
+    AeadContext(const AeadContext&) = delete;
+    AeadContext& operator=(const AeadContext&) = delete;
+    AeadContext(AeadContext&&) noexcept;
+    AeadContext& operator=(AeadContext&&) noexcept;
+
+    std::size_t nonce_length() const noexcept;
+
+    // Bytes Seal adds on top of the plaintext length.
+    static constexpr std::size_t OverheadBytes() noexcept { return kTagLength; }
+
+    // Installs a new key schedule into the existing contexts, reusing the
+    // OpenSSL allocations. A ratchet that derives a fresh message key per
+    // record calls this instead of constructing a new context, which is what
+    // turns "one allocation per frame" into "one allocation per direction".
+    // The nonce-repeat guard resets, since a repeated nonce under a new key
+    // is not a reuse.
+    void Rekey(const Bytes& key);
+
+    // Writes `ciphertext || tag` into `out` and returns the byte count,
+    // which is always plaintext_len + kTagLength. `out_len` must be at least
+    // that. Ciphertext is public, so it is produced directly into `out`.
+    std::size_t Seal(const Bytes& nonce,
+                     const std::uint8_t* plaintext,
+                     std::size_t plaintext_len,
+                     const Bytes& aad,
+                     std::uint8_t* out,
+                     std::size_t out_len);
+
+    // Reads `ciphertext || tag` from `blob` and writes the plaintext into
+    // `out`, returning blob_len - kTagLength.
+    //
+    // OpenSSL emits GCM plaintext from EVP_DecryptUpdate before
+    // EVP_DecryptFinal_ex authenticates the tag, so Open decrypts into
+    // private staging owned by this context and copies to `out` only after
+    // the tag verifies -- the same property AesGcmDecryptWithIvInto has.
+    // Authentication failure leaves `out` untouched and throws
+    // AuthenticationError. The staging buffer is reused across calls and
+    // wiped when the context is destroyed, so the property costs a copy but
+    // no per-record allocation.
+    std::size_t Open(const Bytes& nonce,
+                     const std::uint8_t* blob,
+                     std::size_t blob_len,
+                     const Bytes& aad,
+                     std::uint8_t* out,
+                     std::size_t out_len);
+
+private:
+    struct State;
+    std::unique_ptr<State> state_;
+};
 
 // IETF ChaCha20-Poly1305 (RFC 8439) one-shot AEAD with a caller-supplied
 // nonce. The key must be 32 bytes and the IV exactly 12; unlike AES-GCM this

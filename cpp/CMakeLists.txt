@@ -895,6 +895,16 @@ if(BASEFWX_BUILD_TESTS AND BUILD_TESTING)
     )
     add_test(NAME base64_compatibility_test COMMAND base64_compatibility_test)
 
+    add_executable(secret_resolution_policy_test
+        tools/secret_resolution_policy_test.cpp
+    )
+    target_link_libraries(secret_resolution_policy_test PRIVATE basefwxcpp)
+    target_include_directories(secret_resolution_policy_test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/include"
+    )
+    add_test(NAME secret_resolution_policy_test
+             COMMAND secret_resolution_policy_test)
+
     add_executable(crypto_api_safety_test
         tools/crypto_api_safety_test.cpp
     )
@@ -903,6 +913,15 @@ if(BASEFWX_BUILD_TESTS AND BUILD_TESTING)
         "${CMAKE_CURRENT_SOURCE_DIR}/include"
     )
     add_test(NAME crypto_api_safety_test COMMAND crypto_api_safety_test)
+
+    add_executable(aead_context_test
+        tools/aead_context_test.cpp
+    )
+    target_link_libraries(aead_context_test PRIVATE basefwxcpp)
+    target_include_directories(aead_context_test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/include"
+    )
+    add_test(NAME aead_context_test COMMAND aead_context_test)
 
     add_executable(text_payload_security_test
         tools/text_payload_security_test.cpp

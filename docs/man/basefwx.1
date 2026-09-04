@@ -152,7 +152,7 @@ below.
 .B bench-text \fImethod\fR \fItext-file\fR [--password \fIpassword\fR]
 Time one encode plus decode round trip of the file's text. \fImethod\fR is
 b64, n10, b512, or pb512. The b512 and pb512 methods take a password and also
-accept --kdf, --pbkdf2-iters, and --no-fallback.
+accept --kdf and --pbkdf2-iters.
 .TP
 .B bench-hash \fImethod\fR \fItext-file\fR
 Time hashing of the file's text. \fImethod\fR is hash512. This command takes
@@ -257,11 +257,6 @@ container, whose metadata carries the required dispatch marker.
 .TP
 .B --kdf \fIlabel\fR, --pbkdf2-iters \fIn\fR
 Select key-derivation behavior where a command supports it.
-.TP
-.B --no-fallback
-Deprecated compatibility spelling with no effect. The unauthenticated
-second-chance PBKDF2 path was removed in 3.7.0; authentication failure is
-terminal.
 .SH DATA FLOW
 .nf
 +--------------------------------+

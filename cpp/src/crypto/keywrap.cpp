@@ -89,8 +89,11 @@ bool SkipShortHardening() {
 #endif
 }
 
-basefwx::pb512::KdfOptions HardenKdfOptions(const std::string& password,
-                                            const basefwx::pb512::KdfOptions& kdf) {
+}  // namespace
+
+basefwx::pb512::KdfOptions HardenKdfOptionsForPassword(
+    const std::string& password,
+    const basefwx::pb512::KdfOptions& kdf) {
     if (password.empty() || SkipShortHardening()) {
         return kdf;
     }
@@ -110,8 +113,6 @@ basefwx::pb512::KdfOptions HardenKdfOptions(const std::string& password,
                                            basefwx::constants::kShortArgon2Parallelism);
     return hardened;
 }
-
-}  // namespace
 
 std::string ResolveKdfLabel(const std::string& label) {
     std::string normalized = ToLower(label);
@@ -225,7 +226,7 @@ MaskKeyResult PrepareMaskKey(const std::string& password,
         throw std::runtime_error("Password required for this mode");
     }
     basefwx::pb512::KdfOptions kdf_opts =
-        HardenKdfOptions(resolved, kdf);
+        HardenKdfOptionsForPassword(resolved, kdf);
     const std::string kdf_label = ResolveKdfLabel(kdf_opts.label);
     if (!resolved.empty()) {
         if (IsArgon2Label(kdf_label)) {
@@ -270,6 +271,13 @@ MaskKeyResult PrepareMaskKey(const std::string& password,
             "PQ strict mode requires a configured ML-KEM master public key");
     }
     bool use_master_effective = use_master && (pq_pub.has_value() || ec_pub.has_value());
+    if (use_master && !use_master_effective) {
+        // Degrading to password-only would write a file that looks escrowed
+        // on this host and is unrecoverable once the password is lost. The
+        // caller asked for a master key; refusing is the only honest answer.
+        throw std::runtime_error(
+            "master key requested but no master public key is configured");
+    }
     if (resolved.empty() && !use_master_effective) {
         throw std::runtime_error("Password required when master key is unavailable");
     }
@@ -406,7 +414,7 @@ Bytes RecoverMaskKey(const Bytes& user_blob,
     // errors and produce a successful decrypt under a much weaker derivation.
     // Blobs from 2.x / pre-3.x are out of the supported window
     // (see SECURITY.md "≤ 2.7: Treat as incompatible").
-    basefwx::pb512::KdfOptions kdf_opts = HardenKdfOptions(resolved, kdf);
+    basefwx::pb512::KdfOptions kdf_opts = HardenKdfOptionsForPassword(resolved, kdf);
     basefwx::crypto::SecureBytes user_key{
         DeriveUserKeyWithLabel(resolved, salt, label, kdf_opts)};
     try {

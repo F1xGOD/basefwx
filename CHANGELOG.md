@@ -3,6 +3,34 @@
 ## [Unreleased]
 
 ### Security
+- **`ResolvePassword` is idempotent.** Some entry points resolve a password at
+  the public boundary and again further in, so a secret that was itself a
+  `password://` or `file://` reference could derive two different keys
+  depending on which path was taken. The resolved secret is now never a
+  reference: a `password://` value naming another reference, and a password
+  file whose contents begin with a scheme, are both refused as ambiguous.
+- **Unverified plaintext is no longer spooled to a temporary file.** The
+  fwxAES stream decryptor used `std::tmpfile()` to hold plaintext until the
+  GCM tag verified, which left those blocks unwiped in `TMPDIR` and let a long
+  stream fill it. A destination-aware call such as `DecryptStreamFile` now
+  writes straight into the private sibling it already stages and publishes by
+  rename. A caller that supplies its own stream gets a wiped in-memory hold
+  bounded by `kFwxAesMaxUnstagedPlaintext` (256 MiB), and a larger stream is
+  refused with a pointer to the destination-aware call.
+- **Wrap mode refuses a KDF cost it cannot record.** The wrap header stores the
+  KDF label but not its cost, so a caller setting a non-default PBKDF2
+  iteration count or Argon2 cost produced a blob no host could open, including
+  the one that wrote it. Encryption now fails with the recoverable value
+  named. Serializing the cost is a format change that must land in C++, Java,
+  and Python together.
+- **Master-key refusal reaches Java and Python.** A requested master wrap with
+  no configured master public key already failed closed in C++; `KeyWrap.java`
+  and `_master_key.py` now refuse with the same message instead of silently
+  degrading to password-only.
+- **Java `an7`/`dean7` reject unknown flags.** The Java argument parser
+  silently swallowed `--use-master` and `--no-master` on a format that has no
+  key-escrow path, so a caller could ask for escrow and get none. It now
+  rejects unknown flags, matching the C++ parser.
 - **Authenticated b512/pb512 text payloads (`v3`).** All three writers now
   emit `0x03 || uint32_be(plaintext_length) || nonce || ciphertext || tag`,
   using AES-256-GCM with a payload key derived from the wrapped mask key.
@@ -174,6 +202,12 @@
   secret-named members still fail before archive publication.
 
 ### Added
+- **Reusable AES-256-GCM `AeadContext`.** `basefwx::crypto::AeadContext`
+  keeps both cipher contexts and the key schedule alive across records, takes
+  the nonce and AAD per call, writes into caller-owned buffers, rekeys in
+  place, stages decrypted bytes privately until the tag verifies, and rejects
+  an immediate nonce repeat under one key. The one-shot `AesGcm*WithIv`
+  helpers are unchanged. Covered by `aead_context_test`.
 - **Precisely named large-payload compatibility PRF.** C++
   `CompatPrfStreamSha256`, Java `compatPrfStreamSha256`, and Python
   `_compat_prf_stream_sha256` expose the released zero-salt HMAC-SHA256
@@ -231,6 +265,13 @@
   `pq=ml-kem-768|1024` instead of misleading `oqs=OFF`.
 
 ### Changed
+- **One `KdfOptions`.** `basefwx::KdfOptions` is now an alias of
+  `basefwx::pb512::KdfOptions` instead of an identical second struct copied
+  field by field in the umbrella API.
+- **OpenSSL 3.0 or newer is a stated requirement.** `crypto.cpp` has always
+  included the OpenSSL 3 provider headers unconditionally, so the pre-3.0
+  `HMAC_*` branch was unreachable in every build. That branch is gone and
+  `crypto_utils.hpp` now fails a wrong toolchain at the first include.
 - **C++ LIVE password KDF parity.** The C++ password-mode LIVE writer now uses
   the shared 600,000-iteration PBKDF2 default instead of a stale 200,000
   literal. The iteration count is serialized in each session header, so older
@@ -325,6 +366,40 @@
   `_env_enabled` helpers used by the KDF/performance paths touched here
   accept `1`, `true`, `yes`, or `on`, case-insensitively. Legacy flags
   with exact-`1` contracts retain their existing semantics.
+
+### Fixed
+- **Passwords are wiped on every error path.** `fwxaes::EncryptRaw`,
+  `DecryptRaw`, and `DecryptStream` now register the resolved password with
+  a `SecretGuard` before the first call that can throw, so a wrong password
+  or a policy rejection no longer leaves the password in freed heap.
+- **The PBKDF2 floor applies on encrypt as well as decrypt.** The decoder
+  refused iteration counts below 10,000, but `BASEFWX_FWXAES_PBKDF2_ITERS`
+  could still drive the encoder below it and produce a file the same build
+  could not open. The encoder now refuses the same floor.
+- **A requested master key is never silently dropped.** `PrepareMaskKey`
+  used to degrade to password-only when `use_master` was set but no master
+  public key was configured, producing a file that looked escrowed and was
+  unrecoverable once the password was lost. It now throws.
+- **Private staging for stream and archive temporaries.** The non-seekable
+  `EncryptStream` fallback and the `pack` decode path wrote to predictable
+  names under the shared temp directory, following a pre-planted symlink.
+  Both now stage through `SecureTempPath` in an owner-only directory.
+- **`ec::LoadMasterPublicKey(create_if_missing)` honours its argument.** The
+  flag was ignored and a public PEM was written into the home directory on
+  every password-only encrypt that found a private key.
+- **`BASEFWX_FWXAES_PBKDF2_ITERS` is documented.** It is read by production
+  code and changes key-derivation cost, but appeared in no public document.
+  `SECURITY.md` now records it alongside the floor that bounds it.
+
+### Removed
+- **`allow_pbkdf2_fallback` and `--no-fallback`.** The C++ `KdfOptions`
+  field and the CLI flag had been documented no-ops since 3.7.0 removed the
+  unauthenticated second-chance PBKDF2 path. They are gone from the headers,
+  CLI parsers, help, completions, and manual; authentication failure remains
+  terminal.
+- **`file_stream.hpp`.** The installed header had no consumer in C++, Java,
+  Python, or the tools, and declared `ProcessFileInChunks` without any
+  definition, so a consumer calling it could not link.
 
 ## [v3.8.0-dev1] - 2026-07-19
 

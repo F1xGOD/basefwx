@@ -150,10 +150,10 @@ output, leave them unset or keep PBKDF2 in the peer-safe range. An operator can
 make recovery-only local media work unexpectedly expensive with a trusted
 override, but ciphertext metadata cannot trigger work above the decoder caps.
 
-The C++ `allow_pbkdf2_fallback` struct field and `--no-fallback` CLI spelling
-remain for source/ABI and command-line compatibility only. They have no effect:
-the unauthenticated second-chance PBKDF2 path was removed in 3.7.0, and current
-authentication failure is terminal.
+There is no second-chance PBKDF2 path. 3.7.0 removed the unauthenticated
+fallback, and 3.8.0 removed the `allow_pbkdf2_fallback` field and
+`--no-fallback` flag that had survived as documented no-ops. Authentication
+failure is terminal.
 
 ## Protocol-building APIs
 
@@ -179,7 +179,9 @@ before publication.
 
 ## Master recovery
 
-The password-only path works in every runtime. When master recovery is enabled,
+The password-only path works in every runtime. A writer that is asked for
+master recovery and cannot load a master public key refuses to write rather
+than silently producing a password-only file. When master recovery is enabled,
 all runtimes prefer a provisioned ML-KEM public key. Its standardized size
 selects ML-KEM-768 or ML-KEM-1024 and the `ENC-KEM` value. Upstream artifacts
 contain no baked master key.

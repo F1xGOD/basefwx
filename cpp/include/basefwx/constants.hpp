@@ -99,6 +99,13 @@ inline constexpr std::size_t kEphemeralKeyLen = 32;
 inline constexpr std::size_t kUserWrapFixedLen = kUserKdfSaltSize + kAeadNonceLen + kAeadTagLen + kEphemeralKeyLen;
 inline constexpr std::size_t kFwxAesMaxKeyHeaderLen = 64u * 1024u;
 
+// A stream decrypt that is handed the caller's real destination cannot write
+// plaintext there before the GCM tag verifies, and it has no destination
+// directory to stage beside either. It therefore holds the plaintext in wiped
+// memory up to this bound and refuses beyond it, naming the destination-aware
+// entry point. The bound is a memory budget, not a format limit.
+inline constexpr std::size_t kFwxAesMaxUnstagedPlaintext = 256u << 20;
+
 inline constexpr std::size_t kStreamChunkSize = 1u << 20;
 inline constexpr std::size_t kStreamChunkSizeMax = 16u << 20;
 inline constexpr std::size_t kStreamThreshold = 250u * 1024u;

@@ -16,6 +16,7 @@
 #include "basefwx/filecodec.hpp"
 #include "basefwx/features.hpp"
 #include "basefwx/fwxaes.hpp"
+#include "basefwx/pb512.hpp"
 #include "basefwx/livecipher.hpp"
 #include "basefwx/an7.hpp"
 #if BASEFWX_HAS_RETIRED_MEDIA
@@ -45,15 +46,11 @@ std::string B64Decode(const std::string& input);
 std::string N10Encode(const std::string& input);
 std::string N10Decode(const std::string& input);
 std::string Hash512(const std::string& input);
-struct KdfOptions {
-    std::string label = "auto";
-    std::size_t pbkdf2_iterations = constants::kUserKdfIterations;
-    std::uint32_t argon2_time_cost = constants::kArgon2TimeCost;
-    std::uint32_t argon2_memory_cost = constants::kArgon2MemoryCost;
-    std::uint32_t argon2_parallelism = constants::DefaultArgon2Parallelism();
-    // ABI-retained compatibility field. PBKDF2 fallback was removed in 3.7.0.
-    bool allow_pbkdf2_fallback = true;
-};
+// One KDF option set for every password-derived format. The umbrella API
+// and the pb512 API used to declare two identical structs and copy them
+// field by field; a field added to one but not the other would have been
+// silently dropped on the way through.
+using KdfOptions = basefwx::pb512::KdfOptions;
 
 std::string B512Encode(const std::string& input, const std::string& password, bool use_master, const KdfOptions& kdf);
 std::string B512Decode(const std::string& input, const std::string& password, bool use_master, const KdfOptions& kdf);

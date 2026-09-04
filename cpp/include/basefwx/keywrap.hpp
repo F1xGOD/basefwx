@@ -51,6 +51,14 @@ Bytes DeriveUserKeyWithLabel(const std::string& password,
                              const std::string& label,
                              const basefwx::pb512::KdfOptions& kdf);
 
+// The short-password cost hardening applied identically when a wrap is
+// written and when it is recovered. Exposed so a writer can ask whether the
+// cost it wants is the one a decoder will reconstruct: the wrap header
+// records the KDF label but not its cost.
+basefwx::pb512::KdfOptions HardenKdfOptionsForPassword(
+    const std::string& password,
+    const basefwx::pb512::KdfOptions& kdf);
+
 // Fail closed when peer-supplied ENC-ARGON2-* costs exceed shared maxima.
 void RequirePeerArgon2WithinLimits(std::uint32_t time_cost,
                                    std::uint32_t memory_kib,

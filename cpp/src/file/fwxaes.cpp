@@ -17,8 +17,6 @@
 #include "basefwx/secure_temp.hpp"
 
 #include <array>
-#include <chrono>
-#include <cstdio>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -110,6 +108,12 @@ std::uint32_t ClampToU32(std::size_t value) {
     return static_cast<std::uint32_t>(value);
 }
 
+basefwx::pb512::KdfOptions ResolveWrapKdfOptionsForDecode() {
+    basefwx::pb512::KdfOptions out{};
+    out.pbkdf2_iterations = ResolveTestIters(ClampToU32(out.pbkdf2_iterations));
+    return out;
+}
+
 basefwx::pb512::KdfOptions ResolveWrapKdfOptions(const Options& options,
                                                  const std::string& password) {
     basefwx::pb512::KdfOptions out = options.user_kdf;
@@ -117,13 +121,46 @@ basefwx::pb512::KdfOptions ResolveWrapKdfOptions(const Options& options,
         && options.pbkdf2_iters != basefwx::constants::kUserKdfIterations) {
         out.pbkdf2_iterations = options.pbkdf2_iters;
     }
-    out.pbkdf2_iterations = HardenPbkdf2Iterations(password, ClampToU32(out.pbkdf2_iterations));
-    return out;
-}
-
-basefwx::pb512::KdfOptions ResolveWrapKdfOptionsForDecode() {
-    basefwx::pb512::KdfOptions out{};
-    out.pbkdf2_iterations = ResolveTestIters(ClampToU32(out.pbkdf2_iterations));
+    // The wrap header carries the KDF label but not its cost, so every
+    // decoder reconstructs the cost from these defaults. A blob written with
+    // any other cost cannot be opened by any host, including the one that
+    // wrote it, so the request is refused instead of producing an
+    // unrecoverable file. Serializing the cost is a format change that has to
+    // land in C++, Java, and Python together.
+    //
+    // The comparison runs after the short-password hardening keywrap applies
+    // to both the wrap and the recover side, so an explicit request that
+    // equals the hardened value is accepted rather than mistaken for an
+    // unrecoverable one. keywrap owns that hardening; applying it again here
+    // would only make the two sides harder to compare.
+    const basefwx::pb512::KdfOptions recoverable =
+        basefwx::keywrap::HardenKdfOptionsForPassword(
+            password, ResolveWrapKdfOptionsForDecode());
+    const basefwx::pb512::KdfOptions requested =
+        basefwx::keywrap::HardenKdfOptionsForPassword(password, out);
+    const auto refuse = [](std::string_view field, auto requested_value,
+                           auto only) {
+        throw std::runtime_error(
+            "fwxAES wrap mode cannot record a custom " + std::string(field) +
+            " (requested " + std::to_string(requested_value) + ", the only "
+            "recoverable value is " + std::to_string(only) +
+            "): the wrap header stores the KDF label but not its cost, so a "
+            "blob written this way could not be opened again. Use the "
+            "PBKDF2 payload mode for a custom cost, or leave the cost at its "
+            "default.");
+    };
+    if (requested.pbkdf2_iterations != recoverable.pbkdf2_iterations) {
+        refuse("PBKDF2 iteration count", requested.pbkdf2_iterations, recoverable.pbkdf2_iterations);
+    }
+    if (requested.argon2_time_cost != recoverable.argon2_time_cost) {
+        refuse("Argon2 time cost", requested.argon2_time_cost, recoverable.argon2_time_cost);
+    }
+    if (requested.argon2_memory_cost != recoverable.argon2_memory_cost) {
+        refuse("Argon2 memory cost", requested.argon2_memory_cost, recoverable.argon2_memory_cost);
+    }
+    if (requested.argon2_parallelism != recoverable.argon2_parallelism) {
+        refuse("Argon2 parallelism", requested.argon2_parallelism, recoverable.argon2_parallelism);
+    }
     return out;
 }
 
@@ -166,36 +203,6 @@ void ReadExact(std::istream& in, std::uint8_t* data, std::size_t len, const char
         throw std::runtime_error(label);
     }
 }
-
-class ScopedPathCleanup {
-  public:
-    explicit ScopedPathCleanup(std::filesystem::path path, bool recursive = false)
-        : path_(std::move(path)), recursive_(recursive) {}
-
-    ScopedPathCleanup(const ScopedPathCleanup&) = delete;
-    ScopedPathCleanup& operator=(const ScopedPathCleanup&) = delete;
-
-    ~ScopedPathCleanup() {
-        if (!active_) {
-            return;
-        }
-        std::error_code ec;
-        if (recursive_) {
-            std::filesystem::remove_all(path_, ec);
-        } else {
-            std::filesystem::remove(path_, ec);
-        }
-    }
-
-    void Dismiss() noexcept {
-        active_ = false;
-    }
-
-  private:
-    std::filesystem::path path_;
-    bool recursive_ = false;
-    bool active_ = true;
-};
 
 void PutU32Be(std::vector<std::uint8_t>& out, std::uint32_t value) {
     out.push_back(static_cast<std::uint8_t>((value >> 24) & 0xFF));
@@ -407,10 +414,19 @@ void RejectPluginInStream(const Options& options) {
 
 Bytes EncryptRaw(const Bytes& plaintext, const std::string& password, const Options& options) {
     std::string resolved = basefwx::ResolvePassword(password);
+    // Guard the password before anything that can throw; the first error
+    // path (policy, KDF, master lookup) must not leave it in freed heap.
+    basefwx::crypto::SecretGuard resolved_guard;
+    resolved_guard.Add(resolved);
     basefwx::RequireStrongPasswordForEncryption(resolved, "fwxAES");
     Options effective = options;
     effective.pbkdf2_iters = ResolveTestIters(options.pbkdf2_iters);
     effective.pbkdf2_iters = HardenPbkdf2Iterations(resolved, effective.pbkdf2_iters);
+    // The decoder refuses this floor, so encoding below it would write a
+    // file this same build cannot open. Apply the one rule on both sides.
+    if (ShouldRejectLowPbkdf2Iters(effective.pbkdf2_iters)) {
+        throw std::runtime_error("fwxAES PBKDF2 iteration count below minimum");
+    }
     basefwx::keywrap::RequirePeerPbkdf2WithinLimits(
         effective.pbkdf2_iters);
     if (!effective.use_master && resolved.empty()) {
@@ -459,7 +475,6 @@ Bytes EncryptRaw(const Bytes& plaintext, const std::string& password, const Opti
     Bytes iv = basefwx::crypto::RandomBytes(effective.iv_len);
     Bytes key;
     basefwx::crypto::SecretGuard guard;
-    guard.Add(resolved);
     guard.Add(mask_key.mask_key);
     guard.Add(key);
 
@@ -550,6 +565,9 @@ Bytes DecryptRaw(const Bytes& blob, const std::string& password, bool use_master
 
 Bytes DecryptRaw(const Bytes& blob, const std::string& password, const Options& options) {
     std::string resolved = basefwx::ResolvePassword(password);
+    // A wrong password is the common error path; wipe it on that path too.
+    basefwx::crypto::SecretGuard resolved_guard;
+    resolved_guard.Add(resolved);
     const std::size_t header_len = 16;
     if (blob.size() < header_len) {
         throw std::runtime_error("fwxAES blob too short");
@@ -649,7 +667,6 @@ Bytes DecryptRaw(const Bytes& blob, const std::string& password, const Options& 
         Bytes key = basefwx::crypto::HkdfSha256(
             mask_key.bytes(), basefwx::constants::kFwxAesKeyInfo, 32);
         basefwx::crypto::SecretGuard guard;
-        guard.Add(resolved);
         guard.Add(key);
         Bytes plaintext = basefwx::crypto::AesGcmDecryptWithIvOwned(
             key,
@@ -682,7 +699,6 @@ Bytes DecryptRaw(const Bytes& blob, const std::string& password, const Options& 
     }
     Bytes key = basefwx::crypto::Pbkdf2HmacSha256(resolved, salt, iters, 32);
     basefwx::crypto::SecretGuard guard;
-    guard.Add(resolved);
     guard.Add(key);
     Bytes plaintext = basefwx::crypto::AesGcmDecryptWithIvOwned(
         key,
@@ -708,6 +724,9 @@ std::uint64_t EncryptStream(std::istream& source,
     Options effective = options;
     effective.pbkdf2_iters = ResolveTestIters(options.pbkdf2_iters);
     effective.pbkdf2_iters = HardenPbkdf2Iterations(resolved, effective.pbkdf2_iters);
+    if (ShouldRejectLowPbkdf2Iters(effective.pbkdf2_iters)) {
+        throw std::runtime_error("fwxAES PBKDF2 iteration count below minimum");
+    }
     basefwx::keywrap::RequirePeerPbkdf2WithinLimits(
         effective.pbkdf2_iters);
     if (!effective.use_master && resolved.empty()) {
@@ -896,9 +915,13 @@ std::uint64_t EncryptStream(std::istream& source,
         return encrypt_to_seekable(dest);
     }
 
-    std::filesystem::path temp_path = std::filesystem::temp_directory_path()
-        / ("basefwx-fwxaes-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".tmp");
-    ScopedPathCleanup temp_cleanup(temp_path);
+    // A predictable name in the shared temp directory, opened without
+    // O_EXCL, follows a pre-planted symlink. Stage inside a private
+    // owner-only directory with an exclusive file instead.
+    auto staged = basefwx::temp::SecureTempPath::CreateSibling(
+        std::filesystem::temp_directory_path() / "basefwx-fwxaes-stream",
+        "fwxaes-stream");
+    const std::filesystem::path& temp_path = staged.path();
     std::ofstream temp_out(temp_path, std::ios::binary);
     if (!temp_out) {
         throw std::runtime_error("Failed to open temp output for fwxaes stream");
@@ -922,11 +945,27 @@ std::uint64_t EncryptStream(std::istream& source,
     return ct_len;
 }
 
-std::uint64_t DecryptStream(std::istream& source,
-                            std::ostream& dest,
-                            const std::string& password,
-                            bool use_master) {
+namespace {
+
+// Where the plaintext may live before the GCM tag verifies.
+enum class PlaintextStaging {
+    // `dest` is a private sink the caller publishes only on success, so
+    // plaintext may be written straight through.
+    CallerStaged,
+    // `dest` is the caller's real destination. Plaintext is held in wiped
+    // memory, bounded by kFwxAesMaxUnstagedPlaintext, and written only after
+    // the tag verifies.
+    HoldInMemory,
+};
+
+std::uint64_t DecryptStreamStaged(std::istream& source,
+                                  std::ostream& dest,
+                                  const std::string& password,
+                                  bool use_master,
+                                  PlaintextStaging staging) {
     std::string resolved = basefwx::ResolvePassword(password);
+    basefwx::crypto::SecretGuard resolved_guard;
+    resolved_guard.Add(resolved);
     std::array<std::uint8_t, 16> header{};
     ReadExact(source, header.data(), header.size(), "fwxAES blob too short");
     if (!std::equal(std::begin(kMagic), std::end(kMagic), header.begin())) {
@@ -993,7 +1032,6 @@ std::uint64_t DecryptStream(std::istream& source,
     // branch-local secrets have already been wiped (mask_key in the
     // wrap branch). Wipes resolved + key when DecryptStream returns.
     basefwx::crypto::SecretGuard guard;
-    guard.Add(resolved);
     guard.Add(key);
 
     std::uint64_t ct_len = ct_len32;
@@ -1033,19 +1071,33 @@ std::uint64_t DecryptStream(std::istream& source,
     std::uint64_t remaining = cipher_len;
     Bytes in_buf(basefwx::constants::kStreamChunkSize);
     Bytes out_buf(basefwx::constants::kStreamChunkSize + 16);
-    struct FileCloser {
-        void operator()(std::FILE* file) const {
-            if (file != nullptr) {
-                std::fclose(file);
+    // Unverified plaintext, wiped on every exit path including the AEAD
+    // failure below. Empty when the caller already owns a private staging
+    // sink, in which case nothing is retained at all.
+    basefwx::crypto::SecureBytes held;
+    // out_buf carries plaintext chunks; wipe it on every exit path too.
+    basefwx::crypto::SecretGuard plaintext_guard;
+    plaintext_guard.Add(out_buf);
+    const auto retain = [&](const std::uint8_t* data, std::size_t size) {
+        if (size == 0) return;
+        if (staging == PlaintextStaging::CallerStaged) {
+            dest.write(reinterpret_cast<const char*>(data),
+                       static_cast<std::streamsize>(size));
+            if (!dest) {
+                throw std::runtime_error(
+                    "Failed to stage authenticated fwxaes plaintext");
             }
+            return;
         }
+        if (held.size() + size
+            > basefwx::constants::kFwxAesMaxUnstagedPlaintext) {
+            throw std::runtime_error(
+                "fwxAES stream plaintext exceeds the in-memory decrypt "
+                "bound; use DecryptStreamFile, which stages beside the "
+                "destination instead of holding the plaintext");
+        }
+        held.bytes().insert(held.bytes().end(), data, data + size);
     };
-    std::unique_ptr<std::FILE, FileCloser> authenticated_plain(
-        std::tmpfile());
-    if (!authenticated_plain) {
-        throw std::runtime_error(
-            "Failed to create private fwxaes plaintext spool");
-    }
     std::uint64_t written = 0;
     while (remaining > 0) {
         std::size_t take = static_cast<std::size_t>(
@@ -1056,14 +1108,7 @@ std::uint64_t DecryptStream(std::istream& source,
             throw std::runtime_error("fwxAES decrypt update failed");
         }
         if (out_len > 0) {
-            const std::size_t produced =
-                static_cast<std::size_t>(out_len);
-            if (std::fwrite(
-                    out_buf.data(), 1, produced,
-                    authenticated_plain.get()) != produced) {
-                throw std::runtime_error(
-                    "Failed to write fwxaes plaintext spool");
-            }
+            retain(out_buf.data(), static_cast<std::size_t>(out_len));
             written += static_cast<std::uint64_t>(out_len);
         }
         remaining -= take;
@@ -1079,44 +1124,29 @@ std::uint64_t DecryptStream(std::istream& source,
         throw std::runtime_error("AES-GCM auth failed");
     }
     if (out_len > 0) {
-        const std::size_t produced =
-            static_cast<std::size_t>(out_len);
-        if (std::fwrite(
-                out_buf.data(), 1, produced,
-                authenticated_plain.get()) != produced) {
-            throw std::runtime_error(
-                "Failed to write fwxaes plaintext spool");
-        }
+        retain(out_buf.data(), static_cast<std::size_t>(out_len));
         written += static_cast<std::uint64_t>(out_len);
     }
-    if (std::fflush(authenticated_plain.get()) != 0
-        || std::fseek(authenticated_plain.get(), 0, SEEK_SET) != 0) {
-        throw std::runtime_error(
-            "Failed to rewind fwxaes plaintext spool");
-    }
-    while (true) {
-        const std::size_t got = std::fread(
-            in_buf.data(), 1, in_buf.size(),
-            authenticated_plain.get());
-        if (got > 0) {
-            dest.write(
-                reinterpret_cast<const char*>(in_buf.data()),
-                static_cast<std::streamsize>(got));
-            if (!dest) {
-                throw std::runtime_error(
-                    "Failed to publish authenticated fwxaes plaintext");
-            }
-        }
-        if (got < in_buf.size()) {
-            if (std::ferror(authenticated_plain.get()) != 0) {
-                throw std::runtime_error(
-                    "Failed to read fwxaes plaintext spool");
-            }
-            break;
+    if (staging == PlaintextStaging::HoldInMemory && !held.empty()) {
+        dest.write(reinterpret_cast<const char*>(held.data()),
+                   static_cast<std::streamsize>(held.size()));
+        if (!dest) {
+            throw std::runtime_error(
+                "Failed to publish authenticated fwxaes plaintext");
         }
     }
     dest.flush();
     return written;
+}
+
+}  // namespace
+
+std::uint64_t DecryptStream(std::istream& source,
+                            std::ostream& dest,
+                            const std::string& password,
+                            bool use_master) {
+    return DecryptStreamStaged(source, dest, password, use_master,
+                               PlaintextStaging::HoldInMemory);
 }
 
 std::uint64_t DecryptStreamFile(
@@ -1138,9 +1168,13 @@ std::uint64_t DecryptStreamFile(
         throw std::runtime_error(
             "Failed to open private fwxaes output temp");
     }
+    // `output` is a private temp beside the destination, published by rename
+    // only after this returns, so plaintext may be written straight through
+    // instead of being held.
     const std::uint64_t written =
-        DecryptStream(
-            input, output, password, use_master);
+        DecryptStreamStaged(
+            input, output, password, use_master,
+            PlaintextStaging::CallerStaged);
     output.flush();
     if (!output) {
         throw std::runtime_error(
@@ -1354,19 +1388,13 @@ void DecryptFile(const std::string& path_in,
         } else if (!std::filesystem::is_directory(dest_dir, ec)) {
             dest_dir = output_path.parent_path();
         }
-        auto temp_base = std::filesystem::temp_directory_path();
-        auto temp_dir = temp_base / ("basefwx-pack-dec-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
-        std::filesystem::create_directories(temp_dir, ec);
-        if (ec) {
-            throw std::runtime_error("Failed to create temp directory: " + ec.message());
-        }
-        ScopedPathCleanup temp_dir_cleanup(temp_dir, true);
-        auto ext = (pack_mode == basefwx::archive::PackMode::Txz)
-                       ? std::string(basefwx::constants::kPackTxzExt)
-                       : std::string(basefwx::constants::kPackTgzExt);
-        auto archive_path = temp_dir / (output_path.stem().string() + ext);
-        WriteBinary(archive_path.string(), payload);
-        basefwx::archive::UnpackArchive(archive_path, pack_mode, dest_dir);
+        // The decrypted archive is staged in a private owner-only directory
+        // beside its destination, never under a guessable name in the
+        // shared temp directory where a planted symlink could redirect it.
+        auto staged = basefwx::temp::SecureTempPath::CreateSibling(
+            dest_dir / "pack", "pack-dec");
+        WriteBinary(staged.path().string(), payload);
+        basefwx::archive::UnpackArchive(staged.path(), pack_mode, dest_dir);
         return;
     }
     WriteBinary(path_out, plaintext);

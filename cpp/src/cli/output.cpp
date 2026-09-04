@@ -390,29 +390,29 @@ void PrintUsage() {
     std::cout << "  n10file-enc <in-file> <out-file>\n";
     std::cout << "  n10file-dec <in-file> <out-file>\n";
     std::cout << "  hash512 <text>\n";
-    std::cout << "  b512-enc <text> [--password <password>] " << master_flags << " [--kdf <label>] [--pbkdf2-iters <n>] [--no-fallback]\n";
-    std::cout << "  b512-dec <text> [--password <password>] " << master_flags << " [--kdf <label>] [--pbkdf2-iters <n>] [--no-fallback]\n";
-    std::cout << "  pb512-enc <text> [--password <password>] " << master_flags << " [--kdf <label>] [--pbkdf2-iters <n>] [--no-fallback]\n";
-    std::cout << "  pb512-dec <text> [--password <password>] " << master_flags << " [--kdf <label>] [--pbkdf2-iters <n>] [--no-fallback]\n";
+    std::cout << "  b512-enc <text> [--password <password>] " << master_flags << " [--kdf <label>] [--pbkdf2-iters <n>]\n";
+    std::cout << "  b512-dec <text> [--password <password>] " << master_flags << " [--kdf <label>] [--pbkdf2-iters <n>]\n";
+    std::cout << "  pb512-enc <text> [--password <password>] " << master_flags << " [--kdf <label>] [--pbkdf2-iters <n>]\n";
+    std::cout << "  pb512-dec <text> [--password <password>] " << master_flags << " [--kdf <label>] [--pbkdf2-iters <n>]\n";
     std::cout << "\n";
     std::cout << "File commands:\n";
-    std::cout << "  b512file-enc <file> [--password <password>] " << master_flags << " [--strip-meta] [--compress] [--keep-input] [--kdf <label>] [--pbkdf2-iters <n>] [--no-fallback]\n";
-    std::cout << "  b512file-dec <file.fwx> [--password <password>] " << master_flags << " [--strip-meta] [--kdf <label>] [--pbkdf2-iters <n>] [--no-fallback]\n";
-    std::cout << "  b512file-bytes-rt <in> <out> [--password <password>] " << master_flags << " [--strip-meta] [--kdf <label>] [--pbkdf2-iters <n>] [--no-fallback]\n";
-    std::cout << "  pb512file-bytes-rt <in> <out> [--password <password>] " << master_flags << " [--kdf <label>] [--pbkdf2-iters <n>] [--no-fallback]\n";
-    std::cout << "  pb512file-enc <file> [--password <password>] " << master_flags << " [--no-obf] [--compress] [--keep-input] [--kdf <label>] [--pbkdf2-iters <n>] [--no-fallback]\n";
-    std::cout << "  pb512file-dec <file.fwx> [--password <password>] " << master_flags << " [--strip-meta] [--kdf <label>] [--pbkdf2-iters <n>] [--no-fallback]\n";
+    std::cout << "  b512file-enc <file> [--password <password>] " << master_flags << " [--strip-meta] [--compress] [--keep-input] [--kdf <label>] [--pbkdf2-iters <n>]\n";
+    std::cout << "  b512file-dec <file.fwx> [--password <password>] " << master_flags << " [--strip-meta] [--kdf <label>] [--pbkdf2-iters <n>]\n";
+    std::cout << "  b512file-bytes-rt <in> <out> [--password <password>] " << master_flags << " [--strip-meta] [--kdf <label>] [--pbkdf2-iters <n>]\n";
+    std::cout << "  pb512file-bytes-rt <in> <out> [--password <password>] " << master_flags << " [--kdf <label>] [--pbkdf2-iters <n>]\n";
+    std::cout << "  pb512file-enc <file> [--password <password>] " << master_flags << " [--no-obf] [--compress] [--keep-input] [--kdf <label>] [--pbkdf2-iters <n>]\n";
+    std::cout << "  pb512file-dec <file.fwx> [--password <password>] " << master_flags << " [--strip-meta] [--kdf <label>] [--pbkdf2-iters <n>]\n";
     std::cout << "\n";
     std::cout << "fwxAES commands:\n";
     std::cout << "  fwxaes-enc <file> [--password <password>] " << master_flags << " [--out <path>] [--heavy] [--normalize] [--threshold <n>] [--cover-phrase <text>] [--compress] [--keep-input]";
 #if BASEFWX_HAS_RETIRED_MEDIA
     basefwx::retired::cli::AppendFwxAesUsageOptions(std::cout);
 #endif
-    std::cout << " [--kdf <label>] [--pbkdf2-iters <n>] [--argon2-time <n>] [--argon2-mem <n>] [--argon2-par <n>] [--no-fallback] [--legacy-pbkdf2] [--plugin <path>] [--plugin-id <hex>] [--plugin-pos pre|post] [--plugin-config <file>]\n";
+    std::cout << " [--kdf <label>] [--pbkdf2-iters <n>] [--argon2-time <n>] [--argon2-mem <n>] [--argon2-par <n>] [--legacy-pbkdf2] [--plugin <path>] [--plugin-id <hex>] [--plugin-pos pre|post] [--plugin-config <file>]\n";
     std::cout << "  fwxaes-dec <file> [--password <password>] " << master_flags << " [--out <path>] [--heavy]\n";
     std::cout << "  fwxaes-heavy-enc <file> [--password <password>] " << master_flags << " [--out <path>] [--compress] [--keep-input]  (alias of fwxaes-enc --heavy)\n";
     std::cout << "  fwxaes-heavy-dec <file> [--password <password>] " << master_flags << " [--out <path>]                (alias of fwxaes-dec --heavy)\n";
-    std::cout << "  fwxaes-stream-enc <file> [--password <password>] " << master_flags << " [--out <path>] [--kdf <label>] [--pbkdf2-iters <n>] [--argon2-time <n>] [--argon2-mem <n>] [--argon2-par <n>] [--no-fallback] [--legacy-pbkdf2]\n";
+    std::cout << "  fwxaes-stream-enc <file> [--password <password>] " << master_flags << " [--out <path>] [--kdf <label>] [--pbkdf2-iters <n>] [--argon2-time <n>] [--argon2-mem <n>] [--argon2-par <n>] [--legacy-pbkdf2]\n";
     std::cout << "  fwxaes-stream-dec <file> [--password <password>] " << master_flags << " [--out <path>]\n";
     std::cout << "  fwxaes-live-enc <file|-> [--password <password>] " << master_flags << " [--out <path|->]\n";
     std::cout << "  fwxaes-live-dec <file|-> [--password <password>] " << master_flags << " [--out <path|->]\n";
@@ -435,7 +435,6 @@ void PrintUsage() {
     std::cout << "  bench-pb512file <file> <password> " << master_flags << "\n";
     std::cout << "\n";
     std::cout << "Passworded commands prompt on a TTY when --password is omitted.\n";
-    std::cout << "--no-fallback is a deprecated compatibility no-op; the unsafe PBKDF2 fallback was removed in 3.7.0.\n";
 }
 
 void PrintBashCompletion(const std::string& argv0) {
@@ -469,19 +468,19 @@ void PrintBashCompletion(const std::string& argv0) {
         << "      COMPREPLY=( $(compgen -W \"bash\" -- \"$cur\") )\n"
         << "      ;;\n"
         << "    b512-enc|b512-dec|pb512-enc|pb512-dec)\n"
-        << "      COMPREPLY=( $(compgen -W \"-p --password --kdf --pbkdf2-iters --no-fallback $master_opts\" -- \"$cur\") )\n"
+        << "      COMPREPLY=( $(compgen -W \"-p --password --kdf --pbkdf2-iters $master_opts\" -- \"$cur\") )\n"
         << "      ;;\n"
         << "    b512file-enc)\n"
-        << "      COMPREPLY=( $(compgen -W \"-p --password --strip-meta --compress --keep-input --kdf --pbkdf2-iters --no-fallback $master_opts\" -- \"$cur\") )\n"
+        << "      COMPREPLY=( $(compgen -W \"-p --password --strip-meta --compress --keep-input --kdf --pbkdf2-iters $master_opts\" -- \"$cur\") )\n"
         << "      ;;\n"
         << "    b512file-dec|b512file-bytes-rt|pb512file-dec)\n"
-        << "      COMPREPLY=( $(compgen -W \"-p --password --strip-meta --kdf --pbkdf2-iters --no-fallback $master_opts\" -- \"$cur\") )\n"
+        << "      COMPREPLY=( $(compgen -W \"-p --password --strip-meta --kdf --pbkdf2-iters $master_opts\" -- \"$cur\") )\n"
         << "      ;;\n"
         << "    pb512file-enc)\n"
-        << "      COMPREPLY=( $(compgen -W \"-p --password --no-obf --compress --keep-input --kdf --pbkdf2-iters --no-fallback $master_opts\" -- \"$cur\") )\n"
+        << "      COMPREPLY=( $(compgen -W \"-p --password --no-obf --compress --keep-input --kdf --pbkdf2-iters $master_opts\" -- \"$cur\") )\n"
         << "      ;;\n"
         << "    pb512file-bytes-rt)\n"
-        << "      COMPREPLY=( $(compgen -W \"-p --password --kdf --pbkdf2-iters --no-fallback $master_opts\" -- \"$cur\") )\n"
+        << "      COMPREPLY=( $(compgen -W \"-p --password --kdf --pbkdf2-iters $master_opts\" -- \"$cur\") )\n"
         << "      ;;\n"
         << "    fwxaes-enc|fwxaes-dec|fwxaes-heavy-enc|fwxaes-heavy-dec|fwxaes-stream-enc|fwxaes-stream-dec|fwxaes-live-enc|fwxaes-live-dec)\n"
         << "      COMPREPLY=( $(compgen -W \"-p --password --out -o --heavy --light --normalize --threshold --cover-phrase --compress --keep-input ";
@@ -489,7 +488,7 @@ void PrintBashCompletion(const std::string& argv0) {
     basefwx::retired::cli::AppendFwxAesCompletionOptions(std::cout);
 #endif
     std::cout
-        << "--kdf --pbkdf2-iters --argon2-time --argon2-mem --argon2-par --no-fallback --legacy-pbkdf2 --no-wrap-kdf $master_opts\" -- \"$cur\") )\n"
+        << "--kdf --pbkdf2-iters --argon2-time --argon2-mem --argon2-par --legacy-pbkdf2 --no-wrap-kdf $master_opts\" -- \"$cur\") )\n"
         << "      ;;\n"
         << "    an7)\n"
         << "      COMPREPLY=( $(compgen -W \"-p --password --out -o --keep-input --force-any\" -- \"$cur\") )\n"

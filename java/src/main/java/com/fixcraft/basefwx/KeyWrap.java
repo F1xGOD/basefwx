@@ -100,6 +100,14 @@ public final class KeyWrap {
                     "PQ strict mode requires an ML-KEM master public key "
                     + "when master wrap is requested");
         }
+        if (useMaster && !useMasterEffective) {
+            // Degrading to password-only would write a file that looks
+            // escrowed on this host and is unrecoverable once the password is
+            // lost. The caller asked for a master key; refusing is the only
+            // honest answer. Matches keywrap.cpp.
+            throw new IllegalStateException(
+                    "master key requested but no master public key is configured");
+        }
         if (!hasPassword && !useMasterEffective) {
             throw new IllegalArgumentException("Password required when master key is unavailable");
         }

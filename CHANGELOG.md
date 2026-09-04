@@ -368,6 +368,15 @@
   with exact-`1` contracts retain their existing semantics.
 
 ### Fixed
+- **Retired jMG media no longer requires a master key that was never asked
+  for.** Refusing to degrade a requested master wrap to password-only is
+  correct, but the retired jMG writers passed `use_master=True` as an internal
+  default rather than because a user asked for escrow, so every jMG encrypt
+  failed on a host with no master public key configured. They now resolve the
+  selection once and pass the effective decision on, the way the live b512 and
+  fwxAES writers do. Escrow still happens whenever a master key is configured,
+  the key header still records whether a master blob is present, and a request
+  with neither a password nor a master key is still refused.
 - **Passwords are wiped on every error path.** `fwxaes::EncryptRaw`,
   `DecryptRaw`, and `DecryptStream` now register the resolved password with
   a `SecretGuard` before the first call that can throw, so a wrong password

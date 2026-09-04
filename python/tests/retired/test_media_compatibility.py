@@ -300,12 +300,18 @@ class RetiredMediaCompatibilityTests(unittest.TestCase):
         self.assertEqual(profile_id, basefwx.JMG_SECURITY_PROFILE_MAX)
 
     def test_jmg_key_header_v1_legacy_compat(self):
+        # Build the blobs the way _jmg_prepare_keys does: resolve the master
+        # key once and pass the effective decision on. Asking the primitive
+        # for a master key that is not configured is a hard error, so an
+        # unconditional True made this test depend on the host having one.
+        master_selection = basefwx._select_master_key(True)
         mask_key, user_blob, master_blob, _ = basefwx._prepare_mask_key(
             TEST_PASSWORD,
-            True,
+            master_selection.used_master,
             mask_info=basefwx.JMG_MASK_INFO,
             require_password=False,
             aad=basefwx.JMG_MASK_AAD,
+            master_selection=master_selection,
         )
         _ = mask_key
         payload = basefwx._pack_length_prefixed(user_blob, master_blob)

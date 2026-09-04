@@ -110,7 +110,18 @@ def _jmg_parse_key_header(blob: bytes, password: 'basefwx.typing.Union[str, byte
 
 def _jmg_prepare_keys(password: 'basefwx.typing.Union[str, bytes, bytearray, memoryview]', use_master: bool=True, *, security_profile: 'basefwx.typing.Union[str, int, None]'=None) -> 'tuple[bytes, bytes, bytes, bytes]':
     profile_id = basefwx._jmg_security_profile_id(security_profile)
-    mask_key, user_blob, master_blob, _ = basefwx._prepare_mask_key(password, use_master, mask_info=basefwx.JMG_MASK_INFO, require_password=False, aad=basefwx.JMG_MASK_AAD)
+    # Resolve the master key once and pass the effective decision on, the way
+    # the live b512 and fwxAES writers do. _prepare_mask_key refuses when a
+    # caller asks for a master key that is not configured, because degrading
+    # silently would write a file that looks escrowed and is unrecoverable
+    # once the password is lost. jMG escrow is opportunistic rather than
+    # required: every caller here passes use_master=True as a default, not
+    # because a user asked for escrow, and the key header records whether a
+    # master blob is present, so a password-only jMG file is self-describing
+    # and still readable. Deciding here keeps that refusal meaningful for the
+    # callers that really did ask.
+    master_selection = basefwx._select_master_key(use_master)
+    mask_key, user_blob, master_blob, _ = basefwx._prepare_mask_key(password, master_selection.used_master, mask_info=basefwx.JMG_MASK_INFO, require_password=False, aad=basefwx.JMG_MASK_AAD, master_selection=master_selection)
     header = basefwx._jmg_build_key_header(user_blob, master_blob, security_profile=profile_id)
     material = basefwx._hkdf_sha256(mask_key, info=basefwx._jmg_stream_info_for_profile(profile_id), length=64)
     base_key = material[:32]

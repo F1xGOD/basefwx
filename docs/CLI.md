@@ -89,6 +89,12 @@ Notes:
   password from a file, use an explicit `file://<path>` URI (`~/` expands).
   Use `password://<literal>` to force a literal string that happens to
   contain `://`. Bare strings are never interpreted as file paths.
+- Resolution is idempotent: the resolved secret is never itself a
+  `password://` or `file://` reference. A `password://` value naming another
+  reference, or a password file whose contents begin with one, is refused
+  rather than resolved a second time. Some entry points resolve at the public
+  boundary and again further in, so without this rule the same input could
+  derive two different keys depending on which path was taken.
 - PQ private key lookup uses `BASEFWX_MASTER_PQ_SK` when set, otherwise `~/master_pq.sk`.
 - Set `BASEFWX_PQ_STRICT` (or `BASEFWX_PQ_ONLY`) to `1`, `true`, `yes`,
   or `on` (case-insensitive) to disable EC fallback and require ML-KEM
@@ -322,11 +328,7 @@ Notes:
   `BASEFWX_BENCH_MEMORY_LIMIT_BYTES` overrides the detected C++ budget. Java
   `bench-live` currently uses the configured worker count without that cap.
 - Every bench command except `bench-hash` also accepts the master-key flags,
-  and `bench-text` additionally accepts `--kdf`, `--pbkdf2-iters`, and
-  `--no-fallback`.
-- `--no-fallback` is retained as a deprecated compatibility spelling but has
-  no effect. The unauthenticated second-chance PBKDF2 path was removed in
-  3.7.0, and current authentication failure is terminal.
+  and `bench-text` additionally accepts `--kdf` and `--pbkdf2-iters`.
 - The Java CLI carries the same nine bench commands. The Python CLI has none.
 
 ## C++ API

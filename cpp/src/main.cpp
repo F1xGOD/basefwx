@@ -1069,9 +1069,6 @@ int main(int argc, char** argv) {
                         }
                         opts.kdf.pbkdf2_iterations = static_cast<std::size_t>(std::stoul(argv[idx + 1]));
                         idx += 2;
-                    } else if (flag == "--no-fallback") {
-                        opts.kdf.allow_pbkdf2_fallback = false;
-                        idx += 1;
                     } else {
                         throw std::runtime_error("Unknown flag: " + flag);
                     }

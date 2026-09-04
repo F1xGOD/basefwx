@@ -119,9 +119,6 @@ ParsedOptions ParseCodecArgs(int argc, char** argv, int start_index) {
             }
             opts.kdf.pbkdf2_iterations = static_cast<std::size_t>(std::stoul(argv[idx + 1]));
             idx += 2;
-        } else if (flag == "--no-fallback") {
-            opts.kdf.allow_pbkdf2_fallback = false;
-            idx += 1;
         } else {
             throw std::runtime_error("Unknown flag: " + flag);
         }
@@ -171,9 +168,6 @@ FileArgs ParseFileArgs(int argc, char** argv, int start_index) {
             }
             opts.kdf.pbkdf2_iterations = static_cast<std::size_t>(std::stoul(argv[idx + 1]));
             idx += 2;
-        } else if (flag == "--no-fallback") {
-            opts.kdf.allow_pbkdf2_fallback = false;
-            idx += 1;
         } else {
             throw std::runtime_error("Unknown flag: " + flag);
         }
@@ -235,9 +229,6 @@ FwxAesArgs ParseFwxAesArgs(int argc, char** argv, int start_index) {
             }
             opts.kdf.argon2_parallelism = static_cast<std::uint32_t>(std::stoul(argv[idx + 1]));
             idx += 2;
-        } else if (flag == "--no-fallback") {
-            opts.kdf.allow_pbkdf2_fallback = false;
-            idx += 1;
         } else if (flag == "--legacy-pbkdf2" || flag == "--no-wrap-kdf") {
             opts.force_legacy_pbkdf2 = true;
             idx += 1;

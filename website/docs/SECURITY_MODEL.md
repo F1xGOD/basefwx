@@ -68,6 +68,14 @@ fails. It does not silently write or read the payload as PBKDF2. Low-memory
 writers can select PBKDF2 before creating metadata with
 `BASEFWX_USER_KDF=pbkdf2`.
 
+`BASEFWX_FWXAES_PBKDF2_ITERS=<n>` overrides the direct-PBKDF2 `fwxAES` and
+`LIVE` iteration count for the writer. The count is serialized in each header,
+so a reader does not need the same setting. Both the writer and the reader
+enforce a floor of 10,000 iterations, so this variable can raise the cost but
+cannot drive it below the floor. An embedding application that must not let
+its environment influence key derivation should pass the KDF options
+explicitly at the call site rather than relying on the defaults.
+
 ## Payload authentication
 
 Current `b512` and `pb512` text writers use authenticated payload version 3:
@@ -93,6 +101,17 @@ failed or interrupted operation does not partly replace the requested output.
 Unauthenticated wrap and key headers are capped at 64 KiB, and stream work
 buffers are capped before allocation.
 
+How that staging happens depends on what the caller supplied. A
+destination-aware entry point such as `DecryptStreamFile` stages into a
+private sibling of the destination and publishes by rename, so plaintext is
+written straight through. A caller that hands in its own output stream gets no
+staging directory to use, so the plaintext is held in wiped memory and written
+only after the tag verifies. That hold is bounded by
+`kFwxAesMaxUnstagedPlaintext` (256 MiB) and a larger stream is refused with a
+pointer to the destination-aware call. Unverified plaintext is never spooled
+to a temporary file, so it is never left unwiped on disk and cannot consume
+`TMPDIR`.
+
 ## Optional master recovery
 
 Master recovery is opt-in. It wraps the random content key with a provisioned
@@ -109,6 +128,19 @@ recover the content key. `BASEFWX_PQ_STRICT` or `BASEFWX_PQ_ONLY` refuses EC
 master fallback and makes a requested master-wrap encryption fail when no
 ML-KEM public key is available. It does not disable an independent valid
 password wrap while reading an existing container.
+
+A requested master wrap never degrades to password-only. If a caller asks for
+a master key and no master public key is configured, C++, Java, and Python all
+refuse the encryption with "master key requested but no master public key is
+configured". Degrading silently would write a file that looks escrowed on the
+host that wrote it and is unrecoverable once the password is lost.
+
+The wrap header records the KDF label but not its cost, so every decoder
+reconstructs the cost from the defaults. Wrap-mode encryption therefore
+refuses a non-default PBKDF2 iteration count or Argon2 cost instead of writing
+a blob no host could open. Use the PBKDF2 payload mode when a custom cost is
+required. Serializing the cost in the wrap header is a format change that has
+to land in C++, Java, and Python together.
 
 ## Nonces and explicit-IV helpers
 

@@ -28,6 +28,14 @@ jobs:
       - name: Validate version metadata
         run: python3 scripts/check_version_sync.py
 
+      # The website pages under website/docs/ are generated from the canonical
+      # Markdown. Without this gate a documentation change lands with a stale
+      # published mirror and nothing fails.
+      - name: Validate documentation mirror
+        run: |
+          python3 scripts/sync_website_docs.py --check
+          python3 scripts/check_website_catalog.py
+
       - name: Prepare liboqs cache prefix
         run: |
           set -euo pipefail

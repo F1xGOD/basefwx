@@ -151,7 +151,8 @@ data instead of being mislabeled as a corrupted BaseFWX container.
 
 ## Dependencies
 
-- OpenSSL (crypto) for HKDF, PBKDF2, AES-GCM.
+- OpenSSL 3.0 or newer (crypto) for HKDF, PBKDF2, AES-GCM; older OpenSSL,
+  LibreSSL, and BoringSSL are rejected at compile time.
 - libargon2 for Argon2id KDF parity with Python defaults.
 - liboqs with ML-KEM-768 and ML-KEM-1024 enabled for master-key wrapping.
 - zlib for baked key decoding.

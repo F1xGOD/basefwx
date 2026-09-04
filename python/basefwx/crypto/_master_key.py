@@ -306,6 +306,14 @@ def _prepare_mask_key(password: 'basefwx.typing.Union[str, bytes, bytearray, mem
     pubkey = selection.pq_public
     ec_pub = selection.ec_public
     use_master_effective = use_master and selection.used_master
+    if use_master and not use_master_effective:
+        # Degrading to password-only would write a file that looks escrowed on
+        # this host and is unrecoverable once the password is lost. The caller
+        # asked for a master key; refusing is the only honest answer. Matches
+        # keywrap.cpp and KeyWrap.java.
+        raise ValueError(
+            'master key requested but no master public key is configured'
+        )
     if not password and (not use_master_effective):
         raise ValueError('Password required when PQ master key wrapping is disabled')
     if use_master_effective:

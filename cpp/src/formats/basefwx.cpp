@@ -264,6 +264,13 @@ std::vector<std::uint8_t> ReadFile(const std::string& path) {
 }
 
 
+// True when `value` claims to be a password reference rather than a password.
+// A resolved secret that still looks like one is refused, because that is the
+// single condition under which resolving twice would yield two different keys.
+bool LooksLikePasswordReference(const std::string& value) {
+    return value.rfind("password://", 0) == 0 || value.rfind("file://", 0) == 0;
+}
+
 std::string ResolvePassword(const std::string& input) {
     if (input.empty()) {
         return input;
@@ -280,7 +287,17 @@ std::string ResolvePassword(const std::string& input) {
     constexpr std::string_view kFileScheme = "file://";
     constexpr std::string_view kPasswordScheme = "password://";
     if (input.rfind(kPasswordScheme, 0) == 0) {
-        return input.substr(kPasswordScheme.size());
+        std::string literal = input.substr(kPasswordScheme.size());
+        if (LooksLikePasswordReference(literal)) {
+            basefwx::crypto::SecureClear(literal);
+            throw std::runtime_error(
+                "password:// value itself starts with a password:// or "
+                "file:// scheme. Resolving it again would derive a different "
+                "key than resolving it once, so it is refused as ambiguous. "
+                "ResolvePassword is idempotent by contract: its result is "
+                "never a reference.");
+        }
+        return literal;
     }
     if (input.rfind(kFileScheme, 0) == 0) {
         std::string path = input.substr(kFileScheme.size());
@@ -302,7 +319,18 @@ std::string ResolvePassword(const std::string& input) {
         // /dev/random etc. cases; the password itself is then hashed by
         // Argon2id/PBKDF2 before any cryptographic use.
         auto data = ReadFile(path);
-        return std::string(reinterpret_cast<const char*>(data.data()), data.size());
+        std::string secret(reinterpret_cast<const char*>(data.data()),
+                           data.size());
+        if (LooksLikePasswordReference(secret)) {
+            basefwx::crypto::SecureClear(secret);
+            throw std::runtime_error(
+                "Password file " + path +
+                " starts with a password:// or file:// scheme. Resolving it "
+                "again would derive a different key than resolving it once, "
+                "so the contents are refused as ambiguous rather than "
+                "guessed. Store the literal secret bytes in the file.");
+        }
+        return secret;
     }
     return input;
 }
@@ -523,49 +551,21 @@ std::string Hash512(const std::string& input) {
 std::string B512Encode(const std::string& input, const std::string& password, bool use_master, const KdfOptions& kdf) {
     std::string resolved = ResolvePassword(password);
     RequireStrongPasswordForEncryption(resolved, "b512 encode");
-    basefwx::pb512::KdfOptions opts;
-    opts.label = kdf.label;
-    opts.pbkdf2_iterations = kdf.pbkdf2_iterations;
-    opts.argon2_time_cost = kdf.argon2_time_cost;
-    opts.argon2_memory_cost = kdf.argon2_memory_cost;
-    opts.argon2_parallelism = kdf.argon2_parallelism;
-    opts.allow_pbkdf2_fallback = kdf.allow_pbkdf2_fallback;
-    return basefwx::pb512::B512Encode(input, resolved, use_master, opts);
+    return basefwx::pb512::B512Encode(input, resolved, use_master, kdf);
 }
 
 std::string B512Decode(const std::string& input, const std::string& password, bool use_master, const KdfOptions& kdf) {
-    basefwx::pb512::KdfOptions opts;
-    opts.label = kdf.label;
-    opts.pbkdf2_iterations = kdf.pbkdf2_iterations;
-    opts.argon2_time_cost = kdf.argon2_time_cost;
-    opts.argon2_memory_cost = kdf.argon2_memory_cost;
-    opts.argon2_parallelism = kdf.argon2_parallelism;
-    opts.allow_pbkdf2_fallback = kdf.allow_pbkdf2_fallback;
-    return basefwx::pb512::B512Decode(input, ResolvePassword(password), use_master, opts);
+    return basefwx::pb512::B512Decode(input, ResolvePassword(password), use_master, kdf);
 }
 
 std::string Pb512Encode(const std::string& input, const std::string& password, bool use_master, const KdfOptions& kdf) {
     std::string resolved = ResolvePassword(password);
     RequireStrongPasswordForEncryption(resolved, "pb512 encode");
-    basefwx::pb512::KdfOptions opts;
-    opts.label = kdf.label;
-    opts.pbkdf2_iterations = kdf.pbkdf2_iterations;
-    opts.argon2_time_cost = kdf.argon2_time_cost;
-    opts.argon2_memory_cost = kdf.argon2_memory_cost;
-    opts.argon2_parallelism = kdf.argon2_parallelism;
-    opts.allow_pbkdf2_fallback = kdf.allow_pbkdf2_fallback;
-    return basefwx::pb512::Pb512Encode(input, resolved, use_master, opts);
+    return basefwx::pb512::Pb512Encode(input, resolved, use_master, kdf);
 }
 
 std::string Pb512Decode(const std::string& input, const std::string& password, bool use_master, const KdfOptions& kdf) {
-    basefwx::pb512::KdfOptions opts;
-    opts.label = kdf.label;
-    opts.pbkdf2_iterations = kdf.pbkdf2_iterations;
-    opts.argon2_time_cost = kdf.argon2_time_cost;
-    opts.argon2_memory_cost = kdf.argon2_memory_cost;
-    opts.argon2_parallelism = kdf.argon2_parallelism;
-    opts.allow_pbkdf2_fallback = kdf.allow_pbkdf2_fallback;
-    return basefwx::pb512::Pb512Decode(input, ResolvePassword(password), use_master, opts);
+    return basefwx::pb512::Pb512Decode(input, ResolvePassword(password), use_master, kdf);
 }
 
 std::string FwxAesFile(const std::string& path,

@@ -10,7 +10,6 @@
 
 #include <openssl/evp.h>
 #include <openssl/crypto.h>
-#include <openssl/hmac.h>
 #include <openssl/kdf.h>
 #include <openssl/rand.h>
 #include <openssl/core_names.h>
@@ -312,9 +311,11 @@ Bytes HkdfSha256(const Bytes& key_material, std::string_view info, std::size_t l
     return HkdfSha256(key_material, {}, info, length);
 }
 
-#if OPENSSL_VERSION_NUMBER >= 0x30000000L
-
-// OpenSSL 3.x: use EVP_MAC for HMAC operations
+// HMAC runs through EVP_MAC. There is deliberately no pre-3.0 HMAC_* path:
+// this file includes <openssl/core_names.h> and <openssl/params.h>
+// unconditionally and both arrived with the OpenSSL 3.0 provider API, so a
+// build against 1.1.1, LibreSSL or BoringSSL cannot translate this
+// translation unit at all. crypto_utils.hpp states that requirement.
 
 Bytes CompatPrfStreamSha256(const Bytes& key_material,
                             std::string_view info,
@@ -411,74 +412,6 @@ Bytes HmacSha256(const Bytes& key, const Bytes& data) {
     
     return Bytes(out.data(), out.data() + out_len);
 }
-
-#else // legacy OpenSSL: use HMAC_* APIs
-
-Bytes CompatPrfStreamSha256(const Bytes& key_material,
-                            std::string_view info,
-                            std::size_t length) {
-    if (length == 0) {
-        return {};
-    }
-    EnsureCompatPrfStreamLength(length);
-    static const Bytes zero_salt(32, 0);
-    SecureBytes prk{HmacSha256(zero_salt, key_material)};
-    Bytes out(length);
-    SecureBytes prev;
-    std::size_t offset = 0;
-    std::uint32_t counter = 1;
-    unsigned char counter_bytes[4];
-    SecureBytes digest{Bytes(EVP_MAX_MD_SIZE)};
-    std::unique_ptr<HMAC_CTX, decltype(&HMAC_CTX_free)> ctx(HMAC_CTX_new(), &HMAC_CTX_free);
-    if (!ctx) {
-        throw std::runtime_error("compatibility PRF stream context allocation failed");
-    }
-    while (offset < length) {
-        Ensure(HMAC_Init_ex(ctx.get(), prk.data(), static_cast<int>(prk.size()), EVP_sha256(), nullptr) == 1,
-               "compatibility PRF stream init failed");
-        if (!prev.empty()) {
-            Ensure(HMAC_Update(ctx.get(), prev.data(), prev.size()) == 1,
-                   "compatibility PRF stream update failed");
-        }
-        if (!info.empty()) {
-            Ensure(HMAC_Update(ctx.get(), reinterpret_cast<const unsigned char*>(info.data()), info.size()) == 1,
-                   "compatibility PRF stream update failed");
-        }
-        counter_bytes[0] = static_cast<unsigned char>((counter >> 24) & 0xFF);
-        counter_bytes[1] = static_cast<unsigned char>((counter >> 16) & 0xFF);
-        counter_bytes[2] = static_cast<unsigned char>((counter >> 8) & 0xFF);
-        counter_bytes[3] = static_cast<unsigned char>(counter & 0xFF);
-        Ensure(HMAC_Update(ctx.get(), counter_bytes, sizeof(counter_bytes)) == 1,
-               "compatibility PRF stream update failed");
-        unsigned int digest_len = 0;
-        Ensure(HMAC_Final(ctx.get(), digest.data(), &digest_len) == 1,
-               "compatibility PRF stream final failed");
-        prev.bytes().assign(
-            digest.data(), digest.data() + digest_len);
-        std::size_t take = std::min<std::size_t>(digest_len, length - offset);
-        std::memcpy(out.data() + offset, prev.data(), take);
-        offset += take;
-        if (offset < length) {
-            ++counter;
-        }
-    }
-    return out;
-}
-
-Bytes HmacSha256(const Bytes& key, const Bytes& data) {
-    EnsureEvpIntLength(key.size(), "HMAC key is too large");
-    EnsureEvpIntLength(data.size(), "HMAC input is too large");
-    unsigned int out_len = EVP_MAX_MD_SIZE;
-    Bytes out(out_len);
-    if (!HMAC(EVP_sha256(), key.data(), static_cast<int>(key.size()), data.data(),
-              static_cast<int>(data.size()), out.data(), &out_len)) {
-        throw std::runtime_error("HMAC-SHA256 failed");
-    }
-    out.resize(out_len);
-    return out;
-}
-
-#endif // OPENSSL_VERSION_NUMBER
 
 Bytes HkdfSha256Stream(const Bytes& key_material,
                        std::string_view info,
@@ -712,6 +645,252 @@ std::size_t AesGcmDecryptWithIvInto(const Bytes& key,
         std::memcpy(out, staged.data(), written);
     }
     return written;
+}
+
+// ---------------------------------------------------------------------------
+// AeadContext: AES-256-GCM with the key schedule kept across records.
+// ---------------------------------------------------------------------------
+
+static_assert(AeadContext::kTagLength == constants::kAeadTagLen,
+              "AeadContext tag length must match the wire constant");
+static_assert(AeadContext::kDefaultNonceLength == constants::kAeadNonceLen,
+              "AeadContext default nonce length must match the wire constant");
+
+namespace {
+
+detail::UniqueCipherCtx NewAes256GcmContext(bool for_encryption,
+                                            const Bytes& key,
+                                            std::size_t nonce_length) {
+    detail::UniqueCipherCtx ctx(EVP_CIPHER_CTX_new());
+    if (!ctx) {
+        throw std::runtime_error("AES-GCM context allocation failed");
+    }
+    if (for_encryption) {
+        Ensure(EVP_EncryptInit_ex(ctx.get(), EVP_aes_256_gcm(), nullptr,
+                                  nullptr, nullptr) == 1,
+               "AES-GCM init failed");
+    } else {
+        Ensure(EVP_DecryptInit_ex(ctx.get(), EVP_aes_256_gcm(), nullptr,
+                                  nullptr, nullptr) == 1,
+               "AES-GCM init failed");
+    }
+    Ensure(EVP_CIPHER_CTX_ctrl(ctx.get(), EVP_CTRL_GCM_SET_IVLEN,
+                               static_cast<int>(nonce_length), nullptr) == 1,
+           "AES-GCM set iv length failed");
+    // Key without IV: this is the call that runs the AES key schedule, and
+    // the only one AeadContext repeats when the caller rekeys.
+    if (for_encryption) {
+        Ensure(EVP_EncryptInit_ex(ctx.get(), nullptr, nullptr, key.data(),
+                                  nullptr) == 1,
+               "AES-GCM set key failed");
+    } else {
+        Ensure(EVP_DecryptInit_ex(ctx.get(), nullptr, nullptr, key.data(),
+                                  nullptr) == 1,
+               "AES-GCM set key failed");
+    }
+    return ctx;
+}
+
+void EnsureAeadContextKey(const Bytes& key) {
+    if (key.size() != AeadContext::kKeyLength) {
+        throw std::runtime_error("AES-GCM expects 32-byte key");
+    }
+}
+
+std::size_t ValidatedAeadContextNonceLength(std::size_t nonce_length) {
+    // OpenSSL accepts any positive GCM IV length, but anything other than 12
+    // bytes goes through GHASH-based derivation, and a very short nonce is a
+    // uniqueness hazard rather than a configuration choice.
+    if (nonce_length < 8 || nonce_length > 64) {
+        throw std::runtime_error("AES-GCM nonce length must be 8..64 bytes");
+    }
+    return nonce_length;
+}
+
+}  // namespace
+
+struct AeadContext::State {
+    detail::UniqueCipherCtx encrypt;
+    detail::UniqueCipherCtx decrypt;
+    std::size_t nonce_length = AeadContext::kDefaultNonceLength;
+    // Reused private landing zone for Open, so the tag-before-release
+    // property does not cost an allocation and a zero-fill per record.
+    SecureBytes staging;
+    // Last nonce handed to Seal, for the immediate-repeat misuse guard.
+    Bytes last_seal_nonce;
+};
+
+AeadContext::AeadContext(const Bytes& key, std::size_t nonce_length)
+    : state_(std::make_unique<State>()) {
+    EnsureAeadContextKey(key);
+    state_->nonce_length = ValidatedAeadContextNonceLength(nonce_length);
+    state_->encrypt = NewAes256GcmContext(true, key, state_->nonce_length);
+    state_->decrypt = NewAes256GcmContext(false, key, state_->nonce_length);
+}
+
+AeadContext::~AeadContext() = default;
+AeadContext::AeadContext(AeadContext&&) noexcept = default;
+AeadContext& AeadContext::operator=(AeadContext&&) noexcept = default;
+
+std::size_t AeadContext::nonce_length() const noexcept {
+    return state_->nonce_length;
+}
+
+void AeadContext::Rekey(const Bytes& key) {
+    EnsureAeadContextKey(key);
+    Ensure(EVP_EncryptInit_ex(state_->encrypt.get(), nullptr, nullptr,
+                              key.data(), nullptr) == 1,
+           "AES-GCM set key failed");
+    Ensure(EVP_DecryptInit_ex(state_->decrypt.get(), nullptr, nullptr,
+                              key.data(), nullptr) == 1,
+           "AES-GCM set key failed");
+    // A nonce repeated under a different key is not a reuse.
+    SecureClear(state_->last_seal_nonce);
+    state_->last_seal_nonce.clear();
+}
+
+std::size_t AeadContext::Seal(const Bytes& nonce,
+                              const std::uint8_t* plaintext,
+                              std::size_t plaintext_len,
+                              const Bytes& aad,
+                              std::uint8_t* out,
+                              std::size_t out_len) {
+    if (nonce.size() != state_->nonce_length) {
+        throw std::runtime_error("AES-GCM nonce length does not match context");
+    }
+    if (!state_->last_seal_nonce.empty() &&
+        state_->last_seal_nonce == nonce) {
+        throw std::runtime_error(
+            "AES-GCM nonce reused for consecutive seals under one key");
+    }
+    EnsureEvpIntLength(aad.size(), "AES-GCM AAD is too large");
+    EnsureEvpIntLength(plaintext_len, "AES-GCM plaintext is too large");
+    EnsureReadable(plaintext, plaintext_len, "AES-GCM plaintext buffer is null");
+    if (plaintext_len >
+        std::numeric_limits<std::size_t>::max() - constants::kAeadTagLen) {
+        throw std::length_error("AES-GCM output length overflow");
+    }
+    const std::size_t required_out = plaintext_len + constants::kAeadTagLen;
+    if (out_len < required_out) {
+        throw std::runtime_error("AES-GCM output buffer too small");
+    }
+    EnsureWritable(out, required_out, "AES-GCM output buffer is null");
+
+    EVP_CIPHER_CTX* ctx = state_->encrypt.get();
+    // Nonce only: the key schedule from construction or Rekey stays.
+    Ensure(EVP_EncryptInit_ex(ctx, nullptr, nullptr, nullptr, nonce.data()) == 1,
+           "AES-GCM set nonce failed");
+
+    int produced = 0;
+    std::size_t total_len = 0;
+    const auto advance = [&total_len, required_out](
+                             int written, const char* message) {
+        if (written < 0 || total_len > required_out ||
+            static_cast<std::size_t>(written) > required_out - total_len) {
+            throw std::runtime_error(message);
+        }
+        total_len += static_cast<std::size_t>(written);
+    };
+
+    if (!aad.empty()) {
+        Ensure(EVP_EncryptUpdate(ctx, nullptr, &produced, aad.data(),
+                                 static_cast<int>(aad.size())) == 1,
+               "AES-GCM aad failed");
+    }
+    if (plaintext_len > 0) {
+        Ensure(EVP_EncryptUpdate(ctx, out, &produced, plaintext,
+                                 static_cast<int>(plaintext_len)) == 1,
+               "AES-GCM encrypt failed");
+        advance(produced, "AES-GCM encrypt overran its buffer");
+    }
+    Ensure(EVP_EncryptFinal_ex(ctx, out + total_len, &produced) == 1,
+           "AES-GCM final failed");
+    advance(produced, "AES-GCM final overran its buffer");
+    Ensure(total_len <= required_out - constants::kAeadTagLen,
+           "AES-GCM has no room for the tag");
+    Ensure(EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_GET_TAG,
+                               static_cast<int>(constants::kAeadTagLen),
+                               out + total_len) == 1,
+           "AES-GCM get tag failed");
+    total_len += constants::kAeadTagLen;
+    Ensure(total_len == required_out, "AES-GCM ciphertext length mismatch");
+
+    state_->last_seal_nonce = nonce;
+    return total_len;
+}
+
+std::size_t AeadContext::Open(const Bytes& nonce,
+                              const std::uint8_t* blob,
+                              std::size_t blob_len,
+                              const Bytes& aad,
+                              std::uint8_t* out,
+                              std::size_t out_len) {
+    if (nonce.size() != state_->nonce_length) {
+        throw std::runtime_error("AES-GCM nonce length does not match context");
+    }
+    if (blob_len < constants::kAeadTagLen) {
+        throw std::runtime_error("AES-GCM blob too short");
+    }
+    const std::size_t ct_len = blob_len - constants::kAeadTagLen;
+    EnsureEvpIntLength(aad.size(), "AES-GCM AAD is too large");
+    EnsureEvpIntLength(ct_len, "AES-GCM ciphertext is too large");
+    EnsureReadable(blob, blob_len, "AES-GCM ciphertext buffer is null");
+    if (out_len < ct_len) {
+        throw std::runtime_error("AES-GCM output buffer too small");
+    }
+    EnsureWritable(out, ct_len, "AES-GCM output buffer is null");
+
+    // Grow-only private staging. EVP_DecryptFinal_ex may emit its last block
+    // past ct_len bytes on some cipher paths, so keep tag-length slack the
+    // way AesGcmDecryptWithIvOwned does.
+    if (state_->staging.size() < blob_len) {
+        state_->staging.Reset(Bytes(blob_len));
+    }
+
+    EVP_CIPHER_CTX* ctx = state_->decrypt.get();
+    Ensure(EVP_DecryptInit_ex(ctx, nullptr, nullptr, nullptr, nonce.data()) == 1,
+           "AES-GCM set nonce failed");
+
+    std::uint8_t* staged = state_->staging.data();
+    const std::size_t staged_capacity = state_->staging.size();
+    int produced = 0;
+    std::size_t total_len = 0;
+    const auto advance = [&total_len, staged_capacity](
+                             int written, const char* message) {
+        if (written < 0 || total_len > staged_capacity ||
+            static_cast<std::size_t>(written) > staged_capacity - total_len) {
+            throw std::runtime_error(message);
+        }
+        total_len += static_cast<std::size_t>(written);
+    };
+
+    if (!aad.empty()) {
+        Ensure(EVP_DecryptUpdate(ctx, nullptr, &produced, aad.data(),
+                                 static_cast<int>(aad.size())) == 1,
+               "AES-GCM aad failed");
+    }
+    if (ct_len > 0) {
+        Ensure(EVP_DecryptUpdate(ctx, staged, &produced, blob,
+                                 static_cast<int>(ct_len)) == 1,
+               "AES-GCM decrypt failed");
+        advance(produced, "AES-GCM decrypt overran its buffer");
+    }
+    Ensure(EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_TAG,
+                               static_cast<int>(constants::kAeadTagLen),
+                               const_cast<std::uint8_t*>(blob + ct_len)) == 1,
+           "AES-GCM set tag failed");
+    if (EVP_DecryptFinal_ex(ctx, staged + total_len, &produced) != 1) {
+        // Nothing was written to `out`, and the staged bytes stay private
+        // until they are overwritten by a later call or wiped at destruction.
+        SecureClear(staged, total_len);
+        throw AuthenticationError("AES-GCM auth failed");
+    }
+    advance(produced, "AES-GCM final overran its buffer");
+    Ensure(total_len == ct_len, "AES-GCM plaintext length mismatch");
+    if (total_len > 0) {
+        std::memcpy(out, staged, total_len);
+    }
+    return total_len;
 }
 
 Bytes ChaCha20Poly1305EncryptWithIv(const Bytes& key,

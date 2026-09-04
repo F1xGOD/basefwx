@@ -157,8 +157,12 @@ final class CliOptions {
                 parsed.output = new File(args[++i]);
                 continue;
             }
-            if ("--no-master".equalsIgnoreCase(arg) || "--use-master".equalsIgnoreCase(arg)) {
-                continue;
+            // an7 has no key-escrow path, so silently accepting --use-master
+            // would let a caller ask for a master key and get none. C++
+            // ParseAn7Args rejects every unknown flag; match it rather than
+            // swallowing these two.
+            if (arg.startsWith("--")) {
+                throw new IllegalArgumentException("Unknown flag: " + arg);
             }
             positional.add(arg);
         }

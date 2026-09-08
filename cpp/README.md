@@ -1,3 +1,4 @@
+<!-- Generated from docs/src/en_US/pages/cpp_readme.doc by scripts/yume_docs.py. Edit that file, not this one. -->
 # BaseFWX C++
 
 This C++ implementation is wire-compatible with BaseFWX 3.6.4 and provides the

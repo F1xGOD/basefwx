@@ -1,3 +1,4 @@
+<!-- Generated from docs/src/en_US/pages/agents_readme.doc by scripts/yume_docs.py. Edit that file, not this one. -->
 # Public automation context
 
 This page contains repository facts that are useful to coding tools and safe to
@@ -45,7 +46,7 @@ message:
 | any `BASEFWX_*` environment read | `SECURITY.md` and `docs/CLI.md` environment sections |
 | password policy, KDF defaults, master recovery | `SECURITY.md`, `COMPATIBILITY.md`, `docs/EXPLAINED.md` |
 | `VERSION` or packaging | `scripts/check_version_sync.py` must pass, `CHANGELOG.md` section heading |
-| any root or `docs/` Markdown | `python3 scripts/sync_website_docs.py`, then `--check` and `scripts/check_website_catalog.py` |
+| any root or `docs/` Markdown | if it opens with a generated banner, edit its `docs/src` source and run `python3 scripts/yume_docs.py sync`, then `python3 scripts/sync_website_docs.py`, then `--check` and `scripts/check_website_catalog.py` |
 
 Every behaviour change also gets a line under `[Unreleased]` in
 `CHANGELOG.md`. If a row above is missing for what you touched, add the row.
@@ -107,3 +108,28 @@ Public human docs describe current behavior, supported recovery, and durable
 contracts. Public automation docs live only under `docs/agents/`. Dated
 handoffs, speculative speedups, generated implementation summaries, and task
 queues belong in `.private/` or Git history.
+
+## Documentation sources
+
+Documentation is authored under `docs/src/en_US/`. Edit the `.doc` source
+named in a generated file's banner. Keep one document per aspect; share a
+`.part` only when several documents use it. Titles, descriptions, card labels,
+catalog groups and routes live in the same source as the text.
+
+```sh
+python3 scripts/yume_docs.py sync --all-languages
+python3 scripts/yume_docs.py check --all-languages
+python3 scripts/check_website_catalog.py
+```
+
+The sync covers Markdown, manuals, website pages and catalog, and enabled
+diagram SVGs. BaseFWX publishes ASCII until its own animated style is reviewed.
+Diagram placement is `@diagram <name>` in the document, with topology
+and source labels in `docs/diagrams/<name>.json`. `en_US` is the only active
+locale; missing-content reports are preparation for translations, not proof
+that a translation is current. See [the source guide](../src/README.md).
+
+BaseFWX's native CLI and library manuals also generate web references.
+Its runtime CLI help remains authored in the runtime. Website Markdown is
+tracked; CI checks it before generating ignored SVG includes. Keep BaseFWX
+and YUME shared documentation tooling byte-identical while developing both.

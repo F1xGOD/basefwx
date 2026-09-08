@@ -1,0 +1,49 @@
+{
+  "name": "file_containers",
+  "type": "route",
+  "title": "BaseFWX file containers",
+  "summary": "Key setup precedes authenticated payload encryption and container output. Exact layout depends on the codec.",
+  "targets": {
+    "web": false
+  },
+  "nodes": [
+    {
+      "id": "step0",
+      "kind": "process",
+      "title": "PLAINTEXT FILE",
+      "sub": "bytes from disk or stdin"
+    },
+    {
+      "id": "step1",
+      "kind": "process",
+      "title": "KDF AND KEY SETUP",
+      "sub": "Argon2id or PBKDF2"
+    },
+    {
+      "id": "step2",
+      "kind": "process",
+      "title": "AEAD ENCRYPTION",
+      "sub": "AES-256-GCM payload"
+    },
+    {
+      "id": "step3",
+      "kind": "process",
+      "title": "BASEFWX CONTAINER",
+      "sub": "FWX1 / heavy / encoded form"
+    }
+  ],
+  "edges": [
+    {
+      "from": "step0",
+      "to": "step1"
+    },
+    {
+      "from": "step1",
+      "to": "step2"
+    },
+    {
+      "from": "step2",
+      "to": "step3"
+    }
+  ]
+}

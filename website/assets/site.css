@@ -1542,7 +1542,10 @@ td a:not(.vt-btn):hover {
 .doc-article pre code {
   overflow-wrap: normal;
   padding: 0;
+  border: 0;
+  border-radius: 0;
   background: transparent;
+  font-size: inherit;
 }
 
 .doc-article table {

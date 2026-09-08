@@ -1,0 +1,52 @@
+{
+  "name": "basic_flow",
+  "type": "route",
+  "title": "BaseFWX basic flow",
+  "summary": "A caller supplies bytes and key context; the decoder verifies the resulting container before releasing plaintext.",
+  "targets": {
+    "web": false
+  },
+  "nodes": [
+    {
+      "id": "step0",
+      "kind": "process",
+      "title": "CALLER",
+      "sub": "CLI / library / YUME"
+    },
+    {
+      "id": "step1",
+      "kind": "process",
+      "title": "BASEFWX CORE",
+      "sub": "KDF, keys, AEAD, metadata"
+    },
+    {
+      "id": "step2",
+      "kind": "process",
+      "title": "OUTPUT FORMAT",
+      "sub": "file or packet"
+    },
+    {
+      "id": "step3",
+      "kind": "process",
+      "title": "DECODER",
+      "sub": "verifies before release"
+    }
+  ],
+  "edges": [
+    {
+      "from": "step0",
+      "to": "step1",
+      "label": "password, bytes, options"
+    },
+    {
+      "from": "step1",
+      "to": "step2",
+      "label": "encrypted container"
+    },
+    {
+      "from": "step2",
+      "to": "step3",
+      "label": "stored or transported"
+    }
+  ]
+}

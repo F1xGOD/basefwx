@@ -1,3 +1,4 @@
+<!-- Generated from docs/src/en_US/pages/contributing.doc by scripts/yume_docs.py. Edit that file, not this one. -->
 # Contributing to BaseFWX
 
 > Short version: open a PR; for non-trivial changes, expect to sign a
@@ -118,3 +119,28 @@ substance.
 - About the code: open an issue, tag it `question`.
 - About licensing: `admin@fixcraft.jp` or open an issue tagged
   `licensing`.
+
+## Documentation sources
+
+Documentation is authored under `docs/src/en_US/`. Edit the `.doc` source
+named in a generated file's banner. Keep one document per aspect; share a
+`.part` only when several documents use it. Titles, descriptions, card labels,
+catalog groups and routes live in the same source as the text.
+
+```sh
+python3 scripts/yume_docs.py sync --all-languages
+python3 scripts/yume_docs.py check --all-languages
+python3 scripts/check_website_catalog.py
+```
+
+The sync covers Markdown, manuals, website pages and catalog, and enabled
+diagram SVGs. BaseFWX publishes ASCII until its own animated style is reviewed.
+Diagram placement is `@diagram <name>` in the document, with topology
+and source labels in `docs/diagrams/<name>.json`. `en_US` is the only active
+locale; missing-content reports are preparation for translations, not proof
+that a translation is current. See [the source guide](docs/src/README.md).
+
+BaseFWX's native CLI and library manuals also generate web references.
+Its runtime CLI help remains authored in the runtime. Website Markdown is
+tracked; CI checks it before generating ignored SVG includes. Keep BaseFWX
+and YUME shared documentation tooling byte-identical while developing both.

@@ -1,3 +1,4 @@
+<!-- Generated from docs/src/en_US/pages/plugin_threat_model.doc by scripts/yume_docs.py. Edit that file, not this one. -->
 # BaseFWX plugin threat model
 
 This document is the **authoritative answer** to the question

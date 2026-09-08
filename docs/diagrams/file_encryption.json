@@ -1,0 +1,52 @@
+{
+  "name": "file_encryption",
+  "type": "route",
+  "title": "fwxAES file encryption",
+  "summary": "The fwxAES payload uses fixed-domain AAD; format and key-wrap headers are validated separately.",
+  "targets": {
+    "web": false
+  },
+  "nodes": [
+    {
+      "id": "step0",
+      "kind": "file",
+      "title": "PLAINTEXT",
+      "sub": "optional preprocessing"
+    },
+    {
+      "id": "step1",
+      "kind": "process",
+      "title": "CONTENT KEY + NONCE",
+      "sub": "random per payload"
+    },
+    {
+      "id": "step2",
+      "kind": "file",
+      "title": "CIPHERTEXT + TAG",
+      "sub": "AES-256-GCM"
+    },
+    {
+      "id": "step3",
+      "kind": "file",
+      "title": "VERSIONED CONTAINER",
+      "sub": "password / optional master wrap"
+    }
+  ],
+  "edges": [
+    {
+      "from": "step0",
+      "to": "step1",
+      "label": "compression / obfuscation"
+    },
+    {
+      "from": "step1",
+      "to": "step2",
+      "label": "fixed fwxAES AAD"
+    },
+    {
+      "from": "step2",
+      "to": "step3",
+      "label": "wraps the content key"
+    }
+  ]
+}

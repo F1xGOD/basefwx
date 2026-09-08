@@ -1,0 +1,154 @@
+#!yume-doc 1
+name: contributing
+kind: page
+title: Contributing to BaseFWX
+summary: Change scope, test expectations, licensing, security reports, and review process.
+markdown: CONTRIBUTING.md
+web: yes
+web-title: Contributing
+catalog-group: Contribute
+catalog-order: 100
+---
+> Short version: open a PR; for non-trivial changes, expect to sign a
+> one-page CLA. The CLA exists because BaseFWX uses a split license
+> policy and the project needs permission to keep contributions under
+> the correct license for each area.
+
+## What contributions are welcome
+
+- Bug fixes against the current development line under `[Unreleased]`.
+- Cross-runtime parity fixes (C++ ↔ Java ↔ Python drift).
+- New plugins for `examples/plugins/` (the templates are MIT OR
+  Apache-2.0; see [LICENSING.md](./LICENSING.md)).
+- Documentation improvements to the public API and user guides.
+- Test-suite improvements in `scripts/test_all.sh` or its
+  per-runtime equivalents.
+
+## What needs prior discussion
+
+- New cryptographic primitives. Open an issue first.
+- Wire-format changes. Open an issue, and read
+  [`SECURITY.md`](./SECURITY.md) compatibility policy first.
+- Resurrecting retired methods (`b1024`, etc.). The decisions are
+  documented in `CHANGELOG.md`.
+- "I rewrote everything in Rust." This isn't a port-the-library
+  project.
+
+## Process
+
+1. **Open an issue first** for anything bigger than a typo fix.
+   A 5-line sketch of what you're planning to do is enough; it
+   saves both of us from a PR that doesn't land.
+2. **Branch from `main`.** Name the branch `topic/<short-slug>`.
+3. **Keep PRs focused.** One logical change per PR. If you find
+   yourself bundling unrelated fixes, split them.
+4. **Run the per-runtime tests** for the runtime you're changing.
+   The full `scripts/test_all.sh` cross-runtime suite is the
+   project's gold standard; CI runs it. Use an appropriately provisioned
+   remote build host for heavy runs.
+5. **Update CHANGELOG.md** under `[Unreleased]` for any
+   user-visible change.
+6. **Sign the CLA** (below) if it's your first non-trivial PR.
+
+## Style
+
+- C++: follow the existing pattern. `clang-format` config in
+  `.clang-format` is the source of truth; format your patch before
+  pushing.
+- Java: 4-space indent, the correct source header for the file's
+  license area, javadoc on public methods.
+- Python: PEP 8, type hints on public functions, and the correct
+  source header for the file's license area.
+- Markdown: prose; one sentence per line in long files for clean
+  diffs.
+
+## Contributor license agreement (CLA)
+
+By signing the CLA, you grant FixCraft Inc. the right to redistribute
+your contribution under both:
+
+1. LGPL-3.0-or-later for core library/API/runtime and plugin ABI/SPI
+   contributions.
+2. GPL-3.0-or-later for standalone CLI/tool/benchmark/script
+   contributions.
+3. MIT OR Apache-2.0 for example plugin/template contributions.
+
+You keep your copyright. You give FixCraft Inc. the right to
+relicense your contribution as part of the repository split-license
+model.
+
+If you don't want to sign the CLA, that's fine, but your patch will
+need to be small enough to be considered de minimis (i.e., not
+copyrightable; typically <10 lines of code, or pure formatting / typo
+fixes). For anything larger, the CLA is required.
+
+### CLA text (sign by replying in your PR)
+
+> I, the contributor, agree to the BaseFWX Contributor License
+> Agreement. I am the sole author of the contribution submitted in
+> this pull request, or I have permission from all authors to submit
+> it. I grant FixCraft Inc. a perpetual, worldwide, non-exclusive,
+> royalty-free, irrevocable license to use, copy, modify, prepare
+> derivative works of, publicly display, publicly perform,
+> sublicense, and distribute my contribution and such derivative
+> works under the repository's split license policy: LGPL-3.0-or-later
+> for core library/API/runtime and plugin ABI/SPI code,
+> GPL-3.0-or-later for standalone CLI/tool/benchmark/script code, and
+> MIT OR Apache-2.0 for example plugin/template code. I retain all other
+> rights, including the right to use my contribution under other
+> licenses.
+
+To sign: reply in your PR with the line **"I agree to the BaseFWX
+CLA above."** That's it. We'll record the agreement against your
+GitHub username.
+
+If you're contributing on behalf of an employer, your employer must
+also acknowledge (typically a one-line approval from a manager
+copied into the PR). For corporate contributors with a lot of
+ongoing involvement, a separate signed Corporate CLA is available
+on request. Email `admin@fixcraft.jp`.
+
+## Security issues
+
+Do **not** open public issues for security bugs. See `SECURITY.md`
+for the disclosure path (GitHub Security Advisory, then private
+contact). The same dual-license CLA applies to security-related
+patches.
+
+## Code of conduct
+
+Be civil. Disagreements about technical choices are welcome;
+personal attacks aren't. The maintainers can and will close PRs
+or block contributors who can't keep discussions on the technical
+substance.
+
+## Questions
+
+- About the code: open an issue, tag it `question`.
+- About licensing: `admin@fixcraft.jp` or open an issue tagged
+  `licensing`.
+
+## Documentation sources
+
+Documentation is authored under `docs/src/en_US/`. Edit the `.doc` source
+named in a generated file's banner. Keep one document per aspect; share a
+`.part` only when several documents use it. Titles, descriptions, card labels,
+catalog groups and routes live in the same source as the text.
+
+@code sh
+python3 scripts/yume_docs.py sync --all-languages
+python3 scripts/yume_docs.py check --all-languages
+python3 scripts/check_website_catalog.py
+@end
+
+The sync covers Markdown, manuals, website pages and catalog, and enabled
+diagram SVGs. BaseFWX publishes ASCII until its own animated style is reviewed.
+Diagram placement is `@diagram <name>` in the document, with topology
+and source labels in `docs/diagrams/<name>.json`. `en_US` is the only active
+locale; missing-content reports are preparation for translations, not proof
+that a translation is current. See [the source guide](docs/src/README.md).
+
+BaseFWX's native CLI and library manuals also generate web references.
+Its runtime CLI help remains authored in the runtime. Website Markdown is
+tracked; CI checks it before generating ignored SVG includes. Keep BaseFWX
+and YUME shared documentation tooling byte-identical while developing both.

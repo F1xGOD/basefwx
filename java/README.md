@@ -1,3 +1,4 @@
+<!-- Generated from docs/src/en_US/pages/java_readme.doc by scripts/yume_docs.py. Edit that file, not this one. -->
 # BaseFWX Java
 
 This module provides a Java implementation of the core BaseFWX codecs so it can run on any JVM (desktop, server, or Android runtime).
@@ -79,7 +80,7 @@ java -Dbasefwx.useJNI=true \
 
 Sample run on x86_64 (Linux, JDK 25, OpenSSL 3.5, OpenJDK JCA with AES-NI):
 
-```
+```text
 === 4 MiB / 5 iters ===
   pure-java   encrypt 57.87 ms (69.1 MiB/s)   decrypt 7.44 ms (537.6 MiB/s)
   jni         encrypt 60.29 ms (66.3 MiB/s)   decrypt 7.52 ms (532.1 MiB/s)
@@ -92,7 +93,6 @@ Sample run on x86_64 (Linux, JDK 25, OpenSSL 3.5, OpenJDK JCA with AES-NI):
 ```
 
 On platforms without AES-NI or with weaker JCA implementations the gap is wider; on Android it's been measured at 2-4x in earlier prototypes. On a modern x86 desktop the two backends are within a few percent of each other and the pure-Java path is preferable for the smaller deployment surface.
-
 
 ## Scope (v1)
 
@@ -131,7 +131,7 @@ Gradle's test executor installs a `SecurityManager`, which JDK 24 removed
 (JEP 486). On JDK 24+ an old Gradle compiles cleanly and then fails the moment
 tests start, with:
 
-```
+```text
 java.lang.UnsupportedOperationException: Setting a Security Manager is not supported
 ```
 
@@ -139,7 +139,7 @@ The failure is in Gradle, not in BaseFWX — with the currently tested Gradle
 4.4.1 package, `gradle build -x test` still succeeds on JDK 25. If you hit it,
 either point `JAVA_HOME` at a tested JDK 11 or 21 for the test run:
 
-```
+```text
 JAVA_HOME=/path/to/jdk-21 gradle test
 ```
 
@@ -149,7 +149,7 @@ ever a build/test host, never a floor for consumers.
 
 ### Gradle
 
-```
+```text
 cd java
 gradle build
 ```
@@ -165,7 +165,8 @@ java -jar build/libs/basefwx-java.jar version  # retired_media=ON
 ```
 
 Manual build (no Gradle):
-```
+
+```text
 cd java
 javac -source 8 -target 8 -d build/classes $(find src/main/java -name "*.java")
 jar cfe build/libs/basefwx-java.jar com.fixcraft.basefwx.cli.BaseFwxCli -C build/classes .
@@ -178,14 +179,16 @@ retains the historical codec methods and `Constants.JMG_*`,
 `Constants.IMAGECIPHER_*`, and `Constants.MASK_AAD_JMG` fields without putting
 them back into active source files.
 On Windows PowerShell, you can build sources with:
-```
+
+```text
 $sources = Get-ChildItem -Recurse src/main/java -Filter *.java | ForEach-Object { $_.FullName }
 javac -source 8 -target 8 -d build/classes $sources
 jar cfe build/libs/basefwx-java.jar com.fixcraft.basefwx.cli.BaseFwxCli -C build/classes .
 ```
 
 ## CLI
-```
+
+```text
 java -jar build/libs/basefwx-java.jar [global flags] <command> ...
 # global flags: --verbose|-v --no-log
 java -jar build/libs/basefwx-java.jar fwxaes-enc <in> <out> <password>
@@ -246,6 +249,7 @@ Notes:
 - `kFMd` only decodes BaseFWX carriers and refuses plain WAV/PNG/MP3/M4A inputs (Java: `BaseFwxImage.kFMd`).
 
 ## Cross-compat notes
+
 - b512/pb512 text writers emit canonical standard base64 and authenticated
   payload v3. Decoders accept historical token-map and URL-safe input;
   unauthenticated v2 payloads require
@@ -289,6 +293,7 @@ historical retired-media fields directly on `Constants`; the default JAR and
 Android-oriented core source omit them.
 
 ### Master key paths (EC)
+
 Java reads EC public/private keys from:
 - `BASEFWX_MASTER_EC_PUB` and `BASEFWX_MASTER_EC_PRIV`, or
 - `~/master_ec_public.pem` and `~/master_ec_private.pem`
@@ -298,10 +303,12 @@ non-regular, or larger-than-4-MiB key files fail closed rather than
 falling back to the home-directory key.
 
 ## Android
+
 The library is pure Java and uses standard `javax.crypto` APIs. AES-GCM requires API 21+ on Android.
 File helpers are built on `java.io` to keep Android compatibility.
 The optional jMG compatibility pipeline depends on `ffmpeg`/`ffprobe` and
 `ImageIO`, so it is not Android-compatible.
 
 ## Testing overrides
+
 For fast tests, you can set `BASEFWX_TEST_KDF_ITERS` to reduce PBKDF2 iterations.

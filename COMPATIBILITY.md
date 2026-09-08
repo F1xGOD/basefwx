@@ -1,3 +1,4 @@
+<!-- Generated from docs/src/en_US/pages/compatibility.doc by scripts/yume_docs.py. Edit that file, not this one. -->
 # Compatibility and system requirements
 
 The checkout version comes from [VERSION](VERSION). This page describes format
@@ -95,6 +96,17 @@ sequence number, and plaintext length as AAD. Sequence numbers must be strictly
 ordered. The format provides no retransmission, reordering, jitter buffer, or
 clock synchronization.
 
+## Streaming B512 recovery
+
+Streaming B512 containers use the authenticated inner magic `STRMOBF1`, but
+their internal obfuscation depends on the supplied password. A master key can
+open the outer encryption without recovering that password. The reader does
+not independently authenticate the password used for this final transform,
+so a correct master key with a wrong password can produce corrupted output
+without an authentication error. Master recovery alone is insufficient for
+these streams. Retain the original password and verify restored bytes against
+an independent original before replacing data.
+
 ## KDF compatibility and limits
 
 File-container metadata stores the KDF label. The ordinary b512file user-wrap
@@ -170,12 +182,25 @@ before publication.
 
 ## Master recovery
 
-The password-only path works in every runtime. A writer that is asked for
-master recovery and cannot load a master public key refuses to write rather
-than silently producing a password-only file. When master recovery is enabled,
-all runtimes prefer a provisioned ML-KEM public key. Its standardized size
+The password-only path works when master recovery is disabled and the format
+retains its password wrap. Public writer enforcement of requested master
+recovery is incomplete: some wrappers replace the request with key availability
+or strip the metadata that carries recovery. Python nested file tokens can
+reselect a host recipient instead of retaining the caller-supplied outer key.
+A successful encode is not proof that the requested recipient can recover all
+layers. See [SECURITY.md](SECURITY.md#optional-master-recovery) for the
+provisioning and verification boundary.
+
+When master recovery is retained, all runtimes prefer a provisioned ML-KEM
+public key. Its standardized size
 selects ML-KEM-768 or ML-KEM-1024 and the `ENC-KEM` value. Upstream artifacts
 contain no baked master key.
+
+On decode, enabled master recovery is tried first. A valid but unrelated private
+key may derive a wrong candidate mask; payload authentication then fails without
+retry. Select password recovery explicitly by disabling master recovery when
+the configured private key belongs to another recipient. Failure to load or
+decapsulate a master key can select a password wrap before payload authentication.
 
 Readers select ML-KEM by standardized private-key and ciphertext sizes.
 Historical EC recovery uses the exact P-521 `EC1` frame. Strict-PQ mode refuses

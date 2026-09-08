@@ -1,3 +1,4 @@
+<!-- Generated from docs/src/en_US/pages/plugins_readme.doc by scripts/yume_docs.py. Edit that file, not this one. -->
 # BaseFWX blackbox plugins — author guide
 
 A blackbox plugin is a `.so` / `.dll` / `.dylib` (or `.jar` on Java)

@@ -1,3 +1,4 @@
+<!-- Generated from docs/src/en_US/pages/security.doc by scripts/yume_docs.py. Edit that file, not this one. -->
 # Security policy
 
 ## Supported releases
@@ -61,11 +62,14 @@ writers can select PBKDF2 before creating metadata with
 
 `BASEFWX_FWXAES_PBKDF2_ITERS=<n>` overrides the direct-PBKDF2 `fwxAES` and
 `LIVE` iteration count for the writer. The count is serialized in each header,
-so a reader does not need the same setting. Both the writer and the reader
-enforce a floor of 10,000 iterations, so this variable can raise the cost but
-cannot drive it below the floor. An embedding application that must not let
-its environment influence key derivation should pass the KDF options
-explicitly at the call site rather than relying on the defaults.
+so a reader does not need the same setting. The shared accepted range is
+`1..4,000,000`; the C++ direct-PBKDF2 `FWX1` raw and stream paths additionally
+enforce a floor of 10,000 in production. Java and Python can write and read
+lower counts, including one iteration. These parser bounds are not recommended
+authoring costs: an override below the normal writer profile weakens password
+protection. An embedding application that must not let its environment
+influence key derivation should pass the KDF options explicitly at the call
+site rather than relying on the defaults.
 
 ## Payload authentication
 
@@ -86,26 +90,38 @@ historical input is disabled unless
 Authentication failure in a recognized container never falls through to the
 raw parser.
 
-Streaming decryptors stage plaintext privately and publish it only after the
-final tag and structure checks pass. Writers use sibling staging files so a
-failed or interrupted operation does not partly replace the requested output.
+File-stream decryptors stage plaintext privately and publish it only after the
+final tag and structure checks pass. Publication and temporary-storage
+guarantees depend on the runtime and entry point.
 Unauthenticated wrap and key headers are capped at 64 KiB, and stream work
 buffers are capped before allocation.
 
-How that staging happens depends on what the caller supplied. A
-destination-aware entry point such as `DecryptStreamFile` stages into a
-private sibling of the destination and publishes by rename, so plaintext is
-written straight through. A caller that hands in its own output stream gets no
-staging directory to use, so the plaintext is held in wiped memory and written
-only after the tag verifies. That hold is bounded by
-`kFwxAesMaxUnstagedPlaintext` (256 MiB) and a larger stream is refused with a
-pointer to the destination-aware call. Unverified plaintext is never spooled
-to a temporary file, so it is never left unwiped on disk and cannot consume
-`TMPDIR`.
+In C++, `fwxaes::DecryptStreamFile` writes unverified plaintext into a private
+sibling of the destination and publishes by rename after authentication. The
+generic `fwxaes::DecryptStream` instead holds plaintext in wiped memory until
+the tag verifies. That hold is bounded by `kFwxAesMaxUnstagedPlaintext`
+(256 MiB); a larger stream is refused with a pointer to the destination-aware
+call.
+
+The memory-only guarantee does not cover Java or Python fwxAES stream
+decryption. Java uses a private temporary plaintext file. Python uses a spool
+that rolls from memory to a temporary file above 8 MiB. Both can therefore
+consume the system temporary filesystem before authentication finishes.
+Temporary plaintext files are removed on ordinary cleanup; deletion is not a
+guarantee that their disk blocks are wiped. The same disk-erasure limitation
+applies to C++ destination-aware sibling staging.
+
+Java's public `fwxAesEncryptFile` and `fwxAesEncryptFileNio` open the requested
+output before encryption completes. A refusal can truncate an existing file,
+and input and output must not name the same file. Use a separate output and
+publish it only after successful completion. The decrypt-file wrappers use
+private sibling staging and publish after successful decryption, using an
+atomic move where supported and an ordinary replacement move otherwise.
+That is not a filesystem-independent crash-atomicity guarantee.
 
 ## Optional master recovery
 
-Master recovery is opt-in. It wraps the random content key with a provisioned
+Master recovery wraps the random content key with a provisioned
 ML-KEM-768 or ML-KEM-1024 public key. The matching private key is a separate
 recovery factor and should be kept away from ordinary user data.
 
@@ -120,11 +136,33 @@ master fallback and makes a requested master-wrap encryption fail when no
 ML-KEM public key is available. It does not disable an independent valid
 password wrap while reading an existing container.
 
-A requested master wrap never degrades to password-only. If a caller asks for
-a master key and no master public key is configured, C++, Java, and Python all
-refuse the encryption with "master key requested but no master public key is
-configured". Degrading silently would write a file that looks escrowed on the
-host that wrote it and is unrecoverable once the password is lost.
+An explicit master request is not enforced consistently by every public
+writer. Lower-level wrapping helpers reject missing keys, but file writers
+can replace requested intent with key availability or metadata stripping.
+Some Java/Python raw, stream and live wrappers can catch a wrapping failure
+and proceed with password-only output. Provision the intended public key,
+retain container metadata and verify recovery with the matching private key
+and without the password before relying on escrow.
+
+Python small B512/AES-heavy file containers can reselect host keys for their
+nested extension and data tokens even when the caller supplied a different
+outer `master_pubkey`. Configure the same recipient for all layers and verify
+the complete file recovery path. Batch APIs can also select encryption keys
+before choosing encode versus decode; writer-key configuration may therefore
+affect a batch containing recovery inputs.
+
+Streaming B512 uses `STRMOBF1`, whose internal obfuscation requires the original
+password even if a master key opens the outer encryption. The reader does not
+independently authenticate that final transform's password, so a wrong password
+can produce corrupted output despite a valid outer tag. See the
+[streaming recovery boundary](COMPATIBILITY.md#streaming-b512-recovery).
+
+Readers try enabled master recovery first. A well-formed but unrelated private
+key can produce a candidate mask key whose payload authentication fails; that
+failure is terminal. Disable master recovery explicitly (`--no-master` or the
+API's `use_master=false`) to select a valid password wrap in that situation.
+Key-loading or decapsulation refusal can use the password path before payload
+authentication; this does not imply retry after an authentication failure.
 
 The wrap header records the KDF label but not its cost, so every decoder
 reconstructs the cost from the defaults. Wrap-mode encryption therefore

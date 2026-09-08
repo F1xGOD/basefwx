@@ -1,3 +1,4 @@
+<!-- Generated from docs/src/en_US/pages/plugin_verifier_design.doc by scripts/yume_docs.py. Edit that file, not this one. -->
 # `basefwx-plugin-verify` — design
 
 > Status: design + spec only. Implementation scoped for 3.7.x point
@@ -20,7 +21,7 @@ plus a signed bundle that the consumer can pin.
 
 ## Inputs
 
-```
+```text
 basefwx-plugin-verify <path-to-plugin.so>
     [--config <bytes-or-file>]      pass to plugin init()
     [--vectors <file>]              extra test vectors (default: built-in)
@@ -100,7 +101,7 @@ Each check has a stable name. The JSON output lists every check with
 
 ### Console (default)
 
-```
+```text
 basefwx-plugin-verify v1.0  ABI=1
 
    ./libbasefwx-passthrough.so
@@ -161,7 +162,7 @@ Bundle written to: passthrough-verify-2026-05-21T03-45Z.zip
 
 ### Bundle (`--out bundle.zip`)
 
-```
+```text
 bundle.zip
 ├─ verify-report.json         (the JSON above)
 ├─ verify-report.txt          (the console output)

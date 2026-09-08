@@ -1,3 +1,4 @@
+<!-- Generated from docs/src/en_US/pages/protocol_kats_readme.doc by scripts/yume_docs.py. Edit that file, not this one. -->
 # Protocol known-answer tests (KATs)
 
 Vectors in `vectors.json` are emitted by the C++ reference via

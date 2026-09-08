@@ -1,11 +1,11 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 {%- if page.layout == 'doc' %}
-<title>{{ page.title }} | BaseFWX</title>
-<meta name="description" content="{{ page.title }} documentation for BaseFWX.">
+<title>{{ page.title | escape }} | BaseFWX</title>
+<meta name="description" content="{{ page.description | escape }}">
 {%- else %}
-<title>{{ page.title }}</title>
-<meta name="description" content="{{ page.description | default: site.description | strip_newlines | strip }}">
+<title>{{ page.title | escape }}</title>
+<meta name="description" content="{{ page.description | default: site.description | strip_newlines | strip | escape }}">
 {%- endif %}
 <link rel="icon" type="image/svg+xml" href="{{ '/assets/basefwx-plain.svg' | relative_url }}">
 <meta name="theme-color" content="#0b090f" media="(prefers-color-scheme: dark)">

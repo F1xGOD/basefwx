@@ -1,3 +1,4 @@
+<!-- Generated from docs/src/en_US/pages/testing.doc by scripts/yume_docs.py. Edit that file, not this one. -->
 # Testing
 
 ## Run the main suite

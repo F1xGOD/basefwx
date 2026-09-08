@@ -1,3 +1,4 @@
+<!-- Generated from docs/src/en_US/pages/abi.doc by scripts/yume_docs.py. Edit that file, not this one. -->
 # Native ABI policy
 
 BaseFWX has two different native interfaces with different compatibility

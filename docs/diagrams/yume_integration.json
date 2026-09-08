@@ -1,0 +1,49 @@
+{
+  "name": "yume_integration",
+  "type": "route",
+  "title": "BaseFWX yume integration",
+  "summary": "YUME uses BaseFWX cryptographic primitives inside its transport; BaseFWX itself is not a network transport.",
+  "targets": {
+    "web": false
+  },
+  "nodes": [
+    {
+      "id": "step0",
+      "kind": "process",
+      "title": "YUME STREAM",
+      "sub": "logical app connection"
+    },
+    {
+      "id": "step1",
+      "kind": "process",
+      "title": "BASEFWX INNER CRYPTO",
+      "sub": "AES / Argon2id / ML-KEM"
+    },
+    {
+      "id": "step2",
+      "kind": "process",
+      "title": "YUME CARRIER",
+      "sub": "TLS 1.3 + YUME frames"
+    },
+    {
+      "id": "step3",
+      "kind": "process",
+      "title": "YUMED SERVER",
+      "sub": "unwraps inner stream data"
+    }
+  ],
+  "edges": [
+    {
+      "from": "step0",
+      "to": "step1"
+    },
+    {
+      "from": "step1",
+      "to": "step2"
+    },
+    {
+      "from": "step2",
+      "to": "step3"
+    }
+  ]
+}

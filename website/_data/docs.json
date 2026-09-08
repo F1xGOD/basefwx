@@ -32,6 +32,14 @@
     "order": 40
   },
   {
+    "title": "BaseFWX native CLI manual",
+    "summary": "command-line cryptographic codec tool",
+    "url": "/docs/NATIVE_CLI/",
+    "source": "docs/NATIVE_CLI.md",
+    "group": "Use",
+    "order": 45
+  },
+  {
     "title": "Compatibility",
     "summary": "Portable variants, runtime exceptions, KDF limits, plugins, and retired-data recovery.",
     "url": "/docs/COMPATIBILITY/",
@@ -46,6 +54,14 @@
     "source": "ABI.md",
     "group": "Reference",
     "order": 60
+  },
+  {
+    "title": "BaseFWX library manual",
+    "summary": "C++ cryptographic codec library and container family",
+    "url": "/docs/NATIVE_LIBRARY/",
+    "source": "docs/NATIVE_LIBRARY.md",
+    "group": "Reference",
+    "order": 65
   },
   {
     "title": "Testing",

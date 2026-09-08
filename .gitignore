@@ -114,3 +114,6 @@ examples/plugins/*/bin/
 .leak-java/
 AGENTS.md
 AI_NOTES.md
+
+# Generated SVG copies inlined by Jekyll; canonical SVGs live in docs/diagrams.
+website/_includes/diagrams/

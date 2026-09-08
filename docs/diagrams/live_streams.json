@@ -1,0 +1,49 @@
+{
+  "name": "live_streams",
+  "type": "route",
+  "title": "BaseFWX live streams",
+  "summary": "A producer passes bytes through a live encryptor into ordered authenticated packets for the live decryptor.",
+  "targets": {
+    "web": false
+  },
+  "nodes": [
+    {
+      "id": "step0",
+      "kind": "process",
+      "title": "PRODUCER",
+      "sub": "file, ffmpeg, app bytes"
+    },
+    {
+      "id": "step1",
+      "kind": "process",
+      "title": "LIVE ENCRYPTOR",
+      "sub": "start, update, finalize"
+    },
+    {
+      "id": "step2",
+      "kind": "process",
+      "title": "LIVE PACKETS",
+      "sub": "ordered AES-GCM frames"
+    },
+    {
+      "id": "step3",
+      "kind": "process",
+      "title": "LIVE DECRYPTOR",
+      "sub": "verifies packet sequence"
+    }
+  ],
+  "edges": [
+    {
+      "from": "step0",
+      "to": "step1"
+    },
+    {
+      "from": "step1",
+      "to": "step2"
+    },
+    {
+      "from": "step2",
+      "to": "step3"
+    }
+  ]
+}

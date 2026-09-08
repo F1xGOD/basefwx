@@ -1,3 +1,4 @@
+<!-- Generated from docs/src/en_US/pages/release_notes_3_6_4.doc by scripts/yume_docs.py. Edit that file, not this one. -->
 # BaseFWX 3.6.4 — Release Notes
 
 > **Headline:** stronger crypto **and** faster code. The hardened KDF

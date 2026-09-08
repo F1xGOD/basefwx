@@ -11,7 +11,7 @@ than a hand-written `../` path.
 | --- | --- |
 | `_config.yml` | Site settings. `asset_version` is the cache buster for CSS and JS. |
 | `_data/nav.yml` | The header and footer link lists. Edit here, not in the pages. |
-| `_data/docs.json` | Titles, summaries, routes, canonical sources, groups, and order for documentation indexes. |
+| `_data/docs.json` | Generated from `.doc` title, summary, route and catalog fields. |
 | `_includes/` | Shared chrome: `head`, `brand`, `site-header`, `section-nav`, `site-footer`, `theme-toggle`. |
 | `_layouts/page.html` | Wrapper for the hand-written pages. |
 | `_layouts/doc.html` | Wrapper for the Markdown docs. |
@@ -26,21 +26,20 @@ than a hand-written `../` path.
 **Add or rename a nav link.** Edit `_data/nav.yml`. Both the header and the
 footer read from it, and every page picks the change up.
 
-**Change documentation.** Edit the canonical Markdown outside `website/`, then
-run the generator:
+**Change documentation.** Edit the `.doc` named in the generated file's
+banner, then run from the repository root:
 
-```bash
-python3 scripts/sync_website_docs.py
+```sh
+python3 scripts/yume_docs.py sync --all-languages
+python3 scripts/yume_docs.py check --all-languages
+python3 scripts/check_website_catalog.py
 ```
 
-The page manifest in `scripts/sync_website_docs.py` owns output names, titles,
-and permalinks. Add a page there, then add its title and summary to
-`_data/docs.json` if it should appear in the portal inventory. The generator
-rewrites repository-relative links for the Pages base URL and rejects untagged
-code fences. `--check` fails when a checked-in page has drifted from its
-canonical source. `scripts/check_website_catalog.py` rejects website files as
-sources, missing canonical files, mismatched generated sources, and broken
-local routes.
+The document header owns titles, summaries, optional card labels, routes,
+groups and order. `scripts/sync_website_docs.py` is a website-only entry point
+for the same renderer. Native manuals also publish as web references; diagrams
+come from one JSON specification. Website Markdown is tracked, while the SVG
+include copies are ignored. See [the source guide](../docs/src/README.md).
 
 **Add a page.** Create an HTML file with `layout: page` front matter and a
 `title`. Optional keys: `description`, `nav_current` (marks a header link as the
@@ -84,14 +83,14 @@ underneath can support.
 ```bash
 python3 scripts/sync_website_docs.py --check
 python3 scripts/check_website_catalog.py
-jekyll build -d /tmp/basefwx-site
+jekyll build -s website -d /tmp/basefwx-site
 python3 -m http.server 8000 -d /tmp/basefwx-site
 ```
 
 To check the project-page mount that Pages actually serves:
 
 ```bash
-jekyll build --baseurl /basefwx -d /tmp/basefwx-site
+jekyll build -s website --baseurl /basefwx -d /tmp/basefwx-site
 ```
 
 Before pushing, confirm there is no horizontal scroll at 320, 375, 414, and 768

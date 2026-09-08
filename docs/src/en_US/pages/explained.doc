@@ -1,0 +1,138 @@
+#!yume-doc 1
+name: explained
+kind: page
+title: BaseFWX explained
+summary: File encryption, unlock paths, portable variants, live streams, and failure handling.
+markdown: docs/EXPLAINED.md
+web: yes
+catalog-group: Understand
+catalog-order: 20
+---
+BaseFWX provides authenticated containers in C++, Python, and Java. The
+runtimes share the portable format variants, while the compatibility reference
+records runtime-specific variants and packing limits. This page gives the
+working model without duplicating the CLI or byte-level reference.
+
+## File encryption
+
+The `fwxAES` path has four steps:
+
+@diagram file_encryption
+
+AES-GCM encrypts the fwxAES payload under a fixed `fwxAES` additional
+authenticated data (AAD) value. The format and key-wrap headers are not part of
+that AAD, so the parser validates their structure and bounds separately. A
+reader verifies the payload tag before it publishes plaintext. A wrong
+password, changed ciphertext, truncated body, or changed tag fails decryption.
+
+Obfuscation runs inside the authenticated container. It can change byte
+patterns, but it does not add cryptographic protection and should not be used
+without AEAD.
+
+## Unlock paths
+
+A container can have a password path, a master-key path, or both.
+
+The password path derives a wrapping key with Argon2id or PBKDF2. The format
+stores the KDF choice and its bounded parameters. Current encryption enforces a
+minimum password length unless the caller explicitly changes that policy.
+
+The optional master path uses an ML-KEM public key to wrap the same random
+content key. It is a recovery mechanism, not a second encryption pass over the
+file. The matching private key should be kept separately from ordinary user
+data.
+
+@include shared/master_authoring.part
+
+Python small-file containers can reselect host keys for nested encrypted
+tokens instead of retaining the caller's outer recipient. Configure the same
+recipient for every layer and verify recovery of the complete file.
+
+When both paths exist, either valid path can recover the content key. Strict-PQ
+mode can reject EC fallback for master recovery. It does not remove an intact,
+independent password path from an existing dual-wrapped container.
+When an unrelated configured master key produces a candidate that fails payload
+authentication, disable master recovery to select the valid password path.
+Authentication failures do not trigger a retry with another key.
+
+Streaming B512 uses `STRMOBF1`; its internal obfuscation still needs the
+original password even when master recovery opens the outer encryption.
+That transform's password is not independently authenticated, so a wrong one
+can produce corrupted output. The [compatibility reference](../COMPATIBILITY.md#streaming-b512-recovery)
+describes this recovery limit.
+
+Java's fwxAES file-encryption wrappers open their output directly and can
+truncate an existing destination on refusal. Use a separate output path.
+Plaintext staging during decryption has different storage bounds in each
+runtime; see [SECURITY.md](../SECURITY.md#payload-authentication).
+
+## Text and file codecs
+
+`b512` and `pb512` are Base64-oriented authenticated formats. Current text
+writers include a version, plaintext length, nonce, AES-256-GCM ciphertext,
+and tag. Separate HKDF and AAD domains prevent a payload from being silently
+reinterpreted as the other codec.
+
+File writers use an authenticated outer container. Current authentication
+failures never downgrade into the old raw parser. Legacy input is available
+only through a recovery switch for trusted old data.
+
+`n10` converts bytes to decimal text and back. It is useful where only digits
+can be carried, but it provides no secrecy or authentication.
+
+## Live streams
+
+The live API emits a header followed by authenticated packets. Each packet
+binds its type, sequence number, and plaintext length as AAD. Receivers reject
+replay and out-of-order input.
+
+This gives frame-level confidentiality and authentication. It does not resend
+lost data, reorder packets, synchronize clocks, or smooth playback. A network
+protocol or media pipeline must provide those behaviors.
+
+## Cross-runtime compatibility
+
+Portable format variants are a contract across C++, Python, and Java. The C++
+unsized or greater-than-4-GiB fwxAES stream variant is C++-only, and Java
+refuses packed `ENC-P` containers. A format or security change must update the
+affected runtimes and shared known-answer tests in the same change unless the
+API is explicitly documented as runtime-specific.
+
+The plugin ABI is different. It is a frozen C boundary with its own version and
+wire tag. The general C++ library is still pre-stable and can change at a minor
+release. See [ABI.md](../ABI.md) and [COMPATIBILITY.md](../COMPATIBILITY.md).
+
+## Retired formats
+
+The default artifacts exclude the old media carriers and retired text codecs.
+Their code exists only in a source-built compatibility profile so existing data
+can be recovered. That profile does not make the formats suitable for new
+data, and it does not restore performance work or new features for them.
+
+After recovery, write the plaintext into `fwxAES`, authenticated `b512`, or
+another maintained format. The compatibility page lists the build switch and
+the legacy decode switches.
+
+## Failure model
+
+BaseFWX treats these cases differently:
+
+- An unknown prefix is not automatically a corrupted BaseFWX file.
+- A recognized container with a bad tag is an authentication failure.
+- A missing optional backend is a capability error.
+- A disabled legacy format stays disabled until the caller explicitly enables
+  its recovery policy.
+
+Callers should preserve those distinctions. Do not catch an authentication
+failure and try a looser parser or unauthenticated mode.
+
+## Use in YUME
+
+YUME pins a specific BaseFWX commit and consumes selected C++ primitives and
+storage helpers. YUME owns its network wire format, authentication transcript,
+ratchet policy, permissions, and C ABI. A BaseFWX version change does not change
+those YUME contracts unless YUME makes and tests that change explicitly.
+
+The required BaseFWX revision is recorded in YUME's
+`config/dependencies.json`. The repositories keep separate Git histories and
+release boundaries.

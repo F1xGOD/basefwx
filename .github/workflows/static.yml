@@ -23,6 +23,12 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+      - name: Check documentation sources and renderers
+        run: |
+          python3 scripts/test_yume_docs.py
+          python3 scripts/test_yume_doc_pipeline.py
+          python3 scripts/test_doc_diagrams.py
+          python3 scripts/yume_docs.py check --all-languages
       - name: Check generated documentation drift
         run: |
           python3 scripts/sync_website_docs.py --check

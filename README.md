@@ -1,3 +1,4 @@
+<!-- Generated from docs/src/en_US/pages/readme.doc by scripts/yume_docs.py. Edit that file, not this one. -->
 # BaseFWX
 
 BaseFWX is an authenticated-encryption library and command-line tool for C++,
@@ -25,7 +26,10 @@ release receives security and bug fixes.
 BaseFWX can derive password keys with Argon2id or PBKDF2. An optional master
 recovery path wraps a random content key with ML-KEM-768 or ML-KEM-1024.
 Password and master recovery are independent unlock paths when both are
-present.
+present and no later transform requires the password. `STRMOBF1` B512 streams
+still require their password for internal obfuscation; see
+[streaming B512 recovery](COMPATIBILITY.md#streaming-b512-recovery) before relying
+on master recovery.
 
 BaseFWX does not implement an “AES-512” cipher. Historical `aes512` names are
 aliases for a heavier KDF profile around AES-256-GCM.

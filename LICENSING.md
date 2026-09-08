@@ -1,3 +1,4 @@
+<!-- Generated from docs/src/en_US/pages/licensing.doc by scripts/yume_docs.py. Edit that file, not this one. -->
 # BaseFWX licensing
 
 This document is the practical guide.

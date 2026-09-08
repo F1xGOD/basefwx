@@ -1,32 +1,45 @@
+<!-- Generated from docs/src/en_US/pages/changelog.doc by scripts/yume_docs.py. Edit that file, not this one. -->
 # Changelog
 
 ## [Unreleased]
 
+### Documentation
+
+- Product docs, changelogs and native manuals share `.doc` sources under
+  `docs/src/en_US/`, including web titles and catalog metadata. One sync
+  renders Markdown, man pages and the website. Flow diagrams publish ASCII;
+  BaseFWX animated presentation is deferred. Locale paths prepare for later
+  translations; only `en_US` is active. See [the authoring guide](docs/src/README.md).
+
 ### Security
-- **`ResolvePassword` is idempotent.** Some entry points resolve a password at
-  the public boundary and again further in, so a secret that was itself a
-  `password://` or `file://` reference could derive two different keys
-  depending on which path was taken. The resolved secret is now never a
-  reference: a `password://` value naming another reference, and a password
-  file whose contents begin with a scheme, are both refused as ambiguous.
-- **Unverified plaintext is no longer spooled to a temporary file.** The
-  fwxAES stream decryptor used `std::tmpfile()` to hold plaintext until the
+
+- **C++ password resolution is idempotent.** `ResolvePassword` refuses a
+  `password://` value naming another reference and password files whose contents
+  begin with either scheme. Java and Python do not consistently enforce this
+  rule; nested references remain unsuitable for cross-runtime use.
+- **C++ generic fwxAES stream decryption uses bounded wiped memory.** The
+  C++ fwxAES stream decryptor used `std::tmpfile()` to hold plaintext until the
   GCM tag verified, which left those blocks unwiped in `TMPDIR` and let a long
   stream fill it. A destination-aware call such as `DecryptStreamFile` now
   writes straight into the private sibling it already stages and publishes by
   rename. A caller that supplies its own stream gets a wiped in-memory hold
   bounded by `kFwxAesMaxUnstagedPlaintext` (256 MiB), and a larger stream is
-  refused with a pointer to the destination-aware call.
+  refused with a pointer to the destination-aware call. This change does not
+  remove Java or Python plaintext spooling, and destination-aware C++ calls
+  still write unverified plaintext into private sibling files before the tag
+  verifies.
 - **Wrap mode refuses a KDF cost it cannot record.** The wrap header stores the
   KDF label but not its cost, so a caller setting a non-default PBKDF2
   iteration count or Argon2 cost produced a blob no host could open, including
   the one that wrote it. Encryption now fails with the recoverable value
   named. Serializing the cost is a format change that must land in C++, Java,
   and Python together.
-- **Master-key refusal reaches Java and Python.** A requested master wrap with
-  no configured master public key already failed closed in C++; `KeyWrap.java`
-  and `_master_key.py` now refuse with the same message instead of silently
-  degrading to password-only.
+- **Lower-level master-key helpers refuse missing configured keys.** This does
+  not cover every public writer: wrappers can still replace requested intent
+  with key availability or metadata stripping, or catch wrapping failures.
+  The security and compatibility references describe those limits, the Python
+  nested-recipient boundary, direct Java output writes, and the password-based
+  `STRMOBF1` recovery limitation.
 - **Java `an7`/`dean7` reject unknown flags.** The Java argument parser
   silently swallowed `--use-master` and `--no-master` on a format that has no
   key-escrow path, so a caller could ask for escrow and get none. It now
@@ -202,6 +215,7 @@
   secret-named members still fail before archive publication.
 
 ### Added
+
 - **Reusable AES-256-GCM `AeadContext`.** `basefwx::crypto::AeadContext`
   keeps both cipher contexts and the key schedule alive across records, takes
   the nonce and AAD per call, writes into caller-owned buffers, rekeys in
@@ -265,6 +279,7 @@
   `pq=ml-kem-768|1024` instead of misleading `oqs=OFF`.
 
 ### Changed
+
 - **One `KdfOptions`.** `basefwx::KdfOptions` is now an alias of
   `basefwx::pb512::KdfOptions` instead of an identical second struct copied
   field by field in the umbrella API.
@@ -368,6 +383,7 @@
   with exact-`1` contracts retain their existing semantics.
 
 ### Fixed
+
 - **Retired jMG media no longer requires a master key that was never asked
   for.** Refusing to degrade a requested master wrap to password-only is
   correct, but the retired jMG writers passed `use_master=True` as an internal
@@ -401,6 +417,7 @@
   `SECURITY.md` now records it alongside the floor that bounds it.
 
 ### Removed
+
 - **`allow_pbkdf2_fallback` and `--no-fallback`.** The C++ `KdfOptions`
   field and the CLI flag had been documented no-ops since 3.7.0 removed the
   unauthenticated second-chance PBKDF2 path. They are gone from the headers,
@@ -415,6 +432,7 @@
 Compare: <https://github.com/F1xGOD/basefwx/compare/v3.7.0...main>
 
 ### Added
+
 - **C++ protocol-building primitives.** The public C++ API now provides an
   explicit-salt HKDF-SHA256 overload, move-only self-wiping ephemeral
   ML-KEM keypairs with explicit ML-KEM-768 / ML-KEM-1024 selection, and
@@ -422,6 +440,7 @@ Compare: <https://github.com/F1xGOD/basefwx/compare/v3.7.0...main>
   all-zero shared-secret rejection.
 
 ### Notes
+
 - At the initial 3.8.0-dev1 baseline these primitives were C++-only. The
   current `[Unreleased]` tree adds the Java/Python mirrors and shared
   cross-runtime KATs described above. Android remains a separate consumer and
@@ -439,6 +458,7 @@ Compare: <https://github.com/F1xGOD/basefwx/compare/v3.6.4...v3.7.0>
 > 3.6.5 was never tagged or published.
 
 ### Added
+
 - **Java SPI + Python plugin module (Profile A).** `com.fixcraft.basefwx.plugin` (ServiceLoader) and `basefwx.plugin` (pure Python + ctypes for native `.so`) ship with example plugins and `scripts/plugin-smoke.sh`.
 - **fwxAES/CLI plugin loader (Profile A).** C++ host loader (`plugin_loader.cpp`): `Registry::Find` → `dlopen` → ABI check → `init` → cached `capabilities()` → PRE/POST AEAD dispatch. Wire-format plugin tag (`algo=0x03`) written at encrypt time; decrypt fails closed without matching plugin. CLI flags: `--plugin <path>`, `--plugin-id <hex>`, `--plugin-pos pre|post`, `--plugin-config <file>`. Java/Python fwxAES raw paths mirror the tag layout. JNI bridge, Profile B Java/Python SPI parity, and `basefwx-plugin-verify` remain 3.7.x follow-ups.
 - **Keyed plugin path (`forward_keyed` / `inverse_keyed`).** Plugins can opt into a per-call `tweak` (host-supplied randomness or self-derived from external entropy) and a `host_secret` (host-derived from the user's password) threaded through the transform. This binds the plugin's output to user-secret context, so extracting the plugin `.so` and its static config does not let an attacker reproduce the transform offline. New `BASEFWX_PLUGIN_DEFINE_KEYED(...)` macro in `plugin.hpp` and `Capabilities()` method on the plugin class. Backwards-compatible — v1 plugins (deterministic `forward`/`inverse` only) continue to load and run. See `examples/plugins/aead-wrapped-keyed/` for the canonical shape (HKDF + AES-CTR + HMAC-SHA256 with constant-time tag compare).
@@ -455,12 +475,14 @@ Compare: <https://github.com/F1xGOD/basefwx/compare/v3.6.4...v3.7.0>
 - **Benchmark heaviness chips on the website.** `website/results/heaviness.json` classifies each benchmark method as `low` / `medium` / `high` / `extreme` based on typical peak working set and CPU time per call, with documented per-method notes. `website/assets/site.js` reads the manifest at page load and decorates each entry on the Detailed Results panel with a colored chip (`heaviness-low` = green, `medium` = amber, `high` = orange, `extreme` = red). Lets users at a glance see which methods can run on a laptop and which need a build box.
 
 ### Deprecated
+
 - **`B256Encode` / `b256encode` / `b256Encode`** (C++ / Python / Java). 🫡 **Retired.** b256 was the very first encoding method in BaseFWX — born in V1, back when this was a proof of concept and not a project. It served from day one through every release since. Marked `[[deprecated]]`, `@Deprecated`, `DeprecationWarning` and emits a one-time retirement notice on first call (with 🫡 and ❤️ in the message, because the moment deserves it). Existing b256-encoded blobs still decode; use stdlib base64 or `Hash512` for new code. Internal callers in the already-deprecated `Bi512`/`A512` codecs route through the un-deprecated `codec::B256Encode`/`Decode` helpers so they don't double-warn.
 - **`Uhash513` / `uhash513`** (C++ / Python / Java). Non-standard chained hash (`SHA-256 → SHA-1 → SHA-512 → SHA-256` over the concatenation of two intermediate digests). The SHA-1 hop in the middle uses a hash with known collision weaknesses and adds no security to the construction; the overall collision resistance is bounded by the outer SHA-256 anyway. The "513" in the name is marketing — the output is a 256-bit SHA-256 hex string. Use `Hash512` (SHA-512) or SHA3-512 for new code. Existing call sites continue to work.
 - **`Bi512Encode` / `bi512encode` / `bi512Encode`** (C++ / Python / Java). Marked `[[deprecated]]`, `@Deprecated`, `DeprecationWarning`. It's SHA-256 with a custom prefilter — the prefilter adds no security beyond SHA-256 itself. Use `Hash512` / `hash512` for new code. Existing blobs continue to encode/decode.
 - **`A512Encode` / `A512Decode` / `a512encode` / `a512decode`** (C++ / Python / Java). Reversible obfuscation codec with no security goal (no key, no AEAD), slower than base64 for the same output. Use stdlib base64 for new reversible-encoding needs (b256 is also retiring; see above). Existing blobs continue to encode/decode.
 
 ### Security
+
 - **Drop PBKDF2-32k second-chance fallback** in C++ `keywrap.cpp::RecoverMaskKey`. AES-GCM auth failure (and any other thrown exception during decode) is now terminal — no retry with a 20× weaker derivation. Pre-3.x blobs that relied on this fallback are unsupported per SECURITY.md.
 - **`ResolvePassword` requires an explicit URI scheme** to load from disk: `file://<path>` reads, `password://<literal>` forces literal, bare strings are always literal. Removes the silent reinterpretation where a password equal to an existing path was read as that file's contents.
 - **Remove baked maintainer ML-KEM-768 public key** from upstream artifacts. Deployments that want a baked key now opt in at build time via `-DBASEFWX_MASTER_PQ_PUB_B64=<base64-key>` (C++ CMake option) or `-Dbasefwx.master.pq.public.b64=<base64-key>` (Java sysprop). The `BASEFWX_MASTER_PQ_ALLOW_BAKED` / `ALLOW_BAKED_PUB` env-var gates are gone with the literal.
@@ -473,6 +495,7 @@ Compare: <https://github.com/F1xGOD/basefwx/compare/v3.6.4...v3.7.0>
 - **Refuse to wrap the LiveCipher sequence counter.** C++ `LiveEncryptor::Update` / `Finalize` and Java `LiveEncryptor.update` / `finish` now throw when the counter would advance past `2^64-1` / `Long.MAX_VALUE`, preventing AES-GCM nonce reuse under the same key.
 
 ### Changed
+
 - **`BaseFwxImage.java` split from `BaseFwx.java`.** The image-carrier public API (`kFMe`, `kFMd`, `kFAe`, `kFAd`, `jmgEncryptFile`, `jmgDecryptFile`) moved verbatim to a new **`BaseFwxImage.java`** class in the same package. The core `BaseFwx` class no longer imports `java.awt.*` / `javax.imageio.ImageIO` — enabling Android Gradle sync of the core class. **Source-level breaking change**: `BaseFwx.kFMe(...)` → `BaseFwxImage.kFMe(...)` (same for the other 5 methods). Wire format unchanged.
 - **Monolith decomposition** across C++ (filecodec, imagecipher, kfm, CLI), Java (BaseFwx codecs, CLI, MediaCipher), and Python (`legacy.py` → implementation modules). No wire-format or public API changes beyond the BaseFwxImage move.
 - **`fwxaes.cpp` wipes all key locals via `SecretGuard`.** 3.6.4 had zero `SecureClear` calls in this file vs nine in `keywrap.cpp`; every PBKDF2-derived AES key and HKDF mask key was leaked to the free-list. `SecretGuard` is now declared after the secrets it tracks so destruction order is correct (see code comments for the rationale — declaring it first is a use-after-free).
@@ -483,6 +506,7 @@ Compare: <https://github.com/F1xGOD/basefwx/compare/v3.6.4...v3.7.0>
 - **C++ `--allow-embedded-master` / `--master-autogen` CLI flags** no longer set removed env vars; they only opt into `useMaster=true` (with a deprecation notice for `--master-autogen`).
 
 ### Removed
+
 - **`b1024` retired in all three runtimes.** It was a one-line alias of `Bi512Encode(A512Encode(input))` — no new security, no new functionality, and a large chunk of the cross-runtime test-suite wall-clock. C++ `B1024Encode`, Java `BaseFwx.b1024Encode`, Python `basefwx.b1024encode`, the `b1024-enc` CLI subcommand (C++ + Java), and the `b1024` hash-bench method are all gone. Callers wanting the same output can chain `bi512(a512(input))` themselves. `scripts/test_all.sh` benchmarks and compare-blocks updated; docs cleaned.
 - `BASEFWX_MASTER_PQ_ALLOW_BAKED` env var (C++ + Java).
 - `ALLOW_BAKED_PUB` env-var alias (C++ + Java).
@@ -492,6 +516,7 @@ Compare: <https://github.com/F1xGOD/basefwx/compare/v3.6.4...v3.7.0>
 - PBKDF2-32k second-chance branch in `keywrap.cpp::RecoverMaskKey`.
 
 ### Notes
+
 - Wire format byte-identical to 3.6.4 for blobs **without** a plugin tag. Plugin-tagged blobs use `algo=0x03` and require 3.7.0+ with the matching plugin loaded.
 - See [RELEASE-NOTES-3.7.0.md](RELEASE-NOTES-3.7.0.md) for the upgrade walkthrough.
 
@@ -500,6 +525,7 @@ Compare: <https://github.com/F1xGOD/basefwx/compare/v3.6.4...v3.7.0>
 Compare: <https://github.com/F1xGOD/basefwx/compare/v3.6.3...v3.6.4>
 
 ### Added
+
 - New reversible carrier APIs in all runtimes:
   - `kFMe` / `kFMd` for auto media carrier encode/decode.
   - `kFAe` / `kFAd` legacy audio-image aliases (kept for compatibility).
@@ -527,6 +553,7 @@ Compare: <https://github.com/F1xGOD/basefwx/compare/v3.6.3...v3.6.4>
   - `SECURITY.md` "roll-forward" clarification: each release is **frozen at publish time**; maintenance means publishing a new release, not patching an existing one.
 
 ### Changed
+
 - Python package refactor from monolithic `main.py` into modular API layout, with `legacy.py` retained for compatibility internals.
 - PyPI metadata now reads from the root project README so package description matches the main repository docs.
 - jMG defaults in Python shifted toward no-archive behavior for lower output overhead; archive mode remains available.
@@ -538,6 +565,7 @@ Compare: <https://github.com/F1xGOD/basefwx/compare/v3.6.3...v3.6.4>
 - Java (`Constants.java`) and Python (`legacy.py`) default KDF parameters were aligned with the hardened C++ values listed under **Added** so all three runtimes pay the same security cost. The headline "fwxAES looks slower than 3.6.3" comparison previously came from the C++ side already being hardened while Java/Python silently still used the weaker 3.6.3 cost.
 
 ### Fixed
+
 - Multiple cross-runtime compatibility regressions in codec/KDF paths (including PBKDF2-related decode/interop issues).
 - Java and C++ parity gaps for kFM/kFA/live paths and CLI handling.
 - macOS/Windows/Linux build workflow regressions (arch matrix, dependency handling, static-linking prep).
@@ -548,6 +576,7 @@ Compare: <https://github.com/F1xGOD/basefwx/compare/v3.6.3...v3.6.4>
 - **Python `decrypt_media` / `_recover_mask_key_from_blob` unconditionally required `master_pq.sk` when a master_blob was present.** On non-custodian / open-source deployments without the matching master private key, every jmg blob produced under default master-mode was un-decryptable even with the correct password and an intact user_blob. The decrypt path now falls back to the user_blob/password path when the master private key is missing, matching the documented threat model (master-key recovery is opt-in; password is always an independent unlock path).
 
 ### Notes
+
 - jMG video mode is intentionally gated/paused by default in current release tracks for safety/stability; use fwxAES for video unless explicitly re-enabled.
 - Java media operations require `ffmpeg` available on `PATH`; missing ffmpeg will fail jMG Java tests/benchmarks.
 - Benchmark/website datasets now include newer methods (`n10`, live suites, carrier suites) and are consumed by `website/results/benchmarks-latest.json`.
@@ -560,22 +589,26 @@ Compare: <https://github.com/F1xGOD/basefwx/compare/v3.6.3...v3.6.4>
 Compare: <https://github.com/F1xGOD/basefwx/compare/v3.6.2...v3.6.3>
 
 ### Added
+
 - New `AN7` / `DEAN7` reversible stealth anonymization support in C++, Python, and Java.
 - Shared repository `VERSION` source with cross-runtime build/version metadata plumbing.
 - Release manifest generation and version-sync validation for packaged artifacts.
 - C++ CLI completion and stronger version/build reporting for release diagnostics.
 
 ### Changed
+
 - Release workflows now enforce full-support artifacts instead of silently accepting degraded Argon2/OQS/LZMA builds.
 - Release asset handling was tightened around canonical, architecture-qualified outputs and shared metadata.
 - C++, Python, and Java version/capability reporting was aligned around the same repository version and build inputs.
 - Documentation, compatibility notes, and website release metadata were synchronized around the new release process.
 
 ### Fixed
+
 - Java CLI build regression caused by missing version-command wiring/import coverage.
 - Redundant CI/release pre-build work, including unnecessary repeated `liboqs` setup in cached workflow paths.
 - Workflow/package inconsistencies that could ship artifacts without the intended full crypto feature set.
 
 ### Notes
+
 - `v3.6.3` is a release-hardening and interoperability release: stealth anonymization, stricter packaging, and consistent metadata are the main user-visible changes.
 - Python and Java now follow the repository `VERSION` file directly, so version bumps no longer need separate per-runtime edits beyond the shared source.

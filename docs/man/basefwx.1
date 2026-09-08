@@ -1,3 +1,4 @@
+.\" Generated from docs/src/en_US/man/basefwx_1.doc by scripts/yume_docs.py. Edit that file, not this one.
 .TH BASEFWX 1 "August 2026" "BaseFWX 3.8.0-dev1" "User Commands"
 .SH NAME
 basefwx \- command-line cryptographic codec tool
@@ -14,22 +15,27 @@ basefwx completion bash
 .fi
 .SH DESCRIPTION
 basefwx is the command-line frontend for the BaseFWX cryptographic codec
-library. It encrypts files, decodes BaseFWX containers, inspects container
-metadata, runs reversible text and binary encodings, and processes packetized
-live streams.
+library.
+It encrypts files, decodes BaseFWX containers, inspects container
+metadata, runs reversible text and binary encodings, and processes
+packetized live streams.
 .PP
-The retired media carrier commands are not part of a default build. See
-.B RETIRED MEDIA COMMANDS
+The retired media carrier commands are not part of a default build.
+See
+.B RETIRED
+.B MEDIA
+.B COMMANDS
 below.
 .PP
-The CLI is packaged separately from the shared library. Installing the
-basefwx package pulls in libbasefwx4 automatically; applications that only
-need the library can depend on libbasefwx4 or libbasefwx-dev without
-installing the CLI.
+The CLI is packaged separately from the shared library.
+Installing the basefwx package pulls in libbasefwx4 automatically;
+applications that only need the library can depend on libbasefwx4 or
+libbasefwx-dev without installing the CLI.
 .SH GLOBAL FLAGS
 .TP
 .B --verbose, -v
-Show additional routing and build information where a command supports it.
+Show additional routing and build information where a command supports
+it.
 .TP
 .B --no-log
 Suppress non-essential log output.
@@ -50,20 +56,20 @@ Print build version and enabled feature flags.
 .B completion bash
 Print a bash completion script.
 .TP
-.B info \fIfile.fwx\fR
+.BI "info " file.fwx
 Print BaseFWX container information.
 .TP
-.B identify \fIfile\fR
+.BI "identify " file
 Print a formatted container summary.
 .TP
-.B probe \fIfile\fR
+.BI "probe " file
 Alias for identify.
 .SH FILE ENCRYPTION
 .TP
-.B fwxaes-enc \fIfile\fR [--password \fIpassword\fR] [--out \fIpath\fR]
+\fBfwxaes-enc \fIfile\fR [--password \fIpassword\fR] [--out \fIpath\fR]\fR
 Encrypt a file with the fwxAES container path.
 .TP
-.B fwxaes-dec \fIfile\fR [--password \fIpassword\fR] [--out \fIpath\fR]
+\fBfwxaes-dec \fIfile\fR [--password \fIpassword\fR] [--out \fIpath\fR]\fR
 Decrypt a fwxAES container after authentication succeeds.
 .TP
 .B fwxaes-heavy-enc, fwxaes-heavy-dec
@@ -73,41 +79,49 @@ Aliases for the heavy fwxAES mode.
 Stream-oriented fwxAES file modes.
 .TP
 .B fwxaes-live-enc, fwxaes-live-dec
-Packetized live stream encryption and decryption. Use "-" for stdin or
-stdout where supported.
+Packetized live stream encryption and decryption.
+Use "-" for stdin or stdout where supported.
 .TP
-.B an7 \fIfile.fwx\fR [--password \fIpassword\fR] [--out \fIpath\fR] [--keep-input] [--force-any]
+\fBan7 \fIfile.fwx\fR [--password \fIpassword\fR] [--out \fIpath\fR] [--keep-input] [--force-any]\fR
 Apply the reversible AN7 stealth transform to a file that is already
-encrypted. Unlike the commands above, an7 never reads the password as a
-positional argument. It takes the input path, then only the flags listed here,
-and the password arrives through
+encrypted.
+Unlike the commands above, an7 never reads the password as a positional
+argument.
+It takes the input path, then only the flags listed here, and the
+password arrives through
 .B --password
 or
 .BR -p .
-Keys come from Argon2id over a fresh 16-byte salt at time cost 5, 128 MiB, and
-parallelism 4. The payload is rewritten in 1 MiB chunks, then an encrypted
-trailer and a 64-byte footer are appended. The input must end in .fwx unless
+Keys come from Argon2id over a fresh 16-byte salt at time cost 5, 128
+MiB, and parallelism 4.
+The payload is rewritten in 1 MiB chunks, then an encrypted trailer and
+a 64-byte footer are appended.
+The input must end in .fwx unless
 .B --force-any
-is given. Without
+is given.
+Without
 .B --out
-the result is written beside the input as "data" followed by ten random digits,
-and an
+the result is written beside the input as "data" followed by ten random
+digits, and an
 .B --out
-path that names an existing directory receives that generated name. The input
-file is removed on success unless
+path that names an existing directory receives that generated name.
+The input file is removed on success unless
 .B --keep-input
 is given.
 .TP
-.B dean7 \fIfile\fR [--password \fIpassword\fR] [--out \fIpath\fR] [--keep-input]
-Reverse an AN7 file and print the restored path. The original name, extension,
-and SHA-256 digest are read from the encrypted trailer, and the digest is
-checked before the command reports success. The password is supplied the same
-way as for an7, and
+\fBdean7 \fIfile\fR [--password \fIpassword\fR] [--out \fIpath\fR] [--keep-input]\fR
+Reverse an AN7 file and print the restored path.
+The original name, extension, and SHA-256 digest are read from the
+encrypted trailer, and the digest is checked before the command reports
+success.
+The password is supplied the same way as for an7, and
 .B --force-any
-is rejected here. Without
+is rejected here.
+Without
 .B --out
-the restored file is written beside the input under its recovered original
-name. The input file is removed on success unless
+the restored file is written beside the input under its recovered
+original name.
+The input file is removed on success unless
 .B --keep-input
 is given.
 .TP
@@ -127,14 +141,17 @@ SHA-512 hash helper command.
 .B b512-enc, b512-dec, pb512-enc, pb512-dec
 Password-backed text codec modes.
 .SH BENCHMARK COMMANDS
-The bench commands are measurement helpers, not data-processing commands. Each
-one prints
-.B BENCH_NS=\fIn\fR
-with the median wall-clock nanoseconds of one timed iteration. Some commands
-also print a verification or throughput line. All leave the named input in
-place, but only bench-an7, bench-dean7, bench-b512file, and bench-pb512file copy
-or seed per-worker inputs in owner-only temporary directories. The fwxAES commands read
-the named input into memory, and bench-live reads it directly.
+The bench commands are measurement helpers, not data-processing
+commands.
+Each one prints
+.BI BENCH_NS= n
+with the median wall-clock nanoseconds of one timed iteration.
+Some commands also print a verification or throughput line.
+All leave the named input in place, but only bench-an7, bench-dean7,
+bench-b512file, and bench-pb512file copy or seed per-worker inputs in
+owner-only temporary directories.
+The fwxAES commands read the named input into memory, and bench-live
+reads it directly.
 .PP
 Iteration and thread counts come from the environment:
 .B BASEFWX_BENCH_WARMUP
@@ -144,105 +161,135 @@ Iteration and thread counts come from the environment:
 .B BASEFWX_BENCH_WORKERS
 (default the detected hardware concurrency), and
 .B BASEFWX_BENCH_PARALLEL
-set to 0, false, off, or no to force a single worker. Every bench command
-except bench-hash also accepts the master-key flags described in
-.B KEY OPTIONS
+set to 0, false, off, or no to force a single worker.
+Every bench command except bench-hash also accepts the master-key flags
+described in
+.B KEY
+.B OPTIONS
 below.
 .TP
-.B bench-text \fImethod\fR \fItext-file\fR [--password \fIpassword\fR]
-Time one encode plus decode round trip of the file's text. \fImethod\fR is
-b64, n10, b512, or pb512. The b512 and pb512 methods take a password and also
-accept --kdf and --pbkdf2-iters.
+\fBbench-text \fImethod text-file\fR [--password \fIpassword\fR]\fR
+Time one encode plus decode round trip of the file's text.
+.I method
+is b64, n10, b512, or pb512.
+The b512 and pb512 methods take a password and also accept --kdf and
+--pbkdf2-iters.
 .TP
-.B bench-hash \fImethod\fR \fItext-file\fR
-Time hashing of the file's text. \fImethod\fR is hash512. This command takes
-no flags.
+.BI "bench-hash " "method text-file"
+Time hashing of the file's text.
+.I method
+is hash512.
+This command takes no flags.
 .TP
-.B bench-fwxaes \fIfile\fR \fIpassword\fR
-Time one in-memory fwxAES encrypt plus decrypt round trip over the file bytes.
+.BI "bench-fwxaes " "file password"
+Time one in-memory fwxAES encrypt plus decrypt round trip over the file
+bytes.
 This one is single-threaded and ignores the worker setting.
 .TP
-.B bench-fwxaes-par \fIfile\fR \fIpassword\fR
-Time the same fwxAES round trip spread across worker threads. It prints an
-extra
-.B THROUGHPUT_GiBps=\fIvalue\fR WORKERS=\fIn\fR
+.BI "bench-fwxaes-par " "file password"
+Time the same fwxAES round trip spread across worker threads.
+It prints an extra
+.BI THROUGHPUT_GiBps= value
+.RI WORKERS= n
 line when the measurement is usable.
 .TP
-.B bench-an7 \fIfile\fR \fIpassword\fR
+.BI "bench-an7 " "file password"
 Time an7 over a per-worker fwxAES-encrypted seed built from the input.
 .TP
-.B bench-dean7 \fIfile\fR \fIpassword\fR
+.BI "bench-dean7 " "file password"
 Time dean7 over a per-worker AN7 seed built the same way.
 .TP
-.B bench-live \fIfile\fR \fIpassword\fR
-Time a packetized live encrypt plus decrypt round trip in memory and verify the
-restored length. In the C++ CLI the worker count is capped to fit the input size
-and available memory, and a warning names the reduced count.
+.BI "bench-live " "file password"
+Time a packetized live encrypt plus decrypt round trip in memory and
+verify the restored length.
+In the C++ CLI the worker count is capped to fit the input size and
+available memory, and a warning names the reduced count.
 .B BASEFWX_BENCH_MEMORY_LIMIT_BYTES
-overrides that C++ memory budget. The Java command uses the configured worker
-count without this extra cap and prints
-.BR BENCH_VERIFIED_BYTES=\fIn\fR .
+overrides that C++ memory budget.
+The Java command uses the configured worker count without this extra cap
+and prints
+\fBBENCH_VERIFIED_BYTES=\fIn\fR.\fR
 .TP
-.B bench-b512file \fIfile\fR \fIpassword\fR
-Time a b512 file encode plus decode round trip on a per-worker copy of the
-input.
+.BI "bench-b512file " "file password"
+Time a b512 file encode plus decode round trip on a per-worker copy of
+the input.
 .TP
-.B bench-pb512file \fIfile\fR \fIpassword\fR
+.BI "bench-pb512file " "file password"
 Time the same round trip through the pb512 file codec.
 .PP
 Both C++ and Java bench-fwxaes-par print
-.B THROUGHPUT_GiBps=\fIvalue\fR WORKERS=\fIn\fR
-when the measurement is usable. Java bench-live also prints the verified-byte
-line described above.
+.BI THROUGHPUT_GiBps= value
+.RI WORKERS= n
+when the measurement is usable.
+Java bench-live also prints the verified-byte line described above.
 .SH RETIRED COMPATIBILITY COMMANDS
-b256, A512, Bi512, Uhash513, the jMG media cipher, and the kFM/kFA carrier
-codecs are retired. A default build does not compile or install them, and the
-commands below are absent from its help output and completion script.
+b256, A512, Bi512, Uhash513, the jMG media cipher, and the kFM/kFA
+carrier codecs are retired.
+A default build does not compile or install them, and the commands below
+are absent from its help output and completion script.
 .PP
 They exist only in a compatibility build, configured with
 .BR -DBASEFWX_ENABLE_RETIRED_MEDIA=ON ,
-and is meant for reading retired data that already exists. That build preserves
-the historical commands, formats, and bytes; it receives security, correctness,
-and existing-data compatibility fixes only. Encrypt new media with
+and is meant for reading retired data that already exists.
+That build preserves the historical commands, formats, and bytes; it
+receives security, correctness, and existing-data compatibility fixes
+only.
+Encrypt new media with
 .B fwxaes-enc
 instead.
 .PP
-Because the switch selects what gets compiled, it cannot restore these commands
-in an artifact that was built without them. Use a compatibility build of the
-same BaseFWX version that wrote the file.
+Because the switch selects what gets compiled, it cannot restore these
+commands in an artifact that was built without them.
+Use a compatibility build of the same BaseFWX version that wrote the
+file.
 .TP
 .B b256-enc, b256-dec, a512-enc, a512-dec, bi512-enc, uhash513
 Historical text codecs retained for exact-byte and decode compatibility.
 .TP
-.B jmge \fImedia\fR [--password \fIpassword\fR] [--out \fIpath\fR]
+\fBjmge \fImedia\fR [--password \fIpassword\fR] [--out \fIpath\fR]\fR
 Encode media through the jMG media cipher path.
 .TP
-.B jmgd \fImedia\fR [--password \fIpassword\fR] [--out \fIpath\fR]
+\fBjmgd \fImedia\fR [--password \fIpassword\fR] [--out \fIpath\fR]\fR
 Decode jMG media output.
 .TP
-.B kFMe \fIinput\fR [--out \fIpath\fR] [--bw]
+\fBkFMe \fIinput\fR [--out \fIpath\fR] [--bw]\fR
 Encode into a strict BaseFWX carrier format.
 .TP
-.B kFMd \fIinput\fR [--out \fIpath\fR] [--bw]
-Decode a strict BaseFWX carrier. Plain media that is not a BaseFWX carrier
-is rejected.
+\fBkFMd \fIinput\fR [--out \fIpath\fR] [--bw]\fR
+Decode a strict BaseFWX carrier.
+Plain media that is not a BaseFWX carrier is rejected.
 .TP
 .B kFAe, kFAd
 Deprecated aliases for the PNG-only carrier path.
 .SH KEY OPTIONS
 .TP
-.B --password \fIpassword\fR
-Provide a password on the command line. Passworded commands prompt on a TTY
-when this option is omitted.
+.BI "--password " password
+Provide a password on the command line.
+Passworded commands prompt on a TTY when this option is omitted.
 .TP
 .B --use-master, --no-master
 Enable or disable master-key wrapping where a command supports it.
+Provision the intended public key, retain metadata, and verify
+complete-file recovery independently.
+Some file paths replace requested master intent with key availability or
+metadata stripping, so command success does not establish that a
+recoverable master wrap was written.
+Streaming B512 uses STRMOBF1 and still requires the original password
+for its internal obfuscation.
+The reader does not authenticate that password separately; a matching
+master key with a wrong password can produce corrupted output.
+For password recovery with an unrelated configured master private key,
+use
+.BR --no-master .
+Enabled master recovery is tried first; payload authentication failure
+does not retry the password path.
 .TP
-.B --master-pub \fIpath\fR
+.BI "--master-pub " path
 Use a master public key file where supported.
 .TP
 .B --master-autogen
-Deprecated and has no effect since 3.7.0. It only implies
+Deprecated and has no effect since 3.7.0.
+It only implies
 .BR --use-master .
 Silent EC master autogeneration was removed.
 .TP
@@ -250,37 +297,41 @@ Silent EC master autogeneration was removed.
 Allow embedded master-key metadata where supported.
 .TP
 .B --strip-meta
-Omit file-container metadata where supported. AES-heavy pb512file authoring
-rejects this option because its KDF costs require metadata for recovery.
+Omit file-container metadata where supported.
+AES-heavy pb512file authoring rejects this option because its KDF costs
+require metadata for recovery.
 B512file authoring also rejects it when the input selects the streaming
 container, whose metadata carries the required dispatch marker.
 .TP
-.B --kdf \fIlabel\fR, --pbkdf2-iters \fIn\fR
+\fB--kdf \fIlabel\fR, --pbkdf2-iters \fIn\fR
 Select key-derivation behavior where a command supports it.
 .SH DATA FLOW
+.\" yume-diagram: data_flow
 .nf
-+--------------------------------+
-|  INPUT                         |
-|  file, stream, or text         |
-+--------------------------------+
-        |
-        v
-+--------------------------------+
-|  BASEFWX CLI                   |
-|  selected command + options    |
-+--------------------------------+
-        |
-        | ===>
-        v
-+--------------------------------+
-|  BASEFWX OUTPUT                |
-|  container or stream           |
-+--------------------------------+
++-----------------------------+
+|  INPUT                      |
+|  file, stream, or text      |
++--------------+--------------+
+                \e
+                 \e
+                  v
+   +--------------+--------------+
+   |  BASEFWX CLI                |
+   |  selected command + options |
+   +--------------+--------------+
+                   \e
+                    \e
+                     v
+      +--------------+--------------+
+      |  BASEFWX OUTPUT             |
+      |  container or stream        |
+      +-----------------------------+
 .fi
+.\" /yume-diagram
 .SH EXIT STATUS
-The command exits with status 0 on success and non-zero on invalid usage,
-decode failure, authentication failure, I/O failure, or missing build support
-for a requested feature.
+The command exits with status 0 on success and non-zero on invalid
+usage, decode failure, authentication failure, I/O failure, or missing
+build support for a requested feature.
 .SH SEE ALSO
 .BR basefwx (7)
 .PP

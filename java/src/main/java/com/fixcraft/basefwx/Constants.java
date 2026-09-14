@@ -112,6 +112,8 @@ public final class Constants {
 
     public static final byte[] B512_FILE_MASK_INFO = "basefwx.b512file.mask.v1".getBytes(StandardCharsets.US_ASCII);
     public static final byte[] B512_AEAD_INFO = "basefwx.b512file.v1".getBytes(StandardCharsets.US_ASCII);
+    public static final byte[] B512_STREAM_OBF_INFO_V2 =
+            "basefwx.b512file.stream.obf.v2".getBytes(StandardCharsets.US_ASCII);
     public static final byte[] FWXAES_PAYLOAD_AEAD_INFO =
             "basefwx.fwxaes.payload.aead.v1".getBytes(StandardCharsets.US_ASCII);
     public static final byte[] FWXAES_PAYLOAD_OBF_INFO =
@@ -121,6 +123,8 @@ public final class Constants {
     public static final int STREAM_CHUNK_SIZE_MAX = 16 << 20;
     public static final int HKDF_MAX_LEN = 255 * 32;
     public static final byte[] STREAM_MAGIC = "STRMOBF1".getBytes(StandardCharsets.US_ASCII);
+    public static final byte[] B512_STREAM_MAGIC_V2 =
+            "B512STR2".getBytes(StandardCharsets.US_ASCII);
     public static final byte[] STREAM_INFO_KEY = "basefwx.stream.obf.key.v1".getBytes(StandardCharsets.US_ASCII);
     public static final byte[] STREAM_INFO_IV = "basefwx.stream.obf.iv.v1".getBytes(StandardCharsets.US_ASCII);
     public static final byte[] STREAM_INFO_PERM = "basefwx.stream.obf.perm.v1".getBytes(StandardCharsets.US_ASCII);

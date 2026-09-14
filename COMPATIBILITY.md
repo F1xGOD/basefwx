@@ -98,14 +98,25 @@ clock synchronization.
 
 ## Streaming B512 recovery
 
-Streaming B512 containers use the authenticated inner magic `STRMOBF1`, but
-their internal obfuscation depends on the supplied password. A master key can
-open the outer encryption without recovering that password. The reader does
-not independently authenticate the password used for this final transform,
-so a correct master key with a wrong password can produce corrupted output
-without an authentication error. Master recovery alone is insufficient for
-these streams. Retain the original password and verify restored bytes against
-an independent original before replacing data.
+New streaming B512 containers carry the authenticated inner magic `B512STR2`.
+Their obfuscation key is HKDF-SHA256 of the recovered 32-byte mask key, with an
+empty salt, the ASCII info `basefwx.b512file.stream.obf.v2`, and 32 output bytes.
+The existing stream obfuscator consumes this key plus the stored stream salt.
+Password and master recovery therefore produce the same file bytes. The outer
+AEAD, mask-wrap domains, metadata framing, and AES-heavy stream format are
+unchanged. Streaming B512 authoring still requires a nonempty password.
+
+For the mask key `00 01 ... 1f`, the derived obfuscation key is
+`f53aec8167a000ca3ae3d2e001444946f141697a01f07526f2d476d6afd76f04`.
+The C++, Java, and Python regression suites pin this vector.
+
+Released `STRMOBF1` B512 streams obfuscate with the password itself. They remain
+readable only with an intact user wrap and its correct password, even when a
+valid master key opens the outer encryption. Readers authenticate that password
+wrap and match its recovered mask key before publishing output; missing or
+wrong passwords fail. A master key alone cannot recover the old password-based
+obfuscation. Older readers reject `B512STR2` at the inner magic; upgrade the
+reader before exchanging newly written streams. Unknown magic is refused.
 
 ## KDF compatibility and limits
 
@@ -182,14 +193,20 @@ before publication.
 
 ## Master recovery
 
-The password-only path works when master recovery is disabled and the format
-retains its password wrap. Public writer enforcement of requested master
-recovery is incomplete: some wrappers replace the request with key availability
-or strip the metadata that carries recovery. Python nested file tokens can
-reselect a host recipient instead of retaining the caller-supplied outer key.
-A successful encode is not proof that the requested recipient can recover all
-layers. See [SECURITY.md](SECURITY.md#optional-master-recovery) for the
-provisioning and verification boundary.
+The password-only path works in every runtime when master recovery is disabled.
+Maintained public writers reject a requested master wrap when no public key is
+configured and propagate key-loading and encapsulation failures. B512/PB512
+and AES-light/heavy file writers refuse container metadata stripping combined
+with requested master recovery. This tightens
+authoring input acceptance without changing the stored format or the independent
+password/master decode paths. Python's mixed file batches apply writer policy
+per encode input and keep password recovery independent of encryption public-key
+configuration. Python file containers retain one selected recipient across
+their outer and nested wraps; an explicit `master_pubkey` takes precedence over
+host configuration in both small-file and streaming paths.
+Retired Python jMG retains its separate
+opportunistic selection contract. See
+[SECURITY.md](SECURITY.md#optional-master-recovery) for provisioning requirements.
 
 When master recovery is retained, all runtimes prefer a provisioned ML-KEM
 public key. Its standardized size

@@ -32,7 +32,7 @@ STRINGS_DIR = REPO_ROOT / "docs" / "src"
 STRINGS_NAME = "diagrams.json"
 
 STRINGS_KEYS = {"title", "summary", "nodes", "edges", "groups"}
-STRINGS_NODE_KEYS = {"title", "sub"}
+STRINGS_NODE_KEYS = {"title", "sub", "note"}
 STRINGS_EDGE_KEYS = {"label"}
 
 # SVG card tiers. ASCII uses content-sized boxes and a separate terminal budget.
@@ -41,7 +41,10 @@ WIDE_WIDTH = 72
 
 NAME_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 
-DIAGRAM_TYPES = ("route",)
+# `route` is one ordered chain. `flow` is a chain whose nodes may each send one
+# branch to a side node, such as a front door turning away a request. `layers`
+# is one wrapping, listed from the innermost layer outwards, with no edges.
+DIAGRAM_TYPES = ("route", "flow", "layers")
 
 # Both layouts are rendered for every web diagram. A page picks the one that
 # suits its shape, so the specification never has to guess where it is used.
@@ -52,7 +55,10 @@ NODE_KINDS = (
     "app",
     "client",
     "server",
+    "gate",
+    "key",
     "target",
+    "site",
     "relay",
     "tor",
     "tun",
@@ -65,7 +71,42 @@ NODE_KINDS = (
 # so a reader can see at a glance which hops this project runs and which it
 # only talks to. It is a software boundary, not a trust claim: yumed still
 # terminates the tunnel and sees the traffic it forwards.
-YUME_OWNED_KINDS = ("client", "server", "relay", "tun")
+YUME_OWNED_KINDS = ("client", "server", "gate", "relay", "tun")
+
+# A role is what a node's colour means. Every rendering that colours a node
+# (the website figure, companion pages, the explainer video) reads the same
+# role, so one colour carries one meaning everywhere. The colours themselves
+# are website tokens, and a site without role tokens draws every role in its
+# accent. `neutral` is for plumbing a reader should not have to decode.
+ROLES = ("client", "server", "data", "disguise", "keys", "outside", "refused", "neutral")
+
+# The role a kind has when the specification does not name one.
+KIND_ROLES = {
+    "app": "data",
+    "client": "client",
+    "tun": "client",
+    "server": "server",
+    "gate": "server",
+    "key": "keys",
+    "relay": "server",
+    "target": "outside",
+    "site": "disguise",
+    "tor": "outside",
+    "cloud": "outside",
+    "process": "neutral",
+    "file": "data",
+}
+
+# A note is the plain-language sentence a first-time reader gets beside the
+# figure. It is not drawn inside the SVG or the ASCII form, so its length is
+# bounded by what reads as one short explanation rather than by a card.
+NOTE_LIMIT = 280
+
+# A source is a repository-relative file or directory that backs a node's
+# claim. `check` fails when one disappears, which is how a renamed file shows
+# up as a figure that needs review instead of a silently stale pointer.
+SOURCE_RE = re.compile(r"^(?!/)(?!.*(^|/)\.\.(/|$))[A-Za-z0-9_.\-/]+$")
+SOURCE_LIMIT = 4
 
 # A group title is drawn above the nodes it encloses, so it has to stay short
 # enough not to widen the figure past the run it names.
@@ -93,7 +134,7 @@ SPEC_KEYS = {
     "edges",
 }
 TARGET_KEYS = {"web"}
-NODE_KEYS = {"id", "kind", "title", "sub", "group"}
+NODE_KEYS = {"id", "kind", "title", "sub", "group", "role", "note", "source", "side"}
 EDGE_KEYS = {"from", "to", "label", "channel"}
 
 
@@ -108,6 +149,15 @@ class Node:
     title: str
     sub: str = ""
     group: str = ""
+    role: str = ""
+    note: str = ""
+    sources: list[str] = field(default_factory=list)
+    side: bool = False
+
+    @property
+    def tone(self) -> str:
+        """The declared role, or the one this node's kind implies."""
+        return self.role or KIND_ROLES.get(self.kind, "neutral")
 
 
 @dataclass
@@ -165,11 +215,42 @@ class Spec:
         longest = max(max(len(n.title), len(n.sub)) for n in self.nodes)
         return longest + 5
 
+    def chain(self) -> list[Node]:
+        """The nodes the main path runs through, in order."""
+        return [node for node in self.nodes if not node.side]
+
+    def chain_edges(self) -> list[Edge]:
+        """The hops along the main path, one per consecutive pair of chain nodes."""
+        chain = self.chain()
+        by_pair = {(edge.source, edge.target): edge for edge in self.edges}
+        return [by_pair[(a.id, b.id)] for a, b in zip(chain, chain[1:])]
+
+    def branches(self) -> list[tuple[int, Edge, Node]]:
+        """Each side branch as (chain index of its parent, edge, side node)."""
+        chain_index = {node.id: index for index, node in enumerate(self.chain())}
+        sides = {node.id: node for node in self.nodes if node.side}
+        return [
+            (chain_index[edge.source], edge, sides[edge.target])
+            for edge in self.edges
+            if edge.target in sides
+        ]
+
+    def inputs(self) -> list[tuple[Edge, Node]]:
+        """Each side node that feeds the first chain node, in edge order."""
+        sides = {node.id: node for node in self.nodes if node.side}
+        return [(edge, sides[edge.source]) for edge in self.edges if edge.source in sides]
+
+    def branch_at(self, index: int) -> tuple[Edge, Node] | None:
+        for parent, edge, node in self.branches():
+            if parent == index:
+                return edge, node
+        return None
+
     def edge_into(self, index: int) -> Edge | None:
-        """The edge entering nodes[index], or None for the first node."""
+        """The edge entering chain()[index], or None for the first node."""
         if index == 0:
             return None
-        return self.edges[index - 1]
+        return self.chain_edges()[index - 1]
 
 
 def _require(condition: bool, path: Path, message: str) -> None:
@@ -280,8 +361,28 @@ def _parse_nodes(document: dict, spec: Spec, path: Path) -> None:
         _require(bool(NAME_RE.match(node_id)), path, f"{where} id {node_id!r} must be lowercase with underscores")
         _require(node_id not in seen, path, f"duplicate node id {node_id!r}")
         seen.add(node_id)
-        kind = _string(entry, "kind", path, where)
-        _require(kind in NODE_KINDS, path, f"{where} has unknown kind {kind!r}")
+        # A layer has no glyph, so it names its role instead of a kind.
+        kind = _string(entry, "kind", path, where, required=spec.type != "layers")
+        _require(kind == "" or kind in NODE_KINDS, path, f"{where} has unknown kind {kind!r}")
+        role = _string(entry, "role", path, where, required=spec.type == "layers")
+        _require(role == "" or role in ROLES, path, f"{where} has unknown role {role!r}")
+        note = _string(entry, "note", path, where, required=False)
+        _require(
+            len(note) <= NOTE_LIMIT,
+            path,
+            f"{where} note is {len(note)} characters; keep it under {NOTE_LIMIT}",
+        )
+        sources = entry.get("source", [])
+        _require(
+            isinstance(sources, list)
+            and len(sources) <= SOURCE_LIMIT
+            and all(isinstance(item, str) and SOURCE_RE.match(item) for item in sources),
+            path,
+            f"{where} source must list at most {SOURCE_LIMIT} repository-relative paths",
+        )
+        side = entry.get("side", False)
+        _require(isinstance(side, bool), path, f"{where} side must be true or false")
+        _require(not side or spec.type == "flow", path, f"{where} is a side node, which only a flow has")
         spec.nodes.append(
             Node(
                 id=node_id,
@@ -289,6 +390,10 @@ def _parse_nodes(document: dict, spec: Spec, path: Path) -> None:
                 title=_string(entry, "title", path, where),
                 sub=_string(entry, "sub", path, where, required=False),
                 group=_string(entry, "group", path, where, required=False),
+                role=role,
+                note=note,
+                sources=list(sources),
+                side=side,
             )
         )
 
@@ -297,6 +402,11 @@ def _parse_edges(document: dict, spec: Spec, path: Path) -> None:
     edges = document.get("edges")
     _require(isinstance(edges, list), path, "edges must be a list")
     ids = [node.id for node in spec.nodes]
+    if spec.type == "layers":
+        _require(not edges, path, "a layers diagram has no edges; list its layers innermost first")
+        for node in spec.nodes:
+            _require(not node.group, path, f"layer {node.id!r} cannot join a group")
+        return
     for index, entry in enumerate(edges, start=1):
         where = f"edge {index}"
         _require(isinstance(entry, dict), path, f"{where} must be an object")
@@ -331,6 +441,56 @@ def _parse_edges(document: dict, spec: Spec, path: Path) -> None:
                 path,
                 f"edge {index + 1} must join {ids[index]!r} to {ids[index + 1]!r} for a route",
             )
+        return
+
+    # A flow is a chain in node order, written first, followed by one edge per
+    # side node. A side node is either a branch, reached from one chain node
+    # that sends no other branch, or an input that feeds the first chain node.
+    # Inputs converge on one bus in every renderer, so they carry no label and
+    # no channel. Their words belong in the input's own title and sub.
+    chain = [node.id for node in spec.nodes if not node.side]
+    sides = [node.id for node in spec.nodes if node.side]
+    _require(len(chain) >= 2, path, "a flow needs at least two chain nodes")
+    expected = len(chain) - 1 + len(sides)
+    _require(
+        len(spec.edges) == expected,
+        path,
+        f"a flow with {len(chain)} chain and {len(sides)} side nodes needs {expected} edges, got {len(spec.edges)}",
+    )
+    for index, edge in enumerate(spec.edges[: len(chain) - 1]):
+        _require(
+            edge.source == chain[index] and edge.target == chain[index + 1],
+            path,
+            f"edge {index + 1} must join {chain[index]!r} to {chain[index + 1]!r}; chain edges come first",
+        )
+    parents: set[str] = set()
+    joined: list[str] = []
+    for index, edge in enumerate(spec.edges[len(chain) - 1:], start=len(chain)):
+        branch = edge.source in chain and edge.target in sides
+        feeds = edge.source in sides and edge.target == chain[0]
+        _require(
+            branch or feeds,
+            path,
+            f"edge {index} must run from a chain node to a side node, or from a side node into {chain[0]!r}",
+        )
+        if branch:
+            _require(edge.source not in parents, path, f"{edge.source!r} sends more than one branch")
+            parents.add(edge.source)
+            joined.append(edge.target)
+            continue
+        _require(
+            not edge.label and edge.channel == "plain",
+            path,
+            f"edge {index} is an input to {chain[0]!r}. Inputs take no label or channel, so put the words in the input's sub",
+        )
+        joined.append(edge.source)
+    _require(
+        sorted(joined) == sorted(sides),
+        path,
+        "every side node needs exactly one edge, as a branch or as an input",
+    )
+    for node in spec.nodes:
+        _require(not (node.side and node.group), path, f"side node {node.id!r} sits with its parent and takes no group")
 
 
 def _check_widths(spec: Spec, path: Path) -> None:
@@ -350,6 +510,17 @@ def is_yume_owned(kind: str) -> bool:
     return kind in YUME_OWNED_KINDS
 
 
+def missing_sources(spec: Spec, root: Path | None = None) -> list[str]:
+    """Every declared source path that does not exist in the repository."""
+    base = root or REPO_ROOT
+    return [
+        f"{_relative(spec.path)}: node {node.id!r} names missing source {source!r}"
+        for node in spec.nodes
+        for source in node.sources
+        if not (base / source.rstrip("/")).exists()
+    ]
+
+
 def _check_groups(spec: Spec, path: Path) -> None:
     """A group encloses a run of adjacent nodes and names what it encloses.
 
@@ -359,10 +530,11 @@ def _check_groups(spec: Spec, path: Path) -> None:
     make.
     """
     seen: list[str] = []
-    for index, node in enumerate(spec.nodes):
+    chain = spec.chain()
+    for index, node in enumerate(chain):
         if not node.group:
             continue
-        if index and spec.nodes[index - 1].group == node.group:
+        if index and chain[index - 1].group == node.group:
             continue
         _require(
             node.group not in seen,
@@ -385,16 +557,17 @@ def _check_groups(spec: Spec, path: Path) -> None:
 
 
 def groups(spec: Spec) -> list[tuple[int, int, str]]:
-    """Each run of adjacent nodes sharing a group, as (first, last, title)."""
+    """Each run of adjacent chain nodes sharing a group, as (first, last, title)."""
     runs: list[tuple[int, int, str]] = []
+    chain = spec.chain()
     index = 0
-    while index < len(spec.nodes):
-        title = spec.nodes[index].group
+    while index < len(chain):
+        title = chain[index].group
         if not title:
             index += 1
             continue
         last = index
-        while last + 1 < len(spec.nodes) and spec.nodes[last + 1].group == title:
+        while last + 1 < len(chain) and chain[last + 1].group == title:
             last += 1
         runs.append((index, last, title))
         index = last + 1
@@ -455,6 +628,7 @@ def apply_strings(spec: Spec, document: dict, language: str) -> Spec:
                 continue
             node.title = values.get("title", node.title)
             node.sub = values.get("sub", node.sub)
+            node.note = values.get("note", node.note)
 
     edges = entry.get("edges", {})
     _require(isinstance(edges, dict), path, f"{spec.name}.edges must be an object")
@@ -495,6 +669,8 @@ def missing_strings(spec: Spec, document: dict) -> list[str]:
             gaps.append(f"{spec.name}.nodes.{node.id}.title")
         if node.sub and "sub" not in values:
             gaps.append(f"{spec.name}.nodes.{node.id}.sub")
+        if node.note and "note" not in values:
+            gaps.append(f"{spec.name}.nodes.{node.id}.note")
     edges = entry.get("edges", {})
     for edge in spec.edges:
         if not edge.label:

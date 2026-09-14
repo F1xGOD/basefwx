@@ -18,6 +18,11 @@ The script creates a local virtual environment by default and writes its log to
 `diagnose.log`. It exercises the maintained C++, Python, and Java formats,
 cross-runtime compatibility, negative cases, and the configured benchmark
 policy. Retired media tests run only in the explicit compatibility profile.
+Environment creation, pip preparation and editable-source installation must
+all succeed before tests begin. Failure stops the suite at the named stage;
+the driver does not switch to another interpreter after a requested
+environment or interpreter fails. Existing environments are not deleted on
+failure.
 
 Use a smaller mode while developing:
 
@@ -70,6 +75,30 @@ cmake -S cpp -B cpp/build -DCMAKE_BUILD_TYPE=RelWithDebInfo
 cmake --build cpp/build --parallel
 ctest --test-dir cpp/build --output-on-failure
 @end
+
+`scripts/test_all.sh` uses `scripts/run_cpp_tests.py` for its internal native
+gate. The driver discovers every configured CTest except the
+`basefwx-packaging` label, then requires a passing JUnit result for every
+discovered test. Empty inventories, disabled or skipped tests, missing results,
+and configure/build failures fail the gate; an old executable cannot stand in
+for a failed build. New runtime tests enter this gate through CMake's
+`add_test()` without updating a second name list. The retired-media policy test
+enters only when that profile is configured. Packaging/exported-library checks
+keep their separate lane and remain included by the unfiltered CTest command
+above.
+
+The driver requires Python 3.9+ and CTest 3.21+ for JUnit output. To run only
+this gate after building:
+
+@code bash
+python3 scripts/run_cpp_tests.py --build-dir cpp/build --output-junit cpp/build/runtime-tests.xml
+python3 scripts/test_run_cpp_tests.py
+@end
+
+The second command checks the driver's failure handling with tiny real CTest
+fixtures and isolated Python/native setup failures; it does not install
+dependencies, build or qualify the library. The main suite retains its
+report at `.tmp_basefwx_tests/out/cpp-internal-tests.xml` until the next run.
 
 Format or security changes also need the shared known-answer tests and the
 cross-runtime suite. Packaging, ABI, sanitizer, leak, or benchmark changes need

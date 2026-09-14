@@ -259,6 +259,26 @@ def _ensure_size_limit(path: 'basefwx.pathlib.Path', max_bytes: int=None) -> Non
         raise ValueError(f'{path.name} is {human_size}, exceeding the {human_limit} limit for this mode')
 
 
+def _looks_like_password_source(value: str) -> bool:
+    return value.startswith(('password://', 'file://', 'yubikey:'))
+
+
+def _password_file_starts_with_reference(value: bytes) -> bool:
+    return value.startswith((b'password://', b'file://'))
+
+
+def _read_password_file(candidate: 'basefwx.pathlib.Path') -> bytes:
+    secret = candidate.read_bytes()
+    if _password_file_starts_with_reference(secret):
+        raise ValueError(
+            f'Password file {candidate} starts with a password:// or file:// '
+            'scheme. Resolving it again would derive a different key than '
+            'resolving it once, so the contents are refused as ambiguous '
+            'rather than guessed. Store the literal secret bytes in the file.'
+        )
+    return secret
+
+
 def _resolve_password(password: 'basefwx.typing.Union[str, bytes, bytearray, memoryview]', use_master: bool=True) -> 'basefwx.typing.Union[str, bytes]':
     if password is None:
         if not use_master:
@@ -273,7 +293,7 @@ def _resolve_password(password: 'basefwx.typing.Union[str, bytes, bytearray, mem
         candidate = password.expanduser()
         if not candidate.is_file():
             raise ValueError(f'Password file not found: {candidate}')
-        return candidate.read_bytes()
+        return _read_password_file(candidate)
     if password == '':
         if not use_master:
             raise ValueError('Password required when master key usage is disabled')
@@ -291,16 +311,28 @@ def _resolve_password(password: 'basefwx.typing.Union[str, bytes, bytearray, mem
             raise ValueError(str(exc)) from exc
     # Match C++ ResolvePassword (3.7.0+): bare passwords are ALWAYS literal.
     # Filesystem read is opt-in via an explicit file:// URI. password://
-    # forces the literal-string interpretation. The old auto-detect behavior
-    # (read input as a file if it happened to name an existing path) is gone.
+    # forces the literal-string interpretation for a non-reference value. A
+    # successful resolution never returns another password reference, so two
+    # API layers cannot silently derive different keys. The old auto-detect
+    # behavior (read input as a file if it happened to name an existing path)
+    # is gone.
     if isinstance(password, str) and password.startswith('password://'):
-        return password[len('password://'):]
+        literal = password[len('password://'):]
+        if _looks_like_password_source(literal):
+            raise ValueError(
+                'password:// value itself starts with another password '
+                'source scheme. Resolving it again would derive a different '
+                'key than resolving it once, so it is refused as ambiguous. '
+                'Password resolution is idempotent by contract: its result '
+                'is never a reference.'
+            )
+        return literal
     if isinstance(password, str) and password.startswith('file://'):
         path = password[len('file://'):]
         candidate = basefwx.pathlib.Path(path).expanduser()
         if not candidate.is_file():
             raise ValueError(f'Password file not found: {candidate}')
-        return candidate.read_bytes()
+        return _read_password_file(candidate)
     return password
 
 

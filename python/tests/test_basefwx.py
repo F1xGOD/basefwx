@@ -1346,7 +1346,7 @@ class CryptographyIntegrationTests(unittest.TestCase):
                 )
 
     def test_resolve_password_uri_schemes(self):
-        """Bare strings stay literal; file:// reads; password:// forces literal."""
+        """Bare strings stay literal; URI results resolve idempotently."""
         secret = b"file-secret-contents\n"
         with TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
@@ -1356,14 +1356,27 @@ class CryptographyIntegrationTests(unittest.TestCase):
             # Bare string that happens to name an existing file must NOT be read.
             bare = str(pw_file)
             self.assertEqual(basefwx._resolve_password(bare, use_master=False), bare)
+            self.assertEqual(
+                basefwx._resolve_password(
+                    basefwx._resolve_password(bare, use_master=False),
+                    use_master=False,
+                ),
+                bare,
+            )
 
             # Explicit file:// reads the file.
             via_uri = basefwx._resolve_password(f"file://{pw_file}", use_master=False)
             self.assertEqual(via_uri, secret)
+            self.assertEqual(
+                basefwx._resolve_password(via_uri, use_master=False), via_uri
+            )
 
             # password:// strips the scheme even if the remainder looks like a path.
             forced = basefwx._resolve_password(f"password://{pw_file}", use_master=False)
             self.assertEqual(forced, bare)
+            self.assertEqual(
+                basefwx._resolve_password(forced, use_master=False), forced
+            )
 
             # Missing file:// target fails closed.
             missing = tmp_path / "no-such-pw"
@@ -1373,6 +1386,35 @@ class CryptographyIntegrationTests(unittest.TestCase):
             # Explicit Path is an intentional filesystem reference.
             self.assertEqual(
                 basefwx._resolve_password(pw_file, use_master=False), secret
+            )
+
+    def test_resolve_password_rejects_nested_references(self):
+        for password in (
+            "password://file:///tmp/not-read",
+            "password://password://inner-secret",
+            "password://yubikey:test-label",
+        ):
+            with self.subTest(password=password):
+                with self.assertRaisesRegex(ValueError, "refused as ambiguous"):
+                    basefwx._resolve_password(password, use_master=False)
+
+    def test_resolve_password_rejects_reference_file_contents(self):
+        with TemporaryDirectory() as tmp:
+            pw_file = Path(tmp) / "nested-password.txt"
+            for contents in (b"password://inner-secret", b"file:///tmp/not-read"):
+                pw_file.write_bytes(contents)
+                for password in (pw_file, f"file://{pw_file}"):
+                    with self.subTest(contents=contents, password=password):
+                        with self.assertRaisesRegex(ValueError, "refused as ambiguous"):
+                            basefwx._resolve_password(password, use_master=False)
+
+    def test_b512file_entry_rejects_nested_password_reference(self):
+        with self.assertRaisesRegex(ValueError, "refused as ambiguous"):
+            basefwx.b512file_encode_bytes(
+                b"payload",
+                ".bin",
+                "password://file:///tmp/not-read",
+                use_master=False,
             )
 
 

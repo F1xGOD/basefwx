@@ -932,6 +932,8 @@ if(BASEFWX_BUILD_TESTS AND BUILD_TESTING)
     )
     add_test(NAME text_payload_security_test COMMAND text_payload_security_test)
 
+    # The runtime driver selects every configured test except this explicit
+    # packaging lane. New security tests need no second allowlist in scripts.
     if(BUILD_SHARED_LIBS AND UNIX AND CMAKE_NM)
         add_test(NAME basefwx_core_abi_exports
             COMMAND "${CMAKE_COMMAND}"
@@ -942,6 +944,8 @@ if(BASEFWX_BUILD_TESTS AND BUILD_TESTING)
                 "-DBASEFWX_EXPECT_RETIRED_MEDIA=$<BOOL:${BASEFWX_ENABLE_RETIRED_MEDIA}>"
                 -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/check_core_abi_exports.cmake"
         )
+        set_tests_properties(basefwx_core_abi_exports PROPERTIES
+            LABELS "basefwx-packaging")
     endif()
 
     if(BUILD_SHARED_LIBS AND UNIX AND EXISTS "/usr/bin/dpkg-architecture")
@@ -954,6 +958,8 @@ if(BASEFWX_BUILD_TESTS AND BUILD_TESTING)
                 "-DBASEFWX_EXPECT_RETIRED_MEDIA=$<BOOL:${BASEFWX_ENABLE_RETIRED_MEDIA}>"
                 -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/check_installed_consumer.cmake"
         )
+        set_tests_properties(basefwx_installed_consumer PROPERTIES
+            LABELS "basefwx-packaging")
     endif()
 endif()
 

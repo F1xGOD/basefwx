@@ -8,11 +8,13 @@ from __future__ import annotations
 
 import os
 import io
+import inspect
 import stat
 import tempfile
 import unittest
+from contextlib import ExitStack, redirect_stdout
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from basefwx.crypto import _master_key, _pq, _primitives
 from basefwx.main import basefwx
@@ -122,7 +124,362 @@ class MasterKeyPolicyTests(unittest.TestCase):
                     self.PASSWORD, use_master=True
                 ).start()
 
-    def test_wrong_master_key_falls_back_to_correct_password(self):
+    def test_public_writers_refuse_missing_or_failing_master(self):
+        def writers():
+            return (
+                lambda: basefwx.b512file_encode_bytes(b"payload", ".bin", self.PASSWORD, use_master=True),
+                lambda: basefwx.pb512file_encode_bytes(b"payload", ".bin", self.PASSWORD, use_master=True),
+                lambda: basefwx.encryptAES("payload", self.PASSWORD, use_master=True),
+                lambda: basefwx.fwxAES_encrypt_raw(b"payload", self.PASSWORD, use_master=True),
+                lambda: basefwx.fwxAES_encrypt_stream(io.BytesIO(b"payload"), destination, self.PASSWORD, use_master=True),
+                lambda: basefwx.LiveEncryptor(self.PASSWORD, use_master=True).start(),
+            )
+        for strict in ("", "1"):
+            with self.subTest(strict=strict), self.policy_environment(BASEFWX_PQ_STRICT=strict), patch.object(
+                basefwx, "_load_master_pq_public", return_value=None
+            ), patch.object(basefwx, "_load_master_ec_public", return_value=None):
+                for writer in writers():
+                    destination = io.BytesIO()
+                    with self.assertRaisesRegex(ValueError, "master public key"):
+                        writer()
+                    self.assertEqual(destination.getvalue(), b"")
+        with self.policy_environment(), patch.object(
+            basefwx, "_load_master_pq_public", return_value=None
+        ), patch.object(basefwx, "_load_master_ec_public", return_value=object()), patch.object(
+            basefwx, "_ec_kem_enc", side_effect=ValueError("injected master wrap failure")
+        ):
+            for writer in writers():
+                destination = io.BytesIO()
+                with self.assertRaisesRegex(ValueError, "injected master wrap failure"):
+                    writer()
+                self.assertEqual(destination.getvalue(), b"")
+
+    def test_master_and_stripped_metadata_conflict(self):
+        with self.assertRaisesRegex(ValueError, "conflicts"):
+            basefwx.b512file_encode_bytes(
+                b"payload", ".bin", self.PASSWORD, strip_metadata=True, use_master=True
+            )
+
+    def test_preselected_recipient_cannot_bypass_strict_policy(self):
+        private_key = basefwx.ec.generate_private_key(basefwx.ec.SECP521R1())
+        selection = _master_key.MasterKeySelection(None, private_key.public_key(), "EC")
+        writers = (basefwx.b512encode, basefwx.pb512encode, basefwx.encryptAES)
+        with self.policy_environment(BASEFWX_PQ_STRICT="1"), patch.object(
+            basefwx, "_ec_kem_enc", side_effect=AssertionError("strict policy reached EC encapsulation")
+        ):
+            for writer in writers:
+                with self.subTest(writer=writer.__name__), self.assertRaisesRegex(ValueError, "PQ strict"):
+                    writer("payload", self.PASSWORD, use_master=True, master_selection=selection)
+
+        # Preselection also cannot silently erase an explicit recovery request.
+        empty = _master_key.MasterKeySelection(None, None, "none")
+        with self.policy_environment():
+            for writer in writers:
+                with self.subTest(writer=writer.__name__), self.assertRaisesRegex(ValueError, "master key requested"):
+                    writer("payload", self.PASSWORD, use_master=True, master_selection=empty)
+
+        # Explicitly disabling recovery keeps password-only authoring available.
+        with self.recipient_test_environment(), patch.object(
+            basefwx, "_ec_kem_enc", side_effect=AssertionError("disabled recovery reached EC encapsulation")
+        ):
+            for encode, decode in ((basefwx.b512encode, basefwx.b512decode),
+                                   (basefwx.pb512encode, basefwx.pb512decode),
+                                   (basefwx.encryptAES, basefwx.decryptAES)):
+                with self.subTest(writer=encode.__name__):
+                    blob = encode("payload", self.PASSWORD, use_master=False, master_selection=selection)
+                    self.assertEqual(decode(blob, self.PASSWORD, use_master=False), "payload")
+
+    def test_file_writer_refusal_preserves_input_and_output(self):
+        with tempfile.TemporaryDirectory() as directory, self.policy_environment(), patch.object(
+            basefwx, "_load_master_pq_public", return_value=None
+        ), patch.object(basefwx, "_load_master_ec_public", return_value=None):
+            root = Path(directory)
+            source = root / "input.bin"
+            destination = root / "input.fwx"
+            source.write_bytes(b"source")
+            destination.write_bytes(b"existing")
+            for writer in (basefwx._b512_encode_path, basefwx._b512_encode_path_stream,
+                           basefwx._aes_heavy_encode_path_stream, basefwx._aes_heavy_encode_path):
+                with self.subTest(writer=writer.__name__), self.assertRaisesRegex(ValueError, "master key requested"):
+                    writer(source, self.PASSWORD, use_master=True)
+                self.assertEqual(source.read_bytes(), b"source")
+                self.assertEqual(destination.read_bytes(), b"existing")
+
+    def test_public_file_wrappers_refuse_master_strip_conflict(self):
+        writers = (
+            lambda path: basefwx.b512file_encode(path, self.PASSWORD, strip_metadata=True),
+            lambda path: basefwx.b512file(path, self.PASSWORD, strip_metadata=True, silent=True),
+            lambda path: basefwx.AESfile(path, self.PASSWORD, strip_metadata=True, silent=True),
+            lambda path: basefwx.AESfile(path, self.PASSWORD, light=False, strip_metadata=True, silent=True),
+        )
+        with tempfile.TemporaryDirectory() as directory, redirect_stdout(io.StringIO()):
+            source = Path(directory) / "input.bin"
+            destination = source.with_suffix(".fwx")
+            for index, writer in enumerate(writers):
+                with self.subTest(writer=index):
+                    source.write_bytes(b"source")
+                    destination.write_bytes(b"existing")
+                    self.assertEqual(writer(source), "FAIL!")
+                    self.assertEqual(source.read_bytes(), b"source")
+                    self.assertEqual(destination.read_bytes(), b"existing")
+
+    def test_public_file_readers_do_not_select_writer_master_keys(self):
+        operations = (
+            lambda path, master: basefwx.b512file(path, self.PASSWORD, use_master=master, silent=True),
+            lambda path, master: basefwx.AESfile(path, self.PASSWORD, use_master=master, silent=True),
+            lambda path, master: basefwx.AESfile(path, self.PASSWORD, light=False, use_master=master, silent=True),
+            lambda path, master: basefwx.fwxAES_file(path, self.PASSWORD, heavy=True, use_master=master),
+        )
+        with tempfile.TemporaryDirectory() as directory, redirect_stdout(io.StringIO()), patch.object(
+            basefwx, "_SILENT_MODE", True
+        ):
+            source = Path(directory) / "input.bin"
+            for index, operation in enumerate(operations):
+                with self.subTest(operation=index):
+                    source.write_bytes(b"independent password recovery")
+                    operation(source, False)
+                    ciphertext = source.with_suffix(".fwx")
+                    self.assertTrue(ciphertext.is_file())
+                    self.assertFalse(source.exists())
+                    with self.policy_environment(BASEFWX_PQ_STRICT="1"), patch.object(
+                        basefwx, "_load_master_pq_public", side_effect=AssertionError("reader selected writer key")
+                    ), patch.object(
+                        basefwx, "_load_master_ec_public", side_effect=AssertionError("reader selected writer key")
+                    ):
+                        operation(ciphertext, True)
+                    self.assertEqual(source.read_bytes(), b"independent password recovery")
+                    self.assertFalse(ciphertext.exists())
+
+    def recipient_test_environment(self):
+        context = ExitStack()
+        context.enter_context(self.policy_environment(BASEFWX_PQ_STRICT="1"))
+        # These cases exercise real key wrapping and recovery, not KDF cost.
+        for name, value in (("USER_KDF", "pbkdf2"), ("USER_KDF_ITERATIONS", 1),
+                            ("HEAVY_PBKDF2_ITERATIONS", 1), ("_TEST_KDF_ITERS", 1)):
+            context.enter_context(patch.object(basefwx, name, value))
+        context.enter_context(patch.object(basefwx, "_load_master_ec_public", return_value=None))
+        context.enter_context(patch.object(basefwx, "_load_master_ec_private", return_value=None))
+        context.enter_context(redirect_stdout(io.StringIO()))
+        return context
+
+    def test_b512_stream_setup_failure_clears_keys_and_preserves_files(self):
+        for failure in ("progress", "temporary-directory"):
+            with self.subTest(failure=failure), self.recipient_test_environment(), tempfile.TemporaryDirectory() as directory:
+                source = Path(directory) / "input.bin"
+                destination = source.with_suffix(".fwx")
+                source.write_bytes(b"source")
+                destination.write_bytes(b"existing")
+                captured = {}
+
+                def fail_after_keys(*args, **kwargs):
+                    # Observe the actual owned buffers before unwinding, so this
+                    # tests wiping after an I/O/callback failure, not helper calls.
+                    frame = inspect.currentframe()
+                    try:
+                        while frame is not None and frame.f_code.co_name != "_b512_encode_path_stream":
+                            frame = frame.f_back
+                        self.assertIsNotNone(frame)
+                        for name in ("mask_key", "aead_key", "obf_key"):
+                            secret = frame.f_locals[name]
+                            self.assertIsInstance(secret, bytearray)
+                            self.assertTrue(any(secret), name)
+                            captured[name] = secret
+                    finally:
+                        del frame
+                    raise OSError("injected stream setup failure")
+
+                reporter = Mock()
+                reporter.update.side_effect = lambda *args, **kwargs: (
+                    fail_after_keys() if args[2] == "stream-setup" else None
+                )
+                with ExitStack() as context:
+                    if failure == "temporary-directory":
+                        context.enter_context(patch.object(basefwx.tempfile, "TemporaryDirectory", side_effect=fail_after_keys))
+                        reporter = None
+                    with self.assertRaisesRegex(OSError, "injected stream setup failure"):
+                        basefwx._b512_encode_path_stream(
+                            source, self.PASSWORD, reporter=reporter,
+                            use_master=False, output_path=destination)
+                self.assertEqual(set(captured), {"mask_key", "aead_key", "obf_key"})
+                for name, secret in captured.items():
+                    self.assertFalse(any(secret), name)
+                self.assertEqual(source.read_bytes(), b"source")
+                self.assertEqual(destination.read_bytes(), b"existing")
+                self.assertEqual(set(Path(directory).iterdir()), {source, destination})
+
+    @unittest.skipIf(_pq._ml_kem_768 is None, "real ML-KEM backend required")
+    def test_supplied_file_recipient_survives_every_layer_and_size_branch(self):
+        public_key, private_key = basefwx.generate_kem_keypair("ml-kem-768")
+        other_public, other_private = basefwx.generate_kem_keypair("ml-kem-768")
+        operations = (
+            lambda path, password, **options: basefwx.b512file(path, password, silent=True, **options),
+            lambda path, password, **options: basefwx.AESfile(path, password, light=False, silent=True, **options),
+        )
+        payloads = (b"payload", b"x" * (basefwx.HKDF_MAX_LEN + 1))
+        with self.recipient_test_environment(), tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "input.bin"
+            ciphertext = source.with_suffix(".fwx")
+            for index, operation in enumerate(operations):
+                for host_key in (None, other_public):
+                    for payload in payloads:
+                        with self.subTest(operation=index, host_key=host_key is not None, size=len(payload)), patch.object(
+                            basefwx, "_load_master_pq_public", return_value=host_key
+                        ):
+                            source.write_bytes(payload)
+                            self.assertEqual(operation(source, self.PASSWORD, use_master=True,
+                                                       master_pubkey=public_key), "SUCCESS!")
+                            self.assertFalse(source.exists())
+                            encoded = ciphertext.read_bytes()
+                            # A competing host recipient must not recover the container.
+                            with patch.object(basefwx, "_load_master_pq_private", return_value=other_private):
+                                self.assertEqual(operation(ciphertext, b"wrong-password", use_master=True), "FAIL!")
+                            self.assertFalse(source.exists())
+                            self.assertEqual(ciphertext.read_bytes(), encoded)
+                            # Only the caller's recipient key, with no correct password.
+                            recovery_passwords = (b"", b"wrong-password") if index == 0 else (b"wrong-password",)
+                            for recovery_password in recovery_passwords:
+                                with patch.object(basefwx, "_load_master_pq_private", return_value=private_key):
+                                    self.assertEqual(operation(ciphertext, recovery_password, use_master=True), "SUCCESS!")
+                                self.assertEqual(source.read_bytes(), payload)
+                                self.assertFalse(ciphertext.exists())
+                                source.unlink()
+                                ciphertext.write_bytes(encoded)
+                            with patch.object(basefwx, "_load_master_pq_private",
+                                              side_effect=AssertionError("password path loaded master key")):
+                                self.assertEqual(operation(ciphertext, self.PASSWORD, use_master=False), "SUCCESS!")
+                            self.assertEqual(source.read_bytes(), payload)
+                            self.assertFalse(ciphertext.exists())
+
+    @unittest.skipIf(_pq._ml_kem_768 is None, "real ML-KEM backend required")
+    def test_bytes_container_keeps_one_recipient_when_host_key_changes(self):
+        public_key, private_key = basefwx.generate_kem_keypair("ml-kem-768")
+        other_public, _ = basefwx.generate_kem_keypair("ml-kem-768")
+        codecs = (
+            (basefwx.b512file_encode_bytes, basefwx.b512file_decode_bytes),
+            (basefwx.pb512file_encode_bytes, basefwx.pb512file_decode_bytes),
+        )
+        with self.recipient_test_environment():
+            for encode, decode in codecs:
+                with self.subTest(codec=encode.__name__), patch.object(
+                    basefwx, "_load_master_pq_public", side_effect=[public_key, other_public, other_public]
+                ) as load_public:
+                    encoded = encode(b"payload", ".bin", self.PASSWORD, use_master=True)
+                self.assertEqual(load_public.call_count, 1)
+                with patch.object(basefwx, "_load_master_pq_private", return_value=private_key):
+                    self.assertEqual(decode(encoded, b"wrong-password", use_master=True), (b"payload", ".bin"))
+                self.assertEqual(decode(encoded, self.PASSWORD, use_master=False), (b"payload", ".bin"))
+
+    def test_legacy_b512_stream_requires_authenticated_password_before_publication(self):
+        private_key = basefwx.ec.generate_private_key(basefwx.ec.SECP521R1())
+        selection = _master_key.MasterKeySelection(None, private_key.public_key(), "EC")
+        payload = b"legacy streaming data"
+        with self.recipient_test_environment(), self.policy_environment(BASEFWX_PQ_STRICT=""), patch.object(
+            basefwx, "_load_master_ec_private", return_value=private_key
+        ), patch.object(basefwx, "_load_master_pq_private", return_value=None), tempfile.TemporaryDirectory() as directory:
+            metadata = basefwx._build_metadata("FWX512R", False, True, master_kem="EC",
+                                               aead="AESGCM", kdf="pbkdf2", mode="STREAM", obfuscation="fast").encode()
+            mask, user, master, _ = basefwx._prepare_mask_key(
+                self.PASSWORD, True, mask_info=basefwx.B512_FILE_MASK_INFO,
+                require_password=True, aad=basefwx.MASK_AAD_B512FILE, master_selection=selection)
+            salt = bytes(range(16))
+            header = (basefwx.STREAM_MAGIC + (1024).to_bytes(4, "big") + len(payload).to_bytes(8, "big")
+                      + salt + (4).to_bytes(2, "big") + b".bin")
+            obfuscated = basefwx._StreamObfuscator.for_password(self.PASSWORD, salt, fast=True).encode_chunk(payload)
+            plaintext = metadata + basefwx.META_DELIM.encode() + header + obfuscated
+            aead_key = basefwx._hkdf_sha256(mask, info=basefwx.B512_AEAD_INFO)
+            encrypted = basefwx._aead_encrypt(aead_key, plaintext, metadata)
+            envelope = len(metadata).to_bytes(4, "big") + metadata + encrypted
+            encoded = basefwx._pack_length_prefixed(user, master, envelope)
+            ciphertext = Path(directory) / "legacy.fwx"
+            destination = ciphertext.with_suffix(".bin")
+            destination.write_bytes(b"prior output")
+            for bad_password in (b"", b"wrong-password"):
+                with self.subTest(password_present=bool(bad_password)):
+                    ciphertext.write_bytes(encoded)
+                    self.assertEqual(basefwx.b512file(ciphertext, bad_password, use_master=True, silent=True), "FAIL!")
+                    self.assertEqual(ciphertext.read_bytes(), encoded)
+                    self.assertEqual(destination.read_bytes(), b"prior output")
+            # A valid but unrelated user wrap must not authenticate this stream's password.
+            _, other_user, _, _ = basefwx._prepare_mask_key(
+                b"wrong-password", False, mask_info=basefwx.B512_FILE_MASK_INFO,
+                require_password=True, aad=basefwx.MASK_AAD_B512FILE)
+            for invalid_user in (b"", other_user):
+                ciphertext.write_bytes(basefwx._pack_length_prefixed(invalid_user, master, envelope))
+                self.assertEqual(basefwx.b512file(ciphertext, b"wrong-password", use_master=True, silent=True), "FAIL!")
+                self.assertEqual(destination.read_bytes(), b"prior output")
+            for use_master in (False, True):
+                ciphertext.write_bytes(encoded)
+                self.assertEqual(basefwx.b512file(ciphertext, self.PASSWORD, use_master=use_master, silent=True), "SUCCESS!")
+                self.assertEqual(destination.read_bytes(), payload)
+                self.assertFalse(ciphertext.exists())
+
+    def test_b512_stream_v2_key_domain_vector(self):
+        key = basefwx._hkdf_sha256(bytes(range(32)), info=basefwx.B512_STREAM_OBF_INFO, length=32)
+        self.assertEqual(key.hex(), "f53aec8167a000ca3ae3d2e001444946f141697a01f07526f2d476d6afd76f04")
+
+    def test_public_file_writer_key_failure_preserves_files(self):
+        status_writers = (
+            lambda path: basefwx.b512file_encode(path, self.PASSWORD),
+            lambda path: basefwx.b512file(path, self.PASSWORD, silent=True),
+            lambda path: basefwx.AESfile(path, self.PASSWORD, silent=True),
+            lambda path: basefwx.AESfile(path, self.PASSWORD, light=False, silent=True),
+        )
+        with tempfile.TemporaryDirectory() as directory, redirect_stdout(io.StringIO()), patch.object(
+            basefwx, "_SILENT_MODE", True
+        ):
+            source = Path(directory) / "input.bin"
+            destination = source.with_suffix(".fwx")
+            source.write_bytes(b"source")
+            destination.write_bytes(b"existing")
+            for strict, ec_key in (("", None), ("1", None), ("", object())):
+                with self.subTest(strict=strict, wrapping=ec_key is not None), self.policy_environment(
+                    BASEFWX_PQ_STRICT=strict
+                ), patch.object(basefwx, "_load_master_pq_public", return_value=None), patch.object(
+                    basefwx, "_load_master_ec_public", return_value=ec_key
+                ), patch.object(basefwx, "_ec_kem_enc", side_effect=ValueError("injected master wrap failure")):
+                    for index, writer in enumerate(status_writers):
+                        with self.subTest(writer=index):
+                            self.assertEqual(writer(source), "FAIL!")
+                            self.assertEqual(source.read_bytes(), b"source")
+                            self.assertEqual(destination.read_bytes(), b"existing")
+                    for heavy in (False, True):
+                        with self.subTest(fwxAES_heavy=heavy), self.assertRaisesRegex(ValueError, "master"):
+                            basefwx.fwxAES_file(source, self.PASSWORD, use_master=True, heavy=heavy)
+                        self.assertEqual(source.read_bytes(), b"source")
+                        self.assertEqual(destination.read_bytes(), b"existing")
+
+    def test_mixed_file_batches_keep_decode_independent_of_writer_policy(self):
+        operations = (
+            lambda paths, master, silent: basefwx.b512file(paths, self.PASSWORD, use_master=master, silent=silent),
+            lambda paths, master, silent: basefwx.AESfile(paths, self.PASSWORD, use_master=master, silent=silent),
+            lambda paths, master, silent: basefwx.AESfile(paths, self.PASSWORD, light=False, use_master=master, silent=silent),
+        )
+        with tempfile.TemporaryDirectory() as directory, redirect_stdout(io.StringIO()), patch.object(
+            basefwx, "_CPU_COUNT", 2
+        ):
+            root = Path(directory)
+            plaintext = root / "decode.bin"
+            ciphertext = plaintext.with_suffix(".fwx")
+            new_input = root / "encode.bin"
+            prior_output = new_input.with_suffix(".fwx")
+            new_input.write_bytes(b"new input")
+            prior_output.write_bytes(b"prior output")
+            for index, operation in enumerate(operations):
+                for silent in (False, True):
+                    with self.subTest(operation=index, silent=silent):
+                        plaintext.write_bytes(b"independent password recovery")
+                        self.assertEqual(operation(plaintext, False, True), "SUCCESS!")
+                        with self.policy_environment(BASEFWX_PQ_STRICT="1"), patch.object(
+                            basefwx, "_load_master_pq_public", return_value=None
+                        ), patch.object(basefwx, "_load_master_ec_public", return_value=None):
+                            result = operation([ciphertext, new_input], True, silent)
+                        self.assertEqual(result, {str(ciphertext): "SUCCESS!", str(new_input): "FAIL!"})
+                        self.assertEqual(plaintext.read_bytes(), b"independent password recovery")
+                        self.assertFalse(ciphertext.exists())
+                        self.assertEqual(new_input.read_bytes(), b"new input")
+                        self.assertEqual(prior_output.read_bytes(), b"prior output")
+
+    def test_master_key_loading_failure_falls_back_to_correct_password(self):
         mask_key, user_blob, _, _ = self.password_wrapped_mask()
         with patch.object(
             basefwx, "_load_master_pq_private", side_effect=ValueError("wrong key")

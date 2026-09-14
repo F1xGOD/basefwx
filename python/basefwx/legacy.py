@@ -172,6 +172,8 @@ class basefwx:
     LIVE_STREAM_CHUNK_SIZE = 64 * 1024  # lower latency default for live stream framing
     PERF_OBFUSCATION_THRESHOLD = 1 << 20
     STREAM_MAGIC = b'STRMOBF1'
+    B512_STREAM_MAGIC_V2 = b'B512STR2'
+    B512_STREAM_OBF_INFO = b'basefwx.b512file.stream.obf.v2'
     STREAM_INFO_KEY = b'basefwx.stream.obf.key.v1'
     STREAM_INFO_IV = b'basefwx.stream.obf.iv.v1'
     STREAM_INFO_PERM = b'basefwx.stream.obf.perm.v1'
@@ -445,7 +447,6 @@ class basefwx:
 
     _ec_kem_dec = staticmethod(_master_key._ec_kem_dec)
 
-    _resolve_master_usage = staticmethod(_master_key._resolve_master_usage)
 
     _select_master_key = staticmethod(_master_key._select_master_key)
 

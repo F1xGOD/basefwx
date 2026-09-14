@@ -274,17 +274,17 @@ same BaseFWX version that wrote the file.
 
 - **--use-master, --no-master**
 
-  Enable or disable master-key wrapping where a command supports it. Provision
-  the intended public key, retain metadata, and verify complete-file recovery
-  independently. Some file paths replace requested master intent with key
-  availability or metadata stripping, so command success does not establish
-  that a recoverable master wrap was written. Streaming B512 uses STRMOBF1 and
-  still requires the original password for its internal obfuscation. The
-  reader does not authenticate that password separately; a matching master key
-  with a wrong password can produce corrupted output. For password recovery
-  with an unrelated configured master private key, use **--no-master**.
-  Enabled master recovery is tried first; payload authentication failure does
-  not retry the password path.
+  Enable or disable master-key wrapping where a command supports it.
+  Maintained writers require a usable provisioned key when wrapping is
+  enabled; key-loading and wrapping failures abort authoring rather than
+  producing password-only output. Requested master recovery cannot be combined
+  with **--strip-meta**. New streaming B512 output uses the authenticated
+  B512STR2 inner format and requires an updated reader. Legacy STRMOBF1 B512
+  streams require the correct password even with a matching master private
+  key; wrong or missing passwords refuse output publication. For password
+  recovery with an unrelated configured master private key, use
+  **--no-master**. Enabled master recovery is tried first; payload
+  authentication failure does not retry the password path.
 
 - **--master-pub** *path*
 
@@ -302,9 +302,10 @@ same BaseFWX version that wrote the file.
 - **--strip-meta**
 
   Omit file-container metadata where supported. AES-heavy pb512file authoring
-  rejects this option because its KDF costs require metadata for recovery.
-  B512file authoring also rejects it when the input selects the streaming
-  container, whose metadata carries the required dispatch marker.
+  rejects this option because its KDF costs require metadata for recovery. It
+  is also refused when master recovery is requested. B512file authoring also
+  rejects it when the input selects the streaming container, whose metadata
+  carries the required dispatch marker.
 
 - **--kdf** *label*, --pbkdf2-iters *n*
 

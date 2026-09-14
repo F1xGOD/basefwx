@@ -14,6 +14,7 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.security.GeneralSecurityException;
+import java.security.MessageDigest;
 import java.util.Arrays;
 import java.util.List;
 
@@ -63,21 +64,28 @@ final class B512FileCodec {
                 byte[] streamHeader = buildStreamHeader(
                         inputLength, streamSalt, extBytes,
                         Constants.STREAM_CHUNK_SIZE);
+                // The layout is shared with AES-heavy; only B512 changes its
+                // marker because its obfuscation key now survives master recovery.
+                System.arraycopy(Constants.B512_STREAM_MAGIC_V2, 0,
+                        streamHeader, 0, Constants.B512_STREAM_MAGIC_V2.length);
                 long payloadLen = checkedStreamPayloadLength(
                         inputLength,
                         metadataBytes.length,
                         prefixBytes.length,
                         streamHeader.length);
                 File outFile = output != null ? output : new File(input.getParentFile(), input.getName() + ".fwx");
-                byte[] aeadKey = KeyWrap.deriveKeyAndWipe(
+                byte[] aeadKey = Crypto.hkdfSha256(
                         mask.maskKey, Constants.B512_AEAD_INFO, 32);
+                byte[] obfuscationKey = null;
                 try {
+                    obfuscationKey = KeyWrap.deriveKeyAndWipe(
+                            mask.maskKey, Constants.B512_STREAM_OBF_INFO_V2, 32);
                     stagedOutput = BaseFwxUtil.createPrivateSiblingTempFile(
                             outFile, ".basefwx-b512-enc-", ".tmp");
                     byte[] nonce = Crypto.randomBytes(Constants.AEAD_NONCE_LEN);
                     try (StreamObfuscator obfuscator =
-                                 StreamObfuscator.forPassword(
-                                         pw, streamSalt, fastObf);
+                                 StreamObfuscator.forKey(
+                                         obfuscationKey, streamSalt, fastObf);
                          FileInputStream fin = new FileInputStream(input);
                          BufferedInputStream in = new BufferedInputStream(fin, Constants.STREAM_CHUNK_SIZE);
                          FileOutputStream fout = new FileOutputStream(stagedOutput);
@@ -159,6 +167,9 @@ final class B512FileCodec {
                     throw new IllegalStateException("Streaming b512 encode failed", exc);
                 } finally {
                     Arrays.fill(aeadKey, (byte) 0);
+                    if (obfuscationKey != null) {
+                        Arrays.fill(obfuscationKey, (byte) 0);
+                    }
                 }
                 return outFile;
             } finally {
@@ -180,12 +191,11 @@ final class B512FileCodec {
         byte[] pw = BaseFwx.resolvePasswordBytes(password, useMaster);
         File tempPlain = null;
         File stagedOutput = null;
+        byte[] maskKey = null;
+        byte[] obfuscationKey = null;
         try {
-            if (pw.length == 0) {
-                throw new IllegalArgumentException(
-                        "Password required for streaming b512 decode");
-            }
             byte[] metadataBytes;
+            byte[] userBlob;
             String metadataBlob = "";
             boolean useMasterEffective = useMaster;
             boolean obfuscateStream = true;
@@ -197,7 +207,7 @@ final class B512FileCodec {
                 requireBoundedFileLength(
                         input, 4L, lenUser, Constants.LENGTH_PREFIXED_MAX,
                         "user key transport");
-                byte[] userBlob = readExactBytes(
+                userBlob = readExactBytes(
                         in, lenUser, "Ciphertext payload truncated");
                 int lenMaster = readU32(in, "Ciphertext payload truncated");
                 requireHeaderLengthTotal((long) lenUser + lenMaster);
@@ -266,7 +276,7 @@ final class B512FileCodec {
                     throw new IllegalArgumentException(
                             "Ciphertext payload truncated");
                 }
-                byte[] maskKey = KeyWrap.recoverMaskKey(
+                maskKey = KeyWrap.recoverMaskKey(
                         userBlob,
                         masterBlob,
                         pw,
@@ -277,7 +287,7 @@ final class B512FileCodec {
                                 "pbkdf2",
                                 Constants.USER_KDF_ITERATIONS),
                         Constants.B512_AEAD_INFO);
-                byte[] aeadKey = KeyWrap.deriveKeyAndWipe(
+                byte[] aeadKey = Crypto.hkdfSha256(
                         maskKey, Constants.B512_AEAD_INFO, 32);
                 try {
                     CryptoBackend backend = CryptoBackends.get();
@@ -365,9 +375,18 @@ final class B512FileCodec {
                         plainIn,
                         Constants.STREAM_MAGIC.length,
                         "Malformed streaming payload: magic mismatch");
-                if (!Arrays.equals(magic, Constants.STREAM_MAGIC)) {
+                boolean keyedObfuscation = Arrays.equals(
+                        magic, Constants.B512_STREAM_MAGIC_V2);
+                if (!keyedObfuscation
+                        && !Arrays.equals(magic, Constants.STREAM_MAGIC)) {
                     throw new IllegalArgumentException(
                             "Malformed streaming payload: magic mismatch");
+                }
+                if (keyedObfuscation) {
+                    obfuscationKey = Crypto.hkdfSha256(
+                            maskKey, Constants.B512_STREAM_OBF_INFO_V2, 32);
+                } else {
+                    requireLegacyStreamPassword(userBlob, pw, maskKey);
                 }
                 int chunkSize = readU32(
                         plainIn,
@@ -400,8 +419,9 @@ final class B512FileCodec {
                         outFile, ".basefwx-b512-auth-", ".tmp");
                 byte[] buffer = new byte[chunkSize];
                 try (StreamObfuscator decoder = obfuscateStream
-                             ? StreamObfuscator.forPassword(
-                                     pw, salt, fastObfStream)
+                             ? StreamObfuscator.forKey(
+                                     keyedObfuscation ? obfuscationKey : pw,
+                                     salt, fastObfStream)
                              : null;
                      FileOutputStream fout =
                              new FileOutputStream(stagedOutput);
@@ -443,6 +463,12 @@ final class B512FileCodec {
                         "Streaming b512 decode failed", exc);
             }
         } finally {
+            if (maskKey != null) {
+                Arrays.fill(maskKey, (byte) 0);
+            }
+            if (obfuscationKey != null) {
+                Arrays.fill(obfuscationKey, (byte) 0);
+            }
             if (stagedOutput != null) {
                 BaseFwxUtil.deletePrivateTempFile(stagedOutput);
             }
@@ -450,6 +476,30 @@ final class B512FileCodec {
                 BaseFwxUtil.deletePrivateTempFile(tempPlain);
             }
             Arrays.fill(pw, (byte) 0);
+        }
+    }
+
+    private static void requireLegacyStreamPassword(
+            byte[] userBlob, byte[] password, byte[] maskKey) {
+        // STRMOBF1 used the password independently of the authenticated outer
+        // key. Master recovery alone cannot verify that transform's password.
+        // Preserve these files only when the user wrap proves the same key.
+        if (userBlob.length == 0 || password.length == 0) {
+            throw new IllegalArgumentException(
+                    "Legacy streaming b512 requires a user wrap and password");
+        }
+        byte[] userMaskKey = KeyWrap.recoverMaskKey(
+                userBlob, new byte[0], password, false,
+                Constants.B512_FILE_MASK_INFO, Constants.MASK_AAD_B512FILE,
+                new KeyWrap.KdfOptions("pbkdf2", Constants.USER_KDF_ITERATIONS),
+                Constants.B512_AEAD_INFO);
+        try {
+            if (!MessageDigest.isEqual(userMaskKey, maskKey)) {
+                throw new IllegalArgumentException(
+                        "Legacy streaming b512 password key mismatch");
+            }
+        } finally {
+            Arrays.fill(userMaskKey, (byte) 0);
         }
     }
 
@@ -478,7 +528,11 @@ final class B512FileCodec {
         if (approxB64Len > Constants.HKDF_MAX_LEN) {
             throw new IllegalArgumentException("b512file_encode_bytes payload too large; use file-based streaming APIs");
         }
-        boolean useMasterEffective = useMaster && !stripMetadata;
+        if (useMaster && stripMetadata) {
+            throw new IllegalArgumentException(
+                    "master-key recovery requires metadata; stripMetadata conflicts with useMaster");
+        }
+        boolean useMasterEffective = useMaster;
         byte[] pw = BaseFwx.resolvePasswordBytes(password, useMasterEffective);
         KeyWrap.MaskKeyResult mask = null;
         try {

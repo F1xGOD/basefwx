@@ -93,6 +93,14 @@ void TestResolvePasswordIsIdempotent() {
            }),
            "a password file whose contents are a reference is refused");
     std::filesystem::remove(nested);
+
+    const auto nested_file =
+        WriteTemp("basefwx-resolve-nested-file.txt", "file:///tmp/not-read");
+    expect(Throws([&] {
+               (void)basefwx::ResolvePassword("file://" + nested_file.string());
+           }),
+           "a password file whose contents are a file reference is refused");
+    std::filesystem::remove(nested_file);
 }
 
 void TestWrapRefusesUnrecordableKdfCost() {

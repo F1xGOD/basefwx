@@ -138,6 +138,7 @@ inline constexpr std::string_view kMasterEcMagic = "EC1";
 inline constexpr std::size_t kMasterEcPointLen = 133;
 
 inline constexpr std::string_view kStreamMagic = "STRMOBF1";
+inline constexpr std::string_view kB512StreamMagicV2 = "B512STR2";
 
 inline constexpr std::string_view kFwxAesAad = "fwxAES";
 inline constexpr std::uint8_t kFwxAesAlgo = 0x01;
@@ -183,6 +184,8 @@ inline constexpr std::string_view kPb512PayloadAad =
     "basefwx.pb512.payload.v3";
 inline constexpr std::string_view kB512FileMaskInfo = "basefwx.b512file.mask.v1";
 inline constexpr std::string_view kB512AeadInfo = "basefwx.b512file.v1";
+inline constexpr std::string_view kB512StreamObfInfoV2 =
+    "basefwx.b512file.stream.obf.v2";
 
 inline constexpr std::string_view kObfInfoMask = "basefwx.obf.mask.v1";
 inline constexpr std::string_view kObfInfoPerm = "basefwx.obf.perm.v1";

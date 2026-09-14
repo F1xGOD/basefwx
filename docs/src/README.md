@@ -32,14 +32,14 @@ The unified sync does not silently delete retired files.
 | --- | --- |
 | A document's text, heading, summary and publication settings | One `en_US/pages/<aspect>.doc` or `en_US/man/<command>.doc` |
 | A fact repeated by several documents | One `en_US/parts/shared/<aspect>.part`, included by those documents |
-| A diagram's topology, labels, accessible title and caption | One `docs/diagrams/<name>.json` |
+| A diagram's topology, labels, accessible title and caption, per-part notes and their sources | One `docs/diagrams/<name>.json` |
 | Where a diagram appears | `@diagram <name>` in the document; no second target list |
 | Website page title | `title:`; optional `web-title:` in the same document for a different web heading |
 | Website card title | The web title; optional `catalog-title:` in the same document for a shorter navigation label |
 | Website card summary and page description | `summary:` in the document |
 | Catalog grouping and order | `catalog-group:`, optional `catalog-home:`, and `catalog-order:` in the document |
 | Available catalog groups and repository-specific output policy | `docs/src/site.json` |
-| Diagram colors and fonts | `website/assets/tokens.css`; standalone SVG values are derived from it |
+| Diagram colors, diagram role colors and fonts | `website/assets/tokens.css`, from which standalone SVG values are derived |
 | Site navigation, landing-page copy and layout | `website/_data/nav.yml`, HTML pages and `_includes/` |
 | YUME option help and completion metadata | `@opt` and `@cli` entries in its manual sources |
 

@@ -234,11 +234,6 @@ final class FwxAesCodec {
                     keyHeader = Format.packLengthPrefixed(Arrays.asList(mask.userBlob, mask.masterBlob));
                     maskKey = mask.takeMaskKey();
                 }
-            } catch (RuntimeException exc) {
-                if (!hasPassword || PQ.strictPqOnly()) {
-                    throw exc;
-                }
-                useWrap = false;
             }
         }
 

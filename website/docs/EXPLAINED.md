@@ -75,16 +75,15 @@ content key. It is a recovery mechanism, not a second encryption pass over the
 file. The matching private key should be kept separately from ordinary user
 data.
 
-Master recovery needs a provisioned public key and retained metadata. Public
-writer enforcement is incomplete: some wrappers can discard the request when
-keys are unavailable, wrapping fails or metadata is stripped. Verify recovery
-of the complete file with its intended private key and without the password
-before relying on escrow. Explicitly disable master recovery for password-only
-authoring.
+Requesting master recovery requires a provisioned public key. Maintained
+writers fail if key loading or wrapping fails; they never silently drop the
+requested recovery path. B512/PB512 and AES-light/heavy file writers refuse
+container metadata stripping combined with that request. Explicitly disable
+master recovery for password-only authoring.
 
-Python small-file containers can reselect host keys for nested encrypted
-tokens instead of retaining the caller's outer recipient. Configure the same
-recipient for every layer and verify recovery of the complete file.
+When a file format contains nested encrypted tokens, each layer keeps the
+same selected recovery recipient. A caller-supplied Python public key applies
+to the whole container, regardless of the host's configured key or file size.
 
 When both paths exist, either valid path can recover the content key. Strict-PQ
 mode can reject EC fallback for master recovery. It does not remove an intact,
@@ -93,16 +92,17 @@ When an unrelated configured master key produces a candidate that fails payload
 authentication, disable master recovery to select the valid password path.
 Authentication failures do not trigger a retry with another key.
 
-Streaming B512 uses `STRMOBF1`; its internal obfuscation still needs the
-original password even when master recovery opens the outer encryption.
-That transform's password is not independently authenticated, so a wrong one
-can produce corrupted output. The [compatibility reference]({{ '/docs/COMPATIBILITY/' | relative_url }}#streaming-b512-recovery)
-describes this recovery limit.
+Streaming B512 uses `B512STR2` so its internal obfuscation depends on the
+recoverable key too. Older `STRMOBF1` B512 streams require the correct password
+even if master recovery opens the outer encryption. The reader verifies that
+password before writing the result. The [compatibility reference]({{ '/docs/COMPATIBILITY/' | relative_url }}#streaming-b512-recovery)
+defines the new stream marker and reader-upgrade boundary.
 
-Java's fwxAES file-encryption wrappers open their output directly and can
-truncate an existing destination on refusal. Use a separate output path.
-Plaintext staging during decryption has different storage bounds in each
-runtime; see [SECURITY.md]({{ '/docs/SECURITY_MODEL/' | relative_url }}#payload-authentication).
+Java's fwxAES file-encryption wrappers stage ciphertext in an owner-only
+sibling and publish after finalization, so validation failures preserve an
+existing destination and same-path encryption is supported. Plaintext staging
+during decryption has different storage bounds in each runtime; see
+[SECURITY.md]({{ '/docs/SECURITY_MODEL/' | relative_url }}#payload-authentication).
 
 ## Text and file codecs
 

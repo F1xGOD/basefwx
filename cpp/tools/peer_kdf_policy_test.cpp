@@ -28,6 +28,7 @@
 #include <functional>
 #include <iostream>
 #include <limits>
+#include <memory>
 #include <mutex>
 #include <set>
 #include <sstream>
@@ -35,6 +36,9 @@
 #include <string>
 #include <thread>
 #include <vector>
+
+#include <openssl/evp.h>
+#include <openssl/x509.h>
 
 namespace {
 
@@ -348,10 +352,242 @@ class ScopedEnvironment {
     std::optional<std::string> previous_;
 };
 
+void WriteTestEcKeyPair(const std::filesystem::path& public_path,
+                        const std::filesystem::path& private_path) {
+    const std::unique_ptr<EVP_PKEY, decltype(&EVP_PKEY_free)> key(
+        EVP_PKEY_Q_keygen(nullptr, nullptr, "EC", "secp521r1"),
+        &EVP_PKEY_free);
+    if (!key) {
+        throw std::runtime_error("failed to generate test master EC key");
+    }
+    const int public_size = i2d_PUBKEY(key.get(), nullptr);
+    const int private_size = i2d_PrivateKey(key.get(), nullptr);
+    if (public_size <= 0 || private_size <= 0) {
+        throw std::runtime_error("failed to size test master EC key");
+    }
+    Bytes public_bytes(static_cast<std::size_t>(public_size));
+    basefwx::crypto::SecureBytes private_bytes{
+        Bytes(static_cast<std::size_t>(private_size))};
+    unsigned char* public_out = public_bytes.data();
+    unsigned char* private_out = private_bytes.data();
+    if (i2d_PUBKEY(key.get(), &public_out) != public_size
+        || i2d_PrivateKey(key.get(), &private_out) != private_size) {
+        throw std::runtime_error("failed to encode test master EC key");
+    }
+    basefwx::filecodec::internal::WriteFileBytes(public_path, public_bytes);
+    basefwx::filecodec::internal::WriteFileBytes(
+        private_path, private_bytes.bytes());
+}
+
+Bytes LegacyB512StreamingBlob(
+    const Bytes& data,
+    const std::string& password,
+    const basefwx::keywrap::MaskKeyResult& mask,
+    bool fast,
+    std::string_view magic = basefwx::constants::kStreamMagic) {
+    constexpr std::uint32_t chunk_size = 257u;
+    const std::string metadata = basefwx::metadata::Build(
+        "FWX512R", false, true, "EC", "AESGCM", "pbkdf2",
+        "STREAM", fast ? "fast" : "yes");
+    const Bytes metadata_bytes(metadata.begin(), metadata.end());
+    const Bytes salt(basefwx::obf::StreamObfuscator::kSaltLen, 0x5a);
+    Bytes plaintext = metadata_bytes;
+    plaintext.insert(
+        plaintext.end(), basefwx::constants::kMetaDelim.begin(),
+        basefwx::constants::kMetaDelim.end());
+    plaintext.insert(plaintext.end(), magic.begin(), magic.end());
+    AppendU32Be(plaintext, chunk_size);
+    AppendU64Be(plaintext, data.size());
+    plaintext.insert(plaintext.end(), salt.begin(), salt.end());
+    constexpr std::string_view extension = ".bin";
+    AppendU16Be(plaintext, static_cast<std::uint16_t>(extension.size()));
+    plaintext.insert(plaintext.end(), extension.begin(), extension.end());
+    auto obfuscator = basefwx::obf::StreamObfuscator::ForPassword(
+        password, salt, fast);
+    for (std::size_t offset = 0; offset < data.size();) {
+        const std::size_t take = std::min<std::size_t>(
+            chunk_size, data.size() - offset);
+        basefwx::crypto::SecureBytes chunk{
+            Bytes(data.begin() + offset, data.begin() + offset + take)};
+        obfuscator.EncodeChunkInPlace(chunk.bytes());
+        plaintext.insert(plaintext.end(), chunk.bytes().begin(), chunk.bytes().end());
+        offset += take;
+    }
+    const basefwx::crypto::SecureBytes aead_key{
+        basefwx::crypto::HkdfSha256(
+            mask.mask_key, basefwx::constants::kB512AeadInfo, 32)};
+    const Bytes nonce = basefwx::crypto::RandomBytes(
+        basefwx::constants::kAeadNonceLen);
+    const Bytes ciphertext = basefwx::crypto::AesGcmEncryptWithIv(
+        aead_key.bytes(), nonce, plaintext, metadata_bytes);
+    Bytes payload;
+    AppendU32Be(payload, static_cast<std::uint32_t>(metadata_bytes.size()));
+    payload.insert(payload.end(), metadata_bytes.begin(), metadata_bytes.end());
+    payload.insert(payload.end(), nonce.begin(), nonce.end());
+    payload.insert(payload.end(), ciphertext.begin(), ciphertext.end());
+    return basefwx::format::PackLengthPrefixed(
+        {mask.user_blob, mask.master_blob, payload});
+}
+
+void TestB512StreamingRecovery() {
+    Bytes kat_mask(32);
+    for (std::size_t index = 0; index < kat_mask.size(); ++index) {
+        kat_mask[index] = static_cast<std::uint8_t>(index);
+    }
+    const Bytes expected_obf_key{
+        0xf5, 0x3a, 0xec, 0x81, 0x67, 0xa0, 0x00, 0xca,
+        0x3a, 0xe3, 0xd2, 0xe0, 0x01, 0x44, 0x49, 0x46,
+        0xf1, 0x41, 0x69, 0x7a, 0x01, 0xf0, 0x75, 0x26,
+        0xf2, 0xd4, 0x76, 0xd6, 0xaf, 0xd7, 0x6f, 0x04};
+    if (basefwx::crypto::HkdfSha256(
+            kat_mask, basefwx::constants::kB512StreamObfInfoV2, 32)
+        != expected_obf_key) {
+        throw std::runtime_error("b512 streaming obfuscation HKDF KAT mismatch");
+    }
+
+    ScopedTempDirectory temp_dir;
+    std::filesystem::permissions(
+        temp_dir.path(), std::filesystem::perms::owner_all,
+        std::filesystem::perm_options::replace);
+    const auto public_path = temp_dir.path() / "master-public.der";
+    const auto private_path = temp_dir.path() / "master-private.der";
+    const auto wrong_public_path = temp_dir.path() / "wrong-public.der";
+    const auto wrong_private_path = temp_dir.path() / "wrong-private.der";
+    WriteTestEcKeyPair(public_path, private_path);
+    WriteTestEcKeyPair(wrong_public_path, wrong_private_path);
+    ScopedEnvironment public_env("BASEFWX_MASTER_EC_PUB", public_path.string());
+    ScopedEnvironment private_env("BASEFWX_MASTER_EC_PRIV", private_path.string());
+    ScopedEnvironment pq_public_env("BASEFWX_MASTER_PQ_PUB", "");
+    ScopedEnvironment pq_alg_env("BASEFWX_MASTER_PQ_ALG", "ml-kem-768");
+    ScopedEnvironment strict_env("BASEFWX_PQ_STRICT", "0");
+    ScopedEnvironment pq_only_env("BASEFWX_PQ_ONLY", "0");
+    const std::string password = "b512-stream-recovery-password";
+    basefwx::pb512::KdfOptions kdf;
+    kdf.label = "pbkdf2";
+    kdf.pbkdf2_iterations = 1;
+    basefwx::filecodec::FileOptions options;
+    options.keep_input = true;
+    options.use_master = true;
+    options.stream_threshold = 1;
+    options.stream_chunk_size = 257;
+    Bytes expected(1025);
+    for (std::size_t index = 0; index < expected.size(); ++index) {
+        expected[index] = static_cast<std::uint8_t>(index);
+    }
+    const auto target = temp_dir.path() / "stream-recovery.bin";
+    basefwx::filecodec::internal::WriteFileBytes(target, expected);
+    const auto encoded = std::filesystem::path(
+        basefwx::filecodec::B512EncodeFile(
+            target.string(), password, options, kdf));
+    const Bytes current_blob =
+        basefwx::filecodec::internal::ReadFileBytes(encoded);
+    const Bytes sentinel{'e', 'x', 'i', 's', 't', 'i', 'n', 'g'};
+    const auto expect_decode = [&](const Bytes& blob,
+                                   const std::string& supplied_password,
+                                   bool use_master,
+                                   const std::string& label) {
+        basefwx::filecodec::internal::WriteFileBytes(encoded, blob);
+        basefwx::filecodec::internal::WriteFileBytes(target, sentinel);
+        auto decode_options = options;
+        decode_options.use_master = use_master;
+        std::string decoded;
+        try {
+            decoded = basefwx::filecodec::B512DecodeFile(
+                encoded.string(), supplied_password, decode_options, kdf);
+        } catch (const std::exception& exc) {
+            throw std::runtime_error(label + ": " + exc.what());
+        }
+        if (std::filesystem::path(decoded) != target
+            || basefwx::filecodec::internal::ReadFileBytes(target) != expected) {
+            throw std::runtime_error(label + ": plaintext mismatch");
+        }
+    };
+    const auto expect_reject = [&](const Bytes& blob,
+                                   const std::string& supplied_password,
+                                   const std::string& label,
+                                   const std::string& message_part = "") {
+        basefwx::filecodec::internal::WriteFileBytes(encoded, blob);
+        basefwx::filecodec::internal::WriteFileBytes(target, sentinel);
+        const auto before = DirectoryEntryNames(temp_dir.path());
+        ExpectReject([&] {
+            (void)basefwx::filecodec::B512DecodeFile(
+                encoded.string(), supplied_password, options, kdf);
+        }, label, message_part);
+        if (basefwx::filecodec::internal::ReadFileBytes(target) != sentinel
+            || basefwx::filecodec::internal::ReadFileBytes(encoded) != blob
+            || DirectoryEntryNames(temp_dir.path()) != before) {
+            throw std::runtime_error(label + " changed input/output or leaked a temp file");
+        }
+    };
+    expect_decode(current_blob, "", true, "current stream master-only recovery");
+    expect_decode(current_blob, "wrong-stream-password", true,
+                  "current stream master recovery with wrong password");
+    expect_decode(current_blob, password, false,
+                  "current stream password-only recovery");
+    for (const auto& unavailable_private : {
+             temp_dir.path() / "absent-private.der", wrong_private_path}) {
+        ScopedEnvironment unavailable_env(
+            "BASEFWX_MASTER_EC_PRIV", unavailable_private.string());
+        if (unavailable_private == wrong_private_path) {
+            // A well-formed wrong EC key produces an unauthenticated KEM
+            // candidate. Payload authentication is terminal; choosing the
+            // independent password path requires disabling master recovery.
+            expect_reject(current_blob, password,
+                          "b512 stream wrong master candidate", "auth failed");
+        } else {
+            expect_decode(current_blob, password, true,
+                          "current stream password recovery with missing master key");
+        }
+        expect_decode(current_blob, password, false,
+                      "current stream password-only recovery with "
+                          + unavailable_private.filename().string());
+        expect_reject(current_blob, "wrong-stream-password",
+                      "b512 stream no valid recovery path");
+    }
+    auto malformed_parts = basefwx::format::UnpackLengthPrefixed(current_blob, 3);
+    malformed_parts[2].back() ^= 1u;
+    expect_reject(basefwx::format::PackLengthPrefixed(malformed_parts), "",
+                  "b512 stream invalid tag with valid master");
+
+    const basefwx::keywrap::MasterPublicKeys selected_master{
+        std::nullopt, basefwx::filecodec::internal::ReadFileBytes(public_path)};
+    auto mask = basefwx::keywrap::PrepareMaskKey(
+        password, true, basefwx::constants::kB512FileMaskInfo, true,
+        basefwx::constants::kMaskAadB512File, kdf, &selected_master);
+    for (const bool fast : {false, true}) {
+        const Bytes legacy_blob = LegacyB512StreamingBlob(
+            expected, password, mask, fast);
+        expect_decode(legacy_blob, password, true,
+                      "legacy stream master and password recovery");
+        expect_decode(legacy_blob, password, false,
+                      "legacy stream password-only recovery");
+        expect_reject(legacy_blob, "", "legacy b512 stream missing password",
+                      "requires a password and user key wrap");
+        expect_reject(legacy_blob, "wrong-stream-password",
+                      "legacy b512 stream wrong password with valid master");
+        auto parts = basefwx::format::UnpackLengthPrefixed(legacy_blob, 3);
+        parts[0].clear();
+        expect_reject(basefwx::format::PackLengthPrefixed(parts), password,
+                      "legacy b512 stream missing user wrap",
+                      "requires a password and user key wrap");
+        auto unrelated_mask = basefwx::keywrap::PrepareMaskKey(
+            password, false, basefwx::constants::kB512FileMaskInfo, true,
+            basefwx::constants::kMaskAadB512File, kdf);
+        parts[0] = unrelated_mask.user_blob;
+        expect_reject(basefwx::format::PackLengthPrefixed(parts), password,
+                      "legacy b512 stream mismatched authenticated user wrap",
+                      "does not match payload key");
+    }
+    expect_reject(LegacyB512StreamingBlob(
+                      expected, password, mask, false, "B512STR3"),
+                  password, "b512 stream unknown authenticated magic", "magic mismatch");
+}
+
 }  // namespace
 
 int main() {
     try {
+        TestB512StreamingRecovery();
         constexpr std::uint32_t max =
             basefwx::constants::kPeerPbkdf2IterationsMax;
         basefwx::keywrap::RequirePeerPbkdf2WithinLimits(max);
@@ -1525,6 +1761,31 @@ int main() {
             ScopedEnvironment user_profile_env(
                 "USERPROFILE", empty_home.string());
             ScopedEnvironment public_env("BASEFWX_MASTER_EC_PUB", "");
+            ScopedEnvironment pq_public_env("BASEFWX_MASTER_PQ_PUB", "");
+            ScopedEnvironment pq_only_env("BASEFWX_PQ_ONLY", "");
+            const auto input = empty_home / "input.bin";
+            const auto output = empty_home / "input.fwx";
+            { std::ofstream(input) << "source"; std::ofstream(output) << "existing"; }
+            for (const std::string strict : {"", "1"}) {
+                ScopedEnvironment strict_env("BASEFWX_PQ_STRICT", strict);
+                basefwx::filecodec::FileOptions options;
+                options.use_master = true;
+                ExpectReject([&] { (void)basefwx::filecodec::B512EncodeBytes(
+                    Bytes{'x'}, ".bin", "correct-password", options); }, "b512 public requested master");
+                ExpectReject([&] { (void)basefwx::filecodec::Pb512EncodeBytes(
+                    Bytes{'x'}, ".bin", "correct-password", options); }, "pb512 public requested master");
+                for (const std::size_t threshold : {std::size_t{0}, std::size_t{8192}}) {
+                    options.stream_threshold = threshold;
+                    ExpectReject([&] { (void)basefwx::filecodec::B512EncodeFile(
+                        input.string(), "correct-password", options); }, "b512 file requested master");
+                    ExpectReject([&] { (void)basefwx::filecodec::Pb512EncodeFile(
+                        input.string(), "correct-password", options); }, "pb512 file requested master");
+                    if (basefwx::filecodec::internal::ReadFileBytes(input) != Bytes({'s','o','u','r','c','e'}) ||
+                        basefwx::filecodec::internal::ReadFileBytes(output) != Bytes({'e','x','i','s','t','i','n','g'})) {
+                        throw std::runtime_error("master refusal changed file contents");
+                    }
+                }
+            }
             const auto public_key =
                 basefwx::ec::LoadMasterPublicKey(true);
             if (public_key.has_value()) {

@@ -66,6 +66,9 @@ GLYPH_ARROW = "v"
 # good manual figure draws.
 GLYPH_PORT = "+"
 
+# Columns between an input box and the bus its inputs share.
+INPUT_REACH = 3
+
 
 class Canvas:
     """A sparse character grid that trims itself when rendered."""
@@ -101,11 +104,27 @@ class Canvas:
 
 def render(spec: Spec) -> str:
     """The complete ASCII block for one diagram, ending in a newline."""
-    if spec.type != "route":
+    if spec.type == "layers":
+        return _render_layers(spec)
+    if spec.type not in ("route", "flow"):
         raise ValueError(f"no ASCII renderer for diagram type {spec.type!r}")
-    if not _fits(spec, spec.ascii_width(), 0):
+    if not _fits(spec, _chain_width(spec), 0):
         raise ValueError(f"{spec.name}: ASCII labels exceed the {BUDGET}-column budget; shorten the labels")
     return _render_route(spec)
+
+
+def _box_width(nodes) -> int:
+    """Two borders, a two-space left pad, the longest label, one trailing space."""
+    return max(max(len(node.title), len(node.sub)) for node in nodes) + 5
+
+
+def _chain_width(spec: Spec) -> int:
+    return _box_width(spec.chain())
+
+
+def _branch_gap(label: str) -> int:
+    """Columns between a node and its side box: the arrow, with its label under it."""
+    return max(6, len(label) + 4)
 
 
 def step_for(spec: Spec) -> int:
@@ -115,8 +134,8 @@ def step_for(spec: Spec) -> int:
     is better than a drawing a terminal folds, and it is what a long route of
     wide boxes gets.
     """
-    width = spec.ascii_width()
-    hops = len(spec.nodes) - 1
+    width = _chain_width(spec)
+    hops = len(spec.chain()) - 1
     if hops < 1:
         return 0
     for candidate in range(STEP, 0, -1):
@@ -125,31 +144,58 @@ def step_for(spec: Spec) -> int:
     return 0
 
 
+def _origin(spec: Spec, width: int) -> tuple[int, int, int]:
+    """Where the chain starts, and where the inputs and their bus sit.
+
+    Returns (chain left, input left, bus column). The bus drops onto the first
+    chain box's port, so whichever of the two would sit left of the other is
+    moved right until they meet.
+    """
+    inputs = spec.inputs()
+    if not inputs:
+        return 0, 0, 0
+    bus = _box_width([node for _edge, node in inputs]) + INPUT_REACH
+    left = max(0, bus - width // 2)
+    shift = left + width // 2 - bus
+    return left, shift, bus + shift
+
+
 def _fits(spec: Spec, width: int, step: int) -> bool:
-    hops = len(spec.nodes) - 1
-    needed = width + step * hops + spec.indent
-    for index in range(1, len(spec.nodes)):
-        label = spec.edge_into(index).ascii_label() if spec.edge_into(index) else ""
+    chain = spec.chain()
+    hops = len(chain) - 1
+    left, _shift, bus = _origin(spec, width)
+    needed = max(bus + 1, left + width + step * hops) + spec.indent
+    for index in range(1, len(chain)):
+        label = spec.edge_into(index).ascii_label()
         if not label:
             continue
-        arrow = index * step + width // 2
+        arrow = left + index * step + width // 2
         needed = max(needed, arrow + LABEL_GUTTER + len(label) + spec.indent)
+    for parent, edge, side in spec.branches():
+        reach = left + parent * step + width + _branch_gap(edge.ascii_label()) + _box_width([side])
+        needed = max(needed, reach + spec.indent)
     return needed <= BUDGET
 
 
 def _render_route(spec: Spec) -> str:
     canvas = Canvas()
-    width = spec.ascii_width()
+    chain = spec.chain()
+    width = _chain_width(spec)
     step = step_for(spec)
+    origin, first_top = _draw_inputs(canvas, spec, width)
 
-    for index, node in enumerate(spec.nodes):
-        left = index * step
-        top = index * (BOX_ROWS + GAP_ROWS)
+    for index, node in enumerate(chain):
+        left = origin + index * step
+        top = first_top + index * (BOX_ROWS + GAP_ROWS)
         _box(canvas, left, top, width, node.title, node.sub)
 
         port = left + width // 2
-        if index + 1 < len(spec.nodes):
+        if index + 1 < len(chain):
             canvas.put(port, top + BOX_ROWS - 1, GLYPH_PORT)
+
+        branch = spec.branch_at(index)
+        if branch is not None:
+            _branch(canvas, left + width, top, *branch)
 
         edge = spec.edge_into(index)
         if edge is None:
@@ -157,13 +203,89 @@ def _render_route(spec: Spec) -> str:
         canvas.put(port, top, GLYPH_PORT)
         _connector(
             canvas,
-            source_column=(index - 1) * step + width // 2,
+            source_column=origin + (index - 1) * step + width // 2,
             target_column=port,
             top=top - GAP_ROWS,
             label=edge.ascii_label(),
         )
 
+    if spec.inputs():
+        canvas.put(origin + width // 2, first_top, GLYPH_PORT)
     return canvas.render(spec.indent)
+
+
+def _draw_inputs(canvas: Canvas, spec: Spec, width: int) -> tuple[int, int]:
+    """Stack the inputs above the chain and join them on one bus.
+
+    Each input leaves a port on its right border along its title row and meets
+    the bus at a `+`. The bus then drops, as one arrow, onto the port of the
+    first chain box. Returns (chain left, first chain row).
+    """
+    inputs = spec.inputs()
+    if not inputs:
+        return 0, 0
+    left, shift, bus = _origin(spec, width)
+    box = _box_width([node for _edge, node in inputs])
+    for number, (_edge, node) in enumerate(inputs):
+        top = number * (BOX_ROWS + 1)
+        _box(canvas, shift, top, box, node.title, node.sub)
+        canvas.put(shift + box - 1, top + 1, GLYPH_PORT)
+        canvas.text(shift + box, top + 1, "-" * (bus - shift - box))
+        canvas.put(bus, top + 1, GLYPH_PORT)
+    last_join = (len(inputs) - 1) * (BOX_ROWS + 1) + 1
+    first_top = (len(inputs) - 1) * (BOX_ROWS + 1) + BOX_ROWS + GAP_ROWS
+    for row in range(2, first_top - 1):
+        if (row - 1) % (BOX_ROWS + 1) or row > last_join:
+            canvas.put(bus, row, GLYPH_DOWN)
+    canvas.put(bus, first_top - 1, GLYPH_ARROW)
+    return left, first_top
+
+
+def _branch(canvas: Canvas, right: int, top: int, edge, side) -> None:
+    """A side box level with its parent, joined across the title row.
+
+    The arrow leaves a port on the parent's right border and its label sits on
+    the row beneath it, between the two boxes, so a branch reads as a turn off
+    the path rather than as another step down it.
+    """
+    label = edge.ascii_label()
+    gap = _branch_gap(label)
+    side_left = right + gap
+    canvas.put(right - 1, top + 1, GLYPH_PORT)
+    canvas.text(right, top + 1, "-" * (gap - 1) + ">")
+    if label:
+        canvas.text(right + 2, top + 2, label)
+    _box(canvas, side_left, top, _box_width([side]), side.title, side.sub)
+
+
+def _render_layers(spec: Spec) -> str:
+    """Nested boxes, outermost first, each naming its layer on one row.
+
+    The subtitle is set flush right, so the descriptions form a column that
+    steps inward with the nesting and the eye reads each layer across one row.
+    """
+    layers = list(reversed(spec.nodes))
+    width = max(
+        len(node.title) + (len(node.sub) + 2 if node.sub else 0) + 4 + 4 * level
+        for level, node in enumerate(layers)
+    )
+    if width + spec.indent > BUDGET:
+        raise ValueError(f"{spec.name}: ASCII layers exceed the {BUDGET}-column budget; shorten the labels")
+
+    def nested(level: int, text: str) -> str:
+        return "| " * level + text + " |" * level
+
+    lines: list[str] = []
+    for level, node in enumerate(layers):
+        inner = width - 4 * level
+        lines.append(nested(level, "+" + "-" * (inner - 2) + "+"))
+        text = node.title + node.sub.rjust(inner - 4 - len(node.title)) if node.sub else node.title
+        lines.append(nested(level, "| " + text.ljust(inner - 4) + " |"))
+    for level in reversed(range(len(layers))):
+        inner = width - 4 * level
+        lines.append(nested(level, "+" + "-" * (inner - 2) + "+"))
+    pad = " " * spec.indent
+    return "\n".join(pad + line for line in lines) + "\n"
 
 
 def _box(canvas: Canvas, left: int, top: int, width: int, title: str, sub: str) -> None:

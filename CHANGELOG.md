@@ -3,6 +3,19 @@
 
 ## [Unreleased]
 
+### Testing
+
+- The cross-runtime driver's native gate runs every configured runtime CTest,
+  including secret-resolution, AEAD-context and text-payload security tests
+  previously omitted by its four-name filter. Packaging checks remain a
+  separate explicit lane. Required results must all execute and pass; empty,
+  disabled, skipped, missing and duplicate results fail qualification.
+- Native configure/build failures stop that runtime's tests even when an old
+  executable remains. Driver regressions exercise these failure paths in CI.
+- Python environment creation, pip preparation and source-install failures
+  stop the main driver before tests run. A failed requested environment or
+  interpreter no longer falls back to another installed copy.
+
 ### Documentation
 
 - Product docs, changelogs and native manuals share `.doc` sources under
@@ -13,10 +26,14 @@
 
 ### Security
 
-- **C++ password resolution is idempotent.** `ResolvePassword` refuses a
-  `password://` value naming another reference and password files whose contents
-  begin with either scheme. Java and Python do not consistently enforce this
-  rule; nested references remain unsuitable for cross-runtime use.
+- **Password resolution is idempotent in C++, Java, and Python.** Some entry
+  points resolve a password at the public boundary and again further in, so a
+  secret that was itself a `password://` or `file://` reference could derive
+  two different keys depending on which path was taken. C++ `ResolvePassword`,
+  Java `resolvePasswordBytes`, and Python `_resolve_password` now guarantee
+  that their resolved secret is never another reference: a `password://` value
+  naming one, and a password file whose contents begin with either scheme, are
+  refused as ambiguous.
 - **C++ generic fwxAES stream decryption uses bounded wiped memory.** The
   C++ fwxAES stream decryptor used `std::tmpfile()` to hold plaintext until the
   GCM tag verified, which left those blocks unwiped in `TMPDIR` and let a long
@@ -34,12 +51,44 @@
   the one that wrote it. Encryption now fails with the recoverable value
   named. Serializing the cost is a format change that must land in C++, Java,
   and Python together.
-- **Lower-level master-key helpers refuse missing configured keys.** This does
-  not cover every public writer: wrappers can still replace requested intent
-  with key availability or metadata stripping, or catch wrapping failures.
-  The security and compatibility references describe those limits, the Python
-  nested-recipient boundary, direct Java output writes, and the password-based
-  `STRMOBF1` recovery limitation.
+- **Maintained public writers honor requested master recovery.** C++, Java,
+  and Python preserve caller intent through key selection and raw/file/stream/
+  live authoring. Missing or malformed configured keys and wrapping failures
+  propagate instead of producing password-only output. B512/PB512 and
+  AES-light/heavy file writers reject a master request combined with container
+  metadata stripping. Retired Python jMG retains
+  its separately scoped opportunistic selection; authenticated password/master
+  recovery on decode remains independent.
+- **Python file dispatch preserves writer policy and independent recovery.**
+  `AESfile`, `b512file`, and `b512file_encode` keep explicit master requests
+  through metadata-strip validation. Public-key selection occurs only on
+  encode, including heavy `fwxAES_file`, so missing encryption keys cannot
+  block a batch input with a valid password recovery path.
+- **Python nested file containers retain the selected master recipient.**
+  Small B512 and AES-heavy files carry the caller's `master_pubkey` through
+  their extension and data tokens. Previously those layers reselected host
+  keys, causing refusal without a host key or requiring a different private
+  key for inner recovery. In-memory file writers also reuse one selection.
+  Preselected recipients still enforce strict-PQ and requested-recovery policy
+  before encapsulation. The stored format and independent password path are unchanged.
+- **Streaming B512 recovery no longer depends on the lost password.** C++,
+  Java, and Python write the authenticated inner magic `B512STR2` and use the
+  new `basefwx.b512file.stream.obf.v2` HKDF domain for obfuscation from the
+  recoverable mask key. Old `STRMOBF1` B512 streams still need their password;
+  readers authenticate its wrap before publication. Previously a correct
+  master key with a wrong password could report success and publish corrupted
+  bytes. Older decoders reject the new inner magic, so readers must upgrade.
+  Outer AEAD/wrap domains and AES-heavy streams retain their formats.
+- **Recovery selection is documented explicitly.** An unrelated well-formed
+  master private key can derive a wrong candidate mask and fail payload
+  authentication. That failure remains terminal; select password recovery by
+  disabling master recovery. Key-loading refusal before authentication is a
+  different path and can still use the password wrap.
+- **Java fwxAES file encryption preserves existing output on refusal.** Both
+  ordinary and NIO wrappers use owner-only sibling staging, finalize and sync
+  ciphertext before publication, and support the same path for input/output.
+  Publication uses the existing atomic-move policy with a replacement-move
+  fallback where the filesystem lacks atomic moves.
 - **Java `an7`/`dean7` reject unknown flags.** The Java argument parser
   silently swallowed `--use-master` and `--no-master` on a format that has no
   key-escrow path, so a caller could ask for escrow and get none. It now

@@ -1,6 +1,5 @@
-Master recovery needs a provisioned public key and retained metadata. Public
-writer enforcement is incomplete: some wrappers can discard the request when
-keys are unavailable, wrapping fails or metadata is stripped. Verify recovery
-of the complete file with its intended private key and without the password
-before relying on escrow. Explicitly disable master recovery for password-only
-authoring.
+Requesting master recovery requires a provisioned public key. Maintained
+writers fail if key loading or wrapping fails; they never silently drop the
+requested recovery path. B512/PB512 and AES-light/heavy file writers refuse
+container metadata stripping combined with that request. Explicitly disable
+master recovery for password-only authoring.

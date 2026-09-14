@@ -58,6 +58,7 @@ from yume_diagram_spec import (
     load,
     load_all,
     load_strings,
+    missing_sources,
     missing_strings,
 )
 
@@ -191,8 +192,9 @@ def render_block(spec: Spec, path: Path, language: str = SOURCE_LANGUAGE) -> lis
         # and leaves its arrow head in a column nothing points at.
         return [ROFF_FENCE, *(_roff_literal(line) for line in ascii_lines), ROFF_FENCE_END]
 
+    key = _markdown_key(spec, path)
     if not spec.web:
-        return [f"{pad}{MARKDOWN_FENCE}", *ascii_lines, f"{pad}{MARKDOWN_FENCE_END}"]
+        return [*key, f"{pad}{MARKDOWN_FENCE}", *ascii_lines, f"{pad}{MARKDOWN_FENCE_END}"]
 
     source = os.path.relpath(
         svg_dir(language) / include_name(spec.name, MARKDOWN_LAYOUT), path.parent
@@ -203,6 +205,7 @@ def render_block(spec: Spec, path: Path, language: str = SOURCE_LANGUAGE) -> lis
         f'{pad}<img src="{source}" alt="{html.escape(spec.title, quote=True)}"'
         f' width="{width}" height="{height}">',
         "",
+        *key,
         f"{pad}<details>",
         f"{pad}<summary>Text version</summary>",
         "",
@@ -212,6 +215,55 @@ def render_block(spec: Spec, path: Path, language: str = SOURCE_LANGUAGE) -> lis
         "",
         f"{pad}</details>",
     ]
+
+
+def _markdown_key(spec: Spec, path: Path) -> list[str]:
+    """One list entry per node note, linking each source relative to the document."""
+    pad = " " * spec.indent
+    lines: list[str] = []
+    for node in spec.nodes:
+        if not node.note:
+            continue
+        refs = ", ".join(
+            f"[`{source}`]({os.path.relpath(REPO_ROOT / source, path.parent)})"
+            for source in node.sources
+        )
+        lines.append(f"{pad}- **{node.title}**: {node.note}" + (f" ({refs})" if refs else ""))
+    if not lines:
+        return []
+    # The notes stay one click away, like the text version, so the document
+    # around the figure is not interrupted by a list longer than the figure.
+    return [f"{pad}<details>", f"{pad}<summary>{KEY_SUMMARY}</summary>", "", *lines, "", f"{pad}</details>", ""]
+
+
+KEY_SUMMARY = "What each part does"
+
+
+def key_name(name: str) -> str:
+    return f"{name}-key.html"
+
+
+def key_html(spec: Spec) -> str:
+    """The website key for one figure: each noted part, what it does, where it lives.
+
+    Entries carry the node id the figure's cards carry, so the site can light
+    a card and its entry together. The text is complete without any script.
+    """
+    items: list[str] = []
+    for node in spec.nodes:
+        if not node.note:
+            continue
+        sources = "".join(f"<code>{html.escape(source)}</code>" for source in node.sources)
+        items.append(
+            f'<div class="diagram-key-item" data-node="{node.id}" data-role="{node.tone}">'
+            f"<dt>{html.escape(node.title)}</dt>"
+            f"<dd>{html.escape(node.note)}"
+            + (f'<span class="diagram-key-source">{sources}</span>' if sources else "")
+            + "</dd></div>"
+        )
+    if not items:
+        return ""
+    return '<dl class="diagram-key">\n' + "\n".join(items) + "\n</dl>\n"
 
 
 def _roff_literal(line: str) -> str:
@@ -331,13 +383,21 @@ def write_includes(specs: list[Spec], write: bool, language: str = SOURCE_LANGUA
                 (directory / include_name(spec.name, layout)).write_text(
                     rendered, encoding="utf-8"
                 )
+        key = key_html(spec)
+        if write and key:
+            # Only Jekyll reads the key include. Markdown carries its own list.
+            (inlined / key_name(spec.name)).write_text(key, encoding="utf-8")
     if write:
+        keys = {key_name(spec.name) for spec in specs if spec.web and key_html(spec)}
         for directory in (tracked, inlined):
             if not directory.is_dir():
                 continue
             for path in sorted(directory.glob("*.svg")):
                 if path.name not in wanted:
                     path.unlink()
+        for path in sorted(inlined.glob("*-key.html")) if inlined.is_dir() else []:
+            if path.name not in keys:
+                path.unlink()
     return stale
 
 
@@ -360,6 +420,16 @@ def embed(path: Path, text: str, specs: dict[str, Spec], language: str = SOURCE_
             f'<figure class="diagram" data-diagram="{spec.name}">',
             f"{{% include diagrams/{prefix}{include_name(spec.name, 'vertical')} %}}",
             f"<figcaption>{html.escape(spec.summary)}</figcaption>",
+            *(
+                [
+                    '<details class="diagram-text diagram-notes">',
+                    f"<summary>{KEY_SUMMARY}</summary>",
+                    key_html(spec).rstrip("\n"),
+                    "</details>",
+                ]
+                if key_html(spec)
+                else []
+            ),
             '<details class="diagram-text">',
             "<summary>Text version</summary>",
             f"<pre>{ascii_text}</pre>",
@@ -389,7 +459,9 @@ def command_list(_args: argparse.Namespace) -> int:
 
 def command_render(args: argparse.Namespace) -> int:
     spec = load(args.name, args.language)
-    if args.svg:
+    if args.key:
+        sys.stdout.write(key_html(spec))
+    elif args.svg:
         import yume_diagram_svg
         sys.stdout.write(yume_diagram_svg.render(spec, args.layout))
     else:
@@ -401,6 +473,8 @@ def command_sync(args: argparse.Namespace) -> int:
     specs = load_all()
     index = {spec.name: spec for spec in specs}
     problems = verify_targets(specs)
+    for spec in specs:
+        problems.extend(missing_sources(spec))
     if problems:
         for problem in problems:
             print(f"diagrams: {problem}", file=sys.stderr)
@@ -507,6 +581,7 @@ def main(argv: list[str]) -> int:
     render.add_argument("name")
     render.add_argument("--language", default=SOURCE_LANGUAGE)
     render.add_argument("--svg", action="store_true", help="print the animated SVG")
+    render.add_argument("--key", action="store_true", help="print the HTML key of node notes")
     render.add_argument(
         "--layout", choices=LAYOUTS, default="vertical", help="SVG layout to print"
     )

@@ -231,10 +231,6 @@ public final class LiveCipher {
                         return packFrame(Constants.LIVE_FRAME_TYPE_HEADER, 0L,
                             buildSessionHeader(keyMode, keyHeader, salt, noncePrefix, 0));
                     }
-                } catch (RuntimeException exc) {
-                    if (!hasPassword || PQ.strictPqOnly()) {
-                        throw exc;
-                    }
                 }
             }
 

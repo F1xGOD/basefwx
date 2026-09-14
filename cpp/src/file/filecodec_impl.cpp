@@ -77,6 +77,28 @@ std::optional<Bytes> TryLoadEcPublic(bool /*create_if_missing*/) {
     return basefwx::ec::LoadMasterPublicKey(false);
 }
 
+basefwx::keywrap::MasterPublicKeys SelectMasterForWrite(bool requested, bool strip_metadata) {
+    if (requested && strip_metadata) {
+        throw std::invalid_argument(
+            "master-key recovery requires metadata; strip_metadata conflicts with use_master");
+    }
+    if (!requested) return {};
+    basefwx::keywrap::MasterPublicKeys selection;
+    selection.pq = basefwx::pq::LoadMasterPublicKey();
+    if (!selection.pq.has_value() && StrictPqOnly()) {
+        throw std::runtime_error(
+            "PQ strict mode requires a configured ML-KEM master public key");
+    }
+    if (!selection.pq.has_value()) {
+        selection.ec = TryLoadEcPublic(false);
+    }
+    if (!selection.pq && !selection.ec) {
+        throw std::runtime_error(
+            "master key requested but no master public key is configured");
+    }
+    return selection;
+}
+
 PayloadKeys DerivePayloadKeys(const Bytes& root_key) {
     PayloadKeys keys;
     keys.aead = basefwx::crypto::HkdfSha256(root_key, constants::kFwxAesPayloadAeadInfo, 32);
@@ -507,8 +529,11 @@ Bytes EncryptAesPayload(const std::string& plaintext,
         throw std::runtime_error(
             "PQ strict mode requires a configured ML-KEM master public key");
     }
-    bool use_master_effective = use_master
-        && (pq_public_key.has_value() || ec_public_key.has_value());
+    if (use_master && !pq_public_key && !ec_public_key) {
+        throw std::runtime_error(
+            "master key requested but no master public key is configured");
+    }
+    const bool use_master_effective = use_master;
     if (resolved.empty() && !use_master_effective) {
         throw std::runtime_error("Password required when no usable master key is available");
     }

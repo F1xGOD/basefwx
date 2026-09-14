@@ -30,6 +30,15 @@ class MasterKeySelection(NamedTuple):
     def used_master(self) -> bool:
         return self.pq_public is not None or self.ec_public is not None
 
+    def require_encryption_policy(self, use_master: bool) -> None:
+        if not use_master:
+            return
+        # A retained recipient avoids reselection; it does not authorize
+        # bypassing requested recovery or the current strict-PQ policy.
+        _require_pq_master_if_strict(self.pq_public)
+        if not self.used_master:
+            raise ValueError('master key requested but no master public key is configured')
+
 
 def _bounded_key_decompress(data: bytes) -> 'basefwx.typing.Optional[bytes]':
     decompressor = basefwx.zlib.decompressobj()
@@ -257,6 +266,8 @@ def _ec_kem_dec(master_blob: bytes) -> bytes:
 def _select_master_key(
     use_master: bool,
     master_pubkey: 'basefwx.typing.Optional[bytes]' = None,
+    *,
+    required: bool = True,
 ) -> MasterKeySelection:
     if not use_master:
         return MasterKeySelection(None, None, 'none')
@@ -271,20 +282,13 @@ def _select_master_key(
         return MasterKeySelection(
             pq_pub, None, basefwx.kem_algorithm_for_public_key(pq_pub)
         )
-    if _strict_pq_only():
-        raise ValueError(
-            'PQ strict mode requires an ML-KEM master public key when master wrap is requested'
-        )
+    _require_pq_master_if_strict(None)
     ec_pub = basefwx._load_master_ec_public()
     if ec_pub is not None:
         return MasterKeySelection(None, ec_pub, 'EC')
+    if required:
+        raise ValueError('master key requested but no master public key is configured')
     return MasterKeySelection(None, None, 'none')
-
-
-def _resolve_master_usage(use_master: bool, master_pubkey: 'basefwx.typing.Optional[bytes]') -> 'tuple[basefwx.typing.Optional[bytes], bool]':
-    """Compatibility wrapper; new writers retain the full selection object."""
-    selection = _select_master_key(use_master, master_pubkey)
-    return (selection.pq_public, selection.used_master)
 
 
 def _kem_derive_key(shared: bytes, length: int=32) -> bytes:
@@ -297,23 +301,23 @@ def _strict_pq_only() -> bool:
     )
 
 
+def _require_pq_master_if_strict(public_key: Optional[bytes]) -> None:
+    if public_key is None and _strict_pq_only():
+        raise ValueError(
+            'PQ strict mode requires an ML-KEM master public key when master wrap is requested'
+        )
+
+
 def _prepare_mask_key(password: 'basefwx.typing.Union[str, bytes, bytearray, memoryview]', use_master: bool, *, mask_info: bytes, require_password: bool, aad: 'basefwx.typing.Optional[bytes]'=None, master_selection: 'basefwx.typing.Optional[MasterKeySelection]'=None) -> 'basefwx.typing.Tuple[bytes, bytes, bytes, bool]':
     kdf_label = basefwx._resolve_kdf_label(None)
     if require_password and (not password):
         raise ValueError('Password required for this mode')
     basefwx._require_strong_password_for_encryption(password, 'Encryption')
     selection = master_selection or basefwx._select_master_key(use_master)
+    selection.require_encryption_policy(use_master)
     pubkey = selection.pq_public
     ec_pub = selection.ec_public
     use_master_effective = use_master and selection.used_master
-    if use_master and not use_master_effective:
-        # Degrading to password-only would write a file that looks escrowed on
-        # this host and is unrecoverable once the password is lost. The caller
-        # asked for a master key; refusing is the only honest answer. Matches
-        # keywrap.cpp and KeyWrap.java.
-        raise ValueError(
-            'master key requested but no master public key is configured'
-        )
     if not password and (not use_master_effective):
         raise ValueError('Password required when PQ master key wrapping is disabled')
     if use_master_effective:

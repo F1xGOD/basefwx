@@ -52,21 +52,11 @@ std::string Pb512EncodeFileSimple(const std::filesystem::path& input,
     std::string b64_payload = basefwx::base64::Encode(data);
     std::string ext = input.extension().string();
 
-    std::optional<Bytes> pq_pub;
-    std::optional<Bytes> ec_pub;
-    if (options.use_master) {
-        pq_pub = basefwx::pq::LoadMasterPublicKey();
-        if (!pq_pub.has_value()) {
-            ec_pub = TryLoadEcPublic(true);
-        }
-    }
-    if (options.use_master && !options.strip_metadata
-        && StrictPqOnly() && !pq_pub.has_value()) {
-        throw std::runtime_error(
-            "PQ strict mode requires a configured ML-KEM master public key");
-    }
-    bool use_master_effective = options.use_master && !options.strip_metadata
-        && (pq_pub.has_value() || ec_pub.has_value());
+    const auto master_selection =
+        SelectMasterForWrite(options.use_master, options.strip_metadata);
+    const auto& pq_pub = master_selection.pq;
+    const auto& ec_pub = master_selection.ec;
+    const bool use_master_effective = options.use_master;
     const std::string master_kem =
         MasterKemLabel(pq_pub, ec_pub, use_master_effective);
     basefwx::pb512::KdfOptions kdf_opts = kdf;
@@ -156,21 +146,11 @@ std::string Pb512EncodeFileStream(const std::filesystem::path& input,
         RequireStreamChunkSize(options.stream_chunk_size);
     const std::size_t chunk_size = encoded_chunk_size;
 
-    std::optional<Bytes> pq_pub;
-    std::optional<Bytes> ec_pub;
-    if (options.use_master) {
-        pq_pub = basefwx::pq::LoadMasterPublicKey();
-        if (!pq_pub.has_value()) {
-            ec_pub = TryLoadEcPublic(true);
-        }
-    }
-    if (options.use_master && !options.strip_metadata
-        && StrictPqOnly() && !pq_pub.has_value()) {
-        throw std::runtime_error(
-            "PQ strict mode requires a configured ML-KEM master public key");
-    }
-    bool use_master_effective = options.use_master && !options.strip_metadata
-        && (pq_pub.has_value() || ec_pub.has_value());
+    const auto master_selection =
+        SelectMasterForWrite(options.use_master, options.strip_metadata);
+    const auto& pq_pub = master_selection.pq;
+    const auto& ec_pub = master_selection.ec;
+    const bool use_master_effective = options.use_master;
     const std::string master_kem =
         MasterKemLabel(pq_pub, ec_pub, use_master_effective);
     basefwx::pb512::KdfOptions kdf_opts = kdf;
@@ -741,16 +721,11 @@ std::vector<std::uint8_t> Pb512EncodeBytes(const std::vector<std::uint8_t>& data
     std::string b64_payload = basefwx::base64::Encode(data);
     std::string ext = extension;
 
-    std::optional<Bytes> pq_pub;
-    std::optional<Bytes> ec_pub;
-    if (options.use_master) {
-        pq_pub = basefwx::pq::LoadMasterPublicKey();
-        if (!pq_pub.has_value()) {
-            ec_pub = TryLoadEcPublic(true);
-        }
-    }
-    bool use_master_effective = options.use_master && !options.strip_metadata
-        && (pq_pub.has_value() || ec_pub.has_value());
+    const auto master_selection =
+        SelectMasterForWrite(options.use_master, options.strip_metadata);
+    const auto& pq_pub = master_selection.pq;
+    const auto& ec_pub = master_selection.ec;
+    const bool use_master_effective = options.use_master;
     const std::string master_kem =
         MasterKemLabel(pq_pub, ec_pub, use_master_effective);
     basefwx::pb512::KdfOptions kdf_opts = kdf;

@@ -39,9 +39,11 @@ public final class KeyWrap {
         }
         java.security.PublicKey publicKey =
                 EcKeys.loadMasterPublic(EcKeys.masterEcAutoCreateEnabled());
-        return publicKey == null
-                ? MasterKeySelection.none()
-                : MasterKeySelection.ec(publicKey);
+        if (publicKey == null) {
+            throw new IllegalStateException(
+                    "master key requested but no master public key is configured");
+        }
+        return MasterKeySelection.ec(publicKey);
     }
 
     public static MaskKeyResult prepareMaskKey(byte[] password,

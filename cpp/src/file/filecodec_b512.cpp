@@ -32,6 +32,7 @@
 #include <string_view>
 #include <vector>
 
+#include <openssl/crypto.h>
 #include <openssl/evp.h>
 
 namespace basefwx::filecodec::internal {
@@ -46,21 +47,11 @@ std::string B512EncodeFileSimple(const std::filesystem::path& input,
     std::string b64_payload = basefwx::base64::Encode(data);
     std::string ext = input.extension().string();
 
-    std::optional<Bytes> pq_pub;
-    std::optional<Bytes> ec_pub;
-    if (options.use_master) {
-        pq_pub = basefwx::pq::LoadMasterPublicKey();
-        if (!pq_pub.has_value()) {
-            ec_pub = TryLoadEcPublic(true);
-        }
-    }
-    if (options.use_master && !options.strip_metadata
-        && StrictPqOnly() && !pq_pub.has_value()) {
-        throw std::runtime_error(
-            "PQ strict mode requires a configured ML-KEM master public key");
-    }
-    bool use_master_effective = options.use_master && !options.strip_metadata
-        && (pq_pub.has_value() || ec_pub.has_value());
+    const auto master_selection =
+        SelectMasterForWrite(options.use_master, options.strip_metadata);
+    const auto& pq_pub = master_selection.pq;
+    const auto& ec_pub = master_selection.ec;
+    const bool use_master_effective = options.use_master;
     const std::string master_kem =
         MasterKemLabel(pq_pub, ec_pub, use_master_effective);
     const basefwx::keywrap::MasterPublicKeys selected_master{
@@ -144,21 +135,11 @@ std::string B512EncodeFileStream(const std::filesystem::path& input,
         RequireStreamChunkSize(options.stream_chunk_size);
     const std::size_t chunk_size = encoded_chunk_size;
 
-    std::optional<Bytes> pq_pub;
-    std::optional<Bytes> ec_pub;
-    if (options.use_master) {
-        pq_pub = basefwx::pq::LoadMasterPublicKey();
-        if (!pq_pub.has_value()) {
-            ec_pub = TryLoadEcPublic(true);
-        }
-    }
-    if (options.use_master && !options.strip_metadata
-        && StrictPqOnly() && !pq_pub.has_value()) {
-        throw std::runtime_error(
-            "PQ strict mode requires a configured ML-KEM master public key");
-    }
-    bool use_master_effective = options.use_master && !options.strip_metadata
-        && (pq_pub.has_value() || ec_pub.has_value());
+    const auto master_selection =
+        SelectMasterForWrite(options.use_master, options.strip_metadata);
+    const auto& pq_pub = master_selection.pq;
+    const auto& ec_pub = master_selection.ec;
+    const bool use_master_effective = options.use_master;
     const std::string master_kem =
         MasterKemLabel(pq_pub, ec_pub, use_master_effective);
     const basefwx::keywrap::MasterPublicKeys selected_master{
@@ -196,7 +177,10 @@ std::string B512EncodeFileStream(const std::filesystem::path& input,
     }
 
     Bytes stream_header;
-    stream_header.insert(stream_header.end(), constants::kStreamMagic.begin(), constants::kStreamMagic.end());
+    stream_header.insert(
+        stream_header.end(),
+        constants::kB512StreamMagicV2.begin(),
+        constants::kB512StreamMagicV2.end());
     Bytes chunk_bytes = Uint32Be(encoded_chunk_size);
     stream_header.insert(stream_header.end(), chunk_bytes.begin(), chunk_bytes.end());
     Bytes size_bytes = Uint64Be(input_size);
@@ -265,11 +249,12 @@ std::string B512EncodeFileStream(const std::filesystem::path& input,
         output.write(reinterpret_cast<const char*>(ct.data()), static_cast<std::streamsize>(ct.size()));
     }
 
-    basefwx::obf::StreamObfuscator obfuscator = basefwx::obf::StreamObfuscator::ForPassword(
-        resolved,
-        stream_salt,
-        fast_obf
-    );
+    basefwx::crypto::SecureBytes obf_key{
+        basefwx::crypto::HkdfSha256(
+            mask.mask_key, constants::kB512StreamObfInfoV2, 32)};
+    basefwx::obf::StreamObfuscator obfuscator =
+        basefwx::obf::StreamObfuscator::ForKey(
+            obf_key.bytes(), stream_salt, fast_obf);
     std::ifstream input_stream(input, std::ios::binary);
     if (!input_stream) {
         throw std::runtime_error("Failed to open input file: " + input.string());
@@ -484,10 +469,6 @@ std::string B512DecodeFileStream(const std::filesystem::path& input,
     plain_out.close();
     ThrowIfInterrupted();
 
-    if (resolved.empty()) {
-        throw std::runtime_error("Password required for streaming b512 decode");
-    }
-
     std::ifstream plain_in(temp_plain, std::ios::binary);
     if (!plain_in) {
         throw std::runtime_error("Failed to open plaintext temp file");
@@ -506,11 +487,43 @@ std::string B512DecodeFileStream(const std::filesystem::path& input,
         }
     }
 
-    Bytes magic(constants::kStreamMagic.begin(), constants::kStreamMagic.end());
-    Bytes magic_buf(magic.size());
+    static_assert(
+        constants::kStreamMagic.size()
+        == constants::kB512StreamMagicV2.size());
+    std::array<std::uint8_t, constants::kStreamMagic.size()> magic_buf{};
     plain_in.read(reinterpret_cast<char*>(magic_buf.data()), static_cast<std::streamsize>(magic_buf.size()));
-    if (plain_in.gcount() != static_cast<std::streamsize>(magic_buf.size()) || magic_buf != magic) {
+    const std::string_view magic(
+        reinterpret_cast<const char*>(magic_buf.data()), magic_buf.size());
+    const bool derived_obf_key = magic == constants::kB512StreamMagicV2;
+    if (plain_in.gcount() != static_cast<std::streamsize>(magic_buf.size())
+        || (!derived_obf_key && magic != constants::kStreamMagic)) {
         throw std::runtime_error("Malformed streaming payload: magic mismatch");
+    }
+    if (!derived_obf_key) {
+        // Released STRMOBF1 b512 streams obfuscated with the password.
+        // Master authentication alone cannot validate that password or
+        // establish that its obfuscation key will recover the plaintext.
+        if (user_blob.empty() || resolved.empty()) {
+            throw std::runtime_error(
+                "Legacy streaming b512 requires a password and user key wrap");
+        }
+        basefwx::crypto::SecureBytes user_mask_key{
+            basefwx::keywrap::RecoverMaskKey(
+                user_blob,
+                {},
+                resolved,
+                false,
+                constants::kB512FileMaskInfo,
+                constants::kMaskAadB512File,
+                kdf,
+                constants::kB512AeadInfo)};
+        if (user_mask_key.size() != mask_key.size()
+            || CRYPTO_memcmp(
+                   user_mask_key.data(), mask_key.data(), mask_key.size())
+                != 0) {
+            throw basefwx::crypto::AuthenticationError(
+                "Legacy streaming b512 user wrap does not match payload key");
+        }
     }
     std::array<std::uint8_t, 4> chunk_buf{};
     plain_in.read(reinterpret_cast<char*>(chunk_buf.data()), chunk_buf.size());
@@ -558,11 +571,16 @@ std::string B512DecodeFileStream(const std::filesystem::path& input,
         obf_hint = "yes";
     }
     bool fast_obf = obf_hint == "fast";
-    basefwx::obf::StreamObfuscator decoder = basefwx::obf::StreamObfuscator::ForPassword(
-        resolved,
-        salt,
-        fast_obf
-    );
+    basefwx::crypto::SecureBytes obf_key;
+    if (derived_obf_key) {
+        obf_key.Reset(basefwx::crypto::HkdfSha256(
+            mask_key.bytes(), constants::kB512StreamObfInfoV2, 32));
+    }
+    basefwx::obf::StreamObfuscator decoder = derived_obf_key
+        ? basefwx::obf::StreamObfuscator::ForKey(
+              obf_key.bytes(), salt, fast_obf)
+        : basefwx::obf::StreamObfuscator::ForPassword(
+              resolved, salt, fast_obf);
     std::filesystem::path target = input;
     target.replace_extension("");
     std::string ext;
@@ -774,21 +792,11 @@ std::vector<std::uint8_t> B512EncodeBytes(const std::vector<std::uint8_t>& data,
     std::string b64_payload = basefwx::base64::Encode(data);
     std::string ext = extension;
 
-    std::optional<Bytes> pq_pub;
-    std::optional<Bytes> ec_pub;
-    if (options.use_master) {
-        pq_pub = basefwx::pq::LoadMasterPublicKey();
-        if (!pq_pub.has_value()) {
-            ec_pub = TryLoadEcPublic(true);
-        }
-    }
-    if (options.use_master && !options.strip_metadata
-        && StrictPqOnly() && !pq_pub.has_value()) {
-        throw std::runtime_error(
-            "PQ strict mode requires a configured ML-KEM master public key");
-    }
-    bool use_master_effective = options.use_master && !options.strip_metadata
-        && (pq_pub.has_value() || ec_pub.has_value());
+    const auto master_selection =
+        SelectMasterForWrite(options.use_master, options.strip_metadata);
+    const auto& pq_pub = master_selection.pq;
+    const auto& ec_pub = master_selection.ec;
+    const bool use_master_effective = options.use_master;
     const std::string master_kem =
         MasterKemLabel(pq_pub, ec_pub, use_master_effective);
     const basefwx::keywrap::MasterPublicKeys selected_master{

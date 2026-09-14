@@ -793,7 +793,6 @@ lang_cooldown() {
 }
 
 ensure_venv() {
-    local pip_cmd
     local py_install_target="${PY_ROOT}[argon2]"
     if (( RETIRED_MEDIA_ENABLED == 1 )); then
         py_install_target="${PY_ROOT}[argon2,retired-media]"
@@ -801,34 +800,37 @@ ensure_venv() {
     if [[ "$USE_VENV" != "1" ]]; then
         if [[ -z "$PYTHON_BIN" ]]; then
             PYTHON_BIN="$(command -v python3 || command -v python || true)"
+        else
+            PYTHON_BIN="$(command -v -- "$PYTHON_BIN" || true)"
         fi
-        if [[ -z "$PYTHON_BIN" ]]; then
-            RUN_PY_TESTS=0
-            log "Python: unavailable (no interpreter)"
+        if [[ -z "$PYTHON_BIN" || ! -f "$PYTHON_BIN" || ! -x "$PYTHON_BIN" ]]; then
+            FAILURES+=("python_unavailable (requested interpreter missing)")
             return 1
         fi
-        pip_cmd=("$PYTHON_BIN" "-m" "pip")
-        time_cmd_no_fail "venv_pip" "${pip_cmd[@]}" install -U pip setuptools wheel
-        time_cmd_no_fail "venv_install" "${pip_cmd[@]}" install -e "$py_install_target"
-        return 0
-    fi
-    if [[ ! -x "$VENV_PY" ]]; then
-        time_cmd_no_fail "venv_create" python3 -m venv "$VENV_DIR"
-    fi
-    if [[ -x "$VENV_PY" ]]; then
-        PYTHON_BIN="$VENV_PY"
-        pip_cmd=("$PYTHON_BIN" "-m" "pip")
     else
-        PYTHON_BIN="$(command -v python3 || command -v python || true)"
-        if [[ -z "$PYTHON_BIN" ]]; then
-            RUN_PY_TESTS=0
-            log "Python: unavailable (venv creation failed)"
+        if [[ ! -x "$VENV_PY" ]]; then
+            if ! time_cmd_no_fail "venv_create" python3 -m venv "$VENV_DIR"; then
+                FAILURES+=("venv_create (failed)")
+                return 1
+            fi
+        fi
+        if [[ ! -f "$VENV_PY" || ! -x "$VENV_PY" ]]; then
+            FAILURES+=("venv_create (interpreter missing)")
             return 1
         fi
-        pip_cmd=("$PYTHON_BIN" "-m" "pip")
+        PYTHON_BIN="$VENV_PY"
     fi
-    time_cmd_no_fail "venv_pip" "${pip_cmd[@]}" install -U pip setuptools wheel
-    time_cmd_no_fail "venv_install" "${pip_cmd[@]}" install -e "$py_install_target"
+    # Every setup stage is required. Falling back after a failed environment
+    # build/install can run old installed code while reporting new-source tests.
+    local pip_cmd=("$PYTHON_BIN" "-m" "pip")
+    if ! time_cmd_no_fail "venv_pip" "${pip_cmd[@]}" install -U pip setuptools wheel; then
+        FAILURES+=("venv_pip (failed)")
+        return 1
+    fi
+    if ! time_cmd_no_fail "venv_install" "${pip_cmd[@]}" install -e "$py_install_target"; then
+        FAILURES+=("venv_install (failed)")
+        return 1
+    fi
     return 0
 }
 
@@ -1009,23 +1011,29 @@ ensure_cpp() {
     if [[ "$TEST_MODE" == "bench" || "$BENCH_ONLY" == "1" || "$FBENCH" == "1" || -n "${BASEFWX_TESTING:-}" ]]; then
         cpp_extra_args+=(-DBASEFWX_TESTING=ON)
     fi
-    time_cmd_no_fail "cpp_configure" cmake -S "$ROOT/cpp" -B "$build_dir" \
+    if ! time_cmd_no_fail "cpp_configure" cmake -S "$ROOT/cpp" -B "$build_dir" \
         -DCMAKE_BUILD_TYPE=Release \
         -DBASEFWX_BUILD_TESTS=ON \
+        -DBUILD_TESTING=ON \
         -DBASEFWX_ENABLE_RETIRED_MEDIA="$([[ "$RETIRED_MEDIA_ENABLED" == "1" ]] && printf ON || printf OFF)" \
         -DBASEFWX_REQUIRE_ARGON2="$CPP_REQUIRE_ARGON2" \
         -DBASEFWX_REQUIRE_OQS="$CPP_REQUIRE_OQS" \
         -DBASEFWX_REQUIRE_LZMA="$CPP_REQUIRE_LZMA" \
-        "${cpp_extra_args[@]}"
-    if [[ ! -d "$build_dir" ]]; then
-        log "CMake configure failed; build dir missing"
+        "${cpp_extra_args[@]}"; then
+        CPP_AVAILABLE=0
+        FAILURES+=("cpp_configure (failed)")
+        return 1
     fi
     # The executable target is named basefwx_cpp (its output file is
     # `basefwx`). Building the default ALL target here includes that real
     # target plus the policy executables. For a focused manual CLI rebuild,
     # use `cmake --build cpp/build --target basefwx_cpp`; `--target basefwx`
     # does not name this executable and can leave a stale output binary.
-    time_cmd_no_fail "cpp_build" cmake --build "$build_dir" --config Release
+    if ! time_cmd_no_fail "cpp_build" cmake --build "$build_dir" --config Release; then
+        CPP_AVAILABLE=0
+        FAILURES+=("cpp_build (failed)")
+        return 1
+    fi
     if [[ -x "$CPP_BIN" ]] && cpp_has_file_cli; then
         return 0
     fi
@@ -2167,16 +2175,7 @@ mkdir -p "$ORIG_DIR" "$WORK_DIR" "$OUT_DIR"
 printf "" >"$LOG"
 printf "" >"$VERIFY_LIST"
 
-ensure_venv
-
-if [[ -z "$PYTHON_BIN" || ! -x "$PYTHON_BIN" ]]; then
-    fallback_py="$(command -v python3 || command -v python || true)"
-    if [[ -n "$fallback_py" ]]; then
-        PYTHON_BIN="$fallback_py"
-    fi
-fi
-if [[ -z "$PYTHON_BIN" || ! -x "$PYTHON_BIN" ]]; then
-    FAILURES+=("python_unavailable (no interpreter)")
+if ! ensure_venv; then
     printf "\nFAILURES (%d):\n" "${#FAILURES[@]}"
     for failure in "${FAILURES[@]}"; do
         printf " - %s\n" "$failure"
@@ -3813,9 +3812,9 @@ if [[ "$RUN_CPP_TESTS_ORIG" == "1" ]]; then
         log "C++ binary unavailable; C++ tests will be skipped"
         CPP_AVAILABLE=0
         RUN_CPP_TESTS_ORIG=0
-    elif ! ctest --test-dir "$ROOT/cpp/build" \
-             --output-on-failure \
-             -R '^(peer_kdf_policy_test|bench_memory_policy_test|base64_compatibility_test|crypto_api_safety_test)$' \
+    elif ! "$PYTHON_BIN" "$ROOT/scripts/run_cpp_tests.py" \
+             --build-dir "$ROOT/cpp/build" \
+             --output-junit "$OUT_DIR/cpp-internal-tests.xml" \
              >>"$LOG" 2>&1; then
         FAILURES+=("cpp_internal_policy_tests")
     elif ! "$ROOT/scripts/test_cmake_subdirectory.sh" \

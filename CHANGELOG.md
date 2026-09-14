@@ -3,6 +3,19 @@
 
 ## [Unreleased]
 
+### Testing
+
+- The cross-runtime driver's native gate runs every configured runtime CTest,
+  including secret-resolution, AEAD-context and text-payload security tests
+  previously omitted by its four-name filter. Packaging checks remain a
+  separate explicit lane. Required results must all execute and pass; empty,
+  disabled, skipped, missing and duplicate results fail qualification.
+- Native configure/build failures stop that runtime's tests even when an old
+  executable remains. Driver regressions exercise these failure paths in CI.
+- Python environment creation, pip preparation and source-install failures
+  stop the main driver before tests run. A failed requested environment or
+  interpreter no longer falls back to another installed copy.
+
 ### Documentation
 
 - Product docs, changelogs and native manuals share `.doc` sources under

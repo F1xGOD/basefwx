@@ -28,6 +28,9 @@ jobs:
       - name: Validate version metadata
         run: python3 scripts/check_version_sync.py
 
+      - name: Verify native test driver failure handling
+        run: python3 scripts/test_run_cpp_tests.py
+
       # The website pages under website/docs/ are generated from docs/src/.
       # Without this gate a documentation change lands with a stale
       # published mirror and nothing fails.

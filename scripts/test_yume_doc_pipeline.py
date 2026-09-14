@@ -32,10 +32,12 @@ class Pipeline(unittest.TestCase):
             "schema": 1, "catalog_groups": {"group": ["Reference"]},
             "mirror_tracked": True, "cli": False,
         }))
+        patches = contextlib.ExitStack()
+        self.addCleanup(patches.close)
         for module in (spec, web, docs):
-            self.enterContext(patch.object(module, "REPO_ROOT", self.root))
+            patches.enter_context(patch.object(module, "REPO_ROOT", self.root))
         for module in (spec, docs):
-            self.enterContext(patch.object(module, "SOURCE_ROOT", self.sources))
+            patches.enter_context(patch.object(module, "SOURCE_ROOT", self.sources))
         self.page()
 
     def page(self, name: str = "sample", language: str = "en_US", body: str = "A fact.", header: str = "") -> Path:

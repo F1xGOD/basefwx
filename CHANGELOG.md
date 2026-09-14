@@ -5,6 +5,8 @@
 
 ### Testing
 
+- Shared documentation pipeline fixtures support Python 3.10 and restore their
+  patched source roots through registered cleanup even when setup fails.
 - The cross-runtime driver's native gate runs every configured runtime CTest,
   including secret-resolution, AEAD-context and text-payload security tests
   previously omitted by its four-name filter. Packaging checks remain a

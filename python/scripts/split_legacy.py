@@ -171,7 +171,6 @@ BATCH_MODULES: dict[str, list[str]] = {
         "_write_ec_keypair",
         "_ec_kem_enc",
         "_ec_kem_dec",
-        "_resolve_master_usage",
         "_kem_derive_key",
         "_prepare_mask_key",
         "_recover_mask_key_from_blob",

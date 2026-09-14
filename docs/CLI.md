@@ -58,7 +58,7 @@ python -m basefwx cryptin fwxaes track.m4a -p "correct-horse-battery"
 `--strip` is rejected outright for AES-heavy file encryption at any size,
 because the heavy KDF costs are recorded only in the metadata block and a
 stripped container could never be reopened. For b512 it is rejected when
-the file selects the streaming container, whose
+master recovery is requested or the file selects the streaming container, whose
 marker is required for unambiguous decode dispatch. Either way the encoder
 refuses before creating output.
 
@@ -84,12 +84,11 @@ export BASEFWX_MASTER_PQ_PUB=/secure/mlkem768.pub
 python -m basefwx cryptin aes-heavy payload.bin -p "" --use-master
 ```
 
-Master recovery needs a provisioned public key and retained metadata. Public
-writer enforcement is incomplete: some wrappers can discard the request when
-keys are unavailable, wrapping fails or metadata is stripped. Verify recovery
-of the complete file with its intended private key and without the password
-before relying on escrow. Explicitly disable master recovery for password-only
-authoring.
+Requesting master recovery requires a provisioned public key. Maintained
+writers fail if key loading or wrapping fails; they never silently drop the
+requested recovery path. B512/PB512 and AES-light/heavy file writers refuse
+container metadata stripping combined with that request. Explicitly disable
+master recovery for password-only authoring.
 
 Use `--use-master` to request recovery and `--no-master` for password-only
 authoring. Python spells the metadata-stripping flag `--strip` (or `--trim`);
@@ -99,10 +98,10 @@ Use `--no-master` to select password recovery when the configured private key
 belongs to a different recipient. Enabled master recovery is tried first; a
 payload authentication failure is terminal and does not retry the password.
 
-Streaming B512 uses `STRMOBF1` and needs the original password for internal
-obfuscation even with a matching master private key. The reader does not
-independently authenticate that password, so a wrong one can produce corrupted
-output. See [streaming B512 recovery](../COMPATIBILITY.md#streaming-b512-recovery).
+New streaming B512 output uses `B512STR2` and requires an updated reader.
+Legacy `STRMOBF1` B512 streams require their correct password even with a
+matching master private key; wrong or missing passwords refuse publication.
+See [streaming B512 recovery](../COMPATIBILITY.md#streaming-b512-recovery).
 
 Notes:
 
@@ -110,10 +109,12 @@ Notes:
   password from a file, use an explicit `file://<path>` URI (`~/` expands).
   Use `password://<literal>` to force a literal string that happens to
   contain `://`. Bare strings are never interpreted as file paths.
-- C++ rejects resolved secrets that are themselves `password://` or `file://`
-  references. Java and Python do not consistently enforce that rule. Avoid
-  nested references: resolving them at more than one API layer can derive
-  different keys from the same original input.
+- Resolution is idempotent: the resolved secret is never itself a
+  `password://` or `file://` reference. A `password://` value naming another
+  reference, or a password file whose contents begin with one, is refused
+  rather than resolved a second time. Some entry points resolve at the public
+  boundary and again further in, so without this rule the same input could
+  derive two different keys depending on which path was taken.
 - PQ private key lookup uses `BASEFWX_MASTER_PQ_SK` when set, otherwise `~/master_pq.sk`.
 - Set `BASEFWX_PQ_STRICT` (or `BASEFWX_PQ_ONLY`) to `1`, `true`, `yes`,
   or `on` (case-insensitive) to disable EC fallback and require ML-KEM

@@ -112,6 +112,10 @@ final class LengthPrefixedCodec {
         if (pw.length == 0 && !useMasterEffective) {
             throw new IllegalArgumentException("Cannot encrypt without password or master key");
         }
+        if (useMaster && !useMasterEffective) {
+            throw new IllegalStateException(
+                    "master key requested but no master public key is configured");
+        }
         if (useMaster && PQ.strictPqOnly()
                 && (!useMasterEffective || selectedMaster.pqPublicKey == null)) {
             throw new IllegalStateException(

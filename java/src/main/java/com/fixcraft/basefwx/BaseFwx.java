@@ -318,11 +318,23 @@ public final class BaseFwx {
     }
 
     public static void fwxAesEncryptFile(File input, File output, String password, boolean useMaster) {
-        try (FileInputStream in = new FileInputStream(input);
-             FileOutputStream out = new FileOutputStream(output)) {
-            FwxAesCodec.fwxAesEncryptStreamPublic(in, out, password, useMaster);
+        File temp = null;
+        try {
+            temp = BaseFwxUtil.createPrivateSiblingTempFile(
+                    output, ".basefwx-fwxaes-enc-", ".tmp");
+            try (FileInputStream in = new FileInputStream(input);
+                 FileOutputStream out = new FileOutputStream(temp)) {
+                FwxAesCodec.fwxAesEncryptStreamPublic(in, out, password, useMaster);
+                out.getFD().sync();
+            }
+            BaseFwxUtil.commitAuthenticatedFile(temp, output);
+            temp = null;
         } catch (IOException exc) {
             throw new IllegalStateException("fwxAES file encrypt failed", exc);
+        } finally {
+            if (temp != null) {
+                BaseFwxUtil.deletePrivateTempFile(temp);
+            }
         }
     }
 
@@ -349,14 +361,26 @@ public final class BaseFwx {
     }
 
     public static void fwxAesEncryptFileNio(File input, File output, String password, boolean useMaster) {
-        try (FileInputStream fis = new FileInputStream(input);
-             FileOutputStream fos = new FileOutputStream(output);
-             FileChannel in = fis.getChannel();
-             FileChannel out = fos.getChannel()) {
-            long ctLen = FwxAesCodec.fwxAesEncryptChannel(in, out, password, useMaster);
-            FwxAesCodec.patchCtLen(out, ctLen);
+        File temp = null;
+        try {
+            temp = BaseFwxUtil.createPrivateSiblingTempFile(
+                    output, ".basefwx-fwxaes-enc-", ".tmp");
+            try (FileInputStream fis = new FileInputStream(input);
+                 FileOutputStream fos = new FileOutputStream(temp);
+                 FileChannel in = fis.getChannel();
+                 FileChannel out = fos.getChannel()) {
+                long ctLen = FwxAesCodec.fwxAesEncryptChannel(in, out, password, useMaster);
+                FwxAesCodec.patchCtLen(out, ctLen);
+                out.force(true);
+            }
+            BaseFwxUtil.commitAuthenticatedFile(temp, output);
+            temp = null;
         } catch (IOException exc) {
             throw new IllegalStateException("fwxAES file encrypt failed", exc);
+        } finally {
+            if (temp != null) {
+                BaseFwxUtil.deletePrivateTempFile(temp);
+            }
         }
     }
 
@@ -391,6 +415,30 @@ public final class BaseFwx {
         return BaseFwxUtil.samePath(a, b);
     }
 
+    private static final String PASSWORD_SCHEME = "password://";
+    private static final String FILE_SCHEME = "file://";
+
+    private static boolean looksLikePasswordReference(String value) {
+        return value.startsWith(PASSWORD_SCHEME) || value.startsWith(FILE_SCHEME);
+    }
+
+    private static boolean startsWithAscii(byte[] value, String prefix) {
+        if (value.length < prefix.length()) {
+            return false;
+        }
+        for (int i = 0; i < prefix.length(); ++i) {
+            if ((value[i] & 0xff) != prefix.charAt(i)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static boolean looksLikePasswordReference(byte[] value) {
+        return startsWithAscii(value, PASSWORD_SCHEME)
+                || startsWithAscii(value, FILE_SCHEME);
+    }
+
     public static byte[] resolvePasswordBytes(String password, boolean useMaster) {
         if (password == null) {
             if (!useMaster) {
@@ -406,23 +454,42 @@ public final class BaseFwx {
         }
         // Match C++ ResolvePassword (3.7.0+): bare passwords are ALWAYS
         // literal. Filesystem read is opt-in via an explicit file:// URI.
-        // password:// forces the literal-string interpretation even when
-        // the string contains ://. Auto-detecting "string names an existing
+        // password:// forces the literal-string interpretation for a
+        // non-reference value. A successful resolution never returns another
+        // password reference, so resolving at two API layers cannot silently
+        // derive different keys. Auto-detecting "string names an existing
         // path → read that file" is removed — it silently changed secrets
         // based on filesystem state.
-        final String passwordScheme = "password://";
-        final String fileScheme = "file://";
-        if (password.startsWith(passwordScheme)) {
-            return password.substring(passwordScheme.length())
-                    .getBytes(StandardCharsets.UTF_8);
+        if (password.startsWith(PASSWORD_SCHEME)) {
+            String literal = password.substring(PASSWORD_SCHEME.length());
+            if (looksLikePasswordReference(literal)) {
+                throw new IllegalArgumentException(
+                        "password:// value itself starts with a password:// or "
+                        + "file:// scheme. Resolving it again would derive a "
+                        + "different key than resolving it once, so it is "
+                        + "refused as ambiguous. Password resolution is "
+                        + "idempotent by contract: its result is never a reference.");
+            }
+            return literal.getBytes(StandardCharsets.UTF_8);
         }
-        if (password.startsWith(fileScheme)) {
-            String path = password.substring(fileScheme.length());
+        if (password.startsWith(FILE_SCHEME)) {
+            String path = password.substring(FILE_SCHEME.length());
             File candidate = expandUser(path);
             if (!candidate.isFile()) {
                 throw new IllegalArgumentException("Password file not found: " + path);
             }
-            return readFileBytes(candidate);
+            byte[] secret = readFileBytes(candidate);
+            if (looksLikePasswordReference(secret)) {
+                Arrays.fill(secret, (byte) 0);
+                throw new IllegalArgumentException(
+                        "Password file " + path
+                        + " starts with a password:// or file:// scheme. "
+                        + "Resolving it again would derive a different key than "
+                        + "resolving it once, so the contents are refused as "
+                        + "ambiguous rather than guessed. Store the literal "
+                        + "secret bytes in the file.");
+            }
+            return secret;
         }
         return password.getBytes(StandardCharsets.UTF_8);
     }

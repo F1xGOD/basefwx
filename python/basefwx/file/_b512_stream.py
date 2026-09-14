@@ -33,10 +33,8 @@ def _b512_encode_path(path: 'basefwx.pathlib.Path', password: str, reporter: 'ba
     size_hint: 'basefwx.typing.Optional[basefwx.typing.Tuple[int, int]]' = None
     if reporter:
         reporter.update(file_index, 0.05, 'prepare', display_path)
-    master_selection = basefwx._select_master_key(
-        use_master and (not strip_metadata), master_pubkey
-    )
-    use_master_effective = master_selection.used_master
+    if use_master and strip_metadata:
+        raise ValueError('master-key recovery requires metadata; strip_metadata conflicts with use_master')
     heavy_iters = basefwx.HEAVY_PBKDF2_ITERATIONS
     heavy_argon_time = basefwx.HEAVY_ARGON2_TIME_COST if basefwx.hash_secret_raw is not None else None
     heavy_argon_mem = basefwx.HEAVY_ARGON2_MEMORY_COST if basefwx.hash_secret_raw is not None else None
@@ -44,12 +42,16 @@ def _b512_encode_path(path: 'basefwx.pathlib.Path', password: str, reporter: 'ba
     obfuscate_payload = input_size <= basefwx.STREAM_THRESHOLD
     if input_size >= basefwx.STREAM_THRESHOLD or force_stream:
         return basefwx._b512_encode_path_stream(path, password, reporter, file_index, total_files, strip_metadata, use_master, master_pubkey, pack_flag=pack_flag, output_path=output_path, display_path=display_path, input_size=input_size, keep_input=keep_input)
+    master_selection = basefwx._select_master_key(use_master, master_pubkey)
+    use_master_effective = master_selection.used_master
     data = path.read_bytes()
     if reporter:
         reporter.update(file_index, 0.25, 'base64', display_path)
     b64_payload = basefwx.base64.b64encode(data).decode('utf-8')
-    ext_token = basefwx.b512encode(path.suffix or '', password, use_master=use_master_effective)
-    data_token = basefwx.b512encode(b64_payload, password, use_master=use_master_effective)
+    # Every nested wrap must use the container's recipient, even when a
+    # different public key is configured on this host.
+    ext_token = basefwx.b512encode(path.suffix or '', password, use_master=use_master_effective, master_selection=master_selection)
+    data_token = basefwx.b512encode(b64_payload, password, use_master=use_master_effective, master_selection=master_selection)
     if reporter:
         reporter.update(file_index, 0.65, 'b512', display_path)
     kdf_used = basefwx._resolve_kdf_label(None)
@@ -92,14 +94,18 @@ def _b512_encode_path_stream(path: 'basefwx.pathlib.Path', password: str, report
         raise ValueError(
             'Streaming b512 encode requires metadata for format dispatch'
         )
+    if not password:
+        raise ValueError('Password required for streaming b512 encode')
     display_path = display_path or path
     output_path = output_path or path.with_suffix('.fwx')
     input_size = input_size if input_size is not None else path.stat().st_size
     if reporter:
         reporter.update(file_index, 0.05, 'prepare', display_path)
     chunk_size = basefwx.STREAM_CHUNK_SIZE
+    if use_master and strip_metadata:
+        raise ValueError('master-key recovery requires metadata; strip_metadata conflicts with use_master')
     master_selection = basefwx._select_master_key(
-        use_master and (not strip_metadata), master_pubkey
+        use_master, master_pubkey
     )
     use_master_effective = master_selection.used_master
     stream_salt = basefwx._StreamObfuscator.generate_salt()
@@ -111,7 +117,7 @@ def _b512_encode_path_stream(path: 'basefwx.pathlib.Path', password: str, report
     metadata_len = len(metadata_bytes)
     prefix_bytes = metadata_bytes + basefwx.META_DELIM.encode('utf-8') if metadata_blob else b''
     stream_header = bytearray()
-    stream_header.extend(basefwx.STREAM_MAGIC)
+    stream_header.extend(basefwx.B512_STREAM_MAGIC_V2)
     stream_header.extend(chunk_size.to_bytes(4, 'big'))
     stream_header.extend(input_size.to_bytes(8, 'big'))
     stream_header.extend(stream_salt)
@@ -121,6 +127,9 @@ def _b512_encode_path_stream(path: 'basefwx.pathlib.Path', password: str, report
     plaintext_len = len(prefix_bytes) + len(stream_header_bytes) + input_size
     mask_key = None
     aead_key = None
+    obf_key = None
+    temp_dir = None
+    cleanup_paths: 'basefwx.typing.List[str]' = []
     try:
         mask_key_bytes, user_blob, master_blob, _ = basefwx._prepare_mask_key(password, use_master_effective, mask_info=basefwx.B512_FILE_MASK_INFO, require_password=not use_master_effective, aad=basefwx.MASK_AAD_B512FILE, master_selection=master_selection)
         mask_key = bytearray(mask_key_bytes)
@@ -128,34 +137,30 @@ def _b512_encode_path_stream(path: 'basefwx.pathlib.Path', password: str, report
         aead_key = bytearray(
             basefwx._hkdf_sha256(mask_key, info=basefwx.B512_AEAD_INFO)
         )
-    except BaseException:
-        mask_key = basefwx._clear_secret(mask_key)
-        aead_key = basefwx._clear_secret(aead_key)
-        raise
-    len_user = len(user_blob)
-    len_master = len(master_blob)
-    estimated_payload_len = 4 + metadata_len + basefwx.AEAD_NONCE_LEN + plaintext_len + basefwx.AEAD_TAG_LEN
-    estimated_total_len = 4 + len_user + 4 + len_master + 4 + estimated_payload_len
-    estimated_hint = (input_size, estimated_total_len)
-    if reporter:
-        reporter.update(file_index, 0.12, 'stream-setup', display_path, size_hint=estimated_hint)
-    temp_dir = basefwx.tempfile.TemporaryDirectory(prefix='basefwx-b512-stream-', dir=str(output_path.parent))
-    cleanup_paths: 'basefwx.typing.List[str]' = []
-    processed_plain = 0
+        obf_key = bytearray(
+            basefwx._hkdf_sha256(mask_key, info=basefwx.B512_STREAM_OBF_INFO)
+        )
+        len_user = len(user_blob)
+        len_master = len(master_blob)
+        estimated_payload_len = 4 + metadata_len + basefwx.AEAD_NONCE_LEN + plaintext_len + basefwx.AEAD_TAG_LEN
+        estimated_total_len = 4 + len_user + 4 + len_master + 4 + estimated_payload_len
+        estimated_hint = (input_size, estimated_total_len)
+        if reporter:
+            reporter.update(file_index, 0.12, 'stream-setup', display_path, size_hint=estimated_hint)
+        temp_dir = basefwx.tempfile.TemporaryDirectory(prefix='basefwx-b512-stream-', dir=str(output_path.parent))
+        processed_plain = 0
 
-    def _seal_progress(done_plain: int) -> None:
-        if not reporter:
-            return
-        fraction = 0.55 + 0.44 * (done_plain / plaintext_len if plaintext_len else 0.0)
-        reporter.update(file_index, fraction, 'seal', display_path, size_hint=estimated_hint)
+        def _seal_progress(done_plain: int) -> None:
+            if not reporter:
+                return
+            fraction = 0.55 + 0.44 * (done_plain / plaintext_len if plaintext_len else 0.0)
+            reporter.update(file_index, fraction, 'seal', display_path, size_hint=estimated_hint)
 
-    def _obf_progress(done_bytes: int, total_bytes: int) -> None:
-        if not reporter:
-            return
-        fraction = 0.2 + 0.7 * (done_bytes / total_bytes if total_bytes else 0.0)
-        reporter.update(file_index, fraction, 'pb512-stream', display_path, size_hint=estimated_hint)
-    result: 'basefwx.typing.Optional[basefwx.typing.Tuple[basefwx.pathlib.Path, int]]' = None
-    try:
+        def _obf_progress(done_bytes: int, total_bytes: int) -> None:
+            if not reporter:
+                return
+            fraction = 0.2 + 0.7 * (done_bytes / total_bytes if total_bytes else 0.0)
+            reporter.update(file_index, fraction, 'pb512-stream', display_path, size_hint=estimated_hint)
         payload_len = estimated_payload_len
         with basefwx.tempfile.NamedTemporaryFile('w+b', dir=temp_dir.name, delete=False) as final_tmp:
             cleanup_paths.append(final_tmp.name)
@@ -185,7 +190,7 @@ def _b512_encode_path_stream(path: 'basefwx.pathlib.Path', password: str, report
             if prefix_bytes:
                 _write_plain(prefix_bytes)
             _write_plain(stream_header_bytes)
-            basefwx._StreamObfuscator.encode_file(path, None, password, stream_salt, chunk_size=chunk_size, fast=fast_obf, forward_chunk=_write_plain, progress_cb=_obf_progress)
+            basefwx._StreamObfuscator.encode_file(path, None, password, stream_salt, chunk_size=chunk_size, fast=fast_obf, forward_chunk=_write_plain, progress_cb=_obf_progress, key=obf_key)
             tail = encryptor.finalize()
             if tail:
                 final_tmp.write(tail)
@@ -210,11 +215,11 @@ def _b512_encode_path_stream(path: 'basefwx.pathlib.Path', password: str, report
     finally:
         mask_key = basefwx._clear_secret(mask_key)
         aead_key = basefwx._clear_secret(aead_key)
+        obf_key = basefwx._clear_secret(obf_key)
         for temp_path in cleanup_paths:
             _remove_if_exists(temp_path)
-        temp_dir.cleanup()
-    if result is None:
-        raise RuntimeError('Streaming b512 encode failed')
+        if temp_dir is not None:
+            temp_dir.cleanup()
     return result
 
 
@@ -520,7 +525,7 @@ def _decrypt_b512_stream_body(
     reporter: 'basefwx._ProgressReporter',
     file_index: int,
     path: 'basefwx.pathlib.Path',
-) -> str:
+) -> tuple[str, bytearray]:
     mask_key = None
     aead_key = None
     try:
@@ -572,7 +577,12 @@ def _decrypt_b512_stream_body(
             final_chunk = decryptor.finalize()
             if final_chunk:
                 plain_tmp.write(final_chunk)
-            return plain_tmp.name
+            plaintext_path = plain_tmp.name
+        # Transfer the recovered key only after the authenticated spool closes.
+        # The caller owns its wipe while choosing the versioned obfuscation key.
+        result = (plaintext_path, mask_key)
+        mask_key = None
+        return result
     finally:
         mask_key = basefwx._clear_secret(mask_key)
         aead_key = basefwx._clear_secret(aead_key)
@@ -581,8 +591,8 @@ def _decrypt_b512_stream_body(
 def _restore_b512_plaintext_stream(
     plaintext_path: str,
     envelope: _B512StreamEnvelope,
+    mask_key: bytearray,
     password: str,
-    use_master: bool,
     temp_dir: str,
     cleanup_paths: 'basefwx.typing.List[str]',
     reporter: 'basefwx._ProgressReporter',
@@ -611,7 +621,8 @@ def _restore_b512_plaintext_stream(
             len(basefwx.STREAM_MAGIC),
             'Malformed streaming payload: magic mismatch',
         )
-        if stream_magic != basefwx.STREAM_MAGIC:
+        keyed_stream = stream_magic == basefwx.B512_STREAM_MAGIC_V2
+        if not keyed_stream and stream_magic != basefwx.STREAM_MAGIC:
             raise ValueError('Malformed streaming payload: magic mismatch')
         chunk_size_value = int.from_bytes(
             _read_required(
@@ -649,14 +660,31 @@ def _restore_b512_plaintext_stream(
             ext_len,
             'Malformed streaming payload: truncated extension',
         )
-        if not password and not use_master:
-            raise ValueError('Password required for streaming b512 decode')
         fast_obf = (envelope.metadata.get('ENC-OBF') or 'yes').lower() == 'fast'
-        decoder = basefwx._StreamObfuscator.for_password(
-            password,
-            stream_salt,
-            fast=fast_obf,
-        )
+        obf_key = None
+        password_mask = None
+        try:
+            if keyed_stream:
+                obf_key = bytearray(basefwx._hkdf_sha256(
+                    mask_key, info=basefwx.B512_STREAM_OBF_INFO))
+                decoder = basefwx._StreamObfuscator.for_key(obf_key, stream_salt, fast=fast_obf)
+            else:
+                # Released STRMOBF1 files obfuscated with the password. Master
+                # recovery alone cannot reconstruct it; never publish garbage
+                # merely because the outer GCM tag authenticated successfully.
+                if not envelope.user_blob or not password:
+                    raise ValueError('Legacy B512 stream requires an authenticated password wrap')
+                password_mask = bytearray(basefwx._recover_mask_key_from_blob(
+                    envelope.user_blob, b'', password, False,
+                    mask_info=basefwx.B512_FILE_MASK_INFO,
+                    aad=basefwx.MASK_AAD_B512FILE,
+                    legacy_user_aad=basefwx.B512_AEAD_INFO))
+                if not basefwx.stdlib_hmac.compare_digest(password_mask, mask_key):
+                    raise ValueError('Legacy B512 stream password wrap does not match the content key')
+                decoder = basefwx._StreamObfuscator.for_password(password, stream_salt, fast=fast_obf)
+        finally:
+            basefwx._clear_secret(obf_key)
+            basefwx._clear_secret(password_mask)
         with basefwx.tempfile.NamedTemporaryFile(
             'w+b',
             dir=temp_dir,
@@ -699,6 +727,7 @@ def _b512_decode_path_stream(path: 'basefwx.pathlib.Path', password: str, report
         dir=str(path.parent),
     )
     cleanup_paths: 'basefwx.typing.List[str]' = []
+    mask_key = None
     try:
         with open(path, 'rb') as handle:
             envelope = _read_b512_stream_envelope(
@@ -708,7 +737,7 @@ def _b512_decode_path_stream(path: 'basefwx.pathlib.Path', password: str, report
                 metadata_preview,
                 metadata_blob_preview or '',
             )
-            plaintext_path = _decrypt_b512_stream_body(
+            plaintext_path, mask_key = _decrypt_b512_stream_body(
                 handle,
                 envelope,
                 password,
@@ -722,8 +751,8 @@ def _b512_decode_path_stream(path: 'basefwx.pathlib.Path', password: str, report
         decoded_path, original_size, ext_bytes = _restore_b512_plaintext_stream(
             plaintext_path,
             envelope,
+            mask_key,
             password,
-            use_master_effective,
             temp_dir.name,
             cleanup_paths,
             reporter,
@@ -757,6 +786,7 @@ def _b512_decode_path_stream(path: 'basefwx.pathlib.Path', password: str, report
             reporter.finalize_file(file_index, target, size_hint=size_hint)
         return (target, output_len)
     finally:
+        basefwx._clear_secret(mask_key)
         for temp_path in cleanup_paths:
             _remove_if_exists(temp_path)
         temp_dir.cleanup()
@@ -779,8 +809,10 @@ def _aes_heavy_encode_path_stream(path: 'basefwx.pathlib.Path', password: str, r
     if reporter:
         reporter.update(file_index, 0.05, 'prepare', display_path)
     chunk_size = basefwx.STREAM_CHUNK_SIZE
+    if use_master and strip_metadata:
+        raise ValueError('master-key recovery requires metadata; strip_metadata conflicts with use_master')
     master_selection = basefwx._select_master_key(
-        use_master and (not strip_metadata), master_pubkey
+        use_master, master_pubkey
     )
     use_master_effective = master_selection.used_master
     kdf_used = basefwx._resolve_kdf_label(None)
@@ -993,11 +1025,9 @@ def _aes_heavy_encode_path_stream(path: 'basefwx.pathlib.Path', password: str, r
 
 def b512file_encode(file: str, code: str, strip_metadata: bool=False, use_master: bool=True, keep_input: bool=False):
     try:
-        pubkey_bytes, master_available = basefwx._resolve_master_usage(use_master and (not strip_metadata), None)
-        effective_use_master = (use_master and (not strip_metadata)) and master_available
-        password = basefwx._resolve_password(code, use_master=effective_use_master)
+        password = basefwx._resolve_password(code, use_master=use_master and not strip_metadata)
         path = basefwx._normalize_path(file)
-        basefwx._b512_encode_path(path, password, strip_metadata=strip_metadata, use_master=effective_use_master, master_pubkey=pubkey_bytes, keep_input=keep_input)
+        basefwx._b512_encode_path(path, password, strip_metadata=strip_metadata, use_master=use_master, keep_input=keep_input)
         return 'SUCCESS!'
     except Exception as exc:
         print(f'Failed to encode {file}: {exc}')
@@ -1005,11 +1035,10 @@ def b512file_encode(file: str, code: str, strip_metadata: bool=False, use_master
 
 def b512file(files: 'basefwx.typing.Union[str, basefwx.pathlib.Path, basefwx.typing.Iterable[basefwx.typing.Union[str, basefwx.pathlib.Path]]]', password: str, strip_metadata: bool=False, use_master: bool=True, master_pubkey: 'basefwx.typing.Optional[bytes]'=None, silent: bool=False, compress: bool=False, keep_input: bool=False):
     paths = basefwx._coerce_file_list(files)
-    pubkey_bytes, master_available = basefwx._resolve_master_usage(use_master and (not strip_metadata), master_pubkey)
-    encode_use_master = (use_master and (not strip_metadata)) and master_available
+    # Writer key selection belongs to the encode branch; readers need no public key.
     decode_use_master = use_master and (not strip_metadata)
     try:
-        resolved_password = basefwx._resolve_password(password, use_master=encode_use_master)
+        resolved_password = basefwx._resolve_password(password, use_master=decode_use_master)
     except Exception as exc:
         if not silent:
             print(f'Password resolution failed: {exc}')
@@ -1034,7 +1063,7 @@ def b512file(files: 'basefwx.typing.Union[str, basefwx.pathlib.Path, basefwx.typ
                     pack_temp = pack_ctx[2] if pack_ctx else None
                     source_path = pack_ctx[0] if pack_ctx else path
                     try:
-                        basefwx._b512_encode_path(source_path, resolved_password, reporter, idx, len(paths), strip_metadata, encode_use_master, pubkey_bytes, pack_flag=pack_flag, output_path=path.with_suffix('.fwx'), display_path=path, keep_input=keep_input)
+                        basefwx._b512_encode_path(source_path, resolved_password, reporter, idx, len(paths), strip_metadata, use_master, master_pubkey, pack_flag=pack_flag, output_path=path.with_suffix('.fwx'), display_path=path, keep_input=keep_input)
                         if pack_ctx:
                             basefwx._remove_input(path, keep_input, output_path=path.with_suffix('.fwx'))
                     finally:
@@ -1058,7 +1087,7 @@ def b512file(files: 'basefwx.typing.Union[str, basefwx.pathlib.Path, basefwx.typ
                     pack_temp = pack_ctx[2] if pack_ctx else None
                     source_path = pack_ctx[0] if pack_ctx else path
                     try:
-                        basefwx._b512_encode_path(source_path, resolved_password, None, 0, len(paths), strip_metadata, encode_use_master, pubkey_bytes, pack_flag=pack_flag, output_path=path.with_suffix('.fwx'), display_path=path, keep_input=keep_input)
+                        basefwx._b512_encode_path(source_path, resolved_password, None, 0, len(paths), strip_metadata, use_master, master_pubkey, pack_flag=pack_flag, output_path=path.with_suffix('.fwx'), display_path=path, keep_input=keep_input)
                         if pack_ctx:
                             basefwx._remove_input(path, keep_input, output_path=path.with_suffix('.fwx'))
                     finally:

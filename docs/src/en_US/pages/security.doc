@@ -119,13 +119,14 @@ Temporary plaintext files are removed on ordinary cleanup; deletion is not a
 guarantee that their disk blocks are wiped. The same disk-erasure limitation
 applies to C++ destination-aware sibling staging.
 
-Java's public `fwxAesEncryptFile` and `fwxAesEncryptFileNio` open the requested
-output before encryption completes. A refusal can truncate an existing file,
-and input and output must not name the same file. Use a separate output and
-publish it only after successful completion. The decrypt-file wrappers use
-private sibling staging and publish after successful decryption, using an
-atomic move where supported and an ordinary replacement move otherwise.
-That is not a filesystem-independent crash-atomicity guarantee.
+Java's public `fwxAesEncryptFile` and `fwxAesEncryptFileNio` encrypt into an
+owner-only sibling, finalize the ciphertext and recorded length, sync it, then
+replace the destination. Refusal before publication preserves an existing
+destination, and input and output may name the same file. The corresponding
+decrypt-file wrappers also use sibling staging and publish after successful
+decryption. Publication uses an atomic move where supported, with an ordinary
+replacement move otherwise; it is not a filesystem-independent crash-atomicity
+guarantee.
 
 ## Optional master recovery
 
@@ -144,26 +145,38 @@ master fallback and makes a requested master-wrap encryption fail when no
 ML-KEM public key is available. It does not disable an independent valid
 password wrap while reading an existing container.
 
-An explicit master request is not enforced consistently by every public
-writer. Lower-level wrapping helpers reject missing keys, but file writers
-can replace requested intent with key availability or metadata stripping.
-Some Java/Python raw, stream and live wrappers can catch a wrapping failure
-and proceed with password-only output. Provision the intended public key,
-retain container metadata and verify recovery with the matching private key
-and without the password before relying on escrow.
+Maintained C++, Java, and Python text, file, raw fwxAES, stream, and live
+writers preserve an explicit master request. Missing or malformed configured
+keys and encapsulation failures are reported through each API's error channel;
+they do not produce password-only output. B512/PB512 and AES-light/heavy file
+writers reject `use_master` combined with container metadata stripping before
+output. Password-only authoring remains available by explicitly disabling master
+recovery. Retired Python jMG has a separate opportunistic master-selection
+contract and records whether a master blob is present.
 
-Python small B512/AES-heavy file containers can reselect host keys for their
-nested extension and data tokens even when the caller supplied a different
-outer `master_pubkey`. Configure the same recipient for all layers and verify
-the complete file recovery path. Batch APIs can also select encryption keys
-before choosing encode versus decode; writer-key configuration may therefore
-affect a batch containing recovery inputs.
+Python's `AESfile` and `b512file` batch APIs select public keys only for encode
+operations. A writer refusal returns `FAIL!` for that input and preserves its
+source and prior destination. Other inputs can still decrypt with an intact
+password wrap; decryption does not require an encryption public key.
 
-Streaming B512 uses `STRMOBF1`, whose internal obfuscation requires the original
-password even if a master key opens the outer encryption. The reader does not
-independently authenticate that final transform's password, so a wrong password
-can produce corrupted output despite a valid outer tag. See the
-[streaming recovery boundary](COMPATIBILITY.md#streaming-b512-recovery).
+An explicit Python `master_pubkey` selects the recipient for the whole file,
+including the extension and data tokens inside small B512/AES-heavy containers.
+Nested writers reuse that selection instead of consulting host configuration
+again. The supplied recipient works with an absent or different host public key,
+and its private key recovers either size branch without the correct password.
+Retained selections still enforce requested recovery and strict-PQ policy before
+encapsulation; passing a preselected EC key cannot override strict mode.
+
+New B512 streams use `B512STR2` and derive their obfuscation key from the
+recoverable mask key. Released `STRMOBF1` B512 streams instead require the
+correct password for their internal obfuscation, even with a valid master key.
+Readers now verify that password wrap before output rather than reporting
+success with corrupted bytes. See the [format boundary](COMPATIBILITY.md#streaming-b512-recovery).
+
+Provision the intended key and verify recovery independently before relying on
+escrow. A successfully written wrap establishes that recovery data was
+included; it does not establish that the operator retained the matching private
+key. Password and master decode remain independent authenticated paths.
 
 Readers try enabled master recovery first. A well-formed but unrelated private
 key can produce a candidate mask key whose payload authentication fails; that

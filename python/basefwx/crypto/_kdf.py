@@ -292,6 +292,7 @@ def encryptAES(plaintext: str, user_key: 'basefwx.typing.Union[str, bytes, bytea
         raise ValueError(
             'Password required when no usable master key is available'
         )
+    selection.require_encryption_policy(use_master)
     if use_master_effective:
         if pq_public is not None:
             kem_ciphertext, kem_shared = basefwx._kem_encrypt(pq_public)

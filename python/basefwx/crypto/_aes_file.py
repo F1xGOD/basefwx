@@ -76,8 +76,10 @@ def _aes_light_encode_path(path: 'basefwx.pathlib.Path', password: str, reporter
     size_hint: 'basefwx.typing.Optional[basefwx.typing.Tuple[int, int]]' = None
     if reporter:
         reporter.update(file_index, 0.05, 'prepare', path)
+    if use_master and strip_metadata:
+        raise ValueError('master-key recovery requires metadata; strip_metadata conflicts with use_master')
     master_selection = basefwx._select_master_key(
-        use_master and (not strip_metadata), master_pubkey
+        use_master, master_pubkey
     )
     pubkey_bytes = master_selection.pq_public
     use_master_effective = master_selection.used_master
@@ -248,8 +250,10 @@ def _aes_heavy_encode_path(path: 'basefwx.pathlib.Path', password: str, reporter
     estimated_hint: 'basefwx.typing.Optional[basefwx.typing.Tuple[int, int]]' = None
     if reporter:
         reporter.update(file_index, 0.05, 'prepare', display_path)
+    if use_master and strip_metadata:
+        raise ValueError('master-key recovery requires metadata; strip_metadata conflicts with use_master')
     master_selection = basefwx._select_master_key(
-        use_master and (not strip_metadata), master_pubkey
+        use_master, master_pubkey
     )
     pubkey_bytes = master_selection.pq_public
     use_master_effective = master_selection.used_master
@@ -260,8 +264,8 @@ def _aes_heavy_encode_path(path: 'basefwx.pathlib.Path', password: str, reporter
     if reporter:
         reporter.update(file_index, 0.25, 'base64', display_path)
     b64_payload = basefwx.base64.b64encode(raw).decode('utf-8')
-    ext_token = basefwx.pb512encode(path.suffix or '', password, use_master=use_master_effective)
-    data_token = basefwx.pb512encode(b64_payload, password, use_master=use_master_effective)
+    ext_token = basefwx.pb512encode(path.suffix or '', password, use_master=use_master_effective, master_selection=master_selection)
+    data_token = basefwx.pb512encode(b64_payload, password, use_master=use_master_effective, master_selection=master_selection)
     if reporter:
         reporter.update(file_index, 0.55, 'pb512', display_path)
     kdf_used = basefwx._resolve_kdf_label(None)
@@ -742,11 +746,10 @@ def _aes_heavy_decode_path_stream(path: 'basefwx.pathlib.Path', password: str, r
 
 def AESfile(files: 'basefwx.typing.Union[str, basefwx.pathlib.Path, basefwx.typing.Iterable[basefwx.typing.Union[str, basefwx.pathlib.Path]]]', password: str='', light: bool=True, strip_metadata: bool=False, use_master: bool=True, master_pubkey: 'basefwx.typing.Optional[bytes]'=None, silent: bool=False, compress: bool=False, keep_input: bool=False):
     paths = basefwx._coerce_file_list(files)
-    pubkey_bytes, master_available = basefwx._resolve_master_usage(use_master and (not strip_metadata), master_pubkey)
-    encode_use_master = (use_master and (not strip_metadata)) and master_available
+    # Writer key selection belongs to the encode branch; readers need no public key.
     decode_use_master = use_master and (not strip_metadata)
     try:
-        resolved_password = basefwx._resolve_password(password, use_master=encode_use_master)
+        resolved_password = basefwx._resolve_password(password, use_master=decode_use_master)
     except Exception as exc:
         if not silent:
             print(f'Password resolution failed: {exc}')
@@ -775,9 +778,9 @@ def AESfile(files: 'basefwx.typing.Union[str, basefwx.pathlib.Path, basefwx.typi
                     source_path = pack_ctx[0] if pack_ctx else path
                     try:
                         if light:
-                            basefwx._aes_light_encode_path(source_path, resolved_password, reporter, idx, strip_metadata, encode_use_master, pubkey_bytes, pack_flag=pack_flag, output_path=path.with_suffix('.fwx'), display_path=path, keep_input=keep_input)
+                            basefwx._aes_light_encode_path(source_path, resolved_password, reporter, idx, strip_metadata, use_master, master_pubkey, pack_flag=pack_flag, output_path=path.with_suffix('.fwx'), display_path=path, keep_input=keep_input)
                         else:
-                            basefwx._aes_heavy_encode_path(source_path, resolved_password, reporter, idx, strip_metadata, encode_use_master, pubkey_bytes, pack_flag=pack_flag, output_path=path.with_suffix('.fwx'), display_path=path, keep_input=keep_input)
+                            basefwx._aes_heavy_encode_path(source_path, resolved_password, reporter, idx, strip_metadata, use_master, master_pubkey, pack_flag=pack_flag, output_path=path.with_suffix('.fwx'), display_path=path, keep_input=keep_input)
                         if pack_ctx:
                             basefwx._remove_input(path, keep_input, output_path=path.with_suffix('.fwx'))
                     finally:
@@ -809,9 +812,9 @@ def AESfile(files: 'basefwx.typing.Union[str, basefwx.pathlib.Path, basefwx.typi
                     source_path = pack_ctx[0] if pack_ctx else path
                     try:
                         if light:
-                            basefwx._aes_light_encode_path(source_path, resolved_password, None, 0, strip_metadata, encode_use_master, pubkey_bytes, pack_flag=pack_flag, output_path=path.with_suffix('.fwx'), display_path=path, keep_input=keep_input)
+                            basefwx._aes_light_encode_path(source_path, resolved_password, None, 0, strip_metadata, use_master, master_pubkey, pack_flag=pack_flag, output_path=path.with_suffix('.fwx'), display_path=path, keep_input=keep_input)
                         else:
-                            basefwx._aes_heavy_encode_path(source_path, resolved_password, None, 0, strip_metadata, encode_use_master, pubkey_bytes, pack_flag=pack_flag, output_path=path.with_suffix('.fwx'), display_path=path, keep_input=keep_input)
+                            basefwx._aes_heavy_encode_path(source_path, resolved_password, None, 0, strip_metadata, use_master, master_pubkey, pack_flag=pack_flag, output_path=path.with_suffix('.fwx'), display_path=path, keep_input=keep_input)
                         if pack_ctx:
                             basefwx._remove_input(path, keep_input, output_path=path.with_suffix('.fwx'))
                     finally:

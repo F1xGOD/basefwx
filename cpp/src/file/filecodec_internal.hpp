@@ -10,6 +10,7 @@
 #include "basefwx/constants.hpp"
 #include "basefwx/crypto_utils.hpp"
 #include "basefwx/filecodec.hpp"
+#include "basefwx/keywrap.hpp"
 #include "basefwx/metadata.hpp"
 
 #include <array>
@@ -192,6 +193,8 @@ std::optional<std::uint32_t> ParsePeerPbkdf2Iterations(const std::string& value)
 std::string MasterKemLabel(const std::optional<Bytes>& pq_public_key,
                            const std::optional<Bytes>& ec_public_key,
                            bool use_master);
+
+basefwx::keywrap::MasterPublicKeys SelectMasterForWrite(bool requested, bool strip_metadata);
 
 std::pair<std::string, std::string> SplitMetadata(const std::string& payload);
 

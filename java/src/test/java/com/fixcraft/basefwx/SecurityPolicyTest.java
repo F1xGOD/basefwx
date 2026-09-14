@@ -93,6 +93,91 @@ public class SecurityPolicyTest {
         return processBuilder.start().waitFor();
     }
 
+    @Test
+    public void publicWritersRefuseUnavailableMaster() throws Exception {
+        File root = tmp.newFolder("master-writers");
+        File malformed = new File(root, "malformed.pem");
+        Files.write(malformed.toPath(), "invalid public key".getBytes(StandardCharsets.UTF_8));
+        for (String strict : new String[] {"", "1"}) {
+            for (String key : new String[] {"", malformed.toString()}) {
+                File log = new File(root, "probe.log");
+                ProcessBuilder builder = new ProcessBuilder(
+                    new File(new File(System.getProperty("java.home"), "bin"), "java").toString(),
+                    "-Duser.home=" + root, "-cp", System.getProperty("java.class.path"),
+                    SecurityPolicyTest.class.getName(), root.toString());
+                builder.environment().keySet().removeIf(name -> name.startsWith("BASEFWX_MASTER_") ||
+                        name.equals("BASEFWX_PQ_ONLY") || name.equals("BASEFWX_PQ_STRICT"));
+                builder.environment().put("BASEFWX_PQ_STRICT", strict);
+                builder.environment().put("BASEFWX_MASTER_EC_PUB", key);
+                builder.redirectErrorStream(true).redirectOutput(log);
+                Process process = builder.start();
+                if (!process.waitFor(30, java.util.concurrent.TimeUnit.SECONDS)) {
+                    process.destroyForcibly();
+                    process.waitFor(5, java.util.concurrent.TimeUnit.SECONDS);
+                    fail("master writer subprocess exceeded deadline");
+                }
+                assertEquals(new String(Files.readAllBytes(log.toPath()), StandardCharsets.UTF_8),
+                             0, process.exitValue());
+            }
+        }
+    }
+
+    // A fresh process isolates provisioning and the constants read from env.
+    public static void main(String[] args) throws Exception {
+        File root = new File(args[0]);
+        byte[] payload = "payload".getBytes(StandardCharsets.UTF_8);
+        File source = new File(root, "source.bin");
+        File target = new File(root, "destination.fwx");
+        Files.write(source.toPath(), payload);
+        Files.write(target.toPath(), payload);
+        ByteArrayOutputStream stream = new ByteArrayOutputStream();
+        ThrowingAction[] writers = {
+            () -> BaseFwx.fwxAesEncryptRaw(payload, "correct-password", true),
+            () -> BaseFwx.fwxAesEncryptStream(new ByteArrayInputStream(payload), stream, "correct-password", true),
+            () -> BaseFwx.fwxAesLiveEncryptChunks(Arrays.asList(payload), "correct-password", true),
+            () -> BaseFwx.b512FileEncodeBytes(payload, ".bin", "correct-password", true),
+            () -> BaseFwx.pb512FileEncodeBytes(payload, ".bin", "correct-password", true),
+            () -> BaseFwx.b512FileEncodeFile(source, target, "correct-password", true),
+            () -> BaseFwx.pb512FileEncodeFile(source, target, "correct-password", true),
+            () -> BaseFwx.fwxAesEncryptFile(source, target, "correct-password", true),
+            () -> BaseFwx.fwxAesEncryptFileNio(source, target, "correct-password", true)
+        };
+        for (int index = 0; index < writers.length; ++index) {
+            boolean refused = false;
+            try { writers[index].run(); } catch (RuntimeException expected) { refused = true; }
+            assertTrue("public writer " + index + " discarded requested master recovery", refused);
+            assertEquals(0, stream.size());
+            assertArrayEquals(payload, Files.readAllBytes(source.toPath()));
+            assertArrayEquals(payload, Files.readAllBytes(target.toPath()));
+        }
+    }
+
+    @Test
+    public void encryptionFileWrappersPreserveOutputOnFailureAndSupportSamePath() throws Exception {
+        File source = tmp.newFile("encrypt-source.bin");
+        File destination = tmp.newFile("encrypt-destination.fwx");
+        byte[] plaintext = "transactional writer payload".getBytes(StandardCharsets.UTF_8);
+        byte[] existing = "existing output".getBytes(StandardCharsets.UTF_8);
+        for (boolean nio : new boolean[] {false, true}) {
+            Files.write(source.toPath(), plaintext);
+            Files.write(destination.toPath(), existing);
+            try {
+                if (nio) BaseFwx.fwxAesEncryptFileNio(source, destination, "password://file:///not-read", false);
+                else BaseFwx.fwxAesEncryptFile(source, destination, "password://file:///not-read", false);
+                fail("ambiguous password accepted");
+            } catch (IllegalArgumentException expected) {
+                assertArrayEquals(existing, Files.readAllBytes(destination.toPath()));
+                assertArrayEquals(plaintext, Files.readAllBytes(source.toPath()));
+            }
+            if (nio) BaseFwx.fwxAesEncryptFileNio(source, source, "correct-password", false);
+            else BaseFwx.fwxAesEncryptFile(source, source, "correct-password", false);
+            assertArrayEquals(plaintext, BaseFwx.fwxAesDecryptRaw(
+                    Files.readAllBytes(source.toPath()), "correct-password", false));
+            String[] leftovers = tmp.getRoot().list((parent, name) -> name.startsWith(".basefwx-fwxaes-enc-"));
+            assertTrue(leftovers != null && leftovers.length == 0);
+        }
+    }
+
     private static byte[] maliciousFwxAesHeader(int iterations) {
         byte[] blob = new byte[
                 16

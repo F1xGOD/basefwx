@@ -114,15 +114,10 @@ def fwxAES_encrypt_raw(plaintext: bytes, password: 'basefwx.typing.Union[str, by
     key_header = b''
     mask_key = b''
     if use_master:
-        try:
-            mask_key, user_blob, master_blob, use_master_effective = basefwx._prepare_mask_key(password, use_master, mask_info=basefwx.FWXAES_MASK_INFO, require_password=False, aad=basefwx.FWXAES_AAD)
-            use_wrap = use_master_effective or not pw
-            if use_wrap:
-                key_header = basefwx._pack_length_prefixed(user_blob, master_blob)
-        except Exception:
-            if not pw or basefwx._strict_pq_only():
-                raise
-            use_wrap = False
+        mask_key, user_blob, master_blob, use_master_effective = basefwx._prepare_mask_key(password, use_master, mask_info=basefwx.FWXAES_MASK_INFO, require_password=False, aad=basefwx.FWXAES_AAD)
+        use_wrap = use_master_effective or not pw
+        if use_wrap:
+            key_header = basefwx._pack_length_prefixed(user_blob, master_blob)
     if use_wrap:
         _enforce_wrap_key_header_limit(len(key_header))
     iv = basefwx.os.urandom(basefwx.FWXAES_IV_LEN)
@@ -259,15 +254,10 @@ def fwxAES_encrypt_stream(source, dest, password: 'basefwx.typing.Union[str, byt
         key_header = b''
         mask_key = b''
         if use_master:
-            try:
-                mask_key, user_blob, master_blob, use_master_effective = basefwx._prepare_mask_key(password, use_master, mask_info=basefwx.FWXAES_MASK_INFO, require_password=False, aad=basefwx.FWXAES_AAD)
-                use_wrap = use_master_effective or not pw
-                if use_wrap:
-                    key_header = basefwx._pack_length_prefixed(user_blob, master_blob)
-            except Exception:
-                if not pw or basefwx._strict_pq_only():
-                    raise
-                use_wrap = False
+            mask_key, user_blob, master_blob, use_master_effective = basefwx._prepare_mask_key(password, use_master, mask_info=basefwx.FWXAES_MASK_INFO, require_password=False, aad=basefwx.FWXAES_AAD)
+            use_wrap = use_master_effective or not pw
+            if use_wrap:
+                key_header = basefwx._pack_length_prefixed(user_blob, master_blob)
         if use_wrap:
             _enforce_wrap_key_header_limit(len(key_header))
         iv = basefwx.os.urandom(basefwx.FWXAES_IV_LEN)
@@ -472,15 +462,10 @@ class LiveEncryptor:
         mask_key = b''
         use_wrap = False
         if self._use_master:
-            try:
-                mask_key, user_blob, master_blob, use_master_effective = basefwx._prepare_mask_key(self._password, self._use_master, mask_info=basefwx.FWXAES_MASK_INFO, require_password=False, aad=basefwx.FWXAES_AAD)
-                use_wrap = use_master_effective or not pw
-                if use_wrap:
-                    key_header = basefwx._pack_length_prefixed(user_blob, master_blob)
-            except Exception:
-                if not pw or basefwx._strict_pq_only():
-                    raise
-                use_wrap = False
+            mask_key, user_blob, master_blob, use_master_effective = basefwx._prepare_mask_key(self._password, self._use_master, mask_info=basefwx.FWXAES_MASK_INFO, require_password=False, aad=basefwx.FWXAES_AAD)
+            use_wrap = use_master_effective or not pw
+            if use_wrap:
+                key_header = basefwx._pack_length_prefixed(user_blob, master_blob)
         if use_wrap:
             key_mode = basefwx.LIVE_KEYMODE_WRAP
             self._key = basefwx._hkdf_sha256(mask_key, info=basefwx.FWXAES_KEY_INFO, length=basefwx.FWXAES_KEY_LEN)
@@ -973,13 +958,9 @@ def fwxAES_file(file: 'basefwx.typing.Union[str, basefwx.pathlib.Path]', passwor
     try:
         if heavy:
             _set_bytes_hw_plan()
-            pubkey_bytes, master_available = basefwx._resolve_master_usage(use_master, None)
-            encode_use_master = use_master and master_available
-            decode_use_master = use_master
-            password = basefwx._resolve_password(password, use_master=encode_use_master)
             out_path_override = basefwx._normalize_path(output) if output else None
             if path.suffix.lower() == '.fwx':
-                target, _ = basefwx._aes_heavy_decode_path(path, password, local_reporter, 0, False, decode_use_master)
+                target, _ = basefwx._aes_heavy_decode_path(path, password, local_reporter, 0, False, use_master)
                 if out_path_override and out_path_override != target:
                     if out_path_override.exists() and out_path_override.is_dir():
                         target_out = out_path_override / target.name
@@ -998,7 +979,7 @@ def fwxAES_file(file: 'basefwx.typing.Union[str, basefwx.pathlib.Path]', passwor
             source_path = pack_ctx[0] if pack_ctx else path
             out_path = out_path_override if out_path_override else path.with_suffix('.fwx')
             try:
-                target, _ = basefwx._aes_heavy_encode_path(source_path, password, local_reporter, 0, False, encode_use_master, pubkey_bytes, pack_flag=pack_flag, output_path=out_path, display_path=display_path, keep_input=keep_input)
+                target, _ = basefwx._aes_heavy_encode_path(source_path, password, local_reporter, 0, False, use_master, pack_flag=pack_flag, output_path=out_path, display_path=display_path, keep_input=keep_input)
                 if pack_ctx:
                     basefwx._remove_input(path, keep_input, output_path=target)
                 return str(target)

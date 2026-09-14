@@ -56,7 +56,7 @@ from pathlib import Path
 
 import yume_diagram_theme
 
-from yume_diagram_spec import NARROW_WIDTH, Node, Spec, groups, is_yume_owned
+from yume_diagram_spec import NARROW_WIDTH, ROLES, Node, Spec, groups, is_yume_owned
 
 # The stacked layout, read top to bottom. Cards are rows: a glyph, a title,
 # and a subtitle beside it.
@@ -100,6 +100,37 @@ EDGE_LABEL_COLUMNS = 18
 # space is itself informative: it is the hop the rest of the figure is about.
 TUNNEL_GAP_H = 168
 TUNNEL_GAP_V = 104
+
+# A side card hangs below its parent across the page. In the stack it sits
+# indented under its parent, and the path runs down a rail through the glyph
+# column so it can pass beside the side card.
+H_BRANCH_GAP = 64
+BRANCH_GAP_V = 52
+SIDE_INDENT = 72
+RAIL_X = 32
+
+# Inputs converge on a bus. Across the page they stand in a column left of the
+# first chain card. In the stack they sit indented above it, beside the rail.
+INPUT_GAP_H = 16
+INPUT_REACH_H = 32
+INPUT_ENTRY_H = 60
+INPUT_GAP_V = 14
+INPUT_ENTRY_V = 44
+JUNCTION_RADIUS = 3.5
+
+# A layers figure nests one rounded ring per layer. Across the page each
+# ring's description is set in a column to the right, level with the ring's
+# name. In the stack the description sits under the name inside the ring.
+RING_PAD = 16
+RING_HEAD = 30
+RING_HEAD_V = 46
+RING_FOOT = 12
+CORE_HEIGHT = 48
+CORE_HEIGHT_V = 58
+LEGEND_GAP = 36
+RING_TITLE_SIZE = 13
+RING_TITLE_ADVANCE = RING_TITLE_SIZE * 0.55
+LAYER_SECONDS_PER_RING = 1.1
 
 # How long a node takes to light up and go dark again. Long enough to read as
 # a change of state rather than a flash, short enough that a packet crossing a
@@ -163,6 +194,19 @@ GLYPHS = {
         '<circle cx="7" cy="7" r="1" class="dgm-glyph-fill"/>'
         '<circle cx="7" cy="17" r="1" class="dgm-glyph-fill"/>'
     ),
+    "gate": (
+        '<path d="M5.5 20.5V10a6.5 6.5 0 0 1 13 0v10.5"/>'
+        '<path d="M3 20.5h18"/>'
+        '<circle cx="14.6" cy="14.5" r="1" class="dgm-glyph-fill"/>'
+    ),
+    "site": (
+        '<rect x="2.5" y="3.5" width="19" height="17" rx="2.5"/>'
+        '<path d="M2.5 8.5h19M6 12.5h8M6 16.5h11"/>'
+    ),
+    "key": (
+        '<circle cx="8" cy="12" r="4.5"/>'
+        '<path d="M12.5 12h9M18 12v3.5M21.5 12v2.5"/>'
+    ),
     "target": (
         '<circle cx="12" cy="12" r="8.5"/>'
         '<path d="M3.5 12h17"/>'
@@ -193,7 +237,7 @@ GLYPHS = {
 # here against website/assets/tokens.css, so a renamed token fails a test
 # rather than silently falling back on every page.
 PALETTE, DISPLAY_FACES, MONO_FACES = yume_diagram_theme.load(
-    Path(__file__).resolve().parents[1] / "website/assets/tokens.css"
+    Path(__file__).resolve().parents[1] / "website/assets/tokens.css", ROLES
 )
 
 LIGHT = {local: value for local, _token, value, _dark in PALETTE}
@@ -209,9 +253,7 @@ BASELINE: dict[str, dict[str, str]] = {
     "dgm-plate": {"fill": LIGHT["plate"], "stroke": LIGHT["rule"], "stroke-width": "1"},
     "dgm-lift": {"fill": LIGHT["rule"], "opacity": "0.85"},
     "dgm-card": {"fill": LIGHT["card"], "stroke": LIGHT["rule"], "stroke-width": "1.5"},
-    "dgm-owned-card": {"stroke": LIGHT["accent"], "stroke-width": "2"},
     "dgm-chip": {"fill": LIGHT["rule"]},
-    "dgm-owned-chip": {"fill": LIGHT["soft"]},
     "dgm-glyph": {
         "fill": "none",
         "stroke": LIGHT["muted"],
@@ -219,9 +261,7 @@ BASELINE: dict[str, dict[str, str]] = {
         "stroke-linecap": "round",
         "stroke-linejoin": "round",
     },
-    "dgm-owned-glyph": {"stroke": LIGHT["strong"]},
     "dgm-glyph-fill": {"fill": LIGHT["muted"], "stroke": "none"},
-    "dgm-owned-glyph-fill": {"fill": LIGHT["strong"]},
     "dgm-title": {
         "fill": LIGHT["ink"],
         "font-family": DISPLAY_FACES,
@@ -241,26 +281,29 @@ BASELINE: dict[str, dict[str, str]] = {
     },
     "dgm-centred": {"text-anchor": "middle"},
     "dgm-group": {
-        "fill": LIGHT["soft"],
-        "fill-opacity": "0.55",
-        "stroke": LIGHT["accent"],
+        "fill": LIGHT["rule"],
+        "fill-opacity": "0.22",
+        "stroke": LIGHT["muted"],
+        "stroke-opacity": "0.5",
         "stroke-width": "1.5",
         "stroke-dasharray": "1 5",
         "stroke-linecap": "round",
     },
     "dgm-group-title": {
-        "fill": LIGHT["strong"],
+        "fill": LIGHT["muted"],
         "font-family": MONO_FACES,
         "font-size": f"{GROUP_SIZE}px",
         "letter-spacing": "0.08em",
     },
     "dgm-link": {
         "fill": "none",
-        "stroke": LIGHT["accent"],
+        "stroke": LIGHT["muted"],
+        "stroke-opacity": "0.55",
         "stroke-width": "2.5",
         "stroke-linecap": "round",
     },
     "dgm-link-onion": {"stroke-dasharray": "2 5"},
+    "dgm-link-branch": {"stroke-opacity": "1", "stroke-dasharray": "6 6"},
     "dgm-conduit": {
         "fill": "none",
         "stroke": LIGHT["soft"],
@@ -281,23 +324,63 @@ BASELINE: dict[str, dict[str, str]] = {
         "stroke-dasharray": f"{FLOW_DASH} {FLOW_PERIOD - FLOW_DASH}",
     },
     "dgm-arrow": {
-        "fill": LIGHT["strong"],
-        "stroke": LIGHT["strong"],
+        "fill": LIGHT["muted"],
+        "stroke": LIGHT["muted"],
         "stroke-width": "2",
         "stroke-linejoin": "round",
     },
+    "dgm-conduit-head": {"fill": LIGHT["strong"], "stroke": LIGHT["strong"]},
+    "dgm-junction": {"fill": LIGHT["muted"]},
     # A renderer that cannot follow offset-path would otherwise stack every
     # packet in the top-left corner, so they stay hidden until the stylesheet
     # confirms the property is available.
     "dgm-packet": {"display": "none"},
     "dgm-packet-core": {"fill": LIGHT["strong"]},
     "dgm-packet-glow": {"fill": LIGHT["accent"], "opacity": "0.38"},
+    "dgm-ring": {"stroke-width": "1.5"},
+    "dgm-ring-title": {
+        "font-family": DISPLAY_FACES,
+        "font-size": f"{RING_TITLE_SIZE}px",
+        "font-weight": "600",
+        "letter-spacing": "0.02em",
+    },
+    "dgm-leader": {
+        "fill": "none",
+        "stroke": LIGHT["rule"],
+        "stroke-width": "1.5",
+        "stroke-dasharray": "1 4",
+        "stroke-linecap": "round",
+    },
 }
+
+# Per-role paint. Each key stands for the role of the node or ring it is
+# painted on, which the stylesheet reaches through the `dgm-role-*` class on
+# the enclosing group instead.
+for _role in ROLES:
+    BASELINE.update({
+        f"dgm-tone-card-{_role}": {"stroke": LIGHT[_role], "stroke-width": "2"},
+        f"dgm-tone-chip-{_role}": {"fill": LIGHT[f"{_role}-soft"]},
+        f"dgm-tone-glyph-{_role}": {"stroke": LIGHT[f"{_role}-strong"]},
+        f"dgm-tone-glyph-fill-{_role}": {"fill": LIGHT[f"{_role}-strong"]},
+        f"dgm-tone-link-{_role}": {"stroke": LIGHT[_role]},
+        f"dgm-tone-arrow-{_role}": {"fill": LIGHT[f"{_role}-strong"], "stroke": LIGHT[f"{_role}-strong"]},
+        f"dgm-tone-ring-{_role}": {"fill": LIGHT[f"{_role}-soft"], "stroke": LIGHT[_role]},
+        f"dgm-tone-ink-{_role}": {"fill": LIGHT[f"{_role}-strong"]},
+    })
 
 # Baseline keys that stand for a CSS rule rather than for a class in the
 # markup. They select presentation attributes and are not written out.
-PAINT_ONLY = frozenset(
-    {"dgm-owned-card", "dgm-owned-chip", "dgm-owned-glyph", "dgm-owned-glyph-fill"}
+PAINT_ONLY = frozenset(name for name in BASELINE if name.startswith("dgm-tone-"))
+
+# Each role class points the generic tone variables at that role's palette,
+# so every rule below colours a node by writing `--dgm-tone` once.
+ROLE_RULES = "\n\n".join(
+    f".dgm-role-{role} {{\n"
+    f"  --dgm-tone: var(--dgm-{role});\n"
+    f"  --dgm-tone-strong: var(--dgm-{role}-strong);\n"
+    f"  --dgm-tone-soft: var(--dgm-{role}-soft);\n"
+    "}"
+    for role in ROLES
 )
 
 
@@ -352,7 +435,7 @@ def _paint(*classes: str) -> str:
     drawn = " ".join(
         f'{key}="{html.escape(value, quote=True)}"' for key, value in attributes.items()
     )
-    names = " ".join(name for name in classes if name not in PAINT_ONLY)
+    names = " ".join(name for name in classes if name and name not in PAINT_ONLY)
     return f'class="{names}" {drawn}' if drawn else f'class="{names}"'
 
 
@@ -403,7 +486,7 @@ def _stylesheet(presence: str) -> str:
   fill: var(--dgm-rest);
   opacity: 0.85;
   --dgm-rest: var(--dgm-rule);
-  --dgm-live: var(--dgm-accent);
+  --dgm-live: var(--dgm-tone, var(--dgm-accent));
 }}
 
 .dgm-card {{
@@ -412,26 +495,22 @@ def _stylesheet(presence: str) -> str:
   stroke-width: 1.5;
 }}
 
-/* A card YUME itself runs carries the accent, and everything the route only
-   reaches stays neutral, so the eye follows the part of the path this
-   project is responsible for. It is a software boundary, not a trust claim:
-   yumed still terminates the tunnel and sees the traffic it forwards. */
+/* A card YUME itself runs is outlined in its role colour, and everything the
+   route only reaches keeps a neutral outline, so the eye follows the part of
+   the path this project is responsible for. It is a software boundary, not a
+   trust claim: yumed still terminates the tunnel and sees what it forwards. */
 .dgm-node-owned .dgm-card {{
-  stroke: var(--dgm-accent);
+  stroke: var(--dgm-tone, var(--dgm-accent));
   stroke-width: 2;
 }}
 
-/* The chip is a filled shape with the glyph knocked out of it, so it needs
-   contrast against the card in both themes, which is what accent-strong is
-   for: dark on light paper, bright on dark paper. */
+/* The chip carries the role on every card, owned or not. It is a filled shape
+   with the glyph knocked out of it, so when lit it takes the role's strong
+   tone, which contrasts with the card in both themes. */
 .dgm-chip {{
   fill: var(--dgm-rest);
-  --dgm-rest: var(--dgm-rule);
-  --dgm-live: var(--dgm-strong);
-}}
-
-.dgm-node-owned .dgm-chip {{
-  --dgm-rest: var(--dgm-soft);
+  --dgm-rest: var(--dgm-tone-soft, var(--dgm-rule));
+  --dgm-live: var(--dgm-tone-strong, var(--dgm-strong));
 }}
 
 /* The glyph goes with its chip. Leaving it on the accent while the chip fills
@@ -440,25 +519,18 @@ def _stylesheet(presence: str) -> str:
 .dgm-glyph {{
   --dgm-rest: none;
   --dgm-live: none;
-  --dgm-rest-line: var(--dgm-muted);
+  --dgm-rest-line: var(--dgm-tone-strong, var(--dgm-muted));
   --dgm-live-line: var(--dgm-card);
 }}
 
-.dgm-node-owned .dgm-glyph {{
-  --dgm-rest-line: var(--dgm-strong);
-}}
-
 .dgm-glyph-fill {{
-  --dgm-rest: var(--dgm-muted);
+  --dgm-rest: var(--dgm-tone-strong, var(--dgm-muted));
   --dgm-live: var(--dgm-card);
   --dgm-rest-line: none;
   --dgm-live-line: none;
 }}
 
-.dgm-node-owned .dgm-glyph-fill {{
-  --dgm-rest: var(--dgm-strong);
-}}
-
+.dgm-ring,
 .dgm-lift,
 .dgm-chip,
 .dgm-glyph,
@@ -476,23 +548,15 @@ def _stylesheet(presence: str) -> str:
 
 .dgm-glyph {{
   fill: none;
-  stroke: var(--dgm-muted);
+  stroke: var(--dgm-tone-strong, var(--dgm-muted));
   stroke-width: 1.5;
   stroke-linecap: round;
   stroke-linejoin: round;
 }}
 
 .dgm-glyph-fill {{
-  fill: var(--dgm-muted);
+  fill: var(--dgm-tone-strong, var(--dgm-muted));
   stroke: none;
-}}
-
-.dgm-node-owned .dgm-glyph {{
-  stroke: var(--dgm-strong);
-}}
-
-.dgm-node-owned .dgm-glyph-fill {{
-  fill: var(--dgm-strong);
 }}
 
 .dgm-title {{
@@ -517,30 +581,41 @@ def _stylesheet(presence: str) -> str:
 /* An enclosure holds a run of nodes the specification says belong together,
    and carries the name it gives them. */
 .dgm-group {{
-  fill: var(--dgm-soft);
-  fill-opacity: 0.55;
-  stroke: var(--dgm-accent);
+  fill: var(--dgm-rule);
+  fill-opacity: 0.22;
+  stroke: var(--dgm-muted);
+  stroke-opacity: 0.5;
   stroke-width: 1.5;
   stroke-dasharray: 1 5;
   stroke-linecap: round;
 }}
 
 .dgm-group-title {{
-  fill: var(--dgm-strong);
+  fill: var(--dgm-muted);
   font-family: {MONO_STACK};
   font-size: {GROUP_SIZE}px;
   letter-spacing: 0.08em;
 }}
 
+/* An ordinary hop is quiet plumbing. Colour is kept for the protected hop,
+   which carries the brand accent, and for a branch, which takes the role of
+   the node it turns towards. */
 .dgm-link {{
   fill: none;
-  stroke: var(--dgm-accent);
+  stroke: var(--dgm-muted);
+  stroke-opacity: 0.55;
   stroke-width: 2.5;
   stroke-linecap: round;
 }}
 
 .dgm-link-onion {{
   stroke-dasharray: 2 5;
+}}
+
+.dgm-link-branch {{
+  stroke: var(--dgm-tone);
+  stroke-opacity: 1;
+  stroke-dasharray: 6 6;
 }}
 
 /* The protected hop is drawn as a conduit: a soft bore, two walls, and the
@@ -572,10 +647,56 @@ def _stylesheet(presence: str) -> str:
 /* The stroke rounds the triangle's corners, which is the same softening the
    cards and the chips carry. */
 .dgm-arrow {{
-  fill: var(--dgm-strong);
-  stroke: var(--dgm-strong);
+  fill: var(--dgm-muted);
+  stroke: var(--dgm-muted);
   stroke-width: 2;
   stroke-linejoin: round;
+}}
+
+/* The head of the protected hop keeps the accent its conduit carries. */
+.dgm-conduit-head {{
+  fill: var(--dgm-strong);
+  stroke: var(--dgm-strong);
+}}
+
+.dgm-junction {{
+  fill: var(--dgm-muted);
+}}
+
+.dgm-branch .dgm-arrow {{
+  fill: var(--dgm-tone-strong);
+  stroke: var(--dgm-tone-strong);
+}}
+
+{ROLE_RULES}
+
+/* A layer is a ring, filled with its role's tint and outlined in its tone.
+   On the loop the rings light in wrapping order, innermost first, which is
+   the only thing the motion in a layers figure says. */
+.dgm-ring {{
+  fill: var(--dgm-rest);
+  stroke: var(--dgm-rest-line);
+  stroke-width: 1.5;
+  --dgm-rest: var(--dgm-tone-soft);
+  --dgm-live: var(--dgm-tone);
+  --dgm-rest-line: var(--dgm-tone);
+  --dgm-live-line: var(--dgm-tone-strong);
+}}
+
+.dgm-ring-title {{
+  fill: var(--dgm-tone-strong);
+  font-family: {DISPLAY_STACK};
+  font-size: {RING_TITLE_SIZE}px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}}
+
+.dgm-leader {{
+  fill: none;
+  stroke: var(--dgm-rule);
+  stroke-width: 1.5;
+  stroke-dasharray: 1 4;
+  stroke-linecap: round;
 }}
 
 .dgm-packet-core {{
@@ -616,6 +737,7 @@ def _stylesheet(presence: str) -> str:
   }}
 
   .dgm-conduit-flow,
+  .dgm-ring,
   .dgm-lift,
   .dgm-chip,
   .dgm-glyph,
@@ -637,48 +759,72 @@ def dimensions(spec: Spec, layout: str) -> tuple[str, str]:
 
 def render(spec: Spec, layout: str = "vertical") -> str:
     """The self-contained SVG for one diagram, ending in a newline."""
-    if spec.type != "route":
+    if spec.type not in ("route", "flow", "layers"):
         raise ValueError(f"no SVG renderer for diagram type {spec.type!r}")
+    if layout not in ("vertical", "horizontal"):
+        raise ValueError(f"unknown layout {layout!r}")
+    if spec.type == "layers":
+        return _render_layers(spec, layout)
     if layout == "horizontal":
         return _render_horizontal(spec)
-    if layout != "vertical":
-        raise ValueError(f"unknown layout {layout!r}")
     return _render_vertical(spec)
 
 
 def _render_vertical(spec: Spec) -> str:
-    """A stack read top to bottom. A group becomes a section of the stack."""
+    """A stack read top to bottom. A group becomes a section of the stack.
+
+    A flow with a branch runs its path down a rail through the glyph column,
+    so each side card can sit indented under the card it hangs from while the
+    path passes beside it.
+    """
+    chain = spec.chain()
+    chain_edges = spec.chain_edges()
+    inputs = spec.inputs()
+    rail = bool(spec.branches() or inputs)
     card_width = CARD_WIDTH_NARROW if spec.box_width() == NARROW_WIDTH else CARD_WIDTH_WIDE
     sub_columns = int((card_width - CARD_PADDING - GLYPH_COLUMN) // LABEL_ADVANCE)
     runs = groups(spec)
     inset = GROUP_PAD if runs else 0
-    width = MARGIN * 2 + inset * 2 + card_width
+    indent = SIDE_INDENT if rail else 0
+    width = MARGIN * 2 + inset * 2 + card_width + indent
     left = MARGIN + inset
-    axis = left + card_width / 2
-    # A label sits to the right of the centre line and has to stop inside the
-    # plate, so it wraps to whatever room is left there.
-    label_room = card_width / 2 + inset - LABEL_OFFSET - MARGIN
+    axis = left + (RAIL_X if rail else card_width / 2)
+    # A label sits to the right of the path and has to stop inside the plate,
+    # so it wraps to whatever room is left there.
+    label_room = width - axis - LABEL_OFFSET - MARGIN * 2
     label_columns = max(8, int(label_room // LABEL_ADVANCE))
 
     # The hop is spent before the enclosure opens, so a group's title sits
     # just above its first card rather than a gap away from it.
     placed: list[Placed] = []
+    sides: dict[int, Placed] = {}
     boxes: list[Enclosure] = []
     y = float(MARGIN)
-    for index, node in enumerate(spec.nodes):
+    fed: list[Placed] = []
+    for _edge, node in inputs:
+        fed.append(Placed(node, left + indent, y, card_width, CARD_HEIGHT))
+        y += CARD_HEIGHT + INPUT_GAP_V
+    if inputs:
+        y += INPUT_ENTRY_V - INPUT_GAP_V
+    for index, node in enumerate(chain):
         run = _run_at(runs, index)
         if index:
-            edge = spec.edges[index - 1]
+            edge = chain_edges[index - 1]
             y += TUNNEL_GAP_V if edge.channel == "tunnel" else CARD_GAP
             if (_run_at(runs, index - 1) is None) != (run is None):
                 y += GROUP_PAD
         if run and run[0] == index:
             boxes.append(
-                Enclosure(run[2], left - GROUP_PAD, y, card_width + GROUP_PAD * 2, 0, *run[:2])
+                Enclosure(run[2], left - GROUP_PAD, y, card_width + indent + GROUP_PAD * 2, 0, *run[:2])
             )
             y += GROUP_TITLE_HEIGHT + GROUP_PAD
         placed.append(Placed(node, left, y, card_width, CARD_HEIGHT))
         y += CARD_HEIGHT
+        branch = spec.branch_at(index)
+        if branch is not None:
+            y += BRANCH_GAP_V
+            sides[index] = Placed(branch[1], left + indent, y, card_width, CARD_HEIGHT)
+            y += CARD_HEIGHT
         if run and run[1] == index:
             y += GROUP_PAD
             boxes[-1].height = y - boxes[-1].y
@@ -687,8 +833,8 @@ def _render_vertical(spec: Spec) -> str:
     hops: list[tuple[Point, Point]] = []
     body: list[str] = [_enclosures(boxes, left + 4)]
     body.append('<g class="dgm-links">')
-    for index in range(1, len(spec.nodes)):
-        edge = spec.edges[index - 1]
+    for index in range(1, len(chain)):
+        edge = chain_edges[index - 1]
         start, stop = _span(
             placed[index - 1], index - 1, placed[index], index, boxes, across=False
         )
@@ -696,62 +842,114 @@ def _render_vertical(spec: Spec) -> str:
         stop -= CARD_CLEARANCE
         hops.append(((axis, start), (axis, stop)))
         body.extend(_hop(edge, *hops[-1]))
+        # Beside a side card the label waits until the path is clear of it.
+        side = sides.get(index - 1)
+        top = max(start, side.bottom + CARD_CLEARANCE) if side else start
         lines = _wrap(edge.label, label_columns)
         for offset, line in enumerate(lines):
             centred = offset - (len(lines) - 1) / 2
-            baseline = (start + stop) / 2 + 4 + centred * 13
+            baseline = (top + stop) / 2 + 4 + centred * 13
             body.append(
                 f'<text {_paint("dgm-edge-label")} x="{_n(axis + LABEL_OFFSET)}" '
                 f'y="{_n(baseline)}">{html.escape(line)}</text>'
             )
     body.append("</g>")
+    for index, side in sides.items():
+        edge, node = spec.branch_at(index)
+        x = side.x + RAIL_X
+        columns = max(8, int((width - MARGIN - x - LABEL_OFFSET) // LABEL_ADVANCE))
+        body.append(
+            _branch(
+                edge,
+                node,
+                (x, placed[index].bottom + CARD_CLEARANCE),
+                (x, side.y - CARD_CLEARANCE),
+                _wrap(edge.label, columns),
+                x + LABEL_OFFSET,
+            )
+        )
+    if fed:
+        entry = boxes[0].y if boxes and boxes[0].first == 0 else placed[0].y
+        body.append(_bus(inputs, fed, (axis, entry - CARD_CLEARANCE), across=False, at=axis))
     motion = _packets(placed, hops)
     body.append(motion.markup)
 
     body.append('<g class="dgm-nodes">')
+    for card in fed:
+        body.extend(_stacked_card(spec, card, None, sub_columns))
     for index, card in enumerate(placed):
-        lines = _wrap(card.node.sub, sub_columns)
-        text_x = card.x + GLYPH_COLUMN
-        body.append(
-            f'<g class="{_node_class(card.node.kind)}">'
-            f"{_card(spec, 'vertical', index, card)}"
-            f'<rect {_paint("dgm-chip", "dgm-owned-chip", f"dgm-here-{index}")} x="{_n(card.x + 14)}" '
-            f'y="{_n(card.y + 20)}" width="36" height="36" rx="12"/>'
-            f'<svg {_paint("dgm-glyph", "dgm-owned-glyph", f"dgm-here-{index}")} '
-            f'x="{_n(card.x + 20)}" y="{_n(card.y + 26)}" '
-            f'width="24" height="24" viewBox="0 0 24 24">'
-            f"{_glyph(card.node.kind, index)}</svg>"
-            f'<text {_paint("dgm-title")} x="{_n(text_x)}" '
-            f'y="{_n(card.y + (34 if lines else 43))}">'
-            f"{html.escape(card.node.title)}</text>"
-        )
-        for offset, line in enumerate(lines):
-            body.append(
-                f'<text {_paint("dgm-sub")} x="{_n(text_x)}" '
-                f'y="{_n(card.y + 52 + offset * 13)}">{html.escape(line)}</text>'
-            )
-        body.append("</g>")
+        body.extend(_stacked_card(spec, card, index, sub_columns))
+    for card in sides.values():
+        body.extend(_stacked_card(spec, card, None, sub_columns))
     body.append("</g>")
     return _document(spec, "vertical", width, height, body, motion)
 
 
+def _stacked_card(spec: Spec, card: Placed, index: int | None, sub_columns: int) -> list[str]:
+    """One card of the stack: the glyph chip on the left, its text beside it."""
+    lines = _wrap(card.node.sub, sub_columns)
+    text_x = card.x + GLYPH_COLUMN
+    here = "" if index is None else f"dgm-here-{index}"
+    tone = card.node.tone
+    drawn = [
+        f"<g {_node_attributes(card.node)}>"
+        f"{_card(spec, 'vertical', index, card)}"
+        f'<rect {_paint("dgm-chip", f"dgm-tone-chip-{tone}", here)} x="{_n(card.x + 14)}" '
+        f'y="{_n(card.y + 20)}" width="36" height="36" rx="12"/>'
+        f'<svg {_paint("dgm-glyph", f"dgm-tone-glyph-{tone}", here)} '
+        f'x="{_n(card.x + 20)}" y="{_n(card.y + 26)}" '
+        f'width="24" height="24" viewBox="0 0 24 24">'
+        f"{_glyph(card.node, here)}</svg>"
+        f'<text {_paint("dgm-title")} x="{_n(text_x)}" '
+        f'y="{_n(card.y + (34 if lines else 43))}">'
+        f"{html.escape(card.node.title)}</text>"
+    ]
+    for offset, line in enumerate(lines):
+        drawn.append(
+            f'<text {_paint("dgm-sub")} x="{_n(text_x)}" '
+            f'y="{_n(card.y + 52 + offset * 13)}">{html.escape(line)}</text>'
+        )
+    drawn.append("</g>")
+    return drawn
+
+
 def _render_horizontal(spec: Spec) -> str:
-    """A band read across the page. A group rises onto a plateau."""
+    """A band read across the page. A group rises onto a plateau.
+
+    A side card hangs below the card it branches from, and an enclosure that
+    holds that card grows down far enough to hold its side card too.
+    """
+    chain = spec.chain()
+    chain_edges = spec.chain_edges()
     card_width = _card_width(spec)
     sub_columns = int((card_width - CARD_PADDING) // LABEL_ADVANCE)
-    labels = [_wrap(edge.label, EDGE_LABEL_COLUMNS) for edge in spec.edges]
+    labels = [_wrap(edge.label, EDGE_LABEL_COLUMNS) for edge in chain_edges]
     runs = groups(spec)
 
     plateau_y = float(H_MARGIN + (GROUP_TITLE_HEIGHT + GROUP_PAD if runs else 0))
     base_y = plateau_y + (PLATEAU_RISE if runs else 0)
-    height = base_y + H_CARD_HEIGHT + H_MARGIN
+
+    # Inputs and the first chain card share a centre line, so whichever block
+    # is shorter moves down to meet the other.
+    inputs = spec.inputs()
+    block = len(inputs) * H_CARD_HEIGHT + max(0, len(inputs) - 1) * INPUT_GAP_H
+    first_centre = (plateau_y if _run_at(runs, 0) else base_y) + H_CARD_HEIGHT / 2
+    lower_chain = max(0.0, H_MARGIN + block / 2 - first_centre) if inputs else 0.0
+    plateau_y += lower_chain
+    base_y += lower_chain
+    fed_top = H_MARGIN + max(0.0, first_centre - H_MARGIN - block / 2)
+    fed = [
+        Placed(node, H_MARGIN, fed_top + number * (H_CARD_HEIGHT + INPUT_GAP_H), card_width, H_CARD_HEIGHT)
+        for number, (_edge, node) in enumerate(inputs)
+    ]
+    bus_x = H_MARGIN + card_width + INPUT_REACH_H
 
     placed: list[Placed] = []
-    x = float(H_MARGIN)
-    for index, node in enumerate(spec.nodes):
+    x = float(bus_x + INPUT_ENTRY_H) if inputs else float(H_MARGIN)
+    for index, node in enumerate(chain):
         run = _run_at(runs, index)
         if index:
-            x += _hop_gap(spec.edges[index - 1], labels[index - 1], runs, index)
+            x += _hop_gap(chain_edges[index - 1], labels[index - 1], runs, index)
         if run and run[0] == index:
             x += GROUP_PAD
         placed.append(
@@ -762,24 +960,47 @@ def _render_horizontal(spec: Spec) -> str:
             x += GROUP_PAD
     width = x + H_MARGIN
 
-    boxes = [
-        Enclosure(
-            title,
-            placed[first].x - GROUP_PAD,
-            plateau_y - GROUP_TITLE_HEIGHT - GROUP_PAD,
-            placed[last].right - placed[first].x + GROUP_PAD * 2,
-            GROUP_TITLE_HEIGHT + GROUP_PAD * 2 + H_CARD_HEIGHT,
-            first,
-            last,
+    sides: dict[int, Placed] = {}
+    side_labels: dict[int, list[str]] = {}
+    for index, edge, node in spec.branches():
+        parent = placed[index]
+        sides[index] = Placed(node, parent.x, parent.bottom + H_BRANCH_GAP, card_width, H_CARD_HEIGHT)
+        side_labels[index] = _wrap(edge.label, EDGE_LABEL_COLUMNS)
+        longest = max((len(line) for line in side_labels[index]), default=0)
+        width = max(
+            width, parent.centre_x + LABEL_OFFSET + math.ceil(longest * LABEL_ADVANCE) + H_MARGIN
         )
-        for first, last, title in runs
-    ]
+
+    boxes: list[Enclosure] = []
+    for first, last, title in runs:
+        top = plateau_y - GROUP_TITLE_HEIGHT - GROUP_PAD
+        reach = max(
+            [placed[first].bottom] + [card.bottom for at, card in sides.items() if first <= at <= last]
+        )
+        boxes.append(
+            Enclosure(
+                title,
+                placed[first].x - GROUP_PAD,
+                top,
+                placed[last].right - placed[first].x + GROUP_PAD * 2,
+                reach + GROUP_PAD - top,
+                first,
+                last,
+            )
+        )
+    bottom = max(
+        [base_y + H_CARD_HEIGHT]
+        + [card.bottom for card in sides.values()]
+        + [card.bottom for card in fed]
+        + [box.y + box.height for box in boxes]
+    )
+    height = bottom + H_MARGIN
 
     hops: list[tuple[Point, Point]] = []
     body: list[str] = [_enclosures(boxes, None)]
     body.append('<g class="dgm-links">')
-    for index in range(1, len(spec.nodes)):
-        edge = spec.edges[index - 1]
+    for index in range(1, len(chain)):
+        edge = chain_edges[index - 1]
         previous, following = placed[index - 1], placed[index]
         start_x, stop_x = _span(previous, index - 1, following, index, boxes, across=True)
         start_x += CARD_CLEARANCE
@@ -798,34 +1019,192 @@ def _render_horizontal(spec: Spec) -> str:
                 f'x="{_n(middle_x)}" y="{_n(baseline)}">{html.escape(line)}</text>'
             )
     body.append("</g>")
+    for index, side in sides.items():
+        edge, node = spec.branch_at(index)
+        parent = placed[index]
+        body.append(
+            _branch(
+                edge,
+                node,
+                (parent.centre_x, parent.bottom + CARD_CLEARANCE),
+                (parent.centre_x, side.y - CARD_CLEARANCE),
+                side_labels[index],
+                parent.centre_x + LABEL_OFFSET,
+            )
+        )
+    if fed:
+        entry = boxes[0].x if boxes and boxes[0].first == 0 else placed[0].x
+        body.append(_bus(inputs, fed, (entry - CARD_CLEARANCE, placed[0].centre_y), across=True, at=bus_x))
     motion = _packets(placed, hops)
     body.append(motion.markup)
 
     body.append('<g class="dgm-nodes">')
+    for card in fed:
+        body.extend(_banded_card(spec, card, None, sub_columns))
     for index, card in enumerate(placed):
-        lines = _wrap(card.node.sub, sub_columns)
-        body.append(
-            f'<g class="{_node_class(card.node.kind)}">'
-            f"{_card(spec, 'horizontal', index, card)}"
-            f'<rect {_paint("dgm-chip", "dgm-owned-chip", f"dgm-here-{index}")} '
-            f'x="{_n(card.centre_x - 16)}" y="{_n(card.y + 14)}" '
-            f'width="32" height="32" rx="11"/>'
-            f'<svg {_paint("dgm-glyph", "dgm-owned-glyph", f"dgm-here-{index}")} '
-            f'x="{_n(card.centre_x - 12)}" y="{_n(card.y + 18)}" '
-            f'width="24" height="24" viewBox="0 0 24 24">'
-            f"{_glyph(card.node.kind, index)}</svg>"
-            f'<text {_paint("dgm-title", "dgm-centred")} x="{_n(card.centre_x)}" '
-            f'y="{_n(card.y + (66 if lines else 74))}">'
-            f"{html.escape(card.node.title)}</text>"
+        body.extend(_banded_card(spec, card, index, sub_columns))
+    for card in sides.values():
+        body.extend(_banded_card(spec, card, None, sub_columns))
+    body.append("</g>")
+    return _document(spec, "horizontal", width, height, body, motion)
+
+
+def _banded_card(spec: Spec, card: Placed, index: int | None, sub_columns: int) -> list[str]:
+    """One card of the band: the glyph chip on top, its text centred under it."""
+    lines = _wrap(card.node.sub, sub_columns)
+    here = "" if index is None else f"dgm-here-{index}"
+    tone = card.node.tone
+    drawn = [
+        f"<g {_node_attributes(card.node)}>"
+        f"{_card(spec, 'horizontal', index, card)}"
+        f'<rect {_paint("dgm-chip", f"dgm-tone-chip-{tone}", here)} '
+        f'x="{_n(card.centre_x - 16)}" y="{_n(card.y + 14)}" '
+        f'width="32" height="32" rx="11"/>'
+        f'<svg {_paint("dgm-glyph", f"dgm-tone-glyph-{tone}", here)} '
+        f'x="{_n(card.centre_x - 12)}" y="{_n(card.y + 18)}" '
+        f'width="24" height="24" viewBox="0 0 24 24">'
+        f"{_glyph(card.node, here)}</svg>"
+        f'<text {_paint("dgm-title", "dgm-centred")} x="{_n(card.centre_x)}" '
+        f'y="{_n(card.y + (66 if lines else 74))}">'
+        f"{html.escape(card.node.title)}</text>"
+    ]
+    for offset, line in enumerate(lines):
+        drawn.append(
+            f'<text {_paint("dgm-sub", "dgm-centred")} x="{_n(card.centre_x)}" '
+            f'y="{_n(card.y + 82 + offset * 13)}">{html.escape(line)}</text>'
         )
-        for offset, line in enumerate(lines):
+    drawn.append("</g>")
+    return drawn
+
+
+def _branch(
+    edge, node: Node, start: Point, stop: Point, lines: list[str], label_x: float
+) -> str:
+    """A turn off the path, dashed in the role of the node it reaches."""
+    drawn = [f'<g class="dgm-branch dgm-role-{node.tone}">', *_hop(edge, start, stop, node.tone)]
+    middle = (start[1] + stop[1]) / 2
+    for offset, line in enumerate(lines):
+        centred = offset - (len(lines) - 1) / 2
+        drawn.append(
+            f'<text {_paint("dgm-edge-label")} x="{_n(label_x)}" '
+            f'y="{_n(middle + 4 + centred * 13)}">{html.escape(line)}</text>'
+        )
+    drawn.append("</g>")
+    return "".join(drawn)
+
+
+def _bus(inputs, fed: list[Placed], stop: Point, across: bool, at: float) -> str:
+    """Inputs joining one bus that runs, as a single arrow, into the chain.
+
+    Across the page each input meets a vertical bus to its right. In the stack
+    each input meets the rail to its left. Junctions are dotted so a crossing
+    never reads as a join.
+    """
+    drawn = ['<g class="dgm-inputs">']
+    joins: list[Point] = []
+    for card in fed:
+        if across:
+            start, join = (card.right + CARD_CLEARANCE, card.centre_y), (at, card.centre_y)
+        else:
+            start, join = (card.x - CARD_CLEARANCE, card.centre_y), (at, card.centre_y)
+        drawn.append(f'<path {_paint("dgm-link", "dgm-link-plain")} d="{_line(start, join)}"/>')
+        joins.append(join)
+    if across:
+        low = min([point[1] for point in joins] + [stop[1]])
+        high = max([point[1] for point in joins] + [stop[1]])
+        drawn.append(f'<path {_paint("dgm-link", "dgm-link-plain")} d="{_line((at, low), (at, high))}"/>')
+        drawn.extend(_hop(inputs[0][0], (at, stop[1]), stop))
+    else:
+        drawn.append(f'<path {_paint("dgm-link", "dgm-link-plain")} d="{_line(joins[0], joins[-1])}"/>')
+        drawn.extend(_hop(inputs[0][0], joins[-1], stop))
+    for x, y in joins:
+        drawn.append(f'<circle {_paint("dgm-junction")} cx="{_n(x)}" cy="{_n(y)}" r="{JUNCTION_RADIUS}"/>')
+    drawn.append("</g>")
+    return "".join(drawn)
+
+
+def _render_layers(spec: Spec, layout: str) -> str:
+    """One ring per layer, the innermost at the centre.
+
+    Across the page each ring names its layer in its head strip, and the
+    description sits in a column to the right on the same baseline, joined by
+    a dotted leader drawn outside the rings so it never crosses a wall. In the
+    stack the description sits under the name, inside the ring.
+    """
+    layers = spec.nodes
+    count = len(layers)
+    across = layout == "horizontal"
+    head = RING_HEAD if across else RING_HEAD_V
+    core_height = CORE_HEIGHT if across else CORE_HEIGHT_V
+
+    def needed(level: int, node: Node) -> float:
+        drawn = len(node.title) * RING_TITLE_ADVANCE
+        if not across:
+            drawn = max(drawn, len(node.sub) * LABEL_ADVANCE)
+        return drawn + CARD_PADDING + 4 - 2 * level * RING_PAD
+
+    core_width = max(150, math.ceil(max(needed(level, node) for level, node in enumerate(layers))))
+    outer_width = core_width + 2 * RING_PAD * (count - 1)
+    outer_height = core_height + (head + RING_FOOT) * (count - 1)
+    legend_x = MARGIN + outer_width + LEGEND_GAP
+    legend_width = math.ceil(max(len(node.sub) for node in layers) * LABEL_ADVANCE) if across else 0
+    width = legend_x + legend_width + MARGIN if legend_width else MARGIN * 2 + outer_width
+    height = MARGIN * 2 + outer_height
+
+    body = ['<g class="dgm-layers">']
+    for level in reversed(range(count)):
+        node = layers[level]
+        depth = count - 1 - level
+        x = MARGIN + depth * RING_PAD
+        y = MARGIN + depth * head
+        ring_width = core_width + 2 * level * RING_PAD
+        ring_height = core_height + level * (head + RING_FOOT)
+        tone = node.tone
+        body.append(f'<g class="dgm-layer dgm-role-{tone}" data-node="{node.id}">')
+        body.append(
+            f'<rect {_paint("dgm-ring", f"dgm-tone-ring-{tone}", f"dgm-here-{level}")} '
+            f"{_rect(x, y, ring_width, ring_height, min(36, 12 + level * 4))}/>"
+        )
+        if level == 0:
+            centre = x + ring_width / 2
+            baseline = y + ring_height / 2 + (5 if across or not node.sub else -3)
             body.append(
-                f'<text {_paint("dgm-sub", "dgm-centred")} x="{_n(card.centre_x)}" '
-                f'y="{_n(card.y + 82 + offset * 13)}">{html.escape(line)}</text>'
+                f'<text {_paint("dgm-ring-title", f"dgm-tone-ink-{tone}", "dgm-centred")} '
+                f'x="{_n(centre)}" y="{_n(baseline)}">{html.escape(node.title)}</text>'
+            )
+            if node.sub and not across:
+                body.append(
+                    f'<text {_paint("dgm-sub", "dgm-centred")} x="{_n(centre)}" '
+                    f'y="{_n(baseline + 16)}">{html.escape(node.sub)}</text>'
+                )
+        else:
+            baseline = y + 20
+            body.append(
+                f'<text {_paint("dgm-ring-title", f"dgm-tone-ink-{tone}")} '
+                f'x="{_n(x + 14)}" y="{_n(baseline)}">{html.escape(node.title)}</text>'
+            )
+            if node.sub and not across:
+                body.append(
+                    f'<text {_paint("dgm-sub")} x="{_n(x + 14)}" '
+                    f'y="{_n(baseline + 16)}">{html.escape(node.sub)}</text>'
+                )
+        if node.sub and across:
+            rule_y = baseline - 4
+            body.append(
+                f'<path {_paint("dgm-leader")} '
+                f'd="{_line((MARGIN + outer_width + 8, rule_y), (legend_x - 8, rule_y))}"/>'
+            )
+            body.append(
+                f'<text {_paint("dgm-sub")} x="{_n(legend_x)}" '
+                f'y="{_n(baseline)}">{html.escape(node.sub)}</text>'
             )
         body.append("</g>")
     body.append("</g>")
-    return _document(spec, "horizontal", width, height, body, motion)
+
+    duration = round(max(6.0, count * LAYER_SECONDS_PER_RING), 2)
+    sweep = 0.7 / count
+    spans = [(0.06 + level * sweep, 0.06 + (level + 1) * sweep) for level in range(count)]
+    return _document(spec, layout, width, height, body, Motion("", duration, spans))
 
 
 def _run_at(runs: list[tuple[int, int, str]], index: int) -> tuple[int, int, str] | None:
@@ -911,7 +1290,7 @@ def _enclosures(boxes: list[Enclosure], title_x: float | None) -> str:
     return "".join(drawn)
 
 
-def _hop(edge, start: Point, stop: Point) -> list[str]:
+def _hop(edge, start: Point, stop: Point, tone: str | None = None) -> list[str]:
     """One hop between two points, at whatever angle they lie.
 
     Every channel is a stroked line, so a diagonal hop is drawn exactly like a
@@ -936,15 +1315,18 @@ def _hop(edge, start: Point, stop: Point) -> list[str]:
             )
         drawn.append(f'<path {_paint("dgm-conduit-flow")} d="{_line(head, tail)}"/>')
     else:
+        branch = ("dgm-link-branch", f"dgm-tone-link-{tone}") if tone else ()
         drawn.append(
-            f'<path {_paint("dgm-link", f"dgm-link-{edge.channel}")} '
+            f'<path {_paint("dgm-link", f"dgm-link-{edge.channel}", *branch)} '
             f'd="{_line(start, back)}"/>'
         )
 
     left = _offset(back, -uy, ux, ARROW_HALF)
     right = _offset(back, -uy, ux, -ARROW_HALF)
+    head = "dgm-conduit-head" if edge.channel == "tunnel" else ""
     drawn.append(
-        f'<path {_paint("dgm-arrow")} d="M{_n(left[0])} {_n(left[1])}'
+        f'<path {_paint("dgm-arrow", head, f"dgm-tone-arrow-{tone}" if tone else "")} '
+        f'd="M{_n(left[0])} {_n(left[1])}'
         f"L{_n(right[0])} {_n(right[1])}L{_n(stop[0])} {_n(stop[1])}Z\"/>"
     )
     return drawn
@@ -958,12 +1340,17 @@ def _line(start: Point, stop: Point) -> str:
     return f"M{_n(start[0])} {_n(start[1])}L{_n(stop[0])} {_n(stop[1])}"
 
 
-def _node_class(kind: str) -> str:
-    classes = f"dgm-node dgm-node-{kind}"
-    return f"{classes} dgm-node-owned" if is_yume_owned(kind) else classes
+def _node_class(node: Node) -> str:
+    classes = f"dgm-node dgm-node-{node.kind} dgm-role-{node.tone}"
+    return f"{classes} dgm-node-owned" if is_yume_owned(node.kind) else classes
 
 
-def _card(spec: Spec, layout: str, index: int, card: Placed) -> str:
+def _node_attributes(node: Node) -> str:
+    """The node's classes, plus the id a page uses to pair it with its note."""
+    return f'class="{_node_class(node)}" data-node="{node.id}"'
+
+
+def _card(spec: Spec, layout: str, index: int | None, card: Placed) -> str:
     """A card, the soft shape behind it, and which presence window it uses."""
     halo = _rect(
         card.x - LIFT_SPREAD,
@@ -972,19 +1359,21 @@ def _card(spec: Spec, layout: str, index: int, card: Placed) -> str:
         card.height + LIFT_SPREAD * 2,
         16 + LIFT_SPREAD,
     )
+    here = "" if index is None else f"dgm-here-{index}"
+    owned = f"dgm-tone-card-{card.node.tone}" if is_yume_owned(card.node.kind) else ""
     return (
-        f'<rect {_paint("dgm-lift", f"dgm-here-{index}")} {halo} '
+        f'<rect {_paint("dgm-lift", here)} {halo} '
         f'filter="url(#{_lift_id(spec, layout)})"/>'
-        f'<rect {_paint("dgm-card", "dgm-owned-card")} '
+        f'<rect {_paint("dgm-card", owned)} '
         f"{_rect(card.x, card.y, card.width, card.height)}/>"
     )
 
 
-def _glyph(kind: str, index: int) -> str:
+def _glyph(node: Node, here: str) -> str:
     """The glyph strokes, each carrying its baseline paint and its window."""
-    return GLYPHS[kind].replace(
+    return GLYPHS[node.kind].replace(
         'class="dgm-glyph-fill"',
-        _paint("dgm-glyph-fill", "dgm-owned-glyph-fill", f"dgm-here-{index}"),
+        _paint("dgm-glyph-fill", f"dgm-tone-glyph-fill-{node.tone}", here),
     )
 
 

@@ -207,6 +207,9 @@ def artifacts(docs: list[Doc], selected: list[str], check: bool, website_only: b
                         add(relative(yume_diagrams.svg_dir(language) / name), content)
                     if not check or website_only:
                         add(relative(yume_diagrams.include_dir(language) / name), content)
+                key = yume_diagrams.key_html(spec)
+                if key and (not check or website_only):
+                    add(relative(yume_diagrams.include_dir(language) / yume_diagrams.key_name(spec.name)), key)
     if config["cli"] and not website_only and DEFAULT_LANGUAGE in selected:
         import yume_cli
         for layout in yume_cli.load_layouts():

@@ -11,6 +11,12 @@ from pathlib import Path
 
 TOKEN_RE = re.compile(r"(--[\w-]+)\s*:\s*([^;{}]+);")
 
+# Each role draws with three values: a mid tone for strokes and glows, a
+# strong tone for ink and filled chips, and a soft tint for areas. A site
+# that defines no role tokens draws each role in its own accent instead, and
+# the neutral role in its rule and muted ink.
+ROLE_SUFFIXES = (("", "accent", "rule"), ("-strong", "strong", "muted"), ("-soft", "soft", "rule"))
+
 
 def srgb(value: str) -> str:
     """Convert this workspace's opaque OKLCH tokens to SVG presentation colors."""
@@ -32,7 +38,7 @@ def srgb(value: str) -> str:
     return "#" + "".join(f"{encode(channel):02x}" for channel in channels)
 
 
-def load(path: Path) -> tuple[tuple, str, str]:
+def load(path: Path, roles: tuple[str, ...] = ()) -> tuple[tuple, str, str]:
     css = re.sub(r"/\*.*?\*/", "", path.read_text(encoding="utf-8"), flags=re.S)
     root = re.search(r":root\s*\{([^{}]*)\}", css)
     if root is None:
@@ -48,7 +54,7 @@ def load(path: Path) -> tuple[tuple, str, str]:
 
     light, dark = theme("light"), theme("dark")
     # The two maintained websites have different token names. The mapping
-    # names their consumers; all color values remain owned by tokens.css.
+    # names their consumers. All color values remain owned by tokens.css.
     tokens = (
         {"plate": "--color-paper", "card": "--color-cloud", "ink": "--color-ink",
          "muted": "--color-muted", "rule": "--color-rule", "accent": "--color-accent",
@@ -57,6 +63,12 @@ def load(path: Path) -> tuple[tuple, str, str]:
         {"plate": "--paper", "card": "--surface", "ink": "--text", "muted": "--text-3",
          "rule": "--rule", "accent": "--accent", "strong": "--accent-hover", "soft": "--accent-wash"}
     )
+    for role in roles:
+        for suffix, fallback, neutral in ROLE_SUFFIXES:
+            token = f"--color-role-{role}{suffix}"
+            if token not in baseline:
+                token = tokens[neutral if role == "neutral" else fallback]
+            tokens[f"{role}{suffix}"] = token
 
     def color(values: dict[str, str], token: str) -> str:
         seen = set()

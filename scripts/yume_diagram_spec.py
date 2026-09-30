@@ -44,7 +44,17 @@ NAME_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 # `route` is one ordered chain. `flow` is a chain whose nodes may each send one
 # branch to a side node, such as a front door turning away a request. `layers`
 # is one wrapping, listed from the innermost layer outwards, with no edges.
-DIAGRAM_TYPES = ("route", "flow", "layers")
+# `sequence` is messages between parties in the order they are sent: the nodes
+# are the parties from left to right and the edges are the messages, earliest
+# first. A message from a party to itself is a step that party takes alone.
+DIAGRAM_TYPES = ("route", "flow", "layers", "sequence")
+
+# A sequence has room for this many parties side by side, in a terminal and
+# at phone width, and a bounded number of messages.
+SEQUENCE_PARTIES = (2, 4)
+SEQUENCE_MESSAGES = 24
+# A message label sits on one line above its arrow.
+MESSAGE_LIMIT = 40
 
 # Both layouts are rendered for every web diagram. A page picks the one that
 # suits its shape, so the specification never has to guess where it is used.
@@ -252,6 +262,29 @@ class Spec:
             return None
         return self.chain_edges()[index - 1]
 
+    def column(self, node_id: str) -> int:
+        """A sequence party's position from the left."""
+        return [node.id for node in self.nodes].index(node_id)
+
+
+def edge_keys(spec: Spec) -> list[str]:
+    """The name a translation uses for each edge, in edge order.
+
+    A route or flow joins each pair of nodes once, so `from->to` names the
+    hop. A sequence can send several messages between the same two parties,
+    so a repeated pair is numbered by its occurrence: `a->b#1`, `a->b#2`.
+    """
+    pairs = [f"{edge.source}->{edge.target}" for edge in spec.edges]
+    seen: dict[str, int] = {}
+    keys: list[str] = []
+    for pair in pairs:
+        if pairs.count(pair) == 1:
+            keys.append(pair)
+            continue
+        seen[pair] = seen.get(pair, 0) + 1
+        keys.append(f"{pair}#{seen[pair]}")
+    return keys
+
 
 def _require(condition: bool, path: Path, message: str) -> None:
     if not condition:
@@ -383,6 +416,11 @@ def _parse_nodes(document: dict, spec: Spec, path: Path) -> None:
         side = entry.get("side", False)
         _require(isinstance(side, bool), path, f"{where} side must be true or false")
         _require(not side or spec.type == "flow", path, f"{where} is a side node, which only a flow has")
+        _require(
+            spec.type != "sequence" or "group" not in entry,
+            path,
+            f"{where} is a party, and a sequence has no groups",
+        )
         spec.nodes.append(
             Node(
                 id=node_id,
@@ -425,6 +463,10 @@ def _parse_edges(document: dict, spec: Spec, path: Path) -> None:
                 channel=channel,
             )
         )
+
+    if spec.type == "sequence":
+        _check_sequence(spec, path)
+        return
 
     if spec.type == "route":
         # A route is one ordered chain. The ASCII renderer walks the node list
@@ -491,6 +533,37 @@ def _parse_edges(document: dict, spec: Spec, path: Path) -> None:
     )
     for node in spec.nodes:
         _require(not (node.side and node.group), path, f"side node {node.id!r} sits with its parent and takes no group")
+
+
+def _check_sequence(spec: Spec, path: Path) -> None:
+    """Parties side by side and labelled messages between them, in order.
+
+    Every message says what it is, because an unlabelled arrow between two
+    lifelines tells a reader nothing the parties do not already say.
+    """
+    low, high = SEQUENCE_PARTIES
+    _require(
+        low <= len(spec.nodes) <= high,
+        path,
+        f"a sequence has {low} to {high} parties, got {len(spec.nodes)}",
+    )
+    _require(
+        1 <= len(spec.edges) <= SEQUENCE_MESSAGES,
+        path,
+        f"a sequence has 1 to {SEQUENCE_MESSAGES} messages, got {len(spec.edges)}",
+    )
+    for index, edge in enumerate(spec.edges, start=1):
+        _require(edge.label.strip() != "", path, f"message {index} has no label")
+        _require(
+            len(edge.label) <= MESSAGE_LIMIT,
+            path,
+            f"message {index} label is {len(edge.label)} characters; keep it within {MESSAGE_LIMIT}",
+        )
+        _require(
+            edge.source != edge.target or edge.channel == "plain",
+            path,
+            f"message {index} is a step {edge.source!r} takes alone, which crosses no channel",
+        )
 
 
 def _check_widths(spec: Spec, path: Path) -> None:
@@ -632,7 +705,7 @@ def apply_strings(spec: Spec, document: dict, language: str) -> Spec:
 
     edges = entry.get("edges", {})
     _require(isinstance(edges, dict), path, f"{spec.name}.edges must be an object")
-    pairs = {f"{edge.source}->{edge.target}": edge for edge in spec.edges}
+    pairs = dict(zip(edge_keys(spec), spec.edges))
     for key, values in edges.items():
         _require(key in pairs, path, f"{spec.name}.edges names unknown hop {key!r}")
         _require(isinstance(values, dict), path, f"{spec.name}.edges.{key} must be an object")
@@ -672,10 +745,9 @@ def missing_strings(spec: Spec, document: dict) -> list[str]:
         if node.note and "note" not in values:
             gaps.append(f"{spec.name}.nodes.{node.id}.note")
     edges = entry.get("edges", {})
-    for edge in spec.edges:
+    for key, edge in zip(edge_keys(spec), spec.edges):
         if not edge.label:
             continue
-        key = f"{edge.source}->{edge.target}"
         if "label" not in edges.get(key, {}):
             gaps.append(f"{spec.name}.edges.{key}.label")
     groups = entry.get("groups", {})

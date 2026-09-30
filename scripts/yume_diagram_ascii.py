@@ -106,6 +106,8 @@ def render(spec: Spec) -> str:
     """The complete ASCII block for one diagram, ending in a newline."""
     if spec.type == "layers":
         return _render_layers(spec)
+    if spec.type == "sequence":
+        return _render_sequence(spec)
     if spec.type not in ("route", "flow"):
         raise ValueError(f"no ASCII renderer for diagram type {spec.type!r}")
     if not _fits(spec, _chain_width(spec), 0):
@@ -286,6 +288,119 @@ def _render_layers(spec: Spec) -> str:
         lines.append(nested(level, "+" + "-" * (inner - 2) + "+"))
     pad = " " * spec.indent
     return "\n".join(pad + line for line in lines) + "\n"
+
+
+# A sequence draws each message as a shaft between two lifelines, in the
+# character its channel implies. A tunnel names YUME at its tail, which is
+# what the route form's ==YUME==> token says, so a terminal reader can tell
+# the carrier from an ordinary connection.
+SHAFTS = {"plain": "-", "tunnel": "=", "onion": "."}
+TUNNEL_TAIL = "==YUME"
+TUNNEL_HEAD_LEFT = "YUME=="
+
+# Columns a label keeps clear of the lifelines on either side of it.
+MESSAGE_PAD = 4
+
+# A step one party takes alone is a small loop beside its lifeline, with the
+# label beyond the loop. The loop is three columns wide plus a space.
+SELF_LOOP = 5
+
+
+def _render_sequence(spec: Spec) -> str:
+    """Parties across the top, their lifelines down, and each message in turn.
+
+        +---------+              +---------+
+        |  yume   |              |  yumed  |
+        +---------+              +---------+
+             |                        |
+             |  TLS 1.3, ALPN h2      |
+             |----------------------->|
+             |                        |
+             |  AUTH CHALLENGE        |
+             |<==YUME=================|
+
+    A message between parties further apart passes over the lifelines between
+    them. A step a party takes alone loops beside its lifeline, towards the
+    middle of the figure, with its label past the loop.
+    """
+    parties = spec.nodes
+    width = _box_width(parties)
+    lines = _lifelines(spec, width)
+    canvas = Canvas()
+    for index, node in enumerate(parties):
+        _box(canvas, lines[index] - width // 2, 0, width, node.title, node.sub)
+
+    row = BOX_ROWS
+    for edge in spec.edges:
+        source, target = spec.column(edge.source), spec.column(edge.target)
+        if source == target:
+            left = source == len(parties) - 1
+            _self_step(canvas, lines[source], row + 1, edge.label, left)
+            row += 4
+            continue
+        low, high = sorted((lines[source], lines[target]))
+        canvas.text(low + 3, row + 1, edge.label)
+        shaft = SHAFTS[edge.channel] * (high - low - 2)
+        if edge.channel == "tunnel":
+            if source < target:
+                shaft = TUNNEL_TAIL + shaft[len(TUNNEL_TAIL):]
+            else:
+                shaft = shaft[: len(shaft) - len(TUNNEL_TAIL)] + TUNNEL_HEAD_LEFT
+        arrow = shaft + ">" if source < target else "<" + shaft
+        canvas.text(low + 1, row + 2, arrow)
+        row += 3
+    for column in lines:
+        for y in range(BOX_ROWS, row + 1):
+            if (y, column) not in canvas.cells:
+                canvas.put(column, y, GLYPH_DOWN)
+    if canvas.width() + spec.indent > BUDGET:
+        raise ValueError(
+            f"{spec.name}: ASCII sequence exceeds the {BUDGET}-column budget; shorten the labels"
+        )
+    return canvas.render(spec.indent)
+
+
+def _lifelines(spec: Spec, width: int) -> list[int]:
+    """Each party's lifeline column, spaced so every label fits its message.
+
+    Boxes start two columns apart. A message then needs its label plus a pad
+    between the two lifelines it joins, and a step needs its loop and label
+    before the neighbouring lifeline. Widening only the last gap of a span
+    never undoes an earlier fit, so one pass in message order is enough.
+    """
+    count = len(spec.nodes)
+    gaps = [width + 2] * (count - 1)
+    for edge in spec.edges:
+        source, target = spec.column(edge.source), spec.column(edge.target)
+        if source == target:
+            low, high = (source - 1, source) if source == count - 1 else (source, source + 1)
+            needed = SELF_LOOP + len(edge.label) + 2
+        else:
+            low, high = sorted((source, target))
+            needed = len(edge.label) + MESSAGE_PAD + 1
+            if edge.channel == "tunnel":
+                needed = max(needed, len(TUNNEL_TAIL) + MESSAGE_PAD)
+        span = sum(gaps[low:high])
+        if span < needed:
+            gaps[high - 1] += needed - span
+    lines = [width // 2]
+    for gap in gaps:
+        lines.append(lines[-1] + gap)
+    return lines
+
+
+def _self_step(canvas: Canvas, column: int, top: int, label: str, left: bool) -> None:
+    """A loop off one lifeline and back, with the label past the loop."""
+    if left:
+        canvas.text(column - 3, top, ".--")
+        canvas.put(column - 3, top + 1, "|")
+        canvas.text(column - 3, top + 2, "'->")
+        canvas.text(column - 4 - len(label) - 1, top + 1, label)
+    else:
+        canvas.text(column + 1, top, "--.")
+        canvas.put(column + 3, top + 1, "|")
+        canvas.text(column + 1, top + 2, "<-'")
+        canvas.text(column + SELF_LOOP, top + 1, label)
 
 
 def _box(canvas: Canvas, left: int, top: int, width: int, title: str, sub: str) -> None:

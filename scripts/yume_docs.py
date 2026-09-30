@@ -18,7 +18,7 @@ The tree is partitioned by language from the start, so adding one is a new
 directory rather than a change to any renderer:
 
     docs/src/en_US/pages/security_modes.doc   ->  docs/SECURITY_MODES.md
-    docs/src/en_US/man/yume_gui.doc           ->  docs/man/yume-gui.1
+    docs/src/en_US/man/yumed_8.doc            ->  docs/man/yumed.8
 
 Usage:
     scripts/yume_docs.py list

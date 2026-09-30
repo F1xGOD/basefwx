@@ -94,7 +94,7 @@ Header keys and directives are closed: an unknown spelling fails generation.
 | `kind` | `page` or `man` |
 | `title`, `summary` | Required text; a manual's NAME section also comes from these |
 | `markdown` | Public repository-relative `.md` output path |
-| `man` | `docs/man/<name>.<section>`, or the separate `docs/development/ytp1/man/` design references, for `kind: man` |
+| `man` | `docs/man/<name>.<section>` for `kind: man`; reference-runtime manuals use their explicit binary names |
 | `web` | `yes` publishes a page; requires a Markdown output |
 | `web-path` | Optional path under `website/docs/`, written as `docs/<name>.md`; preserves routes such as BaseFWX's `SECURITY_MODEL` |
 | `web-title` | Optional web H1 and browser title, co-located with the document title |
@@ -152,25 +152,31 @@ The manual's `@opt` signature owns option spellings. Directly following `@cli`
 lines supply short help and completion details:
 
 ```text
-@opt **--relay-mode** *mode*
-@cli values: untrusted trusted
-@cli spell: --relay-mode <mode>
-@cli help: untrusted or trusted
+@opt **--completion** *shell*
+@cli values: bash
+@cli spell: --completion <shell>
+@cli help: Print the shell completion script and exit
 
-Whether this client accepts relayed streams from peers it has not pinned.
+Print the completion script for *shell*, which must be **bash**, and exit.
 ```
 
 `flags`, `file` (`yes`/`no`), and `values` describe completion. `spell` starts
 a printed entry; repeated `help` lines supply its text. `indent`, `column`,
 and `continuation` may adjust columns. Printed flags must belong to the
-option. The closed `{{name}}` interpolation table supplies runtime constants.
+option. Help text is constant, so a `{{name}}` template fails generation.
 Use `complete: no` for a documented, rejected option that should not be
 suggested by the shell; it cannot also declare file or value completions.
 
 `en_US/cli/*.cli` owns help grouping and free text, referencing options by
-flag. Every printed option must be referenced exactly once. `sync` writes
-`src/client/cli/display/help_text.hpp` and `src/server/cli/help_text.hpp`.
-Use `python3 scripts/yume_cli.py render yume --layer help` to preview.
+flag. Every printed option must be referenced exactly once. Each layout
+generates one header of two string constants, the help text and the Bash
+completion script: `src/runtime/yume_help_text.hpp`,
+`src/runtime/yumed_help_text.hpp` and `src/gui/yume_gui_help_text.hpp`. Each
+program prints its help for `--help`, and `yume` and `yumed` print the
+completion for `--completion bash`. The native parsers support only the
+options documented in these layouts. Use
+`python3 scripts/yume_cli.py render yume --layer help` to preview the help,
+and `--layer completion` for the completion script.
 
 ## Languages
 

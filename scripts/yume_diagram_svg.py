@@ -132,6 +132,23 @@ RING_TITLE_SIZE = 13
 RING_TITLE_ADVANCE = RING_TITLE_SIZE * 0.55
 LAYER_SECONDS_PER_RING = 1.1
 
+# A sequence sets its parties' cards across the top, with a lifeline down
+# from each and the messages between lifelines in the order they are sent. A
+# label wraps at its own column count, so two parties still fit a phone.
+SEQ_CARD_GAP = 24
+SEQ_SPACE = 20
+SEQ_LINE = 13
+SEQ_LABEL_ABOVE = 9
+SEQ_LABEL_COLUMNS = 34
+SEQ_LABEL_PAD = 16
+SEQ_TAIL = 24
+SEQ_LOOP_WIDTH = 24
+SEQ_LOOP_HEIGHT = 20
+SEQ_END_CLEARANCE = 4
+# A pause between two messages, so each crossing reads as its own send rather
+# than one dot running a zigzag.
+SEQ_HOLD_SECONDS = 0.35
+
 # How long a node takes to light up and go dark again. Long enough to read as
 # a change of state rather than a flash, short enough that a packet crossing a
 # card still looks like it arrived and left.
@@ -280,6 +297,7 @@ BASELINE: dict[str, dict[str, str]] = {
         "font-size": f"{LABEL_SIZE}px",
     },
     "dgm-centred": {"text-anchor": "middle"},
+    "dgm-end": {"text-anchor": "end"},
     "dgm-group": {
         "fill": LIGHT["rule"],
         "fill-opacity": "0.22",
@@ -343,6 +361,13 @@ BASELINE: dict[str, dict[str, str]] = {
         "font-size": f"{RING_TITLE_SIZE}px",
         "font-weight": "600",
         "letter-spacing": "0.02em",
+    },
+    "dgm-lifeline": {
+        "fill": "none",
+        "stroke": LIGHT["rule"],
+        "stroke-width": "1.5",
+        "stroke-dasharray": "4 6",
+        "stroke-linecap": "round",
     },
     "dgm-leader": {
         "fill": "none",
@@ -578,6 +603,10 @@ def _stylesheet(presence: str) -> str:
   text-anchor: middle;
 }}
 
+.dgm-end {{
+  text-anchor: end;
+}}
+
 /* An enclosure holds a run of nodes the specification says belong together,
    and carries the name it gives them. */
 .dgm-group {{
@@ -691,6 +720,16 @@ def _stylesheet(presence: str) -> str:
   letter-spacing: 0.02em;
 }}
 
+/* A party's lifeline is the time axis for that party, so it is drawn as
+   quietly as a leader and never competes with a message. */
+.dgm-lifeline {{
+  fill: none;
+  stroke: var(--dgm-rule);
+  stroke-width: 1.5;
+  stroke-dasharray: 4 6;
+  stroke-linecap: round;
+}}
+
 .dgm-leader {{
   fill: none;
   stroke: var(--dgm-rule);
@@ -759,12 +798,14 @@ def dimensions(spec: Spec, layout: str) -> tuple[str, str]:
 
 def render(spec: Spec, layout: str = "vertical") -> str:
     """The self-contained SVG for one diagram, ending in a newline."""
-    if spec.type not in ("route", "flow", "layers"):
+    if spec.type not in ("route", "flow", "layers", "sequence"):
         raise ValueError(f"no SVG renderer for diagram type {spec.type!r}")
     if layout not in ("vertical", "horizontal"):
         raise ValueError(f"unknown layout {layout!r}")
     if spec.type == "layers":
         return _render_layers(spec, layout)
+    if spec.type == "sequence":
+        return _render_sequence(spec, layout)
     if layout == "horizontal":
         return _render_horizontal(spec)
     return _render_vertical(spec)
@@ -1207,6 +1248,175 @@ def _render_layers(spec: Spec, layout: str) -> str:
     return _document(spec, layout, width, height, body, Motion("", duration, spans))
 
 
+def _render_sequence(spec: Spec, layout: str) -> str:
+    """Parties across the top and their messages down the page, in order.
+
+    Time runs down, so a sequence has one drawing: both layout files carry
+    it, and a page picks either. A message is an arrow between two lifelines,
+    a conduit when it travels the YUME carrier, with its label above it. A
+    step a party takes alone loops off its lifeline towards the middle of the
+    figure. One dot crosses each message in turn, which is the only thing the
+    motion here says: the order the messages are sent in.
+    """
+    parties = spec.nodes
+    card_width = _card_width(spec)
+    sub_columns = int((card_width - CARD_PADDING) // LABEL_ADVANCE)
+    labels = [_wrap(edge.label, SEQ_LABEL_COLUMNS) for edge in spec.edges]
+    count = len(parties)
+
+    gaps = [float(card_width + SEQ_CARD_GAP)] * (count - 1)
+    for edge, lines in zip(spec.edges, labels):
+        source, target = spec.column(edge.source), spec.column(edge.target)
+        drawn = max(len(line) for line in lines) * LABEL_ADVANCE
+        if source == target:
+            low, high = (source - 1, source) if source == count - 1 else (source, source + 1)
+            needed = SEQ_LOOP_WIDTH + SEQ_LABEL_PAD * 2 + drawn
+        else:
+            low, high = sorted((source, target))
+            needed = drawn + SEQ_LABEL_PAD * 2
+        span = sum(gaps[low:high])
+        if span < needed:
+            gaps[high - 1] += math.ceil(needed - span)
+    centres = [H_MARGIN + card_width / 2]
+    for gap in gaps:
+        centres.append(centres[-1] + gap)
+    width = centres[-1] + card_width / 2 + H_MARGIN
+
+    placed = [
+        Placed(node, centre - card_width / 2, H_MARGIN, card_width, H_CARD_HEIGHT)
+        for node, centre in zip(parties, centres)
+    ]
+    # Each item takes the space it draws: a message its label lines above the
+    # arrow and half its stroke below, a step the taller of its loop and its
+    # label. A conduit is thicker than a line, so its label stands further off.
+    y = placed[0].bottom + CARD_CLEARANCE
+    rows: list[float] = []
+    for edge, lines in zip(spec.edges, labels):
+        lift = CONDUIT_BORE / 2 if edge.channel == "tunnel" else 0
+        if edge.source == edge.target:
+            half = max(SEQ_LOOP_HEIGHT, len(lines) * SEQ_LINE) / 2
+            rows.append(y + SEQ_SPACE + half)
+            y = rows[-1] + half
+            continue
+        rows.append(y + SEQ_SPACE + len(lines) * SEQ_LINE + SEQ_LABEL_ABOVE + lift)
+        y = rows[-1] + max(lift, ARROW_HALF)
+    height = y + SEQ_TAIL + H_MARGIN
+
+    body: list[str] = ['<g class="dgm-lifelines">']
+    for card in placed:
+        body.append(
+            f'<path {_paint("dgm-lifeline")} '
+            f'd="{_line((card.centre_x, card.bottom + CARD_CLEARANCE), (card.centre_x, height - H_MARGIN))}"/>'
+        )
+    body.append("</g>")
+
+    body.append('<g class="dgm-links">')
+    paths: list[str] = []
+    lengths: list[float] = []
+    for edge, lines, row in zip(spec.edges, labels, rows):
+        source, target = spec.column(edge.source), spec.column(edge.target)
+        x = centres[source]
+        if source == target:
+            toward = -1 if source == count - 1 else 1
+            drawn, path, length = _loop(edge, x, row, toward)
+            body.extend(drawn)
+            label_x = x + toward * (SEQ_LOOP_WIDTH + SEQ_LABEL_PAD)
+            classes = ("dgm-edge-label",) + (("dgm-end",) if toward < 0 else ())
+            for offset, line in enumerate(lines):
+                centred = offset - (len(lines) - 1) / 2
+                body.append(
+                    f'<text {_paint(*classes)} x="{_n(label_x)}" '
+                    f'y="{_n(row + 4 + centred * SEQ_LINE)}">{html.escape(line)}</text>'
+                )
+            paths.append(path)
+            lengths.append(length)
+            continue
+        direction = 1 if target > source else -1
+        start = (x + direction * SEQ_END_CLEARANCE, row)
+        stop = (centres[target] - direction * SEQ_END_CLEARANCE, row)
+        body.extend(_hop(edge, start, stop))
+        middle = (centres[source] + centres[target]) / 2
+        lift = CONDUIT_BORE / 2 if edge.channel == "tunnel" else 0
+        for offset, line in enumerate(lines):
+            baseline = row - SEQ_LABEL_ABOVE - lift - (len(lines) - 1 - offset) * SEQ_LINE
+            body.append(
+                f'<text {_paint("dgm-edge-label", "dgm-centred")} '
+                f'x="{_n(middle)}" y="{_n(baseline)}">{html.escape(line)}</text>'
+            )
+        paths.append(_line(start, stop))
+        lengths.append(math.dist(start, stop))
+    body.append("</g>")
+
+    motion = _messages(spec, layout, paths, lengths)
+    body.append(motion.markup)
+
+    body.append('<g class="dgm-nodes">')
+    for card in placed:
+        body.extend(_banded_card(spec, card, None, sub_columns))
+    body.append("</g>")
+    return _document(spec, layout, width, height, body, motion)
+
+
+def _loop(edge, x: float, row: float, toward: int) -> tuple[list[str], str, float]:
+    """A step a party takes alone: out from its lifeline, down, and back.
+
+    Returns the drawn loop, the path a dot follows along it, and its length.
+    """
+    top = row - SEQ_LOOP_HEIGHT / 2
+    bottom = row + SEQ_LOOP_HEIGHT / 2
+    near = x + toward * SEQ_END_CLEARANCE
+    far = x + toward * SEQ_LOOP_WIDTH
+    back = near + toward * ARROW_LENGTH
+    path = (
+        f"M{_n(near)} {_n(top)}L{_n(far)} {_n(top)}"
+        f"L{_n(far)} {_n(bottom)}L{_n(near)} {_n(bottom)}"
+    )
+    drawn = [
+        f'<path {_paint("dgm-link", "dgm-link-plain")} '
+        f'd="M{_n(near)} {_n(top)}L{_n(far)} {_n(top)}'
+        f'L{_n(far)} {_n(bottom)}L{_n(back)} {_n(bottom)}"/>',
+        f'<path {_paint("dgm-arrow")} '
+        f'd="M{_n(back)} {_n(bottom - ARROW_HALF)}L{_n(back)} {_n(bottom + ARROW_HALF)}'
+        f'L{_n(near)} {_n(bottom)}Z"/>',
+    ]
+    length = abs(far - near) * 2 + SEQ_LOOP_HEIGHT
+    return drawn, path, length
+
+
+def _messages(spec: Spec, layout: str, paths: list[str], lengths: list[float]) -> Motion:
+    """One dot per message, each crossing its own arrow in its own slot.
+
+    The slots run one after another on one clock, at the rate every figure's
+    packet moves, with a short hold between them. A dot is only visible in
+    its own slot, so exactly one message is being sent at any moment.
+    """
+    scope = f"{spec.name}-{layout}"
+    slots = [length / PIXELS_PER_SECOND for length in lengths]
+    duration = round(sum(slot + SEQ_HOLD_SECONDS for slot in slots), 2)
+    markup = ['<g class="dgm-packets" aria-hidden="true">']
+    rules: list[str] = []
+    elapsed = 0.0
+    for index, (path, slot) in enumerate(zip(paths, slots)):
+        start = elapsed / duration
+        stop = (elapsed + slot) / duration
+        elapsed += slot + SEQ_HOLD_SECONDS
+        name = f"dgm-{scope}-message-{index}"
+        for part, radius in (("dgm-packet-glow", 9), ("dgm-packet-core", 4)):
+            markup.append(
+                f'<circle {_paint("dgm-packet", part, f"dgm-message-{index}")} cx="0" cy="0" '
+                f'r="{radius}" style="--dgm-path:path(\'{path}\')"/>'
+            )
+        stops = [f"  0%, {_pct(start)} {{ offset-distance: 0%; fill-opacity: 0; }}"]
+        stops.append(f"  {_pct(min(stop, start + 0.001))} {{ fill-opacity: 1; }}")
+        stops.append(f"  {_pct(stop)} {{ offset-distance: 100%; fill-opacity: 1; }}")
+        if stop < 1:
+            stops.append(f"  {_pct(min(1.0, stop + 0.001))}, 100% {{ offset-distance: 100%; fill-opacity: 0; }}")
+        rules.append(f"@keyframes {name} {{\n" + "\n".join(stops) + "\n}")
+        rules.append(f'[data-dgm="{scope}"] .dgm-message-{index} {{ animation-name: {name}; }}')
+    markup.append("</g>")
+    return Motion("".join(markup), max(1.0, duration), [], "\n\n".join(rules))
+
+
 def _run_at(runs: list[tuple[int, int, str]], index: int) -> tuple[int, int, str] | None:
     for run in runs:
         if run[0] <= index <= run[1]:
@@ -1379,11 +1589,16 @@ def _glyph(node: Node, here: str) -> str:
 
 @dataclass
 class Motion:
-    """One loop: the packet's markup, its period, and where it is held."""
+    """One loop: the packet's markup, its period, and where it is held.
+
+    `rules` carries any further keyframes a figure's motion needs, scoped to
+    the figure like the presence rules.
+    """
 
     markup: str
     duration: float
     spans: list[tuple[Point, Point]]
+    rules: str = ""
 
 
 def _packets(placed: list[Placed], hops: list[tuple[Point, Point]]) -> Motion:
@@ -1553,7 +1768,9 @@ def _document(
         'xmlns="http://www.w3.org/2000/svg">',
         f'<title id="{title_id}">{html.escape(spec.title)}</title>',
         f'<desc id="{desc_id}">{html.escape(spec.summary)}</desc>',
-        _stylesheet(_presence_rules(scope, motion.spans, motion.duration)),
+        _stylesheet("\n\n".join(
+            part for part in (_presence_rules(scope, motion.spans, motion.duration), motion.rules) if part
+        )),
         f'<defs><filter id="{_lift_id(spec, layout)}" x="-20%" y="-20%" '
         f'width="140%" height="140%"><feGaussianBlur stdDeviation="{LIFT_BLUR}"/>'
         "</filter></defs>",

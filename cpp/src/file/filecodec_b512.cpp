@@ -169,12 +169,11 @@ std::string B512EncodeFileStream(const std::filesystem::path& input,
         std::string(pack_flag)
     );
     Bytes metadata_bytes = ToBytes(metadata_blob);
-    Bytes prefix_bytes;
-    if (!metadata_blob.empty()) {
-        prefix_bytes = metadata_bytes;
-        std::string delim(constants::kMetaDelim);
-        prefix_bytes.insert(prefix_bytes.end(), delim.begin(), delim.end());
-    }
+    // One construction. Copying the metadata and then appending the delimiter
+    // made GCC 13 at -O3 report a false -Wstringop-overflow in the append.
+    const Bytes prefix_bytes = metadata_blob.empty()
+        ? Bytes{}
+        : ToBytes(metadata_blob + std::string(constants::kMetaDelim));
 
     Bytes stream_header;
     stream_header.insert(

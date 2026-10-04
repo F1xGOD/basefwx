@@ -37,27 +37,24 @@ not install the Python or Java modules.
 |  CALLER                    |
 |  CLI / library / YUME      |
 +--------------+-------------+
-                \
-                 \
-                  v password, bytes, options
-   +--------------+-------------+
-   |  BASEFWX CORE              |
-   |  KDF, keys, AEAD, metadata |
-   +--------------+-------------+
-                   \
-                    \
-                     v encrypted container
-      +--------------+-------------+
-      |  OUTPUT FORMAT             |
-      |  file or packet            |
-      +--------------+-------------+
-                      \
-                       \
-                        v stored or transported
-         +--------------+-------------+
-         |  DECODER                   |
-         |  verifies before release   |
-         +----------------------------+
+               |
+               v password, bytes, options
++--------------+-------------+
+|  BASEFWX CORE              |
+|  KDF, keys, AEAD, metadata |
++--------------+-------------+
+               |
+               v encrypted container
++--------------+-------------+
+|  OUTPUT FORMAT             |
+|  file or packet            |
++--------------+-------------+
+               |
+               v stored or transported
++--------------+-------------+
+|  DECODER                   |
+|  verifies before release   |
++----------------------------+
 ```
 <!-- /yume-diagram -->
 
@@ -123,27 +120,24 @@ instead, which gives it the same AEAD guarantees as any other file.
 |  PLAINTEXT FILE              |
 |  bytes from disk or stdin    |
 +---------------+--------------+
-                 \
-                  \
-                   v
-   +---------------+--------------+
-   |  KDF AND KEY SETUP           |
-   |  Argon2id or PBKDF2          |
-   +---------------+--------------+
-                    \
-                     \
-                      v
-      +---------------+--------------+
-      |  AEAD ENCRYPTION             |
-      |  AES-256-GCM payload         |
-      +---------------+--------------+
-                       \
-                        \
-                         v
-         +---------------+--------------+
-         |  BASEFWX CONTAINER           |
-         |  FWX1 / heavy / encoded form |
-         +------------------------------+
+                |
+                v
++---------------+--------------+
+|  KDF AND KEY SETUP           |
+|  Argon2id or PBKDF2          |
++---------------+--------------+
+                |
+                v
++---------------+--------------+
+|  AEAD ENCRYPTION             |
+|  AES-256-GCM payload         |
++---------------+--------------+
+                |
+                v
++---------------+--------------+
+|  BASEFWX CONTAINER           |
+|  FWX1 / heavy / encoded form |
++------------------------------+
 ```
 <!-- /yume-diagram -->
 
@@ -171,27 +165,24 @@ read and write containers instead of hand-parsing container fields.
 |  PRODUCER                 |
 |  file, ffmpeg, app bytes  |
 +-------------+-------------+
-               \
-                \
-                 v
-   +-------------+-------------+
-   |  LIVE ENCRYPTOR           |
-   |  start, update, finalize  |
-   +-------------+-------------+
-                  \
-                   \
-                    v
-      +-------------+-------------+
-      |  LIVE PACKETS             |
-      |  ordered AES-GCM frames   |
-      +-------------+-------------+
-                     \
-                      \
-                       v
-         +-------------+-------------+
-         |  LIVE DECRYPTOR           |
-         |  verifies packet sequence |
-         +---------------------------+
+              |
+              v
++-------------+-------------+
+|  LIVE ENCRYPTOR           |
+|  start, update, finalize  |
++-------------+-------------+
+              |
+              v
++-------------+-------------+
+|  LIVE PACKETS             |
+|  ordered AES-GCM frames   |
++-------------+-------------+
+              |
+              v
++-------------+-------------+
+|  LIVE DECRYPTOR           |
+|  verifies packet sequence |
++---------------------------+
 ```
 <!-- /yume-diagram -->
 
@@ -207,27 +198,24 @@ before treating the stream as complete.
 |  YUME STREAM               |
 |  logical app connection    |
 +--------------+-------------+
-                \
-                 \
-                  v
-   +--------------+-------------+
-   |  BASEFWX INNER CRYPTO      |
-   |  AES / Argon2id / ML-KEM   |
-   +--------------+-------------+
-                   \
-                    \
-                     v
-      +--------------+-------------+
-      |  YUME CARRIER              |
-      |  TLS 1.3 + YUME frames     |
-      +--------------+-------------+
-                      \
-                       \
-                        v
-         +--------------+-------------+
-         |  YUMED SERVER              |
-         |  unwraps inner stream data |
-         +----------------------------+
+               |
+               v
++--------------+-------------+
+|  BASEFWX INNER CRYPTO      |
+|  AES / Argon2id / ML-KEM   |
++--------------+-------------+
+               |
+               v
++--------------+-------------+
+|  YUME CARRIER              |
+|  TLS 1.3 + YUME frames     |
++--------------+-------------+
+               |
+               v
++--------------+-------------+
+|  YUMED SERVER              |
+|  unwraps inner stream data |
++----------------------------+
 ```
 <!-- /yume-diagram -->
 

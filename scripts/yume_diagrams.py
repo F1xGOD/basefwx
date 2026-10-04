@@ -187,9 +187,8 @@ def render_block(spec: Spec, path: Path, language: str = SOURCE_LANGUAGE) -> lis
     ascii_lines = yume_diagram_ascii.render(spec).rstrip("\n").split("\n")
     if path.suffix != ".md":
         # roff reads a backslash as the start of an escape, and one at the end
-        # of a line joins that line to the next. A diagonal hop is drawn with
-        # backslashes, so an unescaped figure loses every hop that leans right
-        # and leaves its arrow head in a column nothing points at.
+        # of a line joins that line to the next, so a label's backslash would
+        # vanish from the manual and could take the next row with it.
         return [ROFF_FENCE, *(_roff_literal(line) for line in ascii_lines), ROFF_FENCE_END]
 
     key = _markdown_key(spec, path)

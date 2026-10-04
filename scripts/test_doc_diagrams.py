@@ -19,7 +19,9 @@ class Diagrams(unittest.TestCase):
             with self.subTest(diagram=diagram.name):
                 drawing = ascii_renderer.render(diagram)
                 self.assertLessEqual(max(map(len, drawing.splitlines())), ascii_renderer.BUDGET)
-                self.assertIn("\\", drawing)
+                # Every hop runs straight down one column of boxes.
+                self.assertNotIn("\\", drawing)
+                self.assertIn("v", drawing)
                 for node in diagram.nodes:
                     self.assertIn(node.title, drawing)
                 self.assertFalse(diagram.web, "BaseFWX SVG styling is deferred")

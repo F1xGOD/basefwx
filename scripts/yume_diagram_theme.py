@@ -38,7 +38,7 @@ def srgb(value: str) -> str:
     return "#" + "".join(f"{encode(channel):02x}" for channel in channels)
 
 
-def load(path: Path, roles: tuple[str, ...] = ()) -> tuple[tuple, str, str]:
+def load(path: Path, roles: tuple[str, ...] = ()) -> tuple[tuple, str, str, str]:
     css = re.sub(r"/\*.*?\*/", "", path.read_text(encoding="utf-8"), flags=re.S)
     root = re.search(r":root\s*\{([^{}]*)\}", css)
     if root is None:
@@ -83,4 +83,5 @@ def load(path: Path, roles: tuple[str, ...] = ()) -> tuple[tuple, str, str]:
             token = alias.group(1)
 
     palette = tuple((local, token, color(light, token), color(dark, token)) for local, token in tokens.items())
-    return palette, baseline["--font-display"].replace('"', "'"), baseline["--font-mono"].replace('"', "'")
+    faces = (baseline[name].replace('"', "'") for name in ("--font-display", "--font-body", "--font-mono"))
+    return (palette, *faces)

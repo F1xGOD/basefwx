@@ -4,31 +4,30 @@
 # Licensed under the GNU Affero General Public License v3.0 or later.
 """Draw a diagram specification as the ASCII form manuals and fences carry.
 
-The figure is drawn on a character canvas rather than assembled from rows of
-equal boxes, so a hop runs at whatever angle the layout gives it:
+The figure is drawn on a character canvas. A route runs straight down one
+column of equal boxes, and each hop is a short shaft with its label beside
+the arrow head:
 
     +-------------------------+
     |  HUMAN APP              |
     |  browser / curl         |
+    +------------+------------+
+                 |
+                 v ==YUME==> TLS 1.3 + HTTP/2
+    +------------+------------+
+    |  YUME CLIENT            |
+    |  TLS / H2 / YUME frames |
     +-------------------------+
-              \\
-               \\
-                v
-       +-------------------------+
-       |  YUME CLIENT            |
-       |  TLS / H2 / YUME frames |
-       +-------------------------+
 
-A route descends across the page instead of straight down it. That shape is
-what a reader already recognises from a manual such as ffmpeg's, and it says
-something the stacked form could not: each hop is a step away from the one
-before rather than another equal box in a column.
+Every box shares one left edge and one port column, so the eye reads the
+route as a single line and a label is never pushed off to the right by the
+hops before it. A branch turns off on its parent's title row, and inputs
+join one bus above the first box.
 
 Two rules keep the drawing honest. A box is sized to the longest label in its
 own figure, so a diagram that says less is narrower. The whole block stays
 inside `BUDGET` columns, because a manual indents a literal region and a
-terminal at eighty columns must not fold it. Where the staircase would not
-fit, the layout falls back to a straight descent rather than overflowing.
+terminal at eighty columns must not fold it.
 
 Output is deterministic, so regeneration is a byte comparison.
 """
@@ -44,21 +43,14 @@ BUDGET = 68
 # One box is a border, a title, a subtitle, and a border.
 BOX_ROWS = 4
 
-# Rows between two boxes. Three is the smallest that fits a connector, a
-# label beside it, and an arrow head.
-GAP_ROWS = 3
-
-# Columns a hop travels sideways while it descends. The run leaves the tee
-# on the border and advances one column per row, so a step equal to the gap
-# is a clean forty-five degrees rather than a stepped approximation.
-STEP = GAP_ROWS
+# Rows between two boxes: one for the shaft, one for the arrow head and the
+# label beside it.
+GAP_ROWS = 2
 
 # Space between the arrow head and the text describing that hop.
-LABEL_GUTTER = 2
+LABEL_GUTTER = 1
 
 GLYPH_DOWN = "|"
-GLYPH_RIGHT = "\\"
-GLYPH_LEFT = "/"
 GLYPH_ARROW = "v"
 
 # Where a hop meets a box. Marking the border is what separates a connected
@@ -110,7 +102,7 @@ def render(spec: Spec) -> str:
         return _render_sequence(spec)
     if spec.type not in ("route", "flow"):
         raise ValueError(f"no ASCII renderer for diagram type {spec.type!r}")
-    if not _fits(spec, _chain_width(spec), 0):
+    if not _fits(spec, _chain_width(spec)):
         raise ValueError(f"{spec.name}: ASCII labels exceed the {BUDGET}-column budget; shorten the labels")
     return _render_route(spec)
 
@@ -129,23 +121,6 @@ def _branch_gap(label: str) -> int:
     return max(6, len(label) + 4)
 
 
-def step_for(spec: Spec) -> int:
-    """The sideways travel per hop that keeps this figure inside the budget.
-
-    A figure only leans when leaning fits. Falling back to a straight descent
-    is better than a drawing a terminal folds, and it is what a long route of
-    wide boxes gets.
-    """
-    width = _chain_width(spec)
-    hops = len(spec.chain()) - 1
-    if hops < 1:
-        return 0
-    for candidate in range(STEP, 0, -1):
-        if _fits(spec, width, candidate):
-            return candidate
-    return 0
-
-
 def _origin(spec: Spec, width: int) -> tuple[int, int, int]:
     """Where the chain starts, and where the inputs and their bus sit.
 
@@ -162,19 +137,17 @@ def _origin(spec: Spec, width: int) -> tuple[int, int, int]:
     return left, shift, bus + shift
 
 
-def _fits(spec: Spec, width: int, step: int) -> bool:
+def _fits(spec: Spec, width: int) -> bool:
     chain = spec.chain()
-    hops = len(chain) - 1
     left, _shift, bus = _origin(spec, width)
-    needed = max(bus + 1, left + width + step * hops) + spec.indent
+    needed = max(bus + 1, left + width) + spec.indent
+    arrow = left + width // 2
     for index in range(1, len(chain)):
         label = spec.edge_into(index).ascii_label()
-        if not label:
-            continue
-        arrow = left + index * step + width // 2
-        needed = max(needed, arrow + LABEL_GUTTER + len(label) + spec.indent)
-    for parent, edge, side in spec.branches():
-        reach = left + parent * step + width + _branch_gap(edge.ascii_label()) + _box_width([side])
+        if label:
+            needed = max(needed, arrow + 1 + LABEL_GUTTER + len(label) + spec.indent)
+    for _parent, edge, side in spec.branches():
+        reach = left + width + _branch_gap(edge.ascii_label()) + _box_width([side])
         needed = max(needed, reach + spec.indent)
     return needed <= BUDGET
 
@@ -183,15 +156,13 @@ def _render_route(spec: Spec) -> str:
     canvas = Canvas()
     chain = spec.chain()
     width = _chain_width(spec)
-    step = step_for(spec)
-    origin, first_top = _draw_inputs(canvas, spec, width)
+    left, first_top = _draw_inputs(canvas, spec, width)
+    port = left + width // 2
 
     for index, node in enumerate(chain):
-        left = origin + index * step
         top = first_top + index * (BOX_ROWS + GAP_ROWS)
         _box(canvas, left, top, width, node.title, node.sub)
 
-        port = left + width // 2
         if index + 1 < len(chain):
             canvas.put(port, top + BOX_ROWS - 1, GLYPH_PORT)
 
@@ -203,16 +174,10 @@ def _render_route(spec: Spec) -> str:
         if edge is None:
             continue
         canvas.put(port, top, GLYPH_PORT)
-        _connector(
-            canvas,
-            source_column=origin + (index - 1) * step + width // 2,
-            target_column=port,
-            top=top - GAP_ROWS,
-            label=edge.ascii_label(),
-        )
+        _connector(canvas, port, top - GAP_ROWS, edge.ascii_label())
 
     if spec.inputs():
-        canvas.put(origin + width // 2, first_top, GLYPH_PORT)
+        canvas.put(port, first_top, GLYPH_PORT)
     return canvas.render(spec.indent)
 
 
@@ -416,45 +381,14 @@ def _row(text: str, width: int) -> str:
     return "|" + ("  " + text).ljust(width - 2) + "|"
 
 
-def _connector(
-    canvas: Canvas, source_column: int, target_column: int, top: int, label: str
-) -> None:
-    """Draw one hop across the gap rows, ending in an arrow head.
+def _connector(canvas: Canvas, column: int, top: int, label: str) -> None:
+    """One hop down the gap rows: a shaft, then the arrow head and its label.
 
-    The column at each row is interpolated between the two connection points,
-    and the glyph at a row says which way the next row moves. A hop that does
-    not move sideways is the straight descent the stacked form always drew.
+    The label sits beside the head, so every label in a figure starts in the
+    same column and reads as a caption for the hop it ends.
     """
-    travel = target_column - source_column
-    last = GAP_ROWS - 1
-    # Row zero already sits one row below the tee it left, so the run has
-    # GAP_ROWS steps to cover the travel and the head lands on the last one.
-    columns = [
-        source_column + ((row + 1) * travel + GAP_ROWS // 2) // GAP_ROWS
-        for row in range(GAP_ROWS)
-    ]
-    # The head has to sit exactly on the target's connection column. Rounding
-    # a middle row is a drawing choice, but rounding the endpoint would point
-    # the arrow at a column the box does not occupy.
-    columns[last] = target_column
-
-    previous = source_column
-    for row in range(GAP_ROWS):
-        if row == last:
-            canvas.put(target_column, top + row, GLYPH_ARROW)
-            continue
-        moved = columns[row] - previous
-        if moved > 0:
-            glyph = GLYPH_RIGHT
-        elif moved < 0:
-            glyph = GLYPH_LEFT
-        else:
-            glyph = GLYPH_DOWN
-        canvas.put(columns[row], top + row, glyph)
-        previous = columns[row]
-
+    for row in range(GAP_ROWS - 1):
+        canvas.put(column, top + row, GLYPH_DOWN)
+    canvas.put(column, top + GAP_ROWS - 1, GLYPH_ARROW)
     if label:
-        # The label sits beside the arrow head rather than beside the middle
-        # of the run, so every label in a figure starts from the same kind of
-        # anchor whatever angle its hop took.
-        canvas.text(target_column + LABEL_GUTTER, top + GAP_ROWS - 1, label)
+        canvas.text(column + 1 + LABEL_GUTTER, top + GAP_ROWS - 1, label)

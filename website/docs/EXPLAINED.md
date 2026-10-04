@@ -27,27 +27,24 @@ The `fwxAES` path has four steps:
 |  PLAINTEXT                       |
 |  optional preprocessing          |
 +-----------------+----------------+
-                   \
-                    \
-                     v compression / obfuscation
-   +-----------------+----------------+
-   |  CONTENT KEY + NONCE             |
-   |  random per payload              |
-   +-----------------+----------------+
-                      \
-                       \
-                        v fixed fwxAES AAD
-      +-----------------+----------------+
-      |  CIPHERTEXT + TAG                |
-      |  AES-256-GCM                     |
-      +-----------------+----------------+
-                         \
-                          \
-                           v wraps the content key
-         +-----------------+----------------+
-         |  VERSIONED CONTAINER             |
-         |  password / optional master wrap |
-         +----------------------------------+
+                  |
+                  v compression / obfuscation
++-----------------+----------------+
+|  CONTENT KEY + NONCE             |
+|  random per payload              |
++-----------------+----------------+
+                  |
+                  v fixed fwxAES AAD
++-----------------+----------------+
+|  CIPHERTEXT + TAG                |
+|  AES-256-GCM                     |
++-----------------+----------------+
+                  |
+                  v wraps the content key
++-----------------+----------------+
+|  VERSIONED CONTAINER             |
+|  password / optional master wrap |
++----------------------------------+
 ```
 {% endraw %}
 <!-- /yume-diagram -->

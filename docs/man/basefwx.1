@@ -314,20 +314,18 @@ Select key-derivation behavior where a command supports it.
 |  INPUT                      |
 |  file, stream, or text      |
 +--------------+--------------+
-                \e
-                 \e
-                  v
-   +--------------+--------------+
-   |  BASEFWX CLI                |
-   |  selected command + options |
-   +--------------+--------------+
-                   \e
-                    \e
-                     v
-      +--------------+--------------+
-      |  BASEFWX OUTPUT             |
-      |  container or stream        |
-      +-----------------------------+
+               |
+               v
++--------------+--------------+
+|  BASEFWX CLI                |
+|  selected command + options |
++--------------+--------------+
+               |
+               v
++--------------+--------------+
+|  BASEFWX OUTPUT             |
+|  container or stream        |
++-----------------------------+
 .fi
 .\" /yume-diagram
 .SH EXIT STATUS

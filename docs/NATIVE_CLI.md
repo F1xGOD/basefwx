@@ -319,20 +319,18 @@ same BaseFWX version that wrote the file.
 |  INPUT                      |
 |  file, stream, or text      |
 +--------------+--------------+
-                \
-                 \
-                  v
-   +--------------+--------------+
-   |  BASEFWX CLI                |
-   |  selected command + options |
-   +--------------+--------------+
-                   \
-                    \
-                     v
-      +--------------+--------------+
-      |  BASEFWX OUTPUT             |
-      |  container or stream        |
-      +-----------------------------+
+               |
+               v
++--------------+--------------+
+|  BASEFWX CLI                |
+|  selected command + options |
++--------------+--------------+
+               |
+               v
++--------------+--------------+
+|  BASEFWX OUTPUT             |
+|  container or stream        |
++-----------------------------+
 ```
 <!-- /yume-diagram -->
 

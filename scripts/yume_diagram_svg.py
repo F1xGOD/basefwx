@@ -140,9 +140,13 @@ JUNCTION_RADIUS = 3.5
 # A layers figure nests one rounded ring per layer. Across the page each
 # ring's description is set in a column to the right, level with the ring's
 # name. In the stack the description sits under the name inside the ring.
+# A ring's name is set in from its wall by more than its corner curves in
+# at that height, and the head leaves room under the description before
+# the next ring starts.
 RING_PAD = 12
-RING_HEAD = 26
-RING_HEAD_V = 40
+RING_HEAD = 28
+RING_HEAD_V = 46
+RING_TEXT_INSET = 16
 RING_FOOT = 10
 CORE_HEIGHT = 40
 CORE_HEIGHT_V = 50
@@ -658,17 +662,23 @@ def _stylesheet(presence: str) -> str:
 
 {ROLE_RULES}
 
-/* A layer is a ring, filled with its role's tint and outlined in its tone.
+/* A layer is a ring on the card colour, washed with its role's tint and
+   outlined in its tone, so eight nested rings stay as light as the cards of
+   the other figures. The core, the reader's own data, takes the full tint.
    On the loop the rings light in wrapping order, innermost first, which is
    the only thing the motion in a layers figure says. */
 .dgm-ring {{
   fill: var(--dgm-rest);
   stroke: var(--dgm-rest-line);
   stroke-width: 1.25;
-  --dgm-rest: var(--dgm-tone-soft);
+  --dgm-rest: color-mix(in oklab, var(--dgm-tone-soft) 40%, var(--dgm-card));
   --dgm-live: var(--dgm-tone);
   --dgm-rest-line: var(--dgm-tone);
   --dgm-live-line: var(--dgm-tone-strong);
+}}
+
+.dgm-ring.dgm-core {{
+  --dgm-rest: var(--dgm-tone-soft);
 }}
 
 .dgm-ring-title {{
@@ -1113,7 +1123,7 @@ def _render_layers(spec: Spec, layout: str) -> str:
         drawn = len(node.title) * RING_TITLE_ADVANCE
         if not across:
             drawn = max(drawn, len(node.sub) * LABEL_ADVANCE)
-        return drawn + CARD_PADDING + 4 - 2 * level * RING_PAD
+        return drawn + 2 * RING_TEXT_INSET + 4 - 2 * level * RING_PAD
 
     core_width = max(150, math.ceil(max(needed(level, node) for level, node in enumerate(layers))))
     outer_width = core_width + 2 * RING_PAD * (count - 1)
@@ -1133,9 +1143,12 @@ def _render_layers(spec: Spec, layout: str) -> str:
         ring_height = core_height + level * (head + RING_FOOT)
         tone = node.tone
         body.append(f'<g class="dgm-layer dgm-role-{tone}" data-node="{node.id}">')
+        # Corners grow by less than the gap between walls, so nested rings
+        # stay evenly spaced around their curves.
+        core = "dgm-core" if level == 0 else ""
         body.append(
-            f'<rect {_paint("dgm-ring", f"dgm-tone-ring-{tone}", f"dgm-here-{level}")} '
-            f"{_rect(x, y, ring_width, ring_height, min(36, 12 + level * 4))}/>"
+            f'<rect {_paint("dgm-ring", f"dgm-tone-ring-{tone}", f"dgm-here-{level}", core)} '
+            f"{_rect(x, y, ring_width, ring_height, min(30, 10 + level * 3))}/>"
         )
         if level == 0:
             centre = x + ring_width / 2
@@ -1153,11 +1166,11 @@ def _render_layers(spec: Spec, layout: str) -> str:
             baseline = y + 20
             body.append(
                 f'<text {_paint("dgm-ring-title", f"dgm-tone-ink-{tone}")} '
-                f'x="{_n(x + 14)}" y="{_n(baseline)}">{html.escape(node.title)}</text>'
+                f'x="{_n(x + RING_TEXT_INSET)}" y="{_n(baseline)}">{html.escape(node.title)}</text>'
             )
             if node.sub and not across:
                 body.append(
-                    f'<text {_paint("dgm-sub")} x="{_n(x + 14)}" '
+                    f'<text {_paint("dgm-sub")} x="{_n(x + RING_TEXT_INSET)}" '
                     f'y="{_n(baseline + 16)}">{html.escape(node.sub)}</text>'
                 )
         if node.sub and across:

@@ -89,6 +89,10 @@ man:basefwx(1) references.
 `name` matches the filename and uses lowercase letters, digits, and underscores.
 Header keys and directives are closed: an unknown spelling fails generation.
 
+For a README with a graphic heading, set `title:` to the Markdown image
+with the project name as its alternative text. Use a plain `web-title:` for
+the website page and its catalog entry. Do not repeat the image in the body.
+
 | Header | Meaning |
 | --- | --- |
 | `kind` | `page` or `man` |

@@ -20,6 +20,7 @@
 
 ### Documentation
 
+- Restore the original SVG banner as the README heading.
 - Product docs, changelogs and native manuals share `.doc` sources under
   `docs/src/en_US/`, including web titles and catalog metadata. One sync
   renders Markdown, man pages and the website. Flow diagrams publish ASCII;

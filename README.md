@@ -1,5 +1,5 @@
 <!-- Generated from docs/src/en_US/pages/readme.doc by scripts/yume_docs.py. Edit that file, not this one. -->
-# BaseFWX
+# ![BaseFWX](src/ui/basefwx.svg)
 
 BaseFWX is an authenticated-encryption library and command-line tool for C++,
 Python, and Java. The maintained runtimes share portable file, text, and live

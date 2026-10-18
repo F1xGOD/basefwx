@@ -1,7 +1,7 @@
 #!yume-doc 1
 name: readme
 kind: page
-title: BaseFWX
+title: ![BaseFWX](src/ui/basefwx.svg)
 summary: Maintained formats, installation, recovery boundaries, and links to each runtime.
 markdown: README.md
 web: yes
